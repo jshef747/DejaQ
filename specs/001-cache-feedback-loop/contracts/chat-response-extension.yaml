@@ -1,0 +1,70 @@
+openapi: "3.1.0"
+info:
+  title: DejaQ ChatResponse Extension
+  version: "0.1.0"
+  description: |
+    Documents the `cache_entry_id` addition to the existing ChatResponse schema.
+    This field enables clients to submit feedback after receiving a response.
+
+components:
+  schemas:
+    ChatResponse:
+      description: |
+        Extended ChatResponse with `cache_entry_id`.
+        All existing fields are unchanged. Only the new field is documented here.
+      type: object
+      properties:
+        cache_entry_id:
+          type: string
+          nullable: true
+          description: |
+            The ID of the cache entry associated with this response.
+            Always present for both cache hits and cache misses (if the cache filter
+            decided to store the response). Use this ID to submit feedback via
+            POST /cache/entries/{id}/feedback.
+
+            For cache hits: the ID of the entry that was served.
+            For cache misses: the ID that will be assigned when the entry is stored
+            (pre-computed from the normalized query hash).
+
+            Null only if the cache filter decided not to cache this response
+            (e.g., too short, filler message).
+
+examples:
+  cache_hit_response:
+    summary: ChatResponse for a cache hit
+    value:
+      sender: "bot"
+      message: "The capital of France is Paris."
+      normalized_query: "capital of france"
+      status: "ok"
+      cache_hit: true
+      conversation_id: "conv-abc123"
+      cache_entry_id: "a1b2c3d4e5f6a7b8"
+
+  cache_miss_response:
+    summary: ChatResponse for a cache miss (will be stored)
+    value:
+      sender: "bot"
+      message: "The capital of France is Paris, a city with a population of..."
+      normalized_query: "capital of france"
+      status: "ok"
+      cache_hit: false
+      cached: true
+      conversation_id: "conv-abc123"
+      cache_entry_id: "a1b2c3d4e5f6a7b8"
+      complexity: "easy"
+      complexity_score: 0.12
+      task_type: "factual"
+
+  cache_miss_not_cached:
+    summary: ChatResponse for a cache miss (not cached — filler filtered)
+    value:
+      sender: "bot"
+      message: "Hello!"
+      normalized_query: "hello"
+      status: "ok"
+      cache_hit: false
+      cached: false
+      conversation_id: "conv-abc123"
+      cache_entry_id: null

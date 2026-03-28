@@ -1,22 +1,37 @@
 import logging
 import sys
 
-# Define the format: Timestamp - Module Name - Level - Message
-LOG_FORMAT = "%(asctime)s | %(name)-20s | %(levelname)-8s | %(message)s"
+
+class DejaQFormatter(logging.Formatter):
+    """Shortens dejaq logger names for cleaner output."""
+
+    def format(self, record):
+        # 'dejaq.services.normalizer' -> 'normalizer'
+        # 'dejaq.router.chat' -> 'router.chat'
+        # 'dejaq.tasks.cache' -> 'tasks.cache'
+        name = record.name
+        if name.startswith("dejaq.services."):
+            record.name = name[len("dejaq.services."):]
+        elif name.startswith("dejaq."):
+            record.name = name[len("dejaq."):]
+
+        result = super().format(record)
+        record.name = name  # Restore original
+        return result
+
+
+LOG_FORMAT = "%(asctime)s | %(levelname)-5s | %(name)-20s | %(message)s"
+DATE_FORMAT = "%H:%M:%S"
+
 
 def setup_logging():
     """
     Configures the root logger. Call this once in main.py.
     """
-    # Configure the root logger
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(DejaQFormatter(fmt=LOG_FORMAT, datefmt=DATE_FORMAT))
+
     logging.basicConfig(
         level=logging.INFO,
-        format=LOG_FORMAT,
-        handlers=[
-            logging.StreamHandler(sys.stdout)  # Output to console
-            # In the future, add FileHandler here to save logs to a file
-        ]
+        handlers=[handler],
     )
-
-    # Silence noisy libraries if needed (optional)
-    # logging.getLogger("uvicorn.access").setLevel(logging.WARNING)

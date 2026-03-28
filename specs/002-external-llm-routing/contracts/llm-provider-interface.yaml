@@ -1,0 +1,24 @@
+# Internal Contract: External LLM Provider Service
+
+**Interface:** `app.services.external_llm.ExternalLLMService`
+**Description:** This service handles all communications with external LLM providers.
+
+## Methods
+
+### `async def generate_response(self, request: ExternalLLMRequest) -> ExternalLLMResponse`
+Routes the request to the configured provider and returns a standardized response.
+
+- **Parameters:**
+    - `request`: `ExternalLLMRequest` (pydantic model)
+- **Returns:**
+    - `ExternalLLMResponse`: `ExternalLLMResponse` (pydantic model)
+- **Exceptions:**
+    - `ExternalLLMError`: Generic wrapper for provider-specific errors (rate limits, network, auth).
+    - `ExternalLLMAuthError`: Specifically for invalid/missing API keys.
+    - `ExternalLLMTimeoutError`: For requests that exceed the configured timeout.
+
+## Expected Behavior
+- **Timeout:** Default 30 seconds for external API requests.
+- **Retries:** 2 automatic retries for transient network errors.
+- **Logging:** Must log request metadata and provider-level errors to `dejaq.services.external_llm`.
+- **Concurrency:** Uses a single `AsyncOpenAI` instance with a shared connection pool.

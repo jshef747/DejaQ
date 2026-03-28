@@ -15,4 +15,24 @@ dependencies = [
     "transformers>=5.1.0",
     "uvicorn>=0.40.0",
     "websockets>=16.0",
+    "chromadb>=0.6.0",
+    "celery[redis]>=5.4.0",
+    "redis>=5.0.0",
+    "openai>=2.30.0",
+    "python-dotenv>=1.2.1",
+]
+
+[dependency-groups]
+test = ["pytest>=8.0", "pytest-html>=4.1"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--html=test_reports/report.html --self-contained-html -v"
+markers = [
+    "no_model: no ML model needed",
+    "qwen: requires Qwen 0.5B",
+    "qwen_1_5b: requires Qwen 1.5B",
+    "phi: requires Phi-3.5 Mini",
+    "llama: requires Llama 3.2 1B",
+    "deberta: requires NVIDIA DeBERTa",
 ]

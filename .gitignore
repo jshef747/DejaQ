@@ -34,4 +34,25 @@ ENV/
 
 # uv
 uv.lock
-EOF
+
+# ChromaDB persistent storage
+chroma_data/
+
+# Test reports
+test_reports/
+
+# macOS
+.DS_Store
+
+# Redis
+dump.rdb
+
+# Tooling / Scaffolding
+.specify/
+.claude/
+.gemini/
+.logs/
+
+# Personal notes / Obsidian docs
+_docs/
+

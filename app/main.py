@@ -1,7 +1,11 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import chat
+from app.routers import chat, feedback
 from app.utils.logger import setup_logging
+from app.config import USE_CELERY
 import logging
 
 # 1. Setup Global Logging
@@ -22,6 +26,7 @@ app.add_middleware(
 
 # 4. Include Routers
 app.include_router(chat.router)
+app.include_router(feedback.router)
 
 @app.on_event("startup")
 async def startup_event():
@@ -34,4 +39,14 @@ async def shutdown_event():
 @app.get("/health")
 async def health_check():
     logger.debug("Health check requested")
-    return {"status": "ok", "service": "DejaQ Middleware"}
+    result = {"status": "ok", "service": "DejaQ Middleware", "celery": "disabled"}
+
+    if USE_CELERY:
+        try:
+            from app.celery_app import celery_app
+            ping = celery_app.control.ping(timeout=1.0)
+            result["celery"] = "ok" if ping else "no_workers"
+        except Exception:
+            result["celery"] = "redis_unreachable"
+
+    return result

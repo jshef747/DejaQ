@@ -2,82 +2,961 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>DejaQ Normalization Test</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DejaQ Chat</title>
     <style>
-        body { font-family: sans-serif; padding: 20px; background: #f0f2f5; color: #333; }
-        .chat-container { max_width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        #log { height: 400px; overflow-y: scroll; border: 1px solid #ddd; padding: 10px; margin-bottom: 10px; border-radius: 4px; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
 
-        /* Message Styles */
-        .message { margin-bottom: 10px; padding: 8px; border-radius: 4px; }
-        .sent { background: #e3f2fd; text-align: right; }
-        .received { background: #f1f8e9; }
+        /* Outer layout: sidebar + chat */
+        .app-layout {
+            width: 100%;
+            max-width: 960px;
+            height: 90vh;
+            display: flex;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+            position: relative;
+        }
 
-        /* The Normalization Debug Info */
-        .debug-info {
-            font-size: 0.85em;
-            color: #d32f2f;
-            margin-top: 4px;
+        /* Sidebar */
+        .sidebar {
+            width: 220px;
+            min-width: 220px;
+            background: #0d1b3e;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid #1a1a4e;
+        }
+        .sidebar-header {
+            padding: 14px 12px;
+            border-bottom: 1px solid #1a1a4e;
+        }
+        .new-chat-btn {
+            width: 100%;
+            padding: 10px 14px;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            background: transparent;
+            color: #e0e0e0;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .new-chat-btn:hover { background: #16213e; }
+        .conv-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 6px 0;
+        }
+        .conv-list::-webkit-scrollbar { width: 4px; }
+        .conv-list::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
+        .conv-item {
+            display: flex;
+            align-items: center;
+            padding: 10px 12px;
+            cursor: pointer;
+            transition: background 0.15s;
+            position: relative;
+        }
+        .conv-item:hover { background: #16213e; }
+        .conv-item.active { background: #1e3a5f; }
+        .conv-preview {
+            flex: 1;
+            font-size: 0.82rem;
+            color: #94a3b8;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .conv-item.active .conv-preview { color: #e0e0e0; }
+        .conv-delete {
+            display: none;
+            background: none;
+            border: none;
+            color: #64748b;
+            font-size: 0.9rem;
+            cursor: pointer;
+            padding: 2px 4px;
+            margin-left: 4px;
+            line-height: 1;
+        }
+        .conv-delete:hover { color: #ef4444; }
+        .conv-item:hover .conv-delete { display: block; }
+
+        /* Chat container */
+        .chat-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: #16213e;
+            overflow: hidden;
+        }
+
+        /* Header */
+        .header {
+            padding: 16px 20px;
+            background: #0f3460;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #1a1a4e;
+        }
+        .header h1 {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: #e0e0e0;
+        }
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 0.8rem;
+        }
+        .connection-status {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #ef4444;
+        }
+        .status-dot.connected { background: #22c55e; }
+        .cache-stats {
+            color: #94a3b8;
             font-family: monospace;
-            background: #ffebee;
-            padding: 2px 6px;
+        }
+        .cache-viewer-btn {
+            padding: 5px 12px;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            background: transparent;
+            color: #94a3b8;
+            font-size: 0.78rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .cache-viewer-btn:hover { background: #1e293b; color: #e0e0e0; }
+        .cache-viewer-btn.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+
+        /* Messages area */
+        #messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        #messages::-webkit-scrollbar { width: 6px; }
+        #messages::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+
+        .bubble-wrapper {
+            display: flex;
+            flex-direction: column;
+            max-width: 75%;
+        }
+        .bubble-wrapper.user {
+            align-self: flex-end;
+            align-items: flex-end;
+        }
+        .bubble-wrapper.bot {
+            align-self: flex-start;
+            align-items: flex-start;
+        }
+        .bubble {
+            padding: 10px 14px;
+            border-radius: 16px;
+            line-height: 1.45;
+            font-size: 0.95rem;
+            word-wrap: break-word;
+        }
+        .bubble-wrapper.user .bubble {
+            background: #2563eb;
+            color: #fff;
+            border-bottom-right-radius: 4px;
+        }
+        .bubble-wrapper.bot .bubble {
+            background: #334155;
+            color: #e2e8f0;
+            border-bottom-left-radius: 4px;
+        }
+
+        /* Badges */
+        .badges {
+            display: flex;
+            gap: 6px;
+            margin-top: 4px;
+            flex-wrap: wrap;
+        }
+        .badge {
+            font-size: 0.65rem;
+            font-weight: 700;
+            padding: 2px 7px;
+            border-radius: 9999px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .badge-llm    { background: #f97316; color: #fff; }
+        .badge-cache   { background: #22c55e; color: #fff; }
+        .badge-hit     { background: #22c55e; color: #fff; }
+        .badge-miss    { background: #ef4444; color: #fff; }
+        .badge-normalized {
+            background: #1e293b;
+            color: #94a3b8;
+            font-weight: 400;
+            font-family: monospace;
+            font-size: 0.7rem;
+        }
+        .badge-enriched {
+            background: #8b5cf6;
+            color: #fff;
+        }
+        .badge-stored {
+            background: #3b82f6;
+            color: #fff;
+        }
+        .badge-not-cached {
+            background: #f97316;
+            color: #fff;
+        }
+        .badge-easy {
+            background: #14b8a6;
+            color: #fff;
+        }
+        .badge-hard {
+            background: #ef4444;
+            color: #fff;
+        }
+
+        /* Feedback buttons */
+        .feedback-btns {
+            display: flex;
+            gap: 6px;
+            margin-top: 6px;
+            align-items: center;
+        }
+        .feedback-btn {
+            background: none;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            color: #64748b;
+            font-size: 0.9rem;
+            padding: 3px 10px;
+            cursor: pointer;
+            transition: all 0.2s;
+            line-height: 1.4;
+        }
+        .feedback-btn:hover:not(:disabled) {
+            border-color: #94a3b8;
+            color: #e0e0e0;
+        }
+        .feedback-btn.selected-positive {
+            border-color: #22c55e;
+            color: #22c55e;
+            background: rgba(34, 197, 94, 0.1);
+        }
+        .feedback-btn.selected-negative {
+            border-color: #ef4444;
+            color: #ef4444;
+            background: rgba(239, 68, 68, 0.1);
+        }
+        .feedback-btn:disabled {
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+        .feedback-score {
+            font-size: 0.7rem;
+            color: #64748b;
+            font-family: monospace;
+        }
+
+        /* Input area */
+        .input-area {
+            padding: 14px 20px;
+            background: #0f3460;
+            display: flex;
+            gap: 10px;
+            border-top: 1px solid #1a1a4e;
+        }
+        .input-area input {
+            flex: 1;
+            padding: 12px 16px;
+            border: 1px solid #334155;
+            border-radius: 24px;
+            background: #1e293b;
+            color: #e2e8f0;
+            font-size: 0.95rem;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        .input-area input:focus { border-color: #2563eb; }
+        .input-area input::placeholder { color: #64748b; }
+        .input-area button {
+            padding: 10px 22px;
+            border: none;
+            border-radius: 24px;
+            background: #2563eb;
+            color: #fff;
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .input-area button:hover { background: #1d4ed8; }
+        .input-area button:disabled { background: #334155; cursor: not-allowed; }
+
+        /* Cache Viewer Panel */
+        .cache-panel {
+            display: none;
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 380px;
+            height: 100%;
+            background: #0d1b3e;
+            border-left: 1px solid #1a1a4e;
+            z-index: 10;
+            flex-direction: column;
+        }
+        .cache-panel.open { display: flex; }
+        .cache-panel-header {
+            padding: 14px 16px;
+            border-bottom: 1px solid #1a1a4e;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .cache-panel-header h2 {
+            font-size: 1rem;
+            font-weight: 600;
+        }
+        .cache-panel-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .cache-panel-count {
+            font-size: 0.75rem;
+            color: #94a3b8;
+            font-family: monospace;
+        }
+        .cache-refresh-btn, .cache-close-btn {
+            background: none;
+            border: 1px solid #334155;
+            color: #94a3b8;
             border-radius: 4px;
-            display: inline-block;
+            padding: 4px 8px;
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .cache-refresh-btn:hover, .cache-close-btn:hover {
+            background: #1e293b;
+            color: #e0e0e0;
+        }
+        .cache-entries {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px;
+        }
+        .cache-entries::-webkit-scrollbar { width: 4px; }
+        .cache-entries::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
+        .cache-entry {
+            background: #16213e;
+            border: 1px solid #1a1a4e;
+            border-radius: 8px;
+            padding: 10px 12px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+        .cache-entry:hover { border-color: #334155; }
+        .cache-entry-query {
+            font-size: 0.82rem;
+            color: #e0e0e0;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        .cache-entry-original {
+            font-size: 0.75rem;
+            color: #64748b;
+            margin-bottom: 4px;
+        }
+        .cache-entry-answer {
+            font-size: 0.78rem;
+            color: #94a3b8;
+            line-height: 1.4;
+            overflow: hidden;
+            max-height: 2.8em;
+            transition: max-height 0.3s;
+        }
+        .cache-entry.expanded .cache-entry-answer {
+            max-height: none;
+        }
+        .cache-entry-meta {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 6px;
+        }
+        .cache-entry-time {
+            font-size: 0.68rem;
+            color: #475569;
+            font-family: monospace;
+        }
+        .cache-entry-delete {
+            background: none;
+            border: 1px solid #334155;
+            color: #ef4444;
+            border-radius: 4px;
+            padding: 2px 8px;
+            font-size: 0.7rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .cache-entry-delete:hover { background: #ef4444; color: #fff; }
+        .cache-empty {
+            text-align: center;
+            color: #475569;
+            padding: 40px 16px;
+            font-size: 0.85rem;
         }
     </style>
 </head>
 <body>
-    <div class="chat-container">
-        <h2>DejaQ Normalizer Test</h2>
-        <div id="status">Status: Disconnected</div>
+    <div class="app-layout">
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <button class="new-chat-btn" onclick="newChat()">+ New Chat</button>
+            </div>
+            <div class="conv-list" id="convList"></div>
+        </div>
 
-        <div id="log"></div>
+        <div class="chat-container">
+            <div class="header">
+                <h1>DejaQ Chat</h1>
+                <div class="header-right">
+                    <span class="cache-stats" id="cacheStats"></span>
+                    <button class="cache-viewer-btn" id="cacheViewerBtn" onclick="toggleCachePanel()">Cache</button>
+                    <div class="connection-status">
+                        <div class="status-dot" id="statusDot"></div>
+                        <span id="statusText">Disconnected</span>
+                    </div>
+                </div>
+            </div>
 
-        <div style="display: flex; gap: 10px;">
-            <input type="text" id="msgInput" placeholder="Type a messy query (e.g., 'umm what is the wifi please')" style="flex-grow: 1; padding: 10px;">
-            <button onclick="sendMessage()" style="padding: 10px 20px;">Send</button>
+            <div id="messages"></div>
+
+            <div class="input-area">
+                <input type="text" id="msgInput" placeholder="Type a message..." autocomplete="off">
+                <button id="sendBtn" onclick="sendMessage()">Send</button>
+            </div>
+        </div>
+
+        <!-- Cache Viewer Panel -->
+        <div class="cache-panel" id="cachePanel">
+            <div class="cache-panel-header">
+                <h2>Cache Viewer</h2>
+                <div class="cache-panel-controls">
+                    <span class="cache-panel-count" id="cachePanelCount"></span>
+                    <button class="cache-refresh-btn" onclick="loadCacheEntries()">Refresh</button>
+                    <button class="cache-close-btn" onclick="toggleCachePanel()">Close</button>
+                </div>
+            </div>
+            <div class="cache-entries" id="cacheEntries"></div>
         </div>
     </div>
 
     <script>
-        const ws = new WebSocket("ws://localhost:8000/ws/chat");
+        const API_BASE = "http://localhost:8000";
+        let totalQueries = 0;
+        let cacheHits = 0;
+        let ws;
+        let conversationId = null;
 
-        ws.onopen = () => document.getElementById("status").innerText = "Status: Connected ✅";
+        // Local cache: conversationId -> array of {type, html}
+        const chatHistory = {};
 
-        ws.onmessage = (event) => {
-            const data = JSON.parse(event.data);
+        function connect() {
+            ws = new WebSocket(API_BASE.replace("http", "ws") + "/ws/chat");
 
-            // Build the HTML for the response
-            let html = `<strong>[System]:</strong> ${data.message}`;
+            ws.onopen = () => {
+                document.getElementById("statusDot").classList.add("connected");
+                document.getElementById("statusText").textContent = "Connected";
+                document.getElementById("sendBtn").disabled = false;
+            };
 
-            // IF we have a normalized version, show it!
-            if (data.normalized_message) {
-                html += `<br><span class="debug-info">Normalized to: "${data.normalized_message}"</span>`;
-            }
+            ws.onclose = () => {
+                document.getElementById("statusDot").classList.remove("connected");
+                document.getElementById("statusText").textContent = "Disconnected";
+                document.getElementById("sendBtn").disabled = true;
+                setTimeout(connect, 3000);
+            };
 
-            logHTML(html, "received");
-        };
+            ws.onerror = () => ws.close();
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                const isNewConversation = !conversationId;
+                if (data.conversation_id) conversationId = data.conversation_id;
+
+                const wrapper = document.createElement("div");
+                wrapper.className = "bubble-wrapper bot";
+
+                const bubble = document.createElement("div");
+                bubble.className = "bubble";
+                bubble.textContent = data.message;
+                wrapper.appendChild(bubble);
+
+                // Badges
+                if (data.cache_hit !== null && data.cache_hit !== undefined) {
+                    totalQueries++;
+                    if (data.cache_hit) cacheHits++;
+                    updateCacheStats();
+
+                    const badges = document.createElement("div");
+                    badges.className = "badges";
+
+                    const sourceBadge = document.createElement("span");
+                    sourceBadge.className = "badge " + (data.cache_hit ? "badge-cache" : "badge-llm");
+                    sourceBadge.textContent = data.cache_hit ? "Cache" : "LLM";
+                    badges.appendChild(sourceBadge);
+
+                    const hitBadge = document.createElement("span");
+                    hitBadge.className = "badge " + (data.cache_hit ? "badge-hit" : "badge-miss");
+                    hitBadge.textContent = data.cache_hit ? "HIT" : "MISS";
+                    badges.appendChild(hitBadge);
+
+                    // Enriched badge — shown when enricher changed the query
+                    if (data.enriched_query) {
+                        const enrichedBadge = document.createElement("span");
+                        enrichedBadge.className = "badge badge-enriched";
+                        enrichedBadge.textContent = "Enriched: " + data.enriched_query;
+                        badges.appendChild(enrichedBadge);
+                    }
+
+                    // Cache storage badges (only on cache miss)
+                    if (!data.cache_hit && data.cached !== null && data.cached !== undefined) {
+                        const cacheBadge = document.createElement("span");
+                        if (data.cached) {
+                            cacheBadge.className = "badge badge-stored";
+                            cacheBadge.textContent = "Stored";
+                        } else {
+                            cacheBadge.className = "badge badge-not-cached";
+                            cacheBadge.textContent = "Not Cached";
+                        }
+                        badges.appendChild(cacheBadge);
+                    }
+
+                    // Complexity badge (only on cache miss — cache hits skip the classifier)
+                    if (data.complexity) {
+                        const complexityBadge = document.createElement("span");
+                        complexityBadge.className = "badge " + (data.complexity === "easy" ? "badge-easy" : "badge-hard");
+                        complexityBadge.textContent = data.complexity.toUpperCase() + (data.complexity_score != null ? " (" + data.complexity_score.toFixed(2) + ")" : "");
+                        badges.appendChild(complexityBadge);
+                    }
+
+                    // Task type badge
+                    if (data.task_type) {
+                        const taskBadge = document.createElement("span");
+                        taskBadge.className = "badge badge-normalized";
+                        taskBadge.textContent = "task: " + data.task_type;
+                        badges.appendChild(taskBadge);
+                    }
+
+                    // Model used badge
+                    if (data.model_used) {
+                        const modelBadge = document.createElement("span");
+                        modelBadge.className = "badge " + (data.complexity === "hard" ? "badge-hard" : "badge-easy");
+                        modelBadge.textContent = "model: " + data.model_used;
+                        badges.appendChild(modelBadge);
+                    }
+
+                    // Latency badge
+                    if (data.latency_ms != null) {
+                        const latencyBadge = document.createElement("span");
+                        latencyBadge.className = "badge badge-normalized";
+                        latencyBadge.textContent = data.latency_ms.toFixed(0) + " ms";
+                        badges.appendChild(latencyBadge);
+                    }
+
+                    if (data.normalized_query) {
+                        const normBadge = document.createElement("span");
+                        normBadge.className = "badge badge-normalized";
+                        normBadge.textContent = "normalized: " + data.normalized_query;
+                        badges.appendChild(normBadge);
+                    }
+
+                    wrapper.appendChild(badges);
+                }
+
+                // Feedback buttons — only shown when a cache entry ID is available
+                if (data.cache_entry_id) {
+                    const feedbackRow = document.createElement("div");
+                    feedbackRow.className = "feedback-btns";
+
+                    const thumbUp = document.createElement("button");
+                    thumbUp.className = "feedback-btn";
+                    thumbUp.textContent = "👍";
+                    thumbUp.title = "Helpful";
+
+                    const thumbDown = document.createElement("button");
+                    thumbDown.className = "feedback-btn";
+                    thumbDown.textContent = "👎";
+                    thumbDown.title = "Not helpful";
+
+                    const scoreEl = document.createElement("span");
+                    scoreEl.className = "feedback-score";
+
+                    thumbUp.onclick = () => submitFeedback(data.cache_entry_id, "positive", thumbUp, thumbDown, scoreEl);
+                    thumbDown.onclick = () => submitFeedback(data.cache_entry_id, "negative", thumbUp, thumbDown, scoreEl);
+
+                    feedbackRow.appendChild(thumbUp);
+                    feedbackRow.appendChild(thumbDown);
+                    feedbackRow.appendChild(scoreEl);
+                    wrapper.appendChild(feedbackRow);
+                }
+
+                const messagesDiv = document.getElementById("messages");
+                messagesDiv.appendChild(wrapper);
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
+                // Save to local cache
+                saveBubbleToCache(conversationId, wrapper);
+
+                // If this was the first message in a new conversation, add to sidebar
+                if (isNewConversation) {
+                    loadConversationList();
+                }
+            };
+        }
+
+        function saveBubbleToCache(convId, element) {
+            if (!convId) return;
+            if (!chatHistory[convId]) chatHistory[convId] = [];
+            chatHistory[convId].push(element.outerHTML);
+        }
+
+        function updateCacheStats() {
+            const pct = totalQueries > 0 ? Math.round((cacheHits / totalQueries) * 100) : 0;
+            document.getElementById("cacheStats").textContent =
+                "Cache Hit Rate: " + cacheHits + "/" + totalQueries + " (" + pct + "%)";
+        }
 
         function sendMessage() {
             const input = document.getElementById("msgInput");
-            const text = input.value;
+            const text = input.value.trim();
+            if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+            const wrapper = document.createElement("div");
+            wrapper.className = "bubble-wrapper user";
+            const bubble = document.createElement("div");
+            bubble.className = "bubble";
+            bubble.textContent = text;
+            wrapper.appendChild(bubble);
+
+            const messagesDiv = document.getElementById("messages");
+            messagesDiv.appendChild(wrapper);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
+            // Save user bubble to local cache
+            if (conversationId) {
+                saveBubbleToCache(conversationId, wrapper);
+            }
 
             const payload = {
                 user_id: "test_user",
                 department_id: "engineering",
                 message: text
             };
-
+            if (conversationId) payload.conversation_id = conversationId;
             ws.send(JSON.stringify(payload));
-            logHTML(`<strong>[Me]:</strong> ${text}`, "sent");
+
             input.value = "";
+
+            // For new chats, we need to save the user bubble once we get the conv id
+            if (!conversationId) {
+                const pendingHtml = wrapper.outerHTML;
+                const origOnMessage = ws.onmessage;
+                ws.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    if (data.conversation_id && !chatHistory[data.conversation_id]) {
+                        chatHistory[data.conversation_id] = [pendingHtml];
+                    } else if (data.conversation_id && chatHistory[data.conversation_id]) {
+                        // Insert user bubble before bot response if missing
+                        if (chatHistory[data.conversation_id].length === 0) {
+                            chatHistory[data.conversation_id].push(pendingHtml);
+                        }
+                    }
+                    ws.onmessage = origOnMessage;
+                    origOnMessage(event);
+                };
+            }
         }
 
-        function logHTML(htmlContent, type) {
-            const logDiv = document.getElementById("log");
-            logDiv.innerHTML += `<div class="message ${type}">${htmlContent}</div>`;
-            logDiv.scrollTop = logDiv.scrollHeight;
+        // --- Sidebar functions ---
+
+        async function loadConversationList() {
+            try {
+                const res = await fetch(API_BASE + "/conversations");
+                const convos = await res.json();
+                renderConversationList(convos);
+            } catch (e) {
+                // Server might be down, ignore
+            }
         }
+
+        function renderConversationList(convos) {
+            const list = document.getElementById("convList");
+            list.innerHTML = "";
+            convos.forEach(c => {
+                const item = document.createElement("div");
+                item.className = "conv-item" + (c.id === conversationId ? " active" : "");
+                item.onclick = (e) => {
+                    if (e.target.classList.contains("conv-delete")) return;
+                    switchConversation(c.id);
+                };
+
+                const preview = document.createElement("span");
+                preview.className = "conv-preview";
+                preview.textContent = c.preview || "New conversation";
+                item.appendChild(preview);
+
+                const del = document.createElement("button");
+                del.className = "conv-delete";
+                del.textContent = "\u00d7";
+                del.title = "Delete conversation";
+                del.onclick = (e) => {
+                    e.stopPropagation();
+                    deleteConversation(c.id);
+                };
+                item.appendChild(del);
+
+                list.appendChild(item);
+            });
+        }
+
+        function switchConversation(id) {
+            if (id === conversationId) return;
+
+            // Save current messages to cache
+            saveCurrentToCache();
+
+            // Set new conversation
+            conversationId = id;
+
+            // Restore from local cache or clear
+            const messagesDiv = document.getElementById("messages");
+            messagesDiv.innerHTML = "";
+            if (chatHistory[id]) {
+                chatHistory[id].forEach(html => {
+                    messagesDiv.innerHTML += html;
+                });
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            }
+
+            // Reconnect WS with conversation_id
+            reconnectWebSocket();
+
+            // Update sidebar active state
+            document.querySelectorAll(".conv-item").forEach(el => el.classList.remove("active"));
+            document.querySelectorAll(".conv-item").forEach(el => {
+                if (el.querySelector(".conv-preview").textContent === (chatHistory[id] ? "" : "")) return;
+                // Re-render to update active state
+            });
+            loadConversationList();
+        }
+
+        function saveCurrentToCache() {
+            if (!conversationId) return;
+            const messagesDiv = document.getElementById("messages");
+            const bubbles = messagesDiv.querySelectorAll(".bubble-wrapper");
+            chatHistory[conversationId] = [];
+            bubbles.forEach(b => chatHistory[conversationId].push(b.outerHTML));
+        }
+
+        function newChat() {
+            // Save current chat
+            saveCurrentToCache();
+
+            // Reset state
+            conversationId = null;
+            document.getElementById("messages").innerHTML = "";
+            totalQueries = 0;
+            cacheHits = 0;
+            document.getElementById("cacheStats").textContent = "";
+
+            // Reconnect WS (fresh, no conversation_id)
+            reconnectWebSocket();
+
+            // Update sidebar
+            loadConversationList();
+        }
+
+        async function deleteConversation(id) {
+            try {
+                await fetch(API_BASE + "/conversations/" + id, { method: "DELETE" });
+            } catch (e) {
+                // ignore
+            }
+            delete chatHistory[id];
+            if (id === conversationId) {
+                newChat();
+            } else {
+                loadConversationList();
+            }
+        }
+
+        function reconnectWebSocket() {
+            if (ws) {
+                ws.onclose = null; // Prevent auto-reconnect
+                ws.close();
+            }
+            connect();
+        }
+
+        // --- Cache Viewer ---
+
+        function toggleCachePanel() {
+            const panel = document.getElementById("cachePanel");
+            const btn = document.getElementById("cacheViewerBtn");
+            const isOpen = panel.classList.toggle("open");
+            btn.classList.toggle("active", isOpen);
+            if (isOpen) {
+                loadCacheEntries();
+            }
+        }
+
+        async function loadCacheEntries() {
+            const container = document.getElementById("cacheEntries");
+            const countEl = document.getElementById("cachePanelCount");
+            container.innerHTML = '<div class="cache-empty">Loading...</div>';
+
+            try {
+                const res = await fetch(API_BASE + "/cache/entries?limit=100");
+                const data = await res.json();
+
+                countEl.textContent = data.total + " entries";
+
+                if (data.entries.length === 0) {
+                    container.innerHTML = '<div class="cache-empty">No cached entries yet</div>';
+                    return;
+                }
+
+                container.innerHTML = "";
+                data.entries.forEach(entry => {
+                    const el = document.createElement("div");
+                    el.className = "cache-entry";
+                    el.onclick = (e) => {
+                        if (e.target.classList.contains("cache-entry-delete")) return;
+                        el.classList.toggle("expanded");
+                    };
+
+                    const query = document.createElement("div");
+                    query.className = "cache-entry-query";
+                    query.textContent = entry.normalized_query;
+                    el.appendChild(query);
+
+                    if (entry.original_query && entry.original_query !== entry.normalized_query) {
+                        const original = document.createElement("div");
+                        original.className = "cache-entry-original";
+                        original.textContent = "Original: " + entry.original_query;
+                        el.appendChild(original);
+                    }
+
+                    const answer = document.createElement("div");
+                    answer.className = "cache-entry-answer";
+                    answer.textContent = entry.generalized_answer;
+                    el.appendChild(answer);
+
+                    const meta = document.createElement("div");
+                    meta.className = "cache-entry-meta";
+
+                    const time = document.createElement("span");
+                    time.className = "cache-entry-time";
+                    time.textContent = entry.stored_at || "—";
+                    meta.appendChild(time);
+
+                    const deleteBtn = document.createElement("button");
+                    deleteBtn.className = "cache-entry-delete";
+                    deleteBtn.textContent = "Delete";
+                    deleteBtn.onclick = async (e) => {
+                        e.stopPropagation();
+                        try {
+                            await fetch(API_BASE + "/cache/entries/" + entry.id, { method: "DELETE" });
+                            el.remove();
+                            // Update count
+                            const remaining = container.querySelectorAll(".cache-entry").length;
+                            countEl.textContent = remaining + " entries";
+                            if (remaining === 0) {
+                                container.innerHTML = '<div class="cache-empty">No cached entries yet</div>';
+                            }
+                        } catch (err) {
+                            // ignore
+                        }
+                    };
+                    meta.appendChild(deleteBtn);
+
+                    el.appendChild(meta);
+                    container.appendChild(el);
+                });
+            } catch (e) {
+                container.innerHTML = '<div class="cache-empty">Failed to load cache entries</div>';
+            }
+        }
+
+        async function submitFeedback(entryId, value, thumbUpBtn, thumbDownBtn, scoreEl) {
+            thumbUpBtn.disabled = true;
+            thumbDownBtn.disabled = true;
+            try {
+                const res = await fetch(API_BASE + "/cache/entries/" + entryId + "/feedback", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ value, conversation_id: conversationId || undefined })
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (value === "positive") {
+                        thumbUpBtn.classList.add("selected-positive");
+                    } else {
+                        thumbDownBtn.classList.add("selected-negative");
+                    }
+                    if (scoreEl) {
+                        const label = data.deleted ? "deleted" : (data.flagged ? "flagged" : "score: " + data.feedback_score);
+                        scoreEl.textContent = label;
+                    }
+                } else {
+                    thumbUpBtn.disabled = false;
+                    thumbDownBtn.disabled = false;
+                }
+            } catch (e) {
+                thumbUpBtn.disabled = false;
+                thumbDownBtn.disabled = false;
+            }
+        }
+
+        document.getElementById("msgInput").addEventListener("keydown", (e) => {
+            if (e.key === "Enter") sendMessage();
+        });
+
+        // Boot
+        connect();
+        loadConversationList();
     </script>
 </body>
 </html>

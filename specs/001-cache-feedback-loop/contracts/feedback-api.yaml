@@ -1,0 +1,232 @@
+openapi: "3.1.0"
+info:
+  title: DejaQ Feedback API
+  version: "0.1.0"
+  description: Endpoints for submitting quality ratings on cache entries and retrieving feedback history.
+
+paths:
+  /cache/entries/{id}/feedback:
+    post:
+      summary: Submit quality feedback for a cache entry
+      description: |
+        Submit a positive or negative rating for a cache entry identified by `id`.
+        The `id` comes from the `cache_entry_id` field in the ChatResponse.
+
+        On positive feedback: increments the entry's quality score by 1. Entries that
+        accumulate enough positive ratings will match more broadly on future queries.
+
+        On negative feedback: decrements the quality score by 1. If the score falls
+        below the flag threshold, the entry is marked as unreliable and will no longer
+        be served. If it falls below the auto-delete threshold, the entry is removed.
+
+        If the entry does not yet exist in the cache (cache miss scenario and storage
+        is still pending), a suppression flag is set to prevent storage.
+      operationId: submitFeedback
+      tags: [feedback]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The cache entry ID (from ChatResponse.cache_entry_id)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FeedbackRequest'
+            examples:
+              positive:
+                summary: Thumbs up
+                value:
+                  value: "positive"
+                  conversation_id: "conv-abc123"
+              negative:
+                summary: Thumbs down
+                value:
+                  value: "negative"
+                  conversation_id: "conv-abc123"
+      responses:
+        "200":
+          description: Feedback recorded. Returns updated entry status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeedbackResponse'
+              examples:
+                positive_recorded:
+                  summary: Positive feedback recorded
+                  value:
+                    entry_id: "a1b2c3d4e5f6a7b8"
+                    feedback_score: 1
+                    flagged: false
+                    deleted: false
+                    status: "ok"
+                negative_flagged:
+                  summary: Negative feedback caused flagging
+                  value:
+                    entry_id: "a1b2c3d4e5f6a7b8"
+                    feedback_score: -3
+                    flagged: true
+                    deleted: false
+                    status: "ok"
+                entry_deleted:
+                  summary: Negative feedback caused auto-deletion
+                  value:
+                    entry_id: "a1b2c3d4e5f6a7b8"
+                    feedback_score: -5
+                    flagged: true
+                    deleted: true
+                    status: "ok"
+                suppressed:
+                  summary: Entry not yet stored — storage suppressed
+                  value:
+                    entry_id: "a1b2c3d4e5f6a7b8"
+                    feedback_score: 0
+                    flagged: false
+                    deleted: false
+                    status: "suppressed"
+        "422":
+          description: Validation error — value must be "positive" or "negative"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+
+    get:
+      summary: Retrieve feedback history for a cache entry
+      description: |
+        Returns the full timestamped list of ratings submitted for this cache entry,
+        along with its current quality score and flagged status.
+        Returns an empty events list (not 404) if no feedback has been submitted yet.
+      operationId: getFeedbackHistory
+      tags: [feedback]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The cache entry ID
+      responses:
+        "200":
+          description: Feedback history for the entry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeedbackHistoryResponse'
+              examples:
+                with_history:
+                  summary: Entry with ratings
+                  value:
+                    entry_id: "a1b2c3d4e5f6a7b8"
+                    feedback_score: 1
+                    flagged: false
+                    events:
+                      - direction: "positive"
+                        timestamp: "2026-02-19T12:00:00Z"
+                      - direction: "negative"
+                        timestamp: "2026-02-19T12:01:30Z"
+                      - direction: "positive"
+                        timestamp: "2026-02-19T12:05:00Z"
+                no_history:
+                  summary: Entry exists but no feedback submitted
+                  value:
+                    entry_id: "a1b2c3d4e5f6a7b8"
+                    feedback_score: 0
+                    flagged: false
+                    events: []
+        "404":
+          description: Cache entry not found in ChromaDB
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    FeedbackRequest:
+      type: object
+      required:
+        - value
+      properties:
+        value:
+          type: string
+          enum: [positive, negative]
+          description: The quality rating direction
+        conversation_id:
+          type: string
+          nullable: true
+          description: Optional conversation context (for future per-session analytics)
+
+    FeedbackResponse:
+      type: object
+      required: [entry_id, feedback_score, flagged, deleted, status]
+      properties:
+        entry_id:
+          type: string
+          description: The cache entry identifier
+        feedback_score:
+          type: integer
+          description: Net quality score after this rating (+1/-1 per rating)
+        flagged:
+          type: boolean
+          description: Whether the entry is marked as unreliable (no longer served)
+        deleted:
+          type: boolean
+          description: Whether the entry was removed from the cache
+        status:
+          type: string
+          enum: [ok, suppressed, not_found_suppressed]
+          description: |
+            ok = rating applied to existing entry;
+            suppressed = entry not yet stored, storage cancelled;
+            not_found_suppressed = entry not found and suppression flag set
+
+    FeedbackEvent:
+      type: object
+      required: [direction, timestamp]
+      properties:
+        direction:
+          type: string
+          enum: [positive, negative]
+        timestamp:
+          type: string
+          format: date-time
+
+    FeedbackHistoryResponse:
+      type: object
+      required: [entry_id, feedback_score, flagged, events]
+      properties:
+        entry_id:
+          type: string
+        feedback_score:
+          type: integer
+        flagged:
+          type: boolean
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/FeedbackEvent'
+
+    ValidationError:
+      type: object
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            properties:
+              loc:
+                type: array
+              msg:
+                type: string
+              type:
+                type: string
+
+    ErrorResponse:
+      type: object
+      properties:
+        detail:
+          type: string
