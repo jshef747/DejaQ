@@ -33,7 +33,7 @@ ENV/
 .idea/
 
 # uv
-uv.lock
+# uv.lock is tracked, so no longer ignored
 
 # ChromaDB persistent storage
 chroma_data/
@@ -55,4 +55,6 @@ dump.rdb
 
 # Personal notes / Obsidian docs
 _docs/
+test.md
+dejaq-course.html
 

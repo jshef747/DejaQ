@@ -5,4 +5,11 @@
 chroma_data/
 dump.rdb
 test_reports/
-uv.lock
+
+# Python defaults
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
