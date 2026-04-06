@@ -18,7 +18,7 @@ class ModelManager:
                 repo_id="Qwen/Qwen2.5-0.5B-Instruct-GGUF",
                 filename="*q4_k_m.gguf",
                 verbose=False,
-                n_ctx=2048
+                n_ctx=4096
             )
         return cls._qwen
 
@@ -31,7 +31,7 @@ class ModelManager:
                 repo_id="Qwen/Qwen2.5-1.5B-Instruct-GGUF",
                 filename="*q4_k_m.gguf",
                 verbose=False,
-                n_ctx=2048
+                n_ctx=4096
             )
         return cls._qwen_1_5b
 
@@ -44,7 +44,7 @@ class ModelManager:
                 repo_id="bartowski/Phi-3.5-mini-instruct-GGUF",
                 filename="*Q4_K_M.gguf",
                 verbose=False,
-                n_ctx=2048
+                n_ctx=4096
             )
         return cls._phi
 
@@ -57,6 +57,6 @@ class ModelManager:
                 repo_id="hugging-quants/Llama-3.2-1B-Instruct-Q8_0-GGUF",
                 filename="*q8_0.gguf",
                 verbose=False,
-                n_ctx=2048
+                n_ctx=4096
             )
         return cls._llama

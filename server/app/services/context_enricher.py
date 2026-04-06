@@ -53,7 +53,7 @@ class ContextEnricherService:
                 # Actual query
                 {"role": "user", "content": f"HISTORY:\n{context_block}\n\nFOLLOW-UP: {message}"},
             ],
-            max_tokens=64,
+            max_tokens=256,
             temperature=0.0
         )
 

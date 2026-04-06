@@ -7,13 +7,20 @@ from app.routers import chat, feedback
 from app.utils.logger import setup_logging
 from app.config import USE_CELERY
 import logging
+from contextlib import asynccontextmanager
 
 # 1. Setup Global Logging
 setup_logging()
 logger = logging.getLogger("dejaq.main")
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("DejaQ Middleware starting up...")
+    yield
+    logger.info("DejaQ Middleware shutting down...")
+
 # 2. Initialize App
-app = FastAPI(title="DejaQ Middleware", version="0.1.0")
+app = FastAPI(title="DejaQ Middleware", version="0.1.0", lifespan=lifespan)
 
 # 3. CORS
 app.add_middleware(
@@ -28,13 +35,7 @@ app.add_middleware(
 app.include_router(chat.router)
 app.include_router(feedback.router)
 
-@app.on_event("startup")
-async def startup_event():
-    logger.info("DejaQ Middleware starting up...")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    logger.info("DejaQ Middleware shutting down...")
+# Replaced by lifespan context manager
 
 @app.get("/health")
 async def health_check():

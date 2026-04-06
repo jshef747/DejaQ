@@ -24,7 +24,7 @@ class LLMRouterService:
         start = time.time()
         output = self.local_llm.create_chat_completion(
             messages=messages,
-            max_tokens=512,
+            max_tokens=1024,
             temperature=0.7,
         )
         response = output["choices"][0]["message"]["content"].strip()

@@ -32,7 +32,7 @@ class ContextAdjusterService:
                 # Actual answer
                 {"role": "user", "content": f"ANSWER: {answer}"},
             ],
-            max_tokens=256,
+            max_tokens=1024,
             temperature=0.3
         )
 
@@ -61,7 +61,7 @@ class ContextAdjusterService:
                 # Actual query
                 {"role": "user", "content": f"QUESTION: {original_query}\nANSWER: {general_answer}"},
             ],
-            max_tokens=256,
+            max_tokens=1024,
             temperature=0.3
         )
 

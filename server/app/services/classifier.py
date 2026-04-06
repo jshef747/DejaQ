@@ -1,9 +1,10 @@
+import json
 import logging
 import numpy as np
 import torch
 import torch.nn as nn
-from huggingface_hub import PyTorchModelHubMixin
-from transformers import AutoConfig, AutoModel, AutoTokenizer
+from huggingface_hub import PyTorchModelHubMixin, hf_hub_download
+from transformers import AutoModel, AutoTokenizer
 
 logger = logging.getLogger("dejaq.services.classifier")
 
@@ -158,13 +159,15 @@ class ClassifierService:
         cls._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         logger.info("Classifier device: %s", cls._device)
 
-        config = AutoConfig.from_pretrained(MODEL_ID)
+        config_path = hf_hub_download(MODEL_ID, "config.json")
+        with open(config_path) as f:
+            config = json.load(f)
         cls._tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
         cls._model = CustomModel(
-            target_sizes=config.target_sizes,
-            task_type_map=config.task_type_map,
-            weights_map=config.weights_map,
-            divisor_map=config.divisor_map,
+            target_sizes=config["target_sizes"],
+            task_type_map=config["task_type_map"],
+            weights_map=config["weights_map"],
+            divisor_map=config["divisor_map"],
         ).from_pretrained(MODEL_ID)
         cls._model.to(cls._device)
         cls._model.eval()
