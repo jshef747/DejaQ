@@ -76,6 +76,7 @@ class ConfigMetrics:
     hit_rate_at_020: float
     # Cross-concept false positive rate
     cross_fp_rate_at_015: float
+    cross_fp_rate_at_020: float
     n_cross_pairs_sampled: int
     # Latency
     mean_latency_ms: float
@@ -153,9 +154,9 @@ def compute_metrics(
     p95_sibling = _percentile(all_sibling_distances, 95)
     max_sibling = max(all_sibling_distances) if all_sibling_distances else 0.0
 
-    # Cross-concept false positive rate (sampled)
+    # Cross-concept false positive rate (sampled) — measured at both thresholds
     rng = random.Random(seed)
-    cross_fp_rate, n_cross = _compute_cross_fp(rows, text_to_vec, rng)
+    cross_fp_015, cross_fp_020, n_cross = _compute_cross_fp(rows, text_to_vec, rng)
 
     # Latency
     latencies = [r.latency_ms for r in rows]
@@ -199,7 +200,8 @@ def compute_metrics(
         max_sibling_distance=max_sibling,
         hit_rate_at_015=(hit_at_015 / n_sibling_pairs) if n_sibling_pairs else 0.0,
         hit_rate_at_020=(hit_at_020 / n_sibling_pairs) if n_sibling_pairs else 0.0,
-        cross_fp_rate_at_015=cross_fp_rate,
+        cross_fp_rate_at_015=cross_fp_015,
+        cross_fp_rate_at_020=cross_fp_020,
         n_cross_pairs_sampled=n_cross,
         mean_latency_ms=mean_lat,
         p95_latency_ms=p95_lat,
@@ -213,12 +215,15 @@ def _compute_cross_fp(
     rows: list[NormalizedRow],
     text_to_vec: dict[int, np.ndarray],
     rng: random.Random,
-) -> tuple[float, int]:
+) -> tuple[float, float, int]:
     """Sample random pairs of prompts from DIFFERENT concepts and measure
-    what fraction fall under the production threshold (false positives)."""
+    what fraction fall under the production (0.15) and trusted (0.20) thresholds.
+
+    Returns (fp_rate_at_015, fp_rate_at_020, n_sampled).
+    """
     n = len(rows)
     if n < 2:
-        return 0.0, 0
+        return 0.0, 0.0, 0
 
     # Build list of (idx, concept_id) for sampling
     cross_pairs: list[tuple[int, int]] = []
@@ -235,11 +240,14 @@ def _compute_cross_fp(
         cross_pairs.append((i, j))
 
     if not cross_pairs:
-        return 0.0, 0
+        return 0.0, 0.0, 0
 
-    fp = 0
+    fp_015 = 0
+    fp_020 = 0
     for i, j in cross_pairs:
         d = float(1.0 - np.dot(text_to_vec[i], text_to_vec[j]))
         if d <= PRODUCTION_THRESHOLD:
-            fp += 1
-    return fp / len(cross_pairs), len(cross_pairs)
+            fp_015 += 1
+        if d <= TRUSTED_THRESHOLD:
+            fp_020 += 1
+    return fp_015 / len(cross_pairs), fp_020 / len(cross_pairs), len(cross_pairs)

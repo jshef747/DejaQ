@@ -1,0 +1,229 @@
+{
+  "concepts": [
+    {
+      "id": "number_of_strings_guitar",
+      "category": "factual_qa",
+      "phrasings": [
+        "How many strings does a standard guitar have?",
+        "What is the string count on a regular guitar?",
+        "Tell me how many strings a typical acoustic guitar has."
+      ]
+    },
+    {
+      "id": "year_titanic_sank",
+      "category": "factual_qa",
+      "phrasings": [
+        "What year did the Titanic sink?",
+        "When did the RMS Titanic go down?",
+        "Give me the year the Titanic disaster occurred."
+      ]
+    },
+    {
+      "id": "boiling_point_alcohol",
+      "category": "factual_qa",
+      "phrasings": [
+        "What is the boiling point of ethanol?",
+        "At what temperature does alcohol boil?",
+        "Tell me the boiling temperature of ethyl alcohol in Celsius."
+      ]
+    },
+    {
+      "id": "largest_country_by_area",
+      "category": "factual_qa",
+      "phrasings": [
+        "Which country is the largest by land area?",
+        "What nation has the most territory on Earth?",
+        "Name the biggest country in the world by square kilometers."
+      ]
+    },
+    {
+      "id": "what_is_quantum_computing",
+      "category": "conceptual",
+      "phrasings": [
+        "What is quantum computing?",
+        "Explain the concept of a quantum computer.",
+        "How is quantum computing different from classical computing?"
+      ]
+    },
+    {
+      "id": "how_does_a_combustion_engine_work",
+      "category": "conceptual",
+      "phrasings": [
+        "How does a combustion engine work?",
+        "Explain how an internal combustion engine generates power.",
+        "What is the cycle of operation in a petrol engine?"
+      ]
+    },
+    {
+      "id": "what_is_the_water_cycle",
+      "category": "conceptual",
+      "phrasings": [
+        "What is the water cycle?",
+        "Explain how the hydrological cycle works on Earth.",
+        "Describe the stages of the water cycle from evaporation to precipitation."
+      ]
+    },
+    {
+      "id": "what_is_supply_and_demand",
+      "category": "conceptual",
+      "phrasings": [
+        "What is supply and demand in economics?",
+        "Explain the law of supply and demand.",
+        "How does the relationship between supply and demand affect prices?"
+      ]
+    },
+    {
+      "id": "how_to_speed_read",
+      "category": "howto",
+      "phrasings": [
+        "How do I learn to speed read?",
+        "What are the techniques to read faster?",
+        "Walk me through how to increase my reading speed."
+      ]
+    },
+    {
+      "id": "how_to_make_coffee",
+      "category": "howto",
+      "phrasings": [
+        "How do I make a good cup of coffee?",
+        "What are the steps to brew coffee at home?",
+        "Walk me through making coffee using a drip machine."
+      ]
+    },
+    {
+      "id": "how_to_do_a_squat",
+      "category": "howto",
+      "phrasings": [
+        "How do I perform a squat correctly?",
+        "What is the proper form for doing a squat?",
+        "Walk me through how to do a bodyweight squat with good technique."
+      ]
+    },
+    {
+      "id": "how_to_create_budget",
+      "category": "howto",
+      "phrasings": [
+        "How do I create a personal budget?",
+        "What are the steps to building a monthly budget?",
+        "Guide me through setting up a budget to track spending."
+      ]
+    },
+    {
+      "id": "kotlin_null_safety",
+      "category": "code_gen",
+      "phrasings": [
+        "How does null safety work in Kotlin?",
+        "Write a Kotlin code example demonstrating null safety.",
+        "Show me how to handle nullable types in Kotlin."
+      ]
+    },
+    {
+      "id": "react_useState_hook",
+      "category": "code_gen",
+      "phrasings": [
+        "How do you use the useState hook in React?",
+        "Write a React example using useState to manage component state.",
+        "Show me how to declare and update state with useState in React."
+      ]
+    },
+    {
+      "id": "python_exception_handling",
+      "category": "code_gen",
+      "phrasings": [
+        "How do you handle exceptions in Python?",
+        "Write a Python example using try and except for error handling.",
+        "Show me how to catch and handle errors in Python code."
+      ]
+    },
+    {
+      "id": "git_revert_commit",
+      "category": "code_gen",
+      "phrasings": [
+        "How do you revert a commit in Git?",
+        "Write the Git command to undo a previous commit.",
+        "Show me how to reverse a commit using Git."
+      ]
+    },
+    {
+      "id": "numpy_vs_pandas",
+      "category": "comparison",
+      "phrasings": [
+        "What is the difference between NumPy and Pandas in Python?",
+        "Compare NumPy and Pandas as data libraries.",
+        "How does NumPy differ from Pandas for data manipulation?"
+      ]
+    },
+    {
+      "id": "tcp_vs_udp",
+      "category": "comparison",
+      "phrasings": [
+        "What is the difference between TCP and UDP?",
+        "Compare TCP and UDP network protocols.",
+        "How does TCP differ from UDP in terms of reliability and speed?"
+      ]
+    },
+    {
+      "id": "meditation_vs_exercise",
+      "category": "comparison",
+      "phrasings": [
+        "What are the differences between meditation and physical exercise for mental health?",
+        "Compare meditation and working out as stress relief methods.",
+        "How does meditation differ from exercise in reducing anxiety?"
+      ]
+    },
+    {
+      "id": "best_headphones",
+      "category": "opinion",
+      "phrasings": [
+        "Which headphones are the best on the market?",
+        "What is the greatest pair of headphones you can buy?",
+        "Which audio headset is the ultimate choice for sound quality?"
+      ]
+    },
+    {
+      "id": "best_online_learning_platform",
+      "category": "opinion",
+      "phrasings": [
+        "Which online learning platform is the best?",
+        "What is the greatest website to take online courses?",
+        "Which e-learning platform is the ultimate choice for skill development?"
+      ]
+    },
+    {
+      "id": "best_superhero_movie",
+      "category": "opinion",
+      "phrasings": [
+        "Which superhero movie is the greatest of all time?",
+        "What is the most highly acclaimed superhero film ever made?",
+        "Which comic book movie is the absolute best?"
+      ]
+    },
+    {
+      "id": "invention_of_steam_engine",
+      "category": "history",
+      "phrasings": [
+        "Who invented the steam engine?",
+        "Name the engineer who developed the first practical steam engine.",
+        "Which inventor is credited with creating the steam engine?"
+      ]
+    },
+    {
+      "id": "year_first_iphone_released",
+      "category": "history",
+      "phrasings": [
+        "In what year was the first iPhone released?",
+        "When did Apple launch the original iPhone?",
+        "Give me the year Steve Jobs announced the first iPhone."
+      ]
+    },
+    {
+      "id": "end_of_apartheid",
+      "category": "history",
+      "phrasings": [
+        "When did apartheid end in South Africa?",
+        "In what year was apartheid abolished in South Africa?",
+        "Give me the year the apartheid regime officially ended."
+      ]
+    }
+  ]
+}

@@ -32,17 +32,17 @@ def _write_markdown(path: Path, results: list[ConfigMetrics]) -> None:
     # Headline table
     lines.append("## Headline comparison\n")
     lines.append(
-        "| Config | Concepts | Prompts | Hit@0.15 | Hit@0.20 | Mean dist | P95 dist | Cross FP@0.15 | Mean lat (ms) | P95 lat (ms) |"
+        "| Config | Concepts | Prompts | Hit@0.15 | Hit@0.20 | Mean dist | P95 dist | Cross FP@0.15 | Cross FP@0.20 | Mean lat (ms) | P95 lat (ms) |"
     )
     lines.append(
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
     )
     for r in results:
         lines.append(
             f"| {r.config_name} | {r.n_concepts} | {r.n_prompts} | "
             f"{_fmt_pct(r.hit_rate_at_015)} | {_fmt_pct(r.hit_rate_at_020)} | "
             f"{_fmt_dist(r.mean_sibling_distance)} | {_fmt_dist(r.p95_sibling_distance)} | "
-            f"{_fmt_pct(r.cross_fp_rate_at_015)} | "
+            f"{_fmt_pct(r.cross_fp_rate_at_015)} | {_fmt_pct(r.cross_fp_rate_at_020)} | "
             f"{r.mean_latency_ms:.1f} | {r.p95_latency_ms:.1f} |"
         )
     lines.append("")

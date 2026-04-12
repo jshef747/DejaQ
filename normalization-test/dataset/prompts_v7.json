@@ -1,0 +1,229 @@
+{
+  "concepts": [
+    {
+      "id": "number_of_ribs_human",
+      "category": "factual_qa",
+      "phrasings": [
+        "How many ribs does a human have?",
+        "What is the total rib count in the human body?",
+        "Tell me the number of rib bones in an adult human."
+      ]
+    },
+    {
+      "id": "distance_earth_to_sun",
+      "category": "factual_qa",
+      "phrasings": [
+        "How far is the Earth from the Sun?",
+        "What is the average distance between Earth and the Sun?",
+        "Tell me the distance from our planet to the Sun in kilometers."
+      ]
+    },
+    {
+      "id": "number_of_languages_in_world",
+      "category": "factual_qa",
+      "phrasings": [
+        "How many languages are spoken in the world?",
+        "What is the approximate number of languages that exist globally?",
+        "Tell me roughly how many distinct languages humans speak."
+      ]
+    },
+    {
+      "id": "highest_mountain",
+      "category": "factual_qa",
+      "phrasings": [
+        "What is the highest mountain in the world?",
+        "Which mountain has the greatest elevation above sea level?",
+        "Name the tallest peak on Earth."
+      ]
+    },
+    {
+      "id": "how_does_sleep_work",
+      "category": "conceptual",
+      "phrasings": [
+        "How does sleep work scientifically?",
+        "Explain what happens in the brain during sleep.",
+        "What are the stages of sleep and why do they matter?"
+      ]
+    },
+    {
+      "id": "what_is_a_neural_network",
+      "category": "conceptual",
+      "phrasings": [
+        "What is a neural network in machine learning?",
+        "Explain how an artificial neural network works.",
+        "How does a neural network process information to make predictions?"
+      ]
+    },
+    {
+      "id": "how_does_a_plane_fly",
+      "category": "conceptual",
+      "phrasings": [
+        "How does an airplane fly?",
+        "Explain the physics behind how a plane stays in the air.",
+        "What forces allow an aircraft to achieve and maintain flight?"
+      ]
+    },
+    {
+      "id": "what_is_a_budget_deficit",
+      "category": "conceptual",
+      "phrasings": [
+        "What is a budget deficit?",
+        "Explain what it means when a government runs a budget deficit.",
+        "How does a budget deficit affect a country's economy?"
+      ]
+    },
+    {
+      "id": "how_to_type_faster",
+      "category": "howto",
+      "phrasings": [
+        "How do I improve my typing speed?",
+        "What are the steps to type faster on a keyboard?",
+        "Walk me through how to become a faster typist."
+      ]
+    },
+    {
+      "id": "how_to_grow_tomatoes",
+      "category": "howto",
+      "phrasings": [
+        "How do I grow tomatoes at home?",
+        "What are the steps to plant and grow tomatoes in a garden?",
+        "Walk me through growing tomatoes from seed to harvest."
+      ]
+    },
+    {
+      "id": "how_to_negotiate_salary",
+      "category": "howto",
+      "phrasings": [
+        "How do I negotiate a higher salary?",
+        "What are the steps to negotiate your pay at a job offer?",
+        "Guide me through asking for a salary increase effectively."
+      ]
+    },
+    {
+      "id": "how_to_make_smoothie",
+      "category": "howto",
+      "phrasings": [
+        "How do I make a healthy smoothie?",
+        "What are the steps to blend a nutritious smoothie?",
+        "Walk me through making a fruit smoothie at home."
+      ]
+    },
+    {
+      "id": "cpp_smart_pointer",
+      "category": "code_gen",
+      "phrasings": [
+        "How do you use smart pointers in C++?",
+        "Write a C++ example using a unique_ptr smart pointer.",
+        "Show me how to manage memory with smart pointers in C++."
+      ]
+    },
+    {
+      "id": "python_decorator",
+      "category": "code_gen",
+      "phrasings": [
+        "How do you write a decorator in Python?",
+        "Write a Python example of a function decorator.",
+        "Show me how to create and use a decorator in Python."
+      ]
+    },
+    {
+      "id": "sql_update_row",
+      "category": "code_gen",
+      "phrasings": [
+        "How do you update a row in SQL?",
+        "Write a SQL UPDATE statement to modify a record.",
+        "Show me the syntax for updating data in a SQL table."
+      ]
+    },
+    {
+      "id": "bash_environment_variable",
+      "category": "code_gen",
+      "phrasings": [
+        "How do you set an environment variable in bash?",
+        "Write a bash command to define and export an environment variable.",
+        "Show me how to create an environment variable in a bash script."
+      ]
+    },
+    {
+      "id": "podcast_vs_audiobook",
+      "category": "comparison",
+      "phrasings": [
+        "What is the difference between a podcast and an audiobook?",
+        "Compare podcasts and audiobooks as audio content formats.",
+        "How does listening to a podcast differ from an audiobook?"
+      ]
+    },
+    {
+      "id": "interpreter_vs_compiler",
+      "category": "comparison",
+      "phrasings": [
+        "What is the difference between an interpreter and a compiler?",
+        "Compare interpreted and compiled programming languages.",
+        "How does a compiler differ from an interpreter in code execution?"
+      ]
+    },
+    {
+      "id": "savings_vs_checking_account",
+      "category": "comparison",
+      "phrasings": [
+        "What is the difference between a savings account and a checking account?",
+        "Compare savings and checking accounts at a bank.",
+        "How does a savings account differ from a checking account?"
+      ]
+    },
+    {
+      "id": "best_note_taking_app",
+      "category": "opinion",
+      "phrasings": [
+        "Which note-taking app is the best?",
+        "What is the greatest digital tool for taking and organizing notes?",
+        "Which application is the ultimate choice for note-taking?"
+      ]
+    },
+    {
+      "id": "best_running_shoe",
+      "category": "opinion",
+      "phrasings": [
+        "Which running shoe brand is the greatest for long distances?",
+        "What is the most highly recommended running shoe for marathons?",
+        "Which sneaker is the absolute best for road running?"
+      ]
+    },
+    {
+      "id": "best_science_fiction_book",
+      "category": "opinion",
+      "phrasings": [
+        "Which science fiction novel is the greatest ever written?",
+        "What is the most highly acclaimed sci-fi book of all time?",
+        "Which science fiction story is the absolute best in the genre?"
+      ]
+    },
+    {
+      "id": "assassination_of_archduke_franz_ferdinand",
+      "category": "history",
+      "phrasings": [
+        "Who assassinated Archduke Franz Ferdinand?",
+        "Name the person who killed Archduke Franz Ferdinand.",
+        "Which individual shot and killed Archduke Franz Ferdinand in 1914?"
+      ]
+    },
+    {
+      "id": "year_of_american_revolution",
+      "category": "history",
+      "phrasings": [
+        "When did the American Revolution begin?",
+        "In what year did the American Revolutionary War start?",
+        "Give me the year the American colonies declared independence."
+      ]
+    },
+    {
+      "id": "discovery_of_electricity",
+      "category": "history",
+      "phrasings": [
+        "Who discovered electricity?",
+        "Name the scientist credited with harnessing electricity.",
+        "Which inventor made the key discoveries related to electrical power?"
+      ]
+    }
+  ]
+}

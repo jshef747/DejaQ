@@ -1,0 +1,229 @@
+{
+  "concepts": [
+    {
+      "id": "weight_of_earth",
+      "category": "factual_qa",
+      "phrasings": [
+        "What is the mass of the Earth?",
+        "How much does the Earth weigh?",
+        "Give me the approximate mass of our planet in kilograms."
+      ]
+    },
+    {
+      "id": "number_of_us_states",
+      "category": "factual_qa",
+      "phrasings": [
+        "How many states are in the United States?",
+        "What is the total number of US states?",
+        "Tell me how many states make up the USA."
+      ]
+    },
+    {
+      "id": "height_of_eiffel_tower",
+      "category": "factual_qa",
+      "phrasings": [
+        "How tall is the Eiffel Tower?",
+        "What is the height of the Eiffel Tower in meters?",
+        "Tell me the exact height of the Eiffel Tower."
+      ]
+    },
+    {
+      "id": "deepest_lake",
+      "category": "factual_qa",
+      "phrasings": [
+        "What is the deepest lake in the world?",
+        "Which lake has the greatest depth on Earth?",
+        "Name the world's deepest freshwater lake."
+      ]
+    },
+    {
+      "id": "how_does_gps_work",
+      "category": "conceptual",
+      "phrasings": [
+        "How does GPS work?",
+        "Explain how the Global Positioning System determines your location.",
+        "What is the technology behind GPS navigation?"
+      ]
+    },
+    {
+      "id": "what_is_a_black_hole",
+      "category": "conceptual",
+      "phrasings": [
+        "What is a black hole?",
+        "Can you explain what a black hole is in space?",
+        "How does a black hole form and what are its properties?"
+      ]
+    },
+    {
+      "id": "how_does_encryption_work",
+      "category": "conceptual",
+      "phrasings": [
+        "How does encryption work?",
+        "Explain the concept of data encryption.",
+        "What is the process behind encrypting and decrypting information?"
+      ]
+    },
+    {
+      "id": "what_is_compound_interest",
+      "category": "conceptual",
+      "phrasings": [
+        "What is compound interest?",
+        "Explain how compound interest works on savings.",
+        "How does compound interest differ from simple interest?"
+      ]
+    },
+    {
+      "id": "how_to_make_sourdough",
+      "category": "howto",
+      "phrasings": [
+        "How do I bake sourdough bread?",
+        "What are the steps to make sourdough bread from scratch?",
+        "Walk me through baking a sourdough loaf at home."
+      ]
+    },
+    {
+      "id": "how_to_fold_laundry",
+      "category": "howto",
+      "phrasings": [
+        "How do I fold laundry efficiently?",
+        "What is the best technique for folding clothes neatly?",
+        "Walk me through folding shirts and pants the right way."
+      ]
+    },
+    {
+      "id": "how_to_take_notes",
+      "category": "howto",
+      "phrasings": [
+        "How do I take effective notes in class?",
+        "What are the steps to note-taking during a lecture?",
+        "Guide me through a good note-taking strategy for studying."
+      ]
+    },
+    {
+      "id": "how_to_stretch_properly",
+      "category": "howto",
+      "phrasings": [
+        "How do I stretch properly before exercise?",
+        "What are the steps to warm up with stretching?",
+        "Walk me through a proper stretching routine before a workout."
+      ]
+    },
+    {
+      "id": "java_arraylist_example",
+      "category": "code_gen",
+      "phrasings": [
+        "How do you use an ArrayList in Java?",
+        "Write a Java code snippet using ArrayList to store and access items.",
+        "Show me how to work with an ArrayList in Java."
+      ]
+    },
+    {
+      "id": "css_grid_layout",
+      "category": "code_gen",
+      "phrasings": [
+        "How do you create a grid layout in CSS?",
+        "Write a CSS example using CSS Grid.",
+        "Show me how to build a two-column layout using CSS Grid."
+      ]
+    },
+    {
+      "id": "python_lambda_function",
+      "category": "code_gen",
+      "phrasings": [
+        "How do you write a lambda function in Python?",
+        "Write a Python example of a lambda expression.",
+        "Show me how to use a lambda in Python for a simple operation."
+      ]
+    },
+    {
+      "id": "docker_run_container",
+      "category": "code_gen",
+      "phrasings": [
+        "How do you run a Docker container?",
+        "Write the command to start a Docker container from an image.",
+        "Show me how to launch a container using the Docker CLI."
+      ]
+    },
+    {
+      "id": "mac_vs_windows",
+      "category": "comparison",
+      "phrasings": [
+        "What are the main differences between Mac and Windows?",
+        "Compare macOS and Windows as operating systems.",
+        "How does a Mac differ from a Windows PC for everyday use?"
+      ]
+    },
+    {
+      "id": "running_vs_cycling",
+      "category": "comparison",
+      "phrasings": [
+        "What is the difference between running and cycling for fitness?",
+        "Compare running and cycling as forms of cardiovascular exercise.",
+        "How does cycling differ from running in terms of health benefits?"
+      ]
+    },
+    {
+      "id": "library_vs_framework",
+      "category": "comparison",
+      "phrasings": [
+        "What is the difference between a library and a framework in programming?",
+        "Compare software libraries and frameworks.",
+        "How does a programming framework differ from a library?"
+      ]
+    },
+    {
+      "id": "best_laptop_for_students",
+      "category": "opinion",
+      "phrasings": [
+        "Which laptop is the best for college students?",
+        "What is the greatest laptop to buy for university use?",
+        "Which notebook computer is the ultimate choice for students?"
+      ]
+    },
+    {
+      "id": "best_morning_routine",
+      "category": "opinion",
+      "phrasings": [
+        "What is the best morning routine for productivity?",
+        "Which daily morning habit is most highly recommended for a successful day?",
+        "What is the greatest way to start your morning?"
+      ]
+    },
+    {
+      "id": "best_video_game_of_all_time",
+      "category": "opinion",
+      "phrasings": [
+        "Which video game is the greatest of all time?",
+        "What is the most highly acclaimed video game ever made?",
+        "Which game is the absolute best in gaming history?"
+      ]
+    },
+    {
+      "id": "discovery_of_america",
+      "category": "history",
+      "phrasings": [
+        "Who discovered America?",
+        "Name the explorer credited with discovering the Americas.",
+        "Which European explorer first reached the American continent?"
+      ]
+    },
+    {
+      "id": "year_berlin_wall_fell",
+      "category": "history",
+      "phrasings": [
+        "When did the Berlin Wall fall?",
+        "In what year was the Berlin Wall torn down?",
+        "Give me the year the Berlin Wall was demolished."
+      ]
+    },
+    {
+      "id": "first_president_of_usa",
+      "category": "history",
+      "phrasings": [
+        "Who was the first president of the United States?",
+        "Name the first person to serve as US president.",
+        "Which founding father became the inaugural American president?"
+      ]
+    }
+  ]
+}

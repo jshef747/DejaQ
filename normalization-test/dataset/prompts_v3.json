@@ -1,0 +1,229 @@
+{
+  "concepts": [
+    {
+      "id": "distance_to_moon",
+      "category": "factual_qa",
+      "phrasings": [
+        "How far is the Moon from Earth?",
+        "What is the average distance between Earth and the Moon?",
+        "Tell me the distance from our planet to the Moon in kilometers."
+      ]
+    },
+    {
+      "id": "number_of_chromosomes_human",
+      "category": "factual_qa",
+      "phrasings": [
+        "How many chromosomes do humans have?",
+        "What is the chromosome count in a human cell?",
+        "Tell me the number of chromosomes found in human DNA."
+      ]
+    },
+    {
+      "id": "freezing_point_celsius",
+      "category": "factual_qa",
+      "phrasings": [
+        "At what temperature in Celsius does water freeze?",
+        "What is the freezing point of water in Celsius?",
+        "Tell me the temperature at which water turns to ice in Celsius."
+      ]
+    },
+    {
+      "id": "number_of_teeth_shark",
+      "category": "factual_qa",
+      "phrasings": [
+        "How many teeth does a great white shark have?",
+        "What is the tooth count of a great white shark?",
+        "Tell me how many teeth a great white shark typically has."
+      ]
+    },
+    {
+      "id": "longest_river",
+      "category": "factual_qa",
+      "phrasings": [
+        "What is the longest river in the world?",
+        "Which river has the greatest length on Earth?",
+        "Name the world's longest river."
+      ]
+    },
+    {
+      "id": "how_does_the_internet_work",
+      "category": "conceptual",
+      "phrasings": [
+        "How does the internet work?",
+        "Explain how data travels across the internet.",
+        "What is the underlying technology that makes the internet function?"
+      ]
+    },
+    {
+      "id": "what_is_inflation",
+      "category": "conceptual",
+      "phrasings": [
+        "What is inflation in economics?",
+        "Can you explain what economic inflation means?",
+        "How does inflation affect the purchasing power of money?"
+      ]
+    },
+    {
+      "id": "how_does_solar_panel_work",
+      "category": "conceptual",
+      "phrasings": [
+        "How does a solar panel generate electricity?",
+        "Explain how solar panels convert sunlight into power.",
+        "What is the process by which a solar cell produces energy?"
+      ]
+    },
+    {
+      "id": "what_is_natural_selection",
+      "category": "conceptual",
+      "phrasings": [
+        "What is natural selection?",
+        "Explain Darwin's concept of natural selection.",
+        "How does natural selection drive evolution in species?"
+      ]
+    },
+    {
+      "id": "how_to_iron_clothes",
+      "category": "howto",
+      "phrasings": [
+        "How do I iron a shirt properly?",
+        "What are the steps to iron clothes without damaging them?",
+        "Walk me through ironing a dress shirt correctly."
+      ]
+    },
+    {
+      "id": "how_to_hard_boil_egg",
+      "category": "howto",
+      "phrasings": [
+        "How do I hard boil an egg?",
+        "What are the steps to make a perfectly hard-boiled egg?",
+        "Walk me through boiling eggs until they are fully cooked."
+      ]
+    },
+    {
+      "id": "how_to_unclog_drain",
+      "category": "howto",
+      "phrasings": [
+        "How do I unclog a bathroom drain?",
+        "What are the steps to clear a clogged drain?",
+        "Walk me through fixing a blocked drain at home."
+      ]
+    },
+    {
+      "id": "how_to_invest_in_stocks",
+      "category": "howto",
+      "phrasings": [
+        "How do I start investing in stocks?",
+        "What are the steps to begin stock market investing?",
+        "Guide me through buying stocks for the first time."
+      ]
+    },
+    {
+      "id": "python_write_file",
+      "category": "code_gen",
+      "phrasings": [
+        "How do you write text to a file in Python?",
+        "Write a Python code snippet to save data to a text file.",
+        "Show me how to create and write a file using Python."
+      ]
+    },
+    {
+      "id": "js_promise_example",
+      "category": "code_gen",
+      "phrasings": [
+        "How do you use a Promise in JavaScript?",
+        "Write a JavaScript example using Promise for async operations.",
+        "Show me how to handle asynchronous code with a Promise in JS."
+      ]
+    },
+    {
+      "id": "sql_join_tables",
+      "category": "code_gen",
+      "phrasings": [
+        "How do you join two tables in SQL?",
+        "Write a SQL query that joins two tables using INNER JOIN.",
+        "Show me how to combine rows from two tables in SQL."
+      ]
+    },
+    {
+      "id": "rust_read_file",
+      "category": "code_gen",
+      "phrasings": [
+        "How do you read a file in Rust?",
+        "Write a Rust code snippet to read the contents of a file.",
+        "Show me how to open and read a text file in Rust."
+      ]
+    },
+    {
+      "id": "coffee_vs_tea_caffeine",
+      "category": "comparison",
+      "phrasings": [
+        "How does the caffeine in coffee compare to tea?",
+        "What is the difference in caffeine content between coffee and tea?",
+        "Compare the amount of caffeine in a cup of coffee versus a cup of tea."
+      ]
+    },
+    {
+      "id": "introvert_vs_extrovert",
+      "category": "comparison",
+      "phrasings": [
+        "What is the difference between an introvert and an extrovert?",
+        "Compare introverts and extroverts in terms of personality.",
+        "How does an introvert differ from an extrovert behaviorally?"
+      ]
+    },
+    {
+      "id": "rest_vs_graphql",
+      "category": "comparison",
+      "phrasings": [
+        "What is the difference between REST and GraphQL APIs?",
+        "Compare REST and GraphQL as API design approaches.",
+        "How does GraphQL differ from a traditional REST API?"
+      ]
+    },
+    {
+      "id": "best_pet_for_apartment",
+      "category": "opinion",
+      "phrasings": [
+        "Which pet is the best for someone living in an apartment?",
+        "What is the greatest animal companion for apartment living?",
+        "Which pet is the ultimate choice for a small living space?"
+      ]
+    },
+    {
+      "id": "best_way_to_learn_coding",
+      "category": "opinion",
+      "phrasings": [
+        "What is the best way to learn programming?",
+        "Which approach is the greatest for picking up coding skills?",
+        "What is the ultimate method to learn software development?"
+      ]
+    },
+    {
+      "id": "best_coffee_brewing_method",
+      "category": "opinion",
+      "phrasings": [
+        "Which coffee brewing method is the best?",
+        "What is the greatest way to brew a cup of coffee?",
+        "Which coffee preparation technique is the finest?"
+      ]
+    },
+    {
+      "id": "invention_of_light_bulb",
+      "category": "history",
+      "phrasings": [
+        "Who invented the light bulb?",
+        "Name the inventor who created the electric light bulb.",
+        "Which scientist is credited with developing the incandescent light bulb?"
+      ]
+    },
+    {
+      "id": "signing_magna_carta",
+      "category": "history",
+      "phrasings": [
+        "When was the Magna Carta signed?",
+        "In what year was the Magna Carta sealed?",
+        "Give me the date when King John signed the Magna Carta."
+      ]
+    }
+  ]
+}

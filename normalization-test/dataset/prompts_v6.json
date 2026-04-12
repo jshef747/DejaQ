@@ -1,0 +1,229 @@
+{
+  "concepts": [
+    {
+      "id": "number_of_symphonies_beethoven",
+      "category": "factual_qa",
+      "phrasings": [
+        "How many symphonies did Beethoven compose?",
+        "What is the total number of symphonies written by Beethoven?",
+        "Tell me how many symphonies Beethoven produced in his lifetime."
+      ]
+    },
+    {
+      "id": "density_of_water",
+      "category": "factual_qa",
+      "phrasings": [
+        "What is the density of water?",
+        "What is water's density in grams per cubic centimeter?",
+        "Tell me the mass per unit volume of liquid water at room temperature."
+      ]
+    },
+    {
+      "id": "capital_of_australia",
+      "category": "factual_qa",
+      "phrasings": [
+        "What is the capital of Australia?",
+        "Name the capital city of Australia.",
+        "Which city serves as Australia's capital?"
+      ]
+    },
+    {
+      "id": "number_of_sides_hexagon",
+      "category": "factual_qa",
+      "phrasings": [
+        "How many sides does a hexagon have?",
+        "What is the side count of a hexagon?",
+        "Tell me the number of edges a hexagonal shape has."
+      ]
+    },
+    {
+      "id": "how_does_memory_work",
+      "category": "conceptual",
+      "phrasings": [
+        "How does human memory work?",
+        "Explain the process by which the brain stores and retrieves memories.",
+        "What is the neuroscience behind how we form and recall memories?"
+      ]
+    },
+    {
+      "id": "what_is_a_api",
+      "category": "conceptual",
+      "phrasings": [
+        "What is an API?",
+        "Can you explain what an Application Programming Interface is?",
+        "How does an API allow software systems to communicate?"
+      ]
+    },
+    {
+      "id": "how_does_nuclear_energy_work",
+      "category": "conceptual",
+      "phrasings": [
+        "How does nuclear energy work?",
+        "Explain the process of generating electricity from nuclear fission.",
+        "What happens inside a nuclear reactor to produce power?"
+      ]
+    },
+    {
+      "id": "what_is_the_placebo_effect",
+      "category": "conceptual",
+      "phrasings": [
+        "What is the placebo effect?",
+        "Explain how the placebo effect works in medicine.",
+        "Why do patients sometimes improve after taking a sugar pill?"
+      ]
+    },
+    {
+      "id": "how_to_brew_tea",
+      "category": "howto",
+      "phrasings": [
+        "How do I brew a perfect cup of tea?",
+        "What are the steps to make a good pot of tea?",
+        "Walk me through steeping tea correctly."
+      ]
+    },
+    {
+      "id": "how_to_do_cpr",
+      "category": "howto",
+      "phrasings": [
+        "How do I perform CPR?",
+        "What are the steps to administer CPR on an adult?",
+        "Walk me through how to do cardiopulmonary resuscitation."
+      ]
+    },
+    {
+      "id": "how_to_manage_stress",
+      "category": "howto",
+      "phrasings": [
+        "How do I manage stress effectively?",
+        "What are the steps to reduce stress in daily life?",
+        "Guide me through techniques for handling stress and anxiety."
+      ]
+    },
+    {
+      "id": "how_to_write_an_essay",
+      "category": "howto",
+      "phrasings": [
+        "How do I write a good essay?",
+        "What are the steps to write a well-structured essay?",
+        "Guide me through the process of writing an academic essay."
+      ]
+    },
+    {
+      "id": "swift_optional_example",
+      "category": "code_gen",
+      "phrasings": [
+        "How do you use optionals in Swift?",
+        "Write a Swift code example using optional types.",
+        "Show me how to safely unwrap an optional value in Swift."
+      ]
+    },
+    {
+      "id": "sql_create_table",
+      "category": "code_gen",
+      "phrasings": [
+        "How do you create a table in SQL?",
+        "Write a SQL statement to create a new database table.",
+        "Show me the syntax for the CREATE TABLE command in SQL."
+      ]
+    },
+    {
+      "id": "javascript_arrow_function",
+      "category": "code_gen",
+      "phrasings": [
+        "How do you write an arrow function in JavaScript?",
+        "Write a JavaScript example using arrow function syntax.",
+        "Show me how to convert a regular function to an arrow function in JS."
+      ]
+    },
+    {
+      "id": "python_class_example",
+      "category": "code_gen",
+      "phrasings": [
+        "How do you define a class in Python?",
+        "Write a Python example of creating a class with a constructor.",
+        "Show me how to make a simple Python class with methods."
+      ]
+    },
+    {
+      "id": "frontend_vs_backend",
+      "category": "comparison",
+      "phrasings": [
+        "What is the difference between frontend and backend development?",
+        "Compare frontend and backend web development.",
+        "How does frontend programming differ from backend engineering?"
+      ]
+    },
+    {
+      "id": "debit_vs_credit_card",
+      "category": "comparison",
+      "phrasings": [
+        "What is the difference between a debit card and a credit card?",
+        "Compare debit and credit cards as payment methods.",
+        "How does a debit card differ from a credit card in practice?"
+      ]
+    },
+    {
+      "id": "fiction_vs_nonfiction",
+      "category": "comparison",
+      "phrasings": [
+        "What is the difference between fiction and nonfiction books?",
+        "Compare fiction and nonfiction as literary genres.",
+        "How does a fiction book differ from a nonfiction work?"
+      ]
+    },
+    {
+      "id": "best_productivity_app",
+      "category": "opinion",
+      "phrasings": [
+        "Which productivity app is the best available?",
+        "What is the greatest tool for staying organized and productive?",
+        "Which task management application is the ultimate choice?"
+      ]
+    },
+    {
+      "id": "best_tourist_city_europe",
+      "category": "opinion",
+      "phrasings": [
+        "Which city in Europe is the best for tourists?",
+        "What is the greatest European city to visit?",
+        "Which European destination is the ultimate spot for sightseeing?"
+      ]
+    },
+    {
+      "id": "best_anime_series",
+      "category": "opinion",
+      "phrasings": [
+        "Which anime series is the greatest of all time?",
+        "What is the most highly acclaimed anime show ever made?",
+        "Which animated Japanese series is the absolute best?"
+      ]
+    },
+    {
+      "id": "discovery_of_america_columbus",
+      "category": "history",
+      "phrasings": [
+        "When did Christopher Columbus arrive in America?",
+        "What year did Columbus reach the New World?",
+        "Give me the year Columbus first landed in the Americas."
+      ]
+    },
+    {
+      "id": "invention_of_internet",
+      "category": "history",
+      "phrasings": [
+        "Who invented the internet?",
+        "Name the people credited with creating the internet.",
+        "Which researchers or organizations are responsible for inventing the internet?"
+      ]
+    },
+    {
+      "id": "year_of_moon_walk_michael_jackson",
+      "category": "history",
+      "phrasings": [
+        "When did Michael Jackson first perform the moonwalk?",
+        "In what year did Michael Jackson debut his moonwalk dance?",
+        "Give me the year Michael Jackson introduced the moonwalk to the public."
+      ]
+    }
+  ]
+}

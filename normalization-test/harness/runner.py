@@ -105,10 +105,11 @@ def run_config(config: dict, concepts: list[dict]) -> list[NormalizedRow]:
     rows: list[NormalizedRow] = []
     total = sum(len(c["phrasings"]) for c in concepts)
     done = 0
+    precondition_fn = config.get("precondition_fn")  # optional per-prompt LLM gate
     for concept in concepts:
         for idx, phrasing in enumerate(concept["phrasings"]):
             start = time.time()
-            if passthrough:
+            if passthrough or (precondition_fn and not precondition_fn(phrasing)):
                 raw = phrasing
             else:
                 messages = build_messages(config["system_prompt"], config["few_shots"], phrasing)
@@ -250,8 +251,11 @@ def main() -> int:
     print("\n=== Headline ===")
     for r in results:
         print(
-            f"{r.config_name}: hit@0.15={r.hit_rate_at_015 * 100:.1f}% "
-            f"cross_fp={r.cross_fp_rate_at_015 * 100:.1f}% "
+            f"{r.config_name}: "
+            f"hit@0.15={r.hit_rate_at_015 * 100:.1f}% "
+            f"hit@0.20={r.hit_rate_at_020 * 100:.1f}% "
+            f"fp@0.15={r.cross_fp_rate_at_015 * 100:.1f}% "
+            f"fp@0.20={r.cross_fp_rate_at_020 * 100:.1f}% "
             f"mean_dist={r.mean_sibling_distance:.4f} "
             f"p95_lat={r.p95_latency_ms:.0f}ms"
         )

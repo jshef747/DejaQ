@@ -1,0 +1,445 @@
+{
+  "concepts": [
+    {
+      "id": "speed_of_light",
+      "category": "factual_qa",
+      "phrasings": [
+        "What is the speed of light in a vacuum?",
+        "How fast does light travel?",
+        "Tell me the velocity of light in meters per second."
+      ]
+    },
+    {
+      "id": "chemical_formula_of_water",
+      "category": "factual_qa",
+      "phrasings": [
+        "What is the chemical formula for water?",
+        "What molecules make up water?",
+        "Give me the molecular composition of water."
+      ]
+    },
+    {
+      "id": "number_of_bones_in_hand",
+      "category": "factual_qa",
+      "phrasings": [
+        "How many bones are in the human hand?",
+        "What is the bone count in a human hand?",
+        "Tell me the number of bones found in one hand."
+      ]
+    },
+    {
+      "id": "tallest_waterfall",
+      "category": "factual_qa",
+      "phrasings": [
+        "What is the tallest waterfall in the world?",
+        "Name the highest waterfall on Earth.",
+        "Which waterfall has the greatest drop height?"
+      ]
+    },
+    {
+      "id": "melting_point_of_iron",
+      "category": "factual_qa",
+      "phrasings": [
+        "What is the melting point of iron?",
+        "At what temperature does iron melt?",
+        "Give me the temperature at which iron becomes liquid."
+      ]
+    },
+    {
+      "id": "largest_ocean",
+      "category": "factual_qa",
+      "phrasings": [
+        "What is the largest ocean on Earth?",
+        "Which ocean covers the most surface area?",
+        "Name the biggest ocean in the world."
+      ]
+    },
+    {
+      "id": "number_of_planets_solar_system",
+      "category": "factual_qa",
+      "phrasings": [
+        "How many planets are in our solar system?",
+        "What is the total planet count in the solar system?",
+        "Tell me how many planets orbit the sun."
+      ]
+    },
+    {
+      "id": "how_does_photosynthesis_work",
+      "category": "conceptual",
+      "phrasings": [
+        "How does photosynthesis work?",
+        "Explain the process plants use to make food from sunlight.",
+        "What happens during photosynthesis in a plant?"
+      ]
+    },
+    {
+      "id": "what_is_gravity",
+      "category": "conceptual",
+      "phrasings": [
+        "What is gravity?",
+        "Can you explain the concept of gravitational force?",
+        "How does gravity work as a physical phenomenon?"
+      ]
+    },
+    {
+      "id": "how_does_wifi_work",
+      "category": "conceptual",
+      "phrasings": [
+        "How does WiFi work?",
+        "Explain how wireless internet connections function.",
+        "What is the underlying technology behind WiFi signals?"
+      ]
+    },
+    {
+      "id": "what_is_blockchain",
+      "category": "conceptual",
+      "phrasings": [
+        "What is blockchain technology?",
+        "Can you explain what a blockchain is?",
+        "How does a blockchain work at a high level?"
+      ]
+    },
+    {
+      "id": "how_does_a_vaccine_work",
+      "category": "conceptual",
+      "phrasings": [
+        "How does a vaccine work?",
+        "Explain the mechanism behind vaccination.",
+        "What does a vaccine do to the immune system?"
+      ]
+    },
+    {
+      "id": "what_is_machine_learning",
+      "category": "conceptual",
+      "phrasings": [
+        "What is machine learning?",
+        "Can you explain the concept of machine learning?",
+        "How does machine learning differ from traditional programming?"
+      ]
+    },
+    {
+      "id": "how_does_a_battery_work",
+      "category": "conceptual",
+      "phrasings": [
+        "How does a battery store and release energy?",
+        "Explain how a battery works.",
+        "What is the science behind how batteries function?"
+      ]
+    },
+    {
+      "id": "how_to_meditate",
+      "category": "howto",
+      "phrasings": [
+        "How do I start meditating?",
+        "What are the steps to begin a meditation practice?",
+        "Walk me through how to meditate for beginners."
+      ]
+    },
+    {
+      "id": "how_to_make_pasta",
+      "category": "howto",
+      "phrasings": [
+        "How do I cook pasta from scratch?",
+        "What are the steps to make homemade pasta?",
+        "Guide me through making fresh pasta."
+      ]
+    },
+    {
+      "id": "how_to_change_a_tire",
+      "category": "howto",
+      "phrasings": [
+        "How do I change a flat tire?",
+        "What are the steps to replace a tire on a car?",
+        "Walk me through changing a car tire by the roadside."
+      ]
+    },
+    {
+      "id": "how_to_write_a_cover_letter",
+      "category": "howto",
+      "phrasings": [
+        "How do I write a good cover letter?",
+        "What are the steps to writing a strong cover letter for a job?",
+        "Guide me through composing a professional cover letter."
+      ]
+    },
+    {
+      "id": "how_to_do_a_push_up",
+      "category": "howto",
+      "phrasings": [
+        "How do I do a proper push-up?",
+        "What is the correct form for performing a push-up?",
+        "Walk me through how to execute a push-up with good technique."
+      ]
+    },
+    {
+      "id": "how_to_save_money",
+      "category": "howto",
+      "phrasings": [
+        "How do I start saving money effectively?",
+        "What are practical steps to save more money each month?",
+        "Give me a guide to building better savings habits."
+      ]
+    },
+    {
+      "id": "how_to_learn_a_language",
+      "category": "howto",
+      "phrasings": [
+        "How do I learn a new language on my own?",
+        "What steps should I take to become fluent in a foreign language?",
+        "Walk me through a self-study approach to language learning."
+      ]
+    },
+    {
+      "id": "python_sort_list",
+      "category": "code_gen",
+      "phrasings": [
+        "How do you sort a list in Python?",
+        "Write a Python code snippet to sort a list of numbers.",
+        "Show me how to sort an array in Python."
+      ]
+    },
+    {
+      "id": "js_fetch_api",
+      "category": "code_gen",
+      "phrasings": [
+        "How do you make an HTTP request in JavaScript using fetch?",
+        "Write a JavaScript example using the Fetch API.",
+        "Show me how to call a REST API in JavaScript with fetch."
+      ]
+    },
+    {
+      "id": "sql_select_where",
+      "category": "code_gen",
+      "phrasings": [
+        "How do you write a SELECT query with a WHERE clause in SQL?",
+        "Write a SQL query that filters rows using WHERE.",
+        "Show me how to filter data in a SQL SELECT statement."
+      ]
+    },
+    {
+      "id": "python_list_comprehension",
+      "category": "code_gen",
+      "phrasings": [
+        "How do you use list comprehension in Python?",
+        "Write a Python example of a list comprehension.",
+        "Show me how to create a list using comprehension syntax in Python."
+      ]
+    },
+    {
+      "id": "go_http_server",
+      "category": "code_gen",
+      "phrasings": [
+        "How do you start a basic HTTP server in Go?",
+        "Write a Go code example for a simple web server.",
+        "Show me how to create an HTTP server in Golang."
+      ]
+    },
+    {
+      "id": "typescript_interface",
+      "category": "code_gen",
+      "phrasings": [
+        "How do you define an interface in TypeScript?",
+        "Write a TypeScript example using an interface.",
+        "Show me how to declare an interface in TypeScript."
+      ]
+    },
+    {
+      "id": "bash_loop_files",
+      "category": "code_gen",
+      "phrasings": [
+        "How do you loop over files in a directory using bash?",
+        "Write a bash script that iterates over files in a folder.",
+        "Show me how to iterate through files in a directory in bash."
+      ]
+    },
+    {
+      "id": "cats_vs_dogs",
+      "category": "comparison",
+      "phrasings": [
+        "What are the differences between cats and dogs as pets?",
+        "Compare cats and dogs as household companions.",
+        "How do cats differ from dogs in terms of behavior and care?"
+      ]
+    },
+    {
+      "id": "sql_vs_nosql",
+      "category": "comparison",
+      "phrasings": [
+        "What is the difference between SQL and NoSQL databases?",
+        "Compare relational databases to NoSQL alternatives.",
+        "How does SQL differ from NoSQL in structure and use case?"
+      ]
+    },
+    {
+      "id": "iphone_vs_android",
+      "category": "comparison",
+      "phrasings": [
+        "What are the main differences between iPhone and Android?",
+        "Compare iOS and Android smartphones.",
+        "How does an iPhone differ from an Android phone?"
+      ]
+    },
+    {
+      "id": "tea_vs_coffee",
+      "category": "comparison",
+      "phrasings": [
+        "What is the difference between tea and coffee?",
+        "Compare tea and coffee in terms of caffeine and health effects.",
+        "How does drinking tea differ from drinking coffee?"
+      ]
+    },
+    {
+      "id": "agile_vs_waterfall",
+      "category": "comparison",
+      "phrasings": [
+        "What is the difference between Agile and Waterfall development?",
+        "Compare Agile methodology to the Waterfall approach.",
+        "How does Agile software development differ from Waterfall?"
+      ]
+    },
+    {
+      "id": "electric_vs_gas_car",
+      "category": "comparison",
+      "phrasings": [
+        "What are the differences between electric and gas-powered cars?",
+        "Compare electric vehicles to gasoline cars.",
+        "How does an electric car differ from a traditional combustion engine vehicle?"
+      ]
+    },
+    {
+      "id": "renting_vs_buying_home",
+      "category": "comparison",
+      "phrasings": [
+        "What are the pros and cons of renting versus buying a home?",
+        "Compare renting a house to buying one.",
+        "How does renting a home differ from owning one financially?"
+      ]
+    },
+    {
+      "id": "best_programming_language_beginners",
+      "category": "opinion",
+      "phrasings": [
+        "Which programming language is the best for absolute beginners?",
+        "What is the greatest coding language to start learning as a newbie?",
+        "Which language is the ultimate choice for someone who has never coded before?"
+      ]
+    },
+    {
+      "id": "best_diet_for_weight_loss",
+      "category": "opinion",
+      "phrasings": [
+        "Which diet is the best for losing weight?",
+        "What is the most highly recommended eating plan for weight loss?",
+        "Which nutritional approach is widely considered the finest for shedding pounds?"
+      ]
+    },
+    {
+      "id": "best_vacation_destination",
+      "category": "opinion",
+      "phrasings": [
+        "Which country is the best vacation destination?",
+        "What is arguably the greatest travel destination in the world?",
+        "Which place is the ultimate holiday spot globally?"
+      ]
+    },
+    {
+      "id": "best_smartphone",
+      "category": "opinion",
+      "phrasings": [
+        "Which smartphone is the best on the market right now?",
+        "What is the greatest mobile phone you can buy today?",
+        "Which phone is the ultimate choice for everyday use?"
+      ]
+    },
+    {
+      "id": "best_social_media_platform",
+      "category": "opinion",
+      "phrasings": [
+        "Which social media platform is the best to use?",
+        "What is the greatest social network available today?",
+        "Which social app is the ultimate platform for staying connected?"
+      ]
+    },
+    {
+      "id": "best_sport_to_watch",
+      "category": "opinion",
+      "phrasings": [
+        "Which sport is the best to watch as a spectator?",
+        "What is the greatest sport to follow as a fan?",
+        "Which athletic competition is the finest for live entertainment?"
+      ]
+    },
+    {
+      "id": "best_investment_strategy",
+      "category": "opinion",
+      "phrasings": [
+        "Which investment strategy is the best for long-term growth?",
+        "What is the most highly recommended approach to investing money?",
+        "Which financial strategy is widely considered the greatest for building wealth?"
+      ]
+    },
+    {
+      "id": "invention_of_printing_press",
+      "category": "history",
+      "phrasings": [
+        "Who invented the printing press?",
+        "Name the person credited with creating the printing press.",
+        "Which inventor developed the first movable type printing press?"
+      ]
+    },
+    {
+      "id": "first_moon_landing_year",
+      "category": "history",
+      "phrasings": [
+        "In what year did humans first land on the moon?",
+        "When did the Apollo 11 mission reach the lunar surface?",
+        "Give me the year of the first crewed moon landing."
+      ]
+    },
+    {
+      "id": "discovery_of_gravity",
+      "category": "history",
+      "phrasings": [
+        "Who discovered the concept of gravity?",
+        "Name the scientist who formulated the law of gravitation.",
+        "Which physicist is credited with discovering gravitational theory?"
+      ]
+    },
+    {
+      "id": "start_of_french_revolution",
+      "category": "history",
+      "phrasings": [
+        "When did the French Revolution begin?",
+        "In what year did the French Revolution start?",
+        "Give me the starting date of the French Revolution."
+      ]
+    },
+    {
+      "id": "inventor_of_telephone",
+      "category": "history",
+      "phrasings": [
+        "Who invented the telephone?",
+        "Name the person who created the first telephone.",
+        "Which inventor is credited with developing the telephone?"
+      ]
+    },
+    {
+      "id": "end_of_world_war_2",
+      "category": "history",
+      "phrasings": [
+        "When did World War 2 end?",
+        "In what year did the Second World War conclude?",
+        "Give me the year the Allied forces declared victory in WW2."
+      ]
+    },
+    {
+      "id": "builder_of_great_wall_of_china",
+      "category": "history",
+      "phrasings": [
+        "Who built the Great Wall of China?",
+        "Which dynasty constructed the Great Wall of China?",
+        "Name the ruler or empire responsible for building the Great Wall."
+      ]
+    }
+  ]
+}
