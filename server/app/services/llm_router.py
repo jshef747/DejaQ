@@ -4,7 +4,7 @@ from app.services.model_loader import ModelManager
 
 logger = logging.getLogger("dejaq.services.llm_router")
 
-_LOCAL_MODEL_NAME = "gemma-4-26b-a4b"
+_LOCAL_MODEL_NAME = "gemma-4-e4b"
 
 
 class LLMRouterService:
@@ -14,9 +14,16 @@ class LLMRouterService:
     def is_hard(self, complexity: str) -> bool:
         return complexity == "hard"
 
-    def generate_local_response(self, query: str, history: list[dict] | None = None) -> tuple[str, float]:
+    def generate_local_response(
+        self,
+        query: str,
+        history: list[dict] | None = None,
+        max_tokens: int = 1024,
+        system_prompt: str | None = None,
+    ) -> tuple[str, float]:
         """Generate a response using the local model. Returns (text, latency_ms)."""
-        system_prompt = "You are a helpful assistant. Answer the user's query concisely and accurately."
+        if system_prompt is None:
+            system_prompt = "You are a helpful assistant. Answer the user's query concisely and accurately."
         messages = [{"role": "system", "content": system_prompt}]
         if history:
             messages.extend(history)
@@ -24,7 +31,7 @@ class LLMRouterService:
         start = time.time()
         output = self.local_llm.create_chat_completion(
             messages=messages,
-            max_tokens=1024,
+            max_tokens=max_tokens,
             temperature=0.7,
         )
         response = output["choices"][0]["message"]["content"].strip()

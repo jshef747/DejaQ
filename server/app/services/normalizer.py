@@ -20,10 +20,38 @@ _spell = SpellChecker()
 # Load at high frequency so they're preferred over phonetically similar common words
 # (e.g., "ukrine" → "ukraine" not "urine").
 _PROPER_NOUNS = [
+    # Geopolitics
     "ukraine", "ukrainian", "russia", "russian", "israel", "israeli", "palestine",
     "palestinian", "iran", "iranian", "china", "chinese", "taiwan", "taiwanese",
     "korean", "korea", "japan", "japanese", "nato", "biden", "putin", "zelensky",
+    # Cities / places
+    "aviv", "tel", "beijing", "shanghai", "tokyo", "seoul", "dubai", "cairo",
+    "paris", "berlin", "london", "rome", "madrid", "lisbon", "amsterdam",
+    "stockholm", "oslo", "helsinki", "warsaw", "prague", "budapest", "vienna",
+    "zurich", "geneva", "brussels", "athens", "istanbul", "moscow", "kyiv",
+    "riyadh", "doha", "tehran", "kabul", "nairobi", "lagos", "accra", "dakar",
+    "mumbai", "delhi", "bangalore", "karachi", "dhaka", "colombo", "kathmandu",
+    "singapore", "jakarta", "manila", "hanoi", "bangkok", "kuala",
+    "sydney", "melbourne", "auckland", "toronto", "montreal", "vancouver",
+    "chicago", "houston", "phoenix", "dallas", "seattle", "boston", "miami",
+    "denver", "atlanta", "detroit", "portland", "nashville", "austin",
+    # Tech / AI
     "elon", "musk", "openai", "chatgpt", "llm", "api", "gpu", "cpu",
+    "golang", "kotlin", "rust", "typescript", "javascript", "python",
+    "nodejs", "django", "fastapi", "flask", "react", "nextjs", "vuejs",
+    "angular", "svelte", "tailwind", "webpack", "vite", "docker", "kubernetes",
+    "postgres", "postgresql", "mongodb", "redis", "sqlite", "mysql",
+    "graphql", "grpc", "kafka", "rabbitmq", "nginx", "apache",
+    "github", "gitlab", "bitbucket", "jira", "confluence", "slack",
+    "linux", "ubuntu", "debian", "fedora", "macos", "windows",
+    "tensorflow", "pytorch", "numpy", "pandas", "sklearn", "scipy",
+    "gemini", "claude", "anthropic", "mistral", "llama", "gemma",
+    "huggingface", "langchain", "chromadb", "pinecone", "weaviate",
+    "celery", "uvicorn", "pydantic", "sqlalchemy",
+    # People / companies
+    "google", "microsoft", "amazon", "netflix", "nvidia", "intel", "apple",
+    "meta", "bytedance", "alibaba", "tencent", "baidu", "samsung",
+    "zuckerberg", "bezos", "altman", "pichai", "nadella", "huang",
 ]
 _spell.word_frequency.load_words(_PROPER_NOUNS * 10_000)
 _WORD_RE = re.compile(r"([a-zA-Z'-]+|[^a-zA-Z'-]+)")
@@ -123,7 +151,9 @@ def _spell_correct(query: str) -> str:
     result = []
     for token in tokens:
         low = token.lower()
-        if token.isalpha() and len(token) >= 4 and low in unknown:
+        # Skip capitalized tokens — proper nouns (cities, names, brands) are
+        # capitalized in natural input and must not be "corrected".
+        if token.isalpha() and len(token) >= 4 and low in unknown and not token[0].isupper():
             fix = _spell.correction(low)
             if fix and fix != low:
                 result.append(fix)

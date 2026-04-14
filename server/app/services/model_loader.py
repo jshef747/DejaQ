@@ -51,12 +51,12 @@ class ModelManager:
 
     @classmethod
     def load_gemma(cls):
-        """Loads the Gemma 4 26B A4B (MoE) model. The local model for answering queries."""
+        """Loads the Gemma 4 E4B model. The local model for answering queries."""
         if cls._llama is None:
-            logger.info("Loading Gemma 4 26B A4B MoE (GGUF)...")
+            logger.info("Loading Gemma 4 E4B (GGUF)...")
             cls._llama = Llama.from_pretrained(
-                repo_id="unsloth/gemma-4-26B-A4B-it-GGUF",
-                filename="*UD-Q4_K_M*",
+                repo_id="unsloth/gemma-4-E4B-it-GGUF",
+                filename="*Q4_K_M.gguf",
                 verbose=False,
                 n_ctx=8192
             )

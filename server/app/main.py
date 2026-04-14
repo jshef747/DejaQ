@@ -3,7 +3,8 @@ load_dotenv()
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import chat, feedback
+from app.routers import chat, feedback, openai_compat
+from app.middleware.api_key import ApiKeyMiddleware
 from app.utils.logger import setup_logging
 from app.config import USE_CELERY
 import logging
@@ -29,11 +30,16 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["x-dejaq-model-used", "x-dejaq-conversation-id"],
 )
+
+# 3b. API key middleware (runs after CORS)
+app.add_middleware(ApiKeyMiddleware)
 
 # 4. Include Routers
 app.include_router(chat.router)
 app.include_router(feedback.router)
+app.include_router(openai_compat.router, prefix="/v1")
 
 # Replaced by lifespan context manager
 
