@@ -4,6 +4,7 @@
 .logs/
 chroma_data/
 dump.rdb
+*.db
 test_reports/
 
 # Python defaults
