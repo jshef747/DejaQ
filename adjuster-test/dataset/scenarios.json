@@ -1,0 +1,212 @@
+[
+  {
+    "id": "turing_test_casual_1",
+    "category": "casual",
+    "query": "Bro, what's the deal with that Turing test thing everyone talks about with AI?",
+    "neutral_answer": "The Turing test is an evaluation proposed by Alan Turing in 1950 to measure a machine's ability to exhibit intelligent behavior equivalent to, or indistinguishable from, that of a human. It involves a human evaluator who engages in natural language conversations with a human and a machine, attempting to determine which is which.",
+    "expected_adjusted": "So basically, the Turing test is a vibe check for AI that Alan Turing came up with back in 1950. It measures if a machine can act smart enough to be indistinguishable from a human. A human judge chats with both a machine and another person, and if they can't tell which one is the bot, the AI passes!"
+  },
+  {
+    "id": "asteroid_belt_casual_2",
+    "category": "casual",
+    "query": "Hey, where exactly is the asteroid belt hanging out in space?",
+    "neutral_answer": "The asteroid belt is a circumstellar disc in the Solar System located roughly between the orbits of the planets Mars and Jupiter. It contains numerous irregularly shaped bodies called asteroids or minor planets.",
+    "expected_adjusted": "It's basically chilling right between the orbits of Mars and Jupiter! Think of it like a giant circumstellar disc floating in our Solar System packed with a bunch of random, irregularly shaped rocks that we call asteroids or minor planets."
+  },
+  {
+    "id": "mount_everest_casual_3",
+    "category": "casual",
+    "query": "Yo, how tall is Mount Everest anyway?",
+    "neutral_answer": "Mount Everest is Earth's highest mountain above sea level, located in the Mahalangur Himal sub-range of the Himalayas. Its current official elevation, recognized by China and Nepal, is 8,848.86 meters (29,031.7 feet).",
+    "expected_adjusted": "Dude, it's insanely tall! It's officially 8,848.86 meters (or like 29,031.7 feet) above sea level, which both China and Nepal agree on. It sits right in the Mahalangur Himal sub-range of the Himalayas and is officially the highest mountain on Earth."
+  },
+  {
+    "id": "jazz_music_casual_4",
+    "category": "casual",
+    "query": "Where did jazz music actually start, man?",
+    "neutral_answer": "Jazz is a music genre that originated in the African-American communities of New Orleans, Louisiana, in the late 19th and early 20th centuries. It developed from roots in blues and ragtime.",
+    "expected_adjusted": "Jazz originally kicked off in New Orleans, Louisiana back in the late 19th and early 20th centuries. It basically grew out of the African-American communities there, mixing up its roots in blues and ragtime to create a whole new music genre."
+  },
+  {
+    "id": "scurvy_casual_5",
+    "category": "casual",
+    "query": "What even is scurvy? Sounds like some old pirate stuff.",
+    "neutral_answer": "Scurvy is a disease resulting from a deficiency of vitamin C, also known as ascorbic acid. Symptoms include weakness, feeling tired, and sore arms and legs, historically affecting sailors who lacked access to fresh produce.",
+    "expected_adjusted": "It totally is classic pirate stuff! Scurvy is just a disease you get when you have a deficiency of Vitamin C (or ascorbic acid). Back in the day, sailors couldn't get fresh produce, so they'd end up dealing with weakness, feeling super tired, and having sore arms and legs."
+  },
+  {
+    "id": "gothic_architecture_formal_1",
+    "category": "formal",
+    "query": "Could you elucidate the primary characteristics defining Gothic architecture?",
+    "neutral_answer": "Gothic architecture is a European architectural style that originated in the mid-12th century. Its primary characteristics include the pointed arch, the ribbed vault, and the flying buttress, which allowed for increased height and larger windows.",
+    "expected_adjusted": "Gothic architecture, a European architectural paradigm that emerged in the mid-12th century, is predicated upon three defining structural innovations: the pointed arch, the ribbed vault, and the flying buttress. These core elements collectively facilitated unprecedented structural verticality and the incorporation of more expansive windows."
+  },
+  {
+    "id": "inflation_formal_2",
+    "category": "formal",
+    "query": "How might one define the economic phenomenon of inflation?",
+    "neutral_answer": "In economics, inflation is a general increase in the prices of goods and services in an economy. When the general price level rises, each unit of currency buys fewer goods and services, meaning inflation corresponds to a reduction in the purchasing power of money.",
+    "expected_adjusted": "Within the discipline of economics, inflation constitutes a generalized augmentation in the pricing of goods and services across an economy. Consequently, as the general price level escalates, each discrete unit of currency is capable of acquiring fewer goods and services, indicating that inflation fundamentally corresponds to a diminution in the intrinsic purchasing power of money."
+  },
+  {
+    "id": "impressionism_formal_3",
+    "category": "formal",
+    "query": "What were the foundational techniques of the Impressionist art movement?",
+    "neutral_answer": "Impressionism was a 19th-century art movement characterized by relatively small, thin, yet visible brush strokes and open composition. It emphasized the accurate depiction of light in its changing qualities, often using ordinary subject matter and unusual visual angles.",
+    "expected_adjusted": "Impressionism, an influential 19th-century artistic movement, was principally characterized by the utilization of relatively diminutive, thin, albeit discernible brushstrokes, alongside an open compositional framework. The movement rigorously prioritized the accurate rendering of light and its transient qualities, frequently incorporating prosaic subject matter and highly unconventional spatial angles."
+  },
+  {
+    "id": "penicillin_formal_4",
+    "category": "formal",
+    "query": "Who is credited with the discovery of penicillin, and under what circumstances?",
+    "neutral_answer": "Penicillin was discovered by Scottish scientist Alexander Fleming in 1928. He noticed that a mold called Penicillium notatum had contaminated his Petri dishes and was actively destroying the surrounding Staphylococcus bacteria.",
+    "expected_adjusted": "The discovery of penicillin is formally attributed to the Scottish scientist Alexander Fleming in the year 1928. The fortuitous revelation occurred when Fleming observed that a mold identified as Penicillium notatum had inadvertently contaminated his Petri dishes, subsequently demonstrating an active capacity to eradicate the adjacent Staphylococcus bacterial colonies."
+  },
+  {
+    "id": "renaissance_formal_5",
+    "category": "formal",
+    "query": "What temporal and geographical parameters bound the Renaissance?",
+    "neutral_answer": "The Renaissance was a period in European history marking the transition from the Middle Ages to modernity, spanning the 15th and 16th centuries. It originated in the Republic of Florence, Italy, before spreading across the rest of Europe.",
+    "expected_adjusted": "The Renaissance constitutes a pivotal epoch in European historiography, acting as the transitional bridge between the Middle Ages and modernity throughout the 15th and 16th centuries. Geographically, it originated within the Republic of Florence in Italy prior to its subsequent dissemination across the broader European continent."
+  },
+  {
+    "id": "magnetism_eli5_1",
+    "category": "eli5",
+    "query": "Why do magnets stick to my fridge?",
+    "neutral_answer": "Magnetism is a class of physical phenomena that are mediated by magnetic fields, originating from the motion of electric charges, such as electrons. Ferromagnetic materials, like the steel in a refrigerator door, are strongly attracted to these magnetic fields because their internal atomic magnetic moments align with the external field.",
+    "expected_adjusted": "Imagine magnets have invisible, stretchy arms called a magnetic field made by moving electric charges like electrons! Inside your steel fridge door, which is a 'ferromagnetic' material, there are tiny invisible pieces that act like little hands. When the magnet gets close, its internal tiny hands line up with the magnet's invisible arms, pulling them together so they stick tight!"
+  },
+  {
+    "id": "red_blood_cells_eli5_2",
+    "category": "eli5",
+    "query": "What do red blood cells do in my body?",
+    "neutral_answer": "Red blood cells, or erythrocytes, are the most common type of blood cell and the vertebrate organism's principal means of delivering oxygen to the body tissues. They contain hemoglobin, a protein that binds to oxygen in the lungs and releases it as the blood circulates through the body.",
+    "expected_adjusted": "Think of red blood cells (also called erythrocytes) as millions of tiny delivery trucks zooming through your veins! They are the most common blood cell in vertebrates and have a special protein sponge inside called hemoglobin. This sponge picks up oxygen when you breathe into your lungs, and then drops it off to your body tissues as the blood circulates around!"
+  },
+  {
+    "id": "fiber_optics_eli5_3",
+    "category": "eli5",
+    "query": "How does fiber optic internet work?",
+    "neutral_answer": "Fiber optics is the technology of transmitting data, voice, and images by the passage of light through thin, transparent fibers made of glass or plastic. The light signals undergo total internal reflection, allowing them to travel long distances with minimal loss of signal integrity.",
+    "expected_adjusted": "You know how you can flash a flashlight to send a signal to a friend in the dark? Fiber optics works just like that to send data, voice, and images, but it shoots light through super thin, clear strings made of glass or plastic! The light bounces off the inside walls perfectly (called total internal reflection), carrying the signal super far without losing its strength."
+  },
+  {
+    "id": "fibonacci_eli5_4",
+    "category": "eli5",
+    "query": "What's the Fibonacci sequence?",
+    "neutral_answer": "The Fibonacci sequence is a series of numbers where each number is the sum of the two preceding ones, typically starting with 0 and 1. The sequence goes 0, 1, 1, 2, 3, 5, 8, 13, and so forth, and often appears in biological settings such as branching in trees or the arrangement of leaves on a stem.",
+    "expected_adjusted": "Imagine you have a magic number game! You start with a 0 and a 1, and to get the next number, you just add the last two together (so the series goes 0, 1, 1, 2, 3, 5, 8, 13, and so on). You can actually find this exact number pattern hiding in biology, like the way branches grow on trees or how leaves are arranged on a plant's stem!"
+  },
+  {
+    "id": "earthquakes_eli5_5",
+    "category": "eli5",
+    "query": "Why do earthquakes happen?",
+    "neutral_answer": "Earthquakes are caused by the sudden release of energy in the Earth's crust that creates seismic waves. This release is usually the result of tectonic plates slipping past one another along a fault line, after stress has accumulated over time.",
+    "expected_adjusted": "Imagine the Earth's crust is made of giant puzzle pieces called tectonic plates that are constantly pushing against each other! Over time, a lot of stress builds up at the edges, which are called fault lines. When they finally snap and slide past each other, it suddenly releases a huge amount of energy as seismic waves, which makes the ground shake like crazy!"
+  },
+  {
+    "id": "javascript_promises_technical_1",
+    "category": "technical",
+    "query": "Explain the execution model of JavaScript Promises.",
+    "neutral_answer": "A JavaScript Promise represents the eventual completion or failure of an asynchronous operation and its resulting value. It transitions from a pending state to either a fulfilled or rejected state, queuing its .then() or .catch() callbacks in the microtask queue to be executed after the current synchronous call stack clears.",
+    "expected_adjusted": "A Promise object fundamentally encapsulates the deferred resolution or rejection of an asynchronous subroutine, along with its resultant payload. It undergoes a state transition from `pending` to settled (`fulfilled` or `rejected`), whereupon its associated settlement handlers—registered via `.then()` or `.catch()`—are immediately enqueued into the microtask queue. The event loop prioritizes these microtasks, executing them only after the synchronous execution context of the current call stack has fully unwound."
+  },
+  {
+    "id": "combustion_engine_technical_2",
+    "category": "technical",
+    "query": "Detail the thermodynamic cycle of a four-stroke internal combustion engine.",
+    "neutral_answer": "A four-stroke internal combustion engine completes one thermodynamic cycle through four distinct piston strokes: intake, compression, combustion (or power), and exhaust. These strokes correspond to the intake of a fuel-air mixture, its compression, ignition to generate mechanical work, and the expulsion of the resulting exhaust gases.",
+    "expected_adjusted": "The four-stroke internal combustion engine operates by executing a thermodynamic cycle comprised of four discrete piston translations: the intake stroke (drawing a stoichiometric fuel-air mixture), the compression stroke (reducing cylinder volume to increase pressure), the power or combustion stroke (ignition inducing rapid expansion to generate mechanical work), and the exhaust stroke (expulsion of resultant combustion byproducts)."
+  },
+  {
+    "id": "quantum_entanglement_technical_3",
+    "category": "technical",
+    "query": "What is quantum entanglement in terms of state vectors?",
+    "neutral_answer": "Quantum entanglement is a physical phenomenon that occurs when a group of particles is generated, interact, or share spatial proximity in a way such that the quantum state of each particle cannot be described independently of the state of the others. Instead, a quantum state must be described for the system as a whole, meaning a measurement on one particle immediately influences the state of the entangled partners.",
+    "expected_adjusted": "Quantum entanglement designates a physical paradigm wherein a multiparticle system—resulting from generation, interaction, or proximal sharing—possesses a global state vector that cannot be factorized into a tensor product of independent subsystem states. Consequently, the quantum state must be modeled for the composite system in its entirety, whereby the projection postulate dictates that an observable measurement on one subsystem instantaneously collapses the wavefunction and correlates the state of the entangled counterparts."
+  },
+  {
+    "id": "crispr_cas9_technical_4",
+    "category": "technical",
+    "query": "What is the mechanism of CRISPR-Cas9 genome editing?",
+    "neutral_answer": "CRISPR-Cas9 is a genome-editing technology adapted from a natural defense mechanism in bacteria. It uses a guide RNA sequence to direct the Cas9 enzyme to a specific target DNA sequence, where the enzyme makes a double-stranded break, allowing for the addition or removal of genetic material.",
+    "expected_adjusted": "CRISPR-Cas9 functions as a highly specific genome-editing apparatus, evolutionarily derived from bacterial adaptive immunity. The mechanism relies on a single guide RNA (sgRNA) transcript to spatially direct the Cas9 endonuclease to a complementary target genomic DNA locus, at which point Cas9 induces a site-specific double-stranded break (DSB), thereby facilitating targeted mutagenesis via cellular repair pathways that mediate the insertion or deletion of genetic sequences."
+  },
+  {
+    "id": "rsa_encryption_technical_5",
+    "category": "technical",
+    "query": "Explain the mathematical foundation of the RSA algorithm.",
+    "neutral_answer": "RSA is an asymmetric cryptographic algorithm that uses two distinct keys: a public key for encryption and a private key for decryption. Its security relies on the practical difficulty of factoring the product of two large prime numbers, a mathematical problem for which no efficient solution currently exists.",
+    "expected_adjusted": "RSA is a public-key cryptographic algorithm operating on an asymmetric keypair topology: a public exponent for ciphering and a private exponent for deciphering. The foundational security architecture of the cryptosystem is predicated upon the integer factorization problem, specifically the computational intractability of deriving the original two large prime factors from their product modulus, an algorithmic hurdle lacking any known polynomial-time resolution."
+  },
+  {
+    "id": "fall_of_rome_brief_1",
+    "category": "brief",
+    "query": "Year Western Roman Empire fell?",
+    "neutral_answer": "The Western Roman Empire is generally considered to have fallen in the year 476 AD. This date marks the deposition of the last Western Roman Emperor, Romulus Augustulus, by the Germanic king Odoacer.",
+    "expected_adjusted": "476 AD. Marked by Germanic king Odoacer deposing the last emperor, Romulus Augustulus."
+  },
+  {
+    "id": "nile_river_brief_2",
+    "category": "brief",
+    "query": "What's the longest river?",
+    "neutral_answer": "The Nile is traditionally considered the longest river in the world, stretching approximately 6,650 kilometers (4,130 miles) through northeastern Africa. However, some scientific debate exists regarding whether the Amazon River might actually be slightly longer.",
+    "expected_adjusted": "Traditionally the Nile, at ~6,650 km (4,130 miles) in northeastern Africa. Ongoing scientific debate suggests the Amazon may be longer."
+  },
+  {
+    "id": "absolute_zero_brief_3",
+    "category": "brief",
+    "query": "Value of absolute zero?",
+    "neutral_answer": "Absolute zero is the lowest limit of the thermodynamic temperature scale, representing the state at which enthalpy and entropy of a cooled ideal gas reach their minimum value. It is quantified as 0 Kelvin, which is equal to -273.15 degrees Celsius or -459.67 degrees Fahrenheit.",
+    "expected_adjusted": "0 Kelvin (-273.15 \u00b0C or -459.67 \u00b0F). Lowest thermodynamic limit; minimum enthalpy and entropy of an ideal gas."
+  },
+  {
+    "id": "marathon_brief_4",
+    "category": "brief",
+    "query": "Exact length of a marathon?",
+    "neutral_answer": "A marathon is a long-distance foot race with an official distance of 42.195 kilometers. In imperial units, this distance translates to exactly 26 miles and 385 yards.",
+    "expected_adjusted": "Official long-distance foot race distance: 42.195 kilometers (exactly 26 miles and 385 yards)."
+  },
+  {
+    "id": "prime_numbers_brief_5",
+    "category": "brief",
+    "query": "Define prime number.",
+    "neutral_answer": "A prime number is a whole number greater than 1 whose only divisors are 1 and itself. For example, the first few prime numbers are 2, 3, 5, 7, and 11, whereas numbers with more than two divisors are called composite numbers.",
+    "expected_adjusted": "Whole number >1 divisible only by 1 and itself. Examples: 2, 3, 5, 7, 11. (Numbers with more divisors are \"composite\")."
+  },
+  {
+    "id": "platypus_humorous_1",
+    "category": "humorous",
+    "query": "Is the platypus actually real or did God just use spare parts?",
+    "neutral_answer": "The platypus is a semi-aquatic egg-laying mammal endemic to eastern Australia, including Tasmania. It exhibits an unusual combination of features, including a duck-like bill, a beaver-like tail, webbed feet, and venomous spurs on the males' hind legs.",
+    "expected_adjusted": "The platypus is 100% real, though it definitely looks like Mother Nature hit 'randomize' on the character creation screen. It's a semi-aquatic mammal endemic to eastern Australia and Tasmania that lays eggs, rocks a duck-like bill, slaps a beaver-like tail, has webbed feet, and just to keep things spicy, the males have venomous spurs on their hind legs."
+  },
+  {
+    "id": "trojan_horse_humorous_2",
+    "category": "humorous",
+    "query": "Explain the Trojan Horse like it's a terrible prank.",
+    "neutral_answer": "The Trojan Horse was a wooden horse used by the Greeks during the Trojan War to enter the independent city of Troy and win the war. The Greeks constructed the horse, hid a select force of men inside, and pretended to sail away, tricking the Trojans into pulling the horse into their city as a victory trophy.",
+    "expected_adjusted": "The Trojan Horse was the ultimate ancient 'it's just a prank, bro' that completely destroyed an independent city. During the Trojan War, the Greeks basically built a giant wooden horse, stuffed it full of a select force of heavily armed dudes, and pretended to sail away. The Trojans were gullible enough to fall for the trick and dragged this sketchy 'victory trophy' right inside their walls, letting the Greeks win."
+  },
+  {
+    "id": "entropy_humorous_3",
+    "category": "humorous",
+    "query": "Why does my room always get messy? Tell me the physics reason.",
+    "neutral_answer": "In physics, the Second Law of Thermodynamics states that the total entropy, or measure of disorder, of an isolated system can never decrease over time. Therefore, natural processes tend to move towards a state of greater disorder unless energy is expended to maintain order.",
+    "expected_adjusted": "Blame the Second Law of Thermodynamics! Physics literally dictates that the total 'entropy'—which is nerd for the measure of disorder—of an isolated system can never decrease over time. So natural processes intrinsically move towards a state of greater disorder, meaning the universe wants your room to be a chaotic disaster, and you have to expend actual energy to fight the fundamental laws of nature to maintain order."
+  },
+  {
+    "id": "dunning_kruger_humorous_4",
+    "category": "humorous",
+    "query": "What's the science word for people who are stupid but think they're geniuses?",
+    "neutral_answer": "The Dunning-Kruger effect is a cognitive bias whereby people with low ability, expertise, or experience regarding a certain type of task or area of knowledge tend to overestimate their ability or knowledge. Conversely, highly competent individuals may erroneously assume that tasks easy for them to perform are also easy for other people to perform.",
+    "expected_adjusted": "You're looking for the Dunning-Kruger effect! It's a hilarious cognitive bias where people with zero ability, expertise, or experience in a certain area are literally too clueless to realize how terrible they are, so they massively overestimate their knowledge. Meanwhile, the actual highly competent people suffer from imposter syndrome and erroneously assume that if a task is easy for them, it must be easy for everyone else."
+  },
+  {
+    "id": "pluto_humorous_5",
+    "category": "humorous",
+    "query": "Why did Pluto get kicked out of the planet club?",
+    "neutral_answer": "In 2006, the International Astronomical Union (IAU) reclassified Pluto as a 'dwarf planet' because it did not meet all three criteria necessary to be considered a full-sized planet. Specifically, while Pluto orbits the sun and has enough mass to be spherical, it has not 'cleared its neighboring region of other objects' due to its location in the crowded Kuiper Belt.",
+    "expected_adjusted": "Pluto got mercilessly demoted to a 'dwarf planet' in 2006 by the International Astronomical Union because it couldn't pass the background check. To be in the full-sized VIP planet club, you have to meet three criteria: orbit the sun, have enough mass to be spherical, and 'clear your neighboring region of other objects.' Pluto passed the first two, but failed the third because it hangs out in the crowded Kuiper Belt, meaning it's basically the guy who refuses to clean up his apartment."
+  }
+]
