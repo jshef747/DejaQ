@@ -3,10 +3,11 @@ load_dotenv()
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import chat, feedback, openai_compat, departments
+from app.routers import openai_compat, departments
 from app.middleware.api_key import ApiKeyMiddleware
 from app.utils.logger import setup_logging
 from app.config import USE_CELERY
+from app.services.request_logger import request_logger
 import logging
 from contextlib import asynccontextmanager
 
@@ -17,7 +18,9 @@ logger = logging.getLogger("dejaq.main")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("DejaQ Middleware starting up...")
+    await request_logger.init()
     yield
+    await request_logger.close()
     logger.info("DejaQ Middleware shutting down...")
 
 # 2. Initialize App
@@ -37,8 +40,6 @@ app.add_middleware(
 app.add_middleware(ApiKeyMiddleware)
 
 # 4. Include Routers
-app.include_router(chat.router)
-app.include_router(feedback.router)
 app.include_router(openai_compat.router, prefix="/v1")
 app.include_router(departments.router)
 

@@ -112,7 +112,7 @@ echo ""
 echo -e "${GREEN}✓ All services running${NC}"
 echo -e "  API:       http://127.0.0.1:8000"
 echo -e "  ChromaDB:  http://127.0.0.1:8001"
-echo -e "  Chat UI:   open index.html in browser"
+echo -e "  Demo UI:   open openai-compat-demo.html in browser"
 echo -e "  Logs:      $LOG_DIR/"
 echo -e "\n${YELLOW}Press Ctrl+C to stop all services.${NC}\n"
 

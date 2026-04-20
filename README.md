@@ -81,7 +81,7 @@ Then open:
 
 - API health: `http://127.0.0.1:8000/health`
 - OpenAI-compatible base URL: `http://127.0.0.1:8000/v1`
-- Demo UI: `server/openai-compat-demo.html` or `server/index.html`
+- Demo UI: `server/openai-compat-demo.html`
 
 If you want a lighter local setup, the server can also run without Celery:
 

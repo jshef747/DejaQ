@@ -6,7 +6,7 @@ from typing import Optional
 import chromadb
 from sentence_transformers import SentenceTransformer
 
-from app.config import FEEDBACK_TRUSTED_THRESHOLD, FEEDBACK_TRUSTED_SIMILARITY, CHROMA_HOST, CHROMA_PORT
+from app.config import CHROMA_HOST, CHROMA_PORT
 
 logger = logging.getLogger("dejaq.services.memory_chromaDB")
 
@@ -64,27 +64,12 @@ class MemoryService:
             meta = results["metadatas"][0][0] if results["metadatas"] and results["metadatas"][0] else {}
             entry_id = results["ids"][0][0]
 
-            # Respect flagged entries — never serve them
-            if meta.get("flagged", 0) == 1:
-                logger.info(
-                    "Cache FLAGGED entry skipped (id=%s, latency=%.1fms) for query: %s",
-                    entry_id, latency_ms, normalized_query,
-                )
-                return None
-
-            # Dynamic threshold: trusted entries cast a wider net
-            feedback_score = int(meta.get("feedback_score", 0))
-            threshold = (
-                FEEDBACK_TRUSTED_SIMILARITY
-                if feedback_score >= FEEDBACK_TRUSTED_THRESHOLD
-                else SIMILARITY_THRESHOLD
-            )
-
-            if distance <= threshold:
+            # TODO: feedback-driven threshold relaxation will be reintroduced pre-BC6
+            if distance <= SIMILARITY_THRESHOLD:
                 answer = meta["generalized_answer"]
                 logger.info(
-                    "Cache HIT (distance=%.4f, threshold=%.2f, score=%d, latency=%.1fms) for query: %s",
-                    distance, threshold, feedback_score, latency_ms, normalized_query,
+                    "Cache HIT (distance=%.4f, threshold=%.2f, latency=%.1fms) for query: %s",
+                    distance, SIMILARITY_THRESHOLD, latency_ms, normalized_query,
                 )
                 return answer, entry_id, distance
 
@@ -115,8 +100,6 @@ class MemoryService:
                 "original_query": original_query,
                 "user_id": user_id,
                 "stored_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "feedback_score": 0,
-                "flagged": 0,
             }],
         )
         logger.info("Stored in cache (id=%s, total=%d)", doc_id, self._collection.count())
@@ -143,8 +126,6 @@ class MemoryService:
                 "original_query": meta.get("original_query", ""),
                 "user_id": meta.get("user_id", ""),
                 "stored_at": meta.get("stored_at", ""),
-                "feedback_score": int(meta.get("feedback_score", 0)),
-                "flagged": bool(meta.get("flagged", 0)),
             })
 
         return entries

@@ -5,7 +5,7 @@
 - Pydantic Schemas defined (`ChatRequest` with `department_id`).
 - **Normalizer Service:** Implemented using Qwen 2.5 (0.5B) for query canonicalization.
 - **Router Service:** Implemented using Llama 3.2 (1B) for local inference.
-- **Client:** Simple HTML/JS `index.html` for testing.
+- **Client:** `openai-compat-demo.html` for testing; `dejaq-ui/` for the full React UI.
 - **Hardware:** `llama-cpp-python` configured for Mac (Metal) and Windows (CUDA/CPU).
 
 ## In Progress

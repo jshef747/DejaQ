@@ -9,6 +9,7 @@ from app.db import dept_repo, org_repo
 from app.db import api_key_repo
 from app.db.session import get_session
 from cli.ui import console, print_error, print_header, print_success, print_table, print_warning
+from cli.stats import run as _run_stats
 
 
 # ---------------------------------------------------------------------------
@@ -325,3 +326,13 @@ def key_revoke(key_id: int) -> None:
     print_success(
         f"Key id={result_id} revoked at {result_revoked_at.strftime('%Y-%m-%d %H:%M:%S UTC')}."
     )
+
+
+# ---------------------------------------------------------------------------
+# stats command
+# ---------------------------------------------------------------------------
+
+@cli.command("stats")
+def stats_cmd() -> None:
+    """Show usage stats: cache hit rates, latency, and model routing per department."""
+    _run_stats()

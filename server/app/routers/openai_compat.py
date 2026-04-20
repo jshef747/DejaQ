@@ -1,4 +1,5 @@
 # server/app/routers/openai_compat.py
+import asyncio
 import hashlib
 import logging
 import time
@@ -31,6 +32,7 @@ from app.tasks.cache_tasks import generalize_and_store_task
 from app.config import USE_CELERY, EXTERNAL_MODEL_NAME
 from app.utils.exceptions import ExternalLLMError
 from app.schemas.chat import ExternalLLMRequest
+from app.services.request_logger import request_logger
 
 logger = logging.getLogger("dejaq.router.openai_compat")
 
@@ -60,24 +62,9 @@ def _new_completion_id() -> str:
     return "chatcmpl-" + uuid.uuid4().hex[:24]
 
 
-def _is_suppressed(clean_query: str) -> bool:
-    import redis as redis_lib
-    from app.config import REDIS_URL
-
-    doc_id = _doc_id(clean_query)
-    try:
-        r = redis_lib.Redis.from_url(REDIS_URL, decode_responses=True)
-        return r.exists(f"skip:{doc_id}") == 1
-    except redis_lib.exceptions.RedisError:
-        return False
-
-
 def _bg_generalize_and_store(
     clean_query: str, answer: str, original_query: str, tenant_id: str, cache_namespace: str = "dejaq_default"
 ) -> None:
-    if _is_suppressed(clean_query):
-        logger.info("Storage suppressed for query '%s'", clean_query[:60])
-        return
     try:
         generalized = _adjuster.generalize(answer)
         memory = get_memory_service(cache_namespace)
@@ -160,8 +147,10 @@ async def chat_completions(
     raw_request: Request,
     background_tasks: BackgroundTasks,
 ):
+    _t0 = time.monotonic()
     cache_namespace: str = getattr(raw_request.state, "cache_namespace", "dejaq_default")
     org_slug: str = getattr(raw_request.state, "org_slug", "anonymous")
+    dept = raw_request.headers.get("X-DejaQ-Department") or "default"
     logger.info(
         "POST /v1/chat/completions model=%s stream=%s org=%s namespace=%s",
         oai_request.model,
@@ -207,6 +196,9 @@ async def chat_completions(
         except Exception:
             answer = cached_answer
         model_used = "cache"
+
+        _latency = int((time.monotonic() - _t0) * 1000)
+        asyncio.create_task(request_logger.log(org_slug, dept, _latency, True, None, None))
 
         if oai_request.stream:
             words = answer.split(" ")
@@ -302,6 +294,9 @@ async def chat_completions(
             )
 
     # 6. Return response
+    _latency = int((time.monotonic() - _t0) * 1000)
+    asyncio.create_task(request_logger.log(org_slug, dept, _latency, False, complexity, model_used))
+
     prompt_tokens = int(len(clean_query.split()) * 1.3)
     completion_tokens = int(len(answer.split()) * 1.3)
 

@@ -1,23 +1,14 @@
 import pytest
 
 from app.services.cache_filter import should_cache
-from app.services.conversation_store import ConversationStore
 from app.services.memory_chromaDB import MemoryService
 
 
 # ── No-model fixtures (function-scoped for isolation) ──
 
 @pytest.fixture
-def fresh_conversation_store():
-    return ConversationStore()
-
-
-@pytest.fixture
-def memory_service(tmp_path):
-    return MemoryService(
-        collection_name="test_collection",
-        persist_directory=str(tmp_path / "chroma_test"),
-    )
+def memory_service():
+    return MemoryService(collection_name="test_collection")
 
 
 # ── Model-backed fixtures (session-scoped — load once) ──

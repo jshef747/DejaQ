@@ -28,6 +28,7 @@ dependencies = [
     "click>=8.3.2",
     "rich>=14.3.3",
     "textual>=8.2.3",
+    "aiosqlite>=0.22.1",
 ]
 
 [project.scripts]

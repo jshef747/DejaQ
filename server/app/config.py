@@ -14,12 +14,9 @@ EXTERNAL_MODEL_NAME = os.getenv("DEJAQ_EXTERNAL_MODEL", "gemini-2.5-flash")
 # API key cache
 KEY_CACHE_TTL = int(os.getenv("DEJAQ_KEY_CACHE_TTL", "60"))
 
+# Stats DB
+STATS_DB_PATH = os.getenv("DEJAQ_STATS_DB", "dejaq_stats.db")
+
 # Feature flags
 USE_CELERY = os.getenv("DEJAQ_USE_CELERY", "true").lower() == "true"
 
-# Feedback loop thresholds
-FEEDBACK_TRUSTED_THRESHOLD = int(os.getenv("DEJAQ_TRUSTED_THRESHOLD", "3"))
-FEEDBACK_FLAG_THRESHOLD = int(os.getenv("DEJAQ_FLAG_THRESHOLD", "-3"))
-FEEDBACK_AUTO_DELETE_THRESHOLD = int(os.getenv("DEJAQ_AUTO_DELETE_THRESHOLD", "-5"))
-FEEDBACK_TRUSTED_SIMILARITY = float(os.getenv("DEJAQ_TRUSTED_SIMILARITY", "0.20"))
-FEEDBACK_SUPPRESSION_TTL = int(os.getenv("DEJAQ_SUPPRESSION_TTL", "300"))
