@@ -1,24 +1,46 @@
+import asyncio
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Request
 
-from app.schemas.feedback import FeedbackRequest, FeedbackHistoryResponse, FeedbackResponse
-from app.services.feedback_service import get_feedback_service
+from app.schemas.feedback import FeedbackRequest
+from app.services.memory_chromaDB import get_memory_service
+from app.services.request_logger import request_logger
 
 logger = logging.getLogger("dejaq.router.feedback")
 
 router = APIRouter()
 
-feedback_svc = get_feedback_service()
 
+@router.post("/feedback")
+async def submit_feedback(body: FeedbackRequest, raw_request: Request):
+    # Parse response_id into namespace + doc_id
+    if ":" not in body.response_id:
+        raise HTTPException(status_code=422, detail="Invalid response_id format; expected <namespace>:<doc_id>")
+    namespace, doc_id = body.response_id.split(":", 1)
 
-@router.post("/cache/entries/{entry_id}/feedback", response_model=FeedbackResponse)
-async def submit_feedback(entry_id: str, request: FeedbackRequest):
-    logger.info("POST /cache/entries/%s/feedback value=%s", entry_id, request.value)
-    return feedback_svc.submit_feedback(entry_id, request.value, request.conversation_id)
+    org = getattr(raw_request.state, "org_slug", "anonymous")
+    dept = raw_request.headers.get("X-DejaQ-Department") or "default"
 
+    # Log feedback fire-and-forget
+    asyncio.create_task(
+        request_logger.log_feedback(body.response_id, org, dept, body.rating, body.comment)
+    )
 
-@router.get("/cache/entries/{entry_id}/feedback", response_model=FeedbackHistoryResponse)
-async def get_feedback_history(entry_id: str):
-    logger.info("GET /cache/entries/%s/feedback", entry_id)
-    return feedback_svc.get_feedback_history(entry_id)
+    memory = get_memory_service(namespace)
+
+    try:
+        if body.rating == "negative":
+            neg_count = memory.get_negative_count(doc_id)
+            if neg_count == 0:
+                memory.delete_entry(doc_id)
+                logger.info("First negative feedback — deleted entry %s (namespace=%s)", doc_id, namespace)
+                return {"status": "deleted"}
+            else:
+                new_score = memory.update_score(doc_id, -2.0)
+                return {"status": "ok", "new_score": new_score}
+        else:
+            new_score = memory.update_score(doc_id, 1.0)
+            return {"status": "ok", "new_score": new_score}
+    except KeyError:
+        raise HTTPException(status_code=404, detail="response_id not found")

@@ -1,4 +1,5 @@
 from celery import Celery
+from celery.schedules import crontab
 from app.config import REDIS_URL
 
 celery_app = Celery(
@@ -10,6 +11,14 @@ celery_app = Celery(
 celery_app.conf.update(
     # Task autodiscovery
     include=["app.tasks.cache_tasks"],
+
+    # Periodic tasks (requires celery beat worker)
+    beat_schedule={
+        "evict-low-score-cache-entries": {
+            "task": "app.tasks.cache_tasks.evict_low_score_entries",
+            "schedule": crontab(minute="*/30"),
+        },
+    },
 
     # Queue routing
     task_routes={

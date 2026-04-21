@@ -6,7 +6,7 @@ from typing import Optional
 import chromadb
 from sentence_transformers import SentenceTransformer
 
-from app.config import FEEDBACK_TRUSTED_THRESHOLD, FEEDBACK_TRUSTED_SIMILARITY, CHROMA_HOST, CHROMA_PORT
+from app.config import CHROMA_HOST, CHROMA_PORT
 
 logger = logging.getLogger("dejaq.services.memory_chromaDB")
 
@@ -43,59 +43,50 @@ class MemoryService:
         logger.info("ChromaDB ready — %d documents in collection '%s'", self._collection.count(), collection_name)
 
     def check_cache(self, normalized_query: str) -> Optional[tuple[str, str, float]]:
-        """Return (generalized_answer, entry_id, distance) on cache hit, None on miss."""
+        """Return (generalized_answer, entry_id, distance) on cache hit, None on miss.
+
+        Fetches top-5 candidates, filters to those within SIMILARITY_THRESHOLD,
+        then returns the one with the highest score (absent score treated as 0.0).
+        """
         start = time.time()
         query_embedding = _embed(normalized_query)
+        n = min(5, self._collection.count() or 1)
         results = self._collection.query(
             query_embeddings=[query_embedding],
-            n_results=1,
+            n_results=n,
             include=["documents", "metadatas", "distances"],
         )
 
         latency_ms = (time.time() - start) * 1000
 
-        if (
-            results["distances"]
-            and results["distances"][0]
-            and results["ids"]
-            and results["ids"][0]
-        ):
-            distance = results["distances"][0][0]
-            meta = results["metadatas"][0][0] if results["metadatas"] and results["metadatas"][0] else {}
-            entry_id = results["ids"][0][0]
+        if not (results["distances"] and results["distances"][0] and results["ids"] and results["ids"][0]):
+            logger.info("Cache MISS (empty collection, latency=%.1fms) for query: %s", latency_ms, normalized_query)
+            return None
 
-            # Respect flagged entries — never serve them
-            if meta.get("flagged", 0) == 1:
-                logger.info(
-                    "Cache FLAGGED entry skipped (id=%s, latency=%.1fms) for query: %s",
-                    entry_id, latency_ms, normalized_query,
-                )
-                return None
+        candidates = []
+        for i, (dist, entry_id) in enumerate(zip(results["distances"][0], results["ids"][0])):
+            if dist <= SIMILARITY_THRESHOLD:
+                meta = results["metadatas"][0][i] if results["metadatas"] and results["metadatas"][0] else {}
+                score = float(meta.get("score", 0.0))
+                candidates.append((score, dist, entry_id, meta))
 
-            # Dynamic threshold: trusted entries cast a wider net
-            feedback_score = int(meta.get("feedback_score", 0))
-            threshold = (
-                FEEDBACK_TRUSTED_SIMILARITY
-                if feedback_score >= FEEDBACK_TRUSTED_THRESHOLD
-                else SIMILARITY_THRESHOLD
+        if not candidates:
+            nearest_dist = results["distances"][0][0]
+            logger.info(
+                "Cache MISS (distance=%.4f, latency=%.1fms) for query: %s",
+                nearest_dist, latency_ms, normalized_query,
             )
+            return None
 
-            if distance <= threshold:
-                answer = meta["generalized_answer"]
-                logger.info(
-                    "Cache HIT (distance=%.4f, threshold=%.2f, score=%d, latency=%.1fms) for query: %s",
-                    distance, threshold, feedback_score, latency_ms, normalized_query,
-                )
-                return answer, entry_id, distance
-
-        distance = results["distances"][0][0] if results["distances"] and results["distances"][0] else None
+        # Sort by score descending, pick best
+        candidates.sort(key=lambda c: c[0], reverse=True)
+        best_score, best_dist, best_id, best_meta = candidates[0]
+        answer = best_meta["generalized_answer"]
         logger.info(
-            "Cache MISS (distance=%s, latency=%.1fms) for query: %s",
-            f"{distance:.4f}" if distance is not None else "N/A",
-            latency_ms,
-            normalized_query,
+            "Cache HIT (distance=%.4f, score=%.1f, threshold=%.2f, latency=%.1fms) for query: %s",
+            best_dist, best_score, SIMILARITY_THRESHOLD, latency_ms, normalized_query,
         )
-        return None
+        return answer, best_id, best_dist
 
     def store_interaction(
         self,
@@ -103,7 +94,7 @@ class MemoryService:
         generalized_answer: str,
         original_query: str,
         user_id: str,
-    ) -> None:
+    ) -> str:
         doc_id = hashlib.sha256(normalized_query.encode()).hexdigest()[:16]
         embedding = _embed(normalized_query)
         self._collection.upsert(
@@ -115,11 +106,13 @@ class MemoryService:
                 "original_query": original_query,
                 "user_id": user_id,
                 "stored_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "feedback_score": 0,
-                "flagged": 0,
+                "score": 0.0,
+                "hit_count": 0,
+                "negative_count": 0,
             }],
         )
         logger.info("Stored in cache (id=%s, total=%d)", doc_id, self._collection.count())
+        return doc_id
 
     def get_all_entries(self, limit: int = 50, offset: int = 0) -> list[dict]:
         """Return all cached entries with metadata for the cache viewer."""
@@ -143,11 +136,40 @@ class MemoryService:
                 "original_query": meta.get("original_query", ""),
                 "user_id": meta.get("user_id", ""),
                 "stored_at": meta.get("stored_at", ""),
-                "feedback_score": int(meta.get("feedback_score", 0)),
-                "flagged": bool(meta.get("flagged", 0)),
             })
 
         return entries
+
+    def increment_hit_count(self, doc_id: str) -> None:
+        """Increment hit_count metadata field. Read-modify-write; raises KeyError if not found."""
+        meta = self.get_entry_metadata(doc_id)
+        if meta is None:
+            raise KeyError(doc_id)
+        meta["hit_count"] = int(meta.get("hit_count", 0)) + 1
+        self._collection.update(ids=[doc_id], metadatas=[meta])
+
+    def get_negative_count(self, doc_id: str) -> int:
+        """Return negative_count for an entry (0 if absent). Raises KeyError if doc not found."""
+        meta = self.get_entry_metadata(doc_id)
+        if meta is None:
+            raise KeyError(doc_id)
+        return int(meta.get("negative_count", 0))
+
+    def update_score(self, doc_id: str, delta: float) -> float:
+        """Apply delta to score and increment negative_count (for negative deltas). Returns new score.
+
+        Raises KeyError if doc not found. Uses read-modify-write; concurrent updates may lose counts.
+        """
+        meta = self.get_entry_metadata(doc_id)
+        if meta is None:
+            raise KeyError(doc_id)
+        new_score = float(meta.get("score", 0.0)) + delta
+        meta["score"] = new_score
+        if delta < 0:
+            meta["negative_count"] = int(meta.get("negative_count", 0)) + 1
+        self._collection.update(ids=[doc_id], metadatas=[meta])
+        logger.info("Updated score for %s: delta=%.1f new_score=%.1f", doc_id, delta, new_score)
+        return new_score
 
     def delete_entry(self, entry_id: str) -> bool:
         """Delete a single cache entry by ID. Returns True if it existed."""
@@ -161,6 +183,23 @@ class MemoryService:
         except Exception:
             logger.error("Failed to delete cache entry %s", entry_id)
             return False
+
+    def evict_below_floor(self, floor: float) -> int:
+        """Delete all entries with score < floor. Returns count of deleted entries."""
+        try:
+            results = self._collection.get(
+                where={"score": {"$lt": floor}},
+                include=[],
+            )
+            ids_to_delete = results["ids"]
+            if not ids_to_delete:
+                return 0
+            self._collection.delete(ids=ids_to_delete)
+            logger.info("Evicted %d entries below score floor %.1f", len(ids_to_delete), floor)
+            return len(ids_to_delete)
+        except Exception:
+            logger.error("evict_below_floor failed", exc_info=True)
+            return 0
 
     def get_entry_metadata(self, entry_id: str) -> Optional[dict]:
         """Return full metadata dict for a cache entry, or None if not found."""

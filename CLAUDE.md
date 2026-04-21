@@ -32,7 +32,7 @@ redis-server
 # Terminal 2: Start FastAPI
 uv run uvicorn app.main:app --reload
 # Server at http://127.0.0.1:8000
-# WebSocket test UI: open index.html in browser
+# Demo UI: open server/openai-compat-demo.html in browser
 
 # Terminal 3: Start Celery background worker (--pool=solo required for Metal/GPU compatibility)
 uv run celery -A app.celery_app:celery_app worker --queues=background --pool=solo --loglevel=info
@@ -46,25 +46,14 @@ DEJAQ_USE_CELERY=false uv run uvicorn app.main:app --reload
 |----------|---------|-------------|
 | `DEJAQ_REDIS_URL` | `redis://localhost:6379/0` | Redis connection URL (broker + result backend) |
 | `DEJAQ_USE_CELERY` | `true` | Set to `false` to disable Celery and run tasks in-process |
-| `DEJAQ_TRUSTED_THRESHOLD` | `3` | Minimum net-positive feedback score for relaxed cache matching |
-| `DEJAQ_FLAG_THRESHOLD` | `-3` | Score at which a cache entry is flagged as unreliable |
-| `DEJAQ_AUTO_DELETE_THRESHOLD` | `-5` | Score at which a cache entry is auto-deleted |
-| `DEJAQ_TRUSTED_SIMILARITY` | `0.20` | Cosine distance ceiling for trusted (high-score) entries |
-| `DEJAQ_SUPPRESSION_TTL` | `300` | Seconds to hold a storage suppression flag in Redis |
+| `DEJAQ_STATS_DB` | `dejaq_stats.db` | Path to SQLite request log (used by `dejaq-admin stats`) |
+| `DEJAQ_EVICTION_FLOOR` | `-5.0` | Score floor for cache eviction; entries below this are deleted by the beat task |
 
 ### Endpoints
 - `GET /health` — health check
-- `POST /normalize` — normalize a query
-- `POST /chat` — full chat pipeline (normalize → cache check → LLM → respond)
-- `POST /generalize` — test endpoint: strips tone from an answer to produce neutral version
-- `GET /cache/entries` — cache viewer: list all cached entries with metadata
-- `DELETE /cache/entries/{id}` — delete a single cache entry
-- `POST /cache/entries/{id}/feedback` — submit positive/negative quality rating for a cache entry
-- `GET /cache/entries/{id}/feedback` — retrieve timestamped feedback history for a cache entry
-- `GET /conversations` — list all conversations (newest first)
-- `GET /conversations/{id}/messages` — get conversation message history
-- `DELETE /conversations/{id}` — delete a conversation
-- `WS /ws/chat` — real-time WebSocket chat (with conversation history support)
+- `POST /v1/chat/completions` — OpenAI-compatible chat (streaming + non-streaming); requires `Authorization: Bearer <api-key>` and optional `X-DejaQ-Department` header; response includes `X-DejaQ-Response-Id` header when the response is cached or stored to cache
+- `POST /v1/feedback` — submit thumbs-up/down feedback on a cached response; requires `Authorization: Bearer <api-key>`; body: `{"response_id": "<X-DejaQ-Response-Id value>", "rating": "positive"|"negative", "comment": "<optional>"}`
+- Org/department management endpoints — see `dejaq-admin` CLI (`dejaq-admin org`, `dept`, `key`)
 
 ## Architecture
 
@@ -73,35 +62,44 @@ app/
 ├── main.py              # FastAPI init, CORS, startup/shutdown, health check
 ├── config.py            # Centralized settings (Redis URL, feature flags)
 ├── celery_app.py        # Celery configuration (broker, queues, serialization)
-├── routers/chat.py      # All endpoints (HTTP + WebSocket) + conversation CRUD
+├── middleware/
+│   └── api_key.py       # Bearer token → org/department resolution; sets request.state
+├── routers/
+│   ├── openai_compat.py # Sole chat endpoint (POST /v1/chat/completions), stateless, OpenAI-compatible
+│   └── departments.py   # Org/department CRUD
 ├── tasks/
 │   └── cache_tasks.py   # Celery task: generalize_and_store_task (Phi-3.5 + ChromaDB)
 ├── services/
 │   ├── model_loader.py  # ModelManager singleton (Qwen 0.5B, Qwen 1.5B, Llama 3.2 1B, Phi-3.5 Mini)
 │   ├── normalizer.py    # Query cleaning via Qwen 2.5-0.5B
-│   ├── llm_router.py    # Routes "easy"→Llama 3.2 1B local, "hard"→external API (stub)
+│   ├── llm_router.py    # Routes "easy"→Llama 3.2 1B local, "hard"→external API
 │   ├── context_adjuster.py # generalize() strips tone via Phi-3.5 Mini, adjust() adds tone via Qwen 2.5-1.5B
 │   ├── context_enricher.py # Rewrites context-dependent queries into standalone ones (Qwen 1.5B + regex gate, v5)
 │   ├── cache_filter.py  # Smart heuristic filter: skips non-cacheable prompts (too short, filler, vague)
-│   ├── conversation_store.py # In-memory multi-turn conversation history (max 20 messages)
 │   ├── classifier.py    # NVIDIA DeBERTa-based prompt complexity classifier (easy/hard routing)
-│   └── memory_chromaDB.py # ChromaDB semantic cache (PersistentClient, cosine ≤ 0.15)
-├── schemas/chat.py      # ChatRequest/ChatResponse (Pydantic), includes conversation_id
+│   ├── memory_chromaDB.py # ChromaDB semantic cache (HttpClient, cosine ≤ 0.15)
+│   └── request_logger.py  # Async SQLite request log (org, dept, latency, cache hit/miss, model)
+├── schemas/
+│   ├── chat.py          # ExternalLLMRequest/Response only
+│   └── openai_compat.py # OpenAI-compatible request/response schemas
 ├── models/              # TODO: DB models (PostgreSQL)
 ├── repositories/        # TODO: DB access layer
 └── utils/logger.py      # Centralized logging config
-index.html               # WebSocket chatbot test UI with cache diagnostics (project root)
+cli/
+├── admin.py             # dejaq-admin CLI (org, dept, key, stats subcommands)
+└── stats.py             # dejaq-admin stats — Rich TUI usage dashboard
 ```
 
 **Key patterns:**
 - ModelManager is a singleton — models load once on first use
 - Models use GGUF format via `llama-cpp-python` for cross-platform GPU support (Metal/CUDA)
 - All schemas use Pydantic BaseModel
-- Conversation history is passed to the LLM for multi-turn context
+- Client sends full message history in the `messages` array (stateless; no server-side conversation store)
 - Cache miss triggers background generalization + storage via Celery task queue (falls back to in-process if Celery disabled) — only if cache filter passes
 - Celery workers lazy-load their own model instances via ModelManager singleton (one per worker process)
 - Context enricher rewrites follow-up queries ("tell me more") into standalone questions before normalization
 - Cache filter skips storing trivial messages (filler words, too short, too vague)
+- Per-request stats logged to SQLite (fire-and-forget via asyncio.create_task)
 
 ## Coding Conventions
 
@@ -171,13 +169,12 @@ Best config: `v22` (BGE-small embedder + opinion LLM gate) — 81% Hit@0.20.
 
 ## Current Status
 
-**Working:** FastAPI WebSocket + HTTP, Normalizer (Qwen 0.5B, v22), LLM Router (Llama 3.2 1B local), Context Adjuster (generalize via Phi-3.5 + adjust via Qwen 1.5B), Semantic cache (ChromaDB, cosine ≤ 0.15), Multi-turn conversation history (in-memory), Conversation CRUD endpoints, Background generalize+store on cache miss, Hardware acceleration (Metal/CUDA), Context Enricher v5 (Qwen 1.5B + regex gate, 88.7% @0.15 across 5 datasets), Smart Cache Filter (skip non-cacheable prompts), Cache Viewer API + UI panel, Difficulty Classifier (NVIDIA DeBERTa — routes easy→local, hard→external), Celery + Redis task queue (non-blocking generalize+store for both HTTP and WebSocket)
+**Working:** FastAPI HTTP, Normalizer (Qwen 0.5B, v22), LLM Router (Llama 3.2 1B local), Context Adjuster (generalize via Phi-3.5 + adjust via Qwen 1.5B), Semantic cache (ChromaDB, cosine ≤ 0.15), Background generalize+store on cache miss, Hardware acceleration (Metal/CUDA), Context Enricher v5 (Qwen 1.5B + regex gate, 88.7% @0.15 across 5 datasets), Smart Cache Filter (skip non-cacheable prompts), Difficulty Classifier (NVIDIA DeBERTa — routes easy→local, hard→external), Celery + Redis task queue (non-blocking generalize+store), OpenAI-compatible endpoint with API-key auth + per-department cache namespacing, Org/department/API-key management (CLI + SQLite), Stats tracking (SQLite + Rich TUI — `dejaq-admin stats`)
 **In progress:** Database integration (PostgreSQL)
-**Planned:** External LLM APIs (GPT/Gemini), Feedback loop, React frontend, Persistent conversation storage (currently in-memory only), Offload user-facing inference to Celery inference queue (multi-user parallelism), Subject-extraction preprocessing for bare comparative failures ("Which is cheaper?" — 1.5B model not sufficient)
+**Planned:** External LLM APIs (GPT/Gemini), Feedback loop (redesign), Offload user-facing inference to Celery inference queue (multi-user parallelism), Subject-extraction preprocessing for bare comparative failures ("Which is cheaper?" — 1.5B model not sufficient)
 
 ## Active Technologies
-- Python 3.13+ + FastAPI + Uvicorn, ChromaDB (PersistentClient), redis-py (already present as Celery dependency), Pydantic v2, Celery
-- ChromaDB (entry metadata), Redis (feedback event history, suppression flags)
+- Python 3.13+ + FastAPI + Uvicorn, ChromaDB (HttpClient), redis-py (Celery dependency), Pydantic v2, Celery, aiosqlite (request log), Rich (stats TUI), SQLAlchemy + Alembic (org/dept DB)
 
 ## Recent Changes
 - `services-tuning` branch: deployed v5 enricher (Qwen 1.5B + regex gate) — +5.4pp @0.15 vs baseline; built enricher-test harness (5 datasets, configs: baseline / v2_regex_gate / v3_improved_fewshots / v4_gate_fix / v5_qwen_1_5b)

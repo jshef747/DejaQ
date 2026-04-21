@@ -101,7 +101,7 @@ uv run celery -A app.celery_app:celery_app worker --queues=background --pool=sol
 ```
 
 **Server:** [http://127.0.0.1:8000](http://127.0.0.1:8000)
-**WebSocket test UI:** Open `index.html` in your browser
+**Demo UI:** Open `openai-compat-demo.html` in your browser
 
 #### Scaling with Multiple Workers
 
@@ -174,12 +174,13 @@ app/
 │   ├── context_adjuster.py  # generalize() + adjust() for tone handling
 │   ├── context_enricher.py  # Rewrites follow-up queries into standalone
 │   ├── cache_filter.py      # Heuristic filter for non-cacheable prompts
-│   ├── conversation_store.py # In-memory conversation history
 │   ├── classifier.py        # DeBERTa complexity classifier
-│   └── memory_chromaDB.py   # ChromaDB semantic cache
-├── schemas/chat.py      # Pydantic request/response models
+│   ├── memory_chromaDB.py   # ChromaDB semantic cache
+│   └── request_logger.py    # Async SQLite request log
+├── schemas/
+│   ├── chat.py          # ExternalLLMRequest/Response only
+│   └── openai_compat.py # OpenAI-compatible request/response schemas
 └── utils/logger.py      # Centralized logging config
-index.html               # WebSocket test UI (project root)
 ```
 
 ---

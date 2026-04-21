@@ -20,9 +20,10 @@ UVICORN="$VENV/bin/uvicorn"
 CELERY="$VENV/bin/celery"
 CHROMA="$VENV/bin/chroma"
 
-REDIS_PID=""; CELERY_PID=""; UVICORN_PID=""; CHROMA_PID=""; TAIL_PID=""
+REDIS_PID=""; CELERY_PID=""; CELERY_BEAT_PID=""; UVICORN_PID=""; CHROMA_PID=""; TAIL_PID=""
 
 cleanup() {
+  trap - EXIT INT TERM
   echo -e "\n${YELLOW}Shutting down services...${NC}"
   stop_service() {
     local pid=$1 name=$2
@@ -33,10 +34,11 @@ cleanup() {
     fi
   }
   [[ -n "$TAIL_PID" ]] && kill "$TAIL_PID" 2>/dev/null || true
-  stop_service "$UVICORN_PID" "FastAPI"
-  stop_service "$CELERY_PID"  "Celery"
-  stop_service "$CHROMA_PID"  "ChromaDB"
-  stop_service "$REDIS_PID"   "Redis"
+  stop_service "$UVICORN_PID"     "FastAPI"
+  stop_service "$CELERY_BEAT_PID" "Celery beat"
+  stop_service "$CELERY_PID"      "Celery worker"
+  stop_service "$CHROMA_PID"      "ChromaDB"
+  stop_service "$REDIS_PID"       "Redis"
   echo -e "${GREEN}All services stopped.${NC}"
 }
 trap cleanup EXIT INT TERM
@@ -84,20 +86,32 @@ else
   echo -e "  ${GREEN}Redis running (PID $REDIS_PID)${NC}"
 fi
 
-# ── 3. Celery ───────────────────────────────────────────────────────────────
-echo -e "${CYAN}[3/4] Starting Celery worker...${NC}"
+# ── 3. Celery worker ────────────────────────────────────────────────────────
+echo -e "${CYAN}[3/5] Starting Celery worker...${NC}"
 "$CELERY" -A app.celery_app:celery_app worker \
   --queues=background --pool=solo --loglevel=info \
   &>"$LOG_DIR/celery.log" &
 CELERY_PID=$!
 sleep 2
 if ! kill -0 "$CELERY_PID" 2>/dev/null; then
-  echo -e "${RED}Celery failed to start. Check $LOG_DIR/celery.log${NC}"; exit 1
+  echo -e "${RED}Celery worker failed to start. Check $LOG_DIR/celery.log${NC}"; exit 1
 fi
-echo -e "  ${GREEN}Celery running (PID $CELERY_PID)${NC}"
+echo -e "  ${GREEN}Celery worker running (PID $CELERY_PID)${NC}"
 
-# ── 4. FastAPI ──────────────────────────────────────────────────────────────
-echo -e "${CYAN}[4/4] Starting FastAPI...${NC}"
+# ── 4. Celery beat ──────────────────────────────────────────────────────────
+echo -e "${CYAN}[4/5] Starting Celery beat (periodic tasks)...${NC}"
+"$CELERY" -A app.celery_app:celery_app beat \
+  --loglevel=info \
+  &>"$LOG_DIR/celery_beat.log" &
+CELERY_BEAT_PID=$!
+sleep 2
+if ! kill -0 "$CELERY_BEAT_PID" 2>/dev/null; then
+  echo -e "${RED}Celery beat failed to start. Check $LOG_DIR/celery_beat.log${NC}"; exit 1
+fi
+echo -e "  ${GREEN}Celery beat running (PID $CELERY_BEAT_PID) — eviction runs every 30 min${NC}"
+
+# ── 5. FastAPI ──────────────────────────────────────────────────────────────
+echo -e "${CYAN}[5/5] Starting FastAPI...${NC}"
 free_port 8000
 "$UVICORN" app.main:app --reload &>"$LOG_DIR/uvicorn.log" &
 UVICORN_PID=$!
@@ -110,13 +124,14 @@ echo -e "  ${GREEN}FastAPI running (PID $UVICORN_PID)${NC}"
 # ── Ready ───────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}✓ All services running${NC}"
-echo -e "  API:       http://127.0.0.1:8000"
-echo -e "  ChromaDB:  http://127.0.0.1:8001"
-echo -e "  Chat UI:   open index.html in browser"
-echo -e "  Logs:      $LOG_DIR/"
+echo -e "  API:         http://127.0.0.1:8000"
+echo -e "  ChromaDB:    http://127.0.0.1:8001"
+echo -e "  Demo UI:     open openai-compat-demo.html in browser"
+echo -e "  Stats TUI:   uv run python -m cli.stats"
+echo -e "  Logs:        $LOG_DIR/"
 echo -e "\n${YELLOW}Press Ctrl+C to stop all services.${NC}\n"
 
 # Tail all logs — kill tail pid in cleanup so it doesn't linger
-tail -f "$LOG_DIR/redis.log" "$LOG_DIR/celery.log" "$LOG_DIR/uvicorn.log" &
+tail -f "$LOG_DIR/redis.log" "$LOG_DIR/celery.log" "$LOG_DIR/celery_beat.log" "$LOG_DIR/uvicorn.log" &
 TAIL_PID=$!
 wait $TAIL_PID
