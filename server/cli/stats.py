@@ -7,6 +7,9 @@ import sys
 
 from rich.console import Console
 from rich.table import Table
+from rich.panel import Panel
+from rich.columns import Columns
+from rich.text import Text
 from rich import box
 
 _TOKENS_PER_HIT = 150
@@ -133,7 +136,55 @@ def run() -> None:
             style=t_style,
         )
 
-    Console().print(table)
+    console = Console()
+    console.print(table)
+    console.print()
+    _print_cache_health(console, db_path)
+
+
+def _print_cache_health(console: Console, db_path: str) -> None:
+    """Print a Cache Health panel showing score distribution across cached entries."""
+    try:
+        import chromadb
+        from app.config import CHROMA_HOST, CHROMA_PORT, EVICTION_FLOOR
+        client = chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
+        collections = client.list_collections()
+    except Exception as exc:
+        console.print(f"[dim]Cache Health unavailable: {exc}[/dim]")
+        return
+
+    total = 0
+    positive = 0
+    neutral = 0
+    negative = 0
+    below_floor = 0
+
+    for col in collections:
+        try:
+            collection = client.get_collection(col.name)
+            results = collection.get(include=["metadatas"])
+            for meta in (results["metadatas"] or []):
+                score = float(meta.get("score", 0.0))
+                total += 1
+                if score > 0:
+                    positive += 1
+                elif score == 0:
+                    neutral += 1
+                else:
+                    negative += 1
+                if score < EVICTION_FLOOR:
+                    below_floor += 1
+        except Exception:
+            pass
+
+    lines = [
+        f"[bold]Total entries:[/bold] {total}",
+        f"[green]Score > 0:[/green]   {positive}",
+        f"[dim]Score = 0:[/dim]   {neutral}",
+        f"[yellow]Score < 0:[/yellow]  {negative}",
+        f"[red]Below floor:[/red] {below_floor}  [dim](floor={EVICTION_FLOOR})[/dim]",
+    ]
+    console.print(Panel("\n".join(lines), title="[bold]Cache Health[/bold]", expand=False))
 
 
 if __name__ == "__main__":

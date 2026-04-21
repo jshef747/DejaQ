@@ -20,3 +20,13 @@ STATS_DB_PATH = os.getenv("DEJAQ_STATS_DB", "dejaq_stats.db")
 # Feature flags
 USE_CELERY = os.getenv("DEJAQ_USE_CELERY", "true").lower() == "true"
 
+# Cache eviction
+try:
+    EVICTION_FLOOR = float(os.getenv("DEJAQ_EVICTION_FLOOR", "-5.0"))
+except ValueError:
+    import logging as _logging
+    _logging.getLogger("dejaq.config").warning(
+        "Invalid DEJAQ_EVICTION_FLOOR value; using default -5.0"
+    )
+    EVICTION_FLOOR = -5.0
+

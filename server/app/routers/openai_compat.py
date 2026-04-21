@@ -73,6 +73,13 @@ def _bg_generalize_and_store(
         logger.error("Failed to generalize/store: %s", traceback.format_exc())
 
 
+async def _increment_hit_count_bg(namespace: str, doc_id: str) -> None:
+    try:
+        get_memory_service(namespace).increment_hit_count(doc_id)
+    except Exception:
+        logger.warning("Failed to increment hit_count for %s:%s", namespace, doc_id)
+
+
 def _extract_pipeline_inputs(
     request: OAIChatRequest,
 ) -> tuple[str, list[dict], str | None]:
@@ -197,8 +204,10 @@ async def chat_completions(
             answer = cached_answer
         model_used = "cache"
 
+        response_id = f"{cache_namespace}:{_entry_id}"
         _latency = int((time.monotonic() - _t0) * 1000)
-        asyncio.create_task(request_logger.log(org_slug, dept, _latency, True, None, None))
+        asyncio.create_task(request_logger.log(org_slug, dept, _latency, True, None, None, response_id))
+        asyncio.create_task(_increment_hit_count_bg(cache_namespace, _entry_id))
 
         if oai_request.stream:
             words = answer.split(" ")
@@ -206,6 +215,7 @@ async def chat_completions(
             headers = {
                 "x-dejaq-model-used": model_used,
                 "x-dejaq-conversation-id": completion_id,
+                "x-dejaq-response-id": response_id,
             }
             return StreamingResponse(
                 _stream_generator(chunks, completion_id, oai_request.model, model_used),
@@ -233,6 +243,7 @@ async def chat_completions(
             headers={
                 "x-dejaq-model-used": model_used,
                 "x-dejaq-conversation-id": completion_id,
+                "x-dejaq-response-id": response_id,
             },
         )
 
@@ -285,7 +296,11 @@ async def chat_completions(
     except Exception:
         pass
 
+    # Compute response_id deterministically (same hash as store_interaction uses)
+    miss_response_id: str | None = None
     if will_cache:
+        miss_doc_id = _doc_id(clean_query)
+        miss_response_id = f"{cache_namespace}:{miss_doc_id}"
         if USE_CELERY:
             generalize_and_store_task.delay(clean_query, answer, user_query, org_slug, cache_namespace)
         else:
@@ -295,22 +310,25 @@ async def chat_completions(
 
     # 6. Return response
     _latency = int((time.monotonic() - _t0) * 1000)
-    asyncio.create_task(request_logger.log(org_slug, dept, _latency, False, complexity, model_used))
+    asyncio.create_task(request_logger.log(org_slug, dept, _latency, False, complexity, model_used, miss_response_id))
 
     prompt_tokens = int(len(clean_query.split()) * 1.3)
     completion_tokens = int(len(answer.split()) * 1.3)
 
+    miss_headers: dict[str, str] = {
+        "x-dejaq-model-used": model_used,
+        "x-dejaq-conversation-id": completion_id,
+    }
+    if miss_response_id:
+        miss_headers["x-dejaq-response-id"] = miss_response_id
+
     if oai_request.stream:
         words = answer.split(" ")
         chunks = [w + " " for w in words[:-1]] + [words[-1]] if words else [answer]
-        headers = {
-            "x-dejaq-model-used": model_used,
-            "x-dejaq-conversation-id": completion_id,
-        }
         return StreamingResponse(
             _stream_generator(chunks, completion_id, oai_request.model, model_used),
             media_type="text/event-stream",
-            headers=headers,
+            headers=miss_headers,
         )
 
     response = OAIChatResponse(
@@ -328,8 +346,5 @@ async def chat_completions(
 
     return JSONResponse(
         content=response.model_dump(),
-        headers={
-            "x-dejaq-model-used": model_used,
-            "x-dejaq-conversation-id": completion_id,
-        },
+        headers=miss_headers,
     )

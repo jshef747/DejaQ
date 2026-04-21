@@ -47,10 +47,12 @@ DEJAQ_USE_CELERY=false uv run uvicorn app.main:app --reload
 | `DEJAQ_REDIS_URL` | `redis://localhost:6379/0` | Redis connection URL (broker + result backend) |
 | `DEJAQ_USE_CELERY` | `true` | Set to `false` to disable Celery and run tasks in-process |
 | `DEJAQ_STATS_DB` | `dejaq_stats.db` | Path to SQLite request log (used by `dejaq-admin stats`) |
+| `DEJAQ_EVICTION_FLOOR` | `-5.0` | Score floor for cache eviction; entries below this are deleted by the beat task |
 
 ### Endpoints
 - `GET /health` — health check
-- `POST /v1/chat/completions` — OpenAI-compatible chat (streaming + non-streaming); requires `Authorization: Bearer <api-key>` and optional `X-DejaQ-Department` header
+- `POST /v1/chat/completions` — OpenAI-compatible chat (streaming + non-streaming); requires `Authorization: Bearer <api-key>` and optional `X-DejaQ-Department` header; response includes `X-DejaQ-Response-Id` header when the response is cached or stored to cache
+- `POST /v1/feedback` — submit thumbs-up/down feedback on a cached response; requires `Authorization: Bearer <api-key>`; body: `{"response_id": "<X-DejaQ-Response-Id value>", "rating": "positive"|"negative", "comment": "<optional>"}`
 - Org/department management endpoints — see `dejaq-admin` CLI (`dejaq-admin org`, `dept`, `key`)
 
 ## Architecture
