@@ -23,6 +23,7 @@ CHROMA="$VENV/bin/chroma"
 REDIS_PID=""; CELERY_PID=""; CELERY_BEAT_PID=""; UVICORN_PID=""; CHROMA_PID=""; TAIL_PID=""
 
 cleanup() {
+  trap - EXIT INT TERM
   echo -e "\n${YELLOW}Shutting down services...${NC}"
   stop_service() {
     local pid=$1 name=$2
