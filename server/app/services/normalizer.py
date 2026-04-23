@@ -13,7 +13,7 @@ import time
 
 from spellchecker import SpellChecker
 
-from app.services.model_loader import ModelManager
+from app.services.model_backends import CompletionRequest, ModelBackend
 
 _spell = SpellChecker()
 # Common proper nouns the base dictionary lacks.
@@ -193,8 +193,11 @@ def _build_opinion_messages(query: str) -> list[dict]:
 
 
 class NormalizerService:
+    def __init__(self, backend: ModelBackend, model_name: str):
+        self.backend = backend
+        self.model_name = model_name
 
-    def normalize(self, raw_query: str) -> str:
+    async def normalize(self, raw_query: str) -> str:
         logger.debug("Normalizing query: %s", raw_query)
         start = time.time()
 
@@ -209,11 +212,15 @@ class NormalizerService:
             )
             return normalized
 
-        # Opinion path: lazy-load Gemma E2B
-        llm = ModelManager.load_gemma_e2b()
         messages = _build_opinion_messages(query)
-        output = llm.create_chat_completion(messages=messages, max_tokens=8, temperature=0.0)
-        raw_output = output["choices"][0]["message"]["content"].strip()
+        raw_output = await self.backend.complete(
+            CompletionRequest(
+                model_name=self.model_name,
+                messages=messages,
+                max_tokens=8,
+                temperature=0.0,
+            )
+        )
         normalized = _postprocess(raw_output, raw_query)
 
         latency = (time.time() - start) * 1000

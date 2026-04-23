@@ -1,4 +1,5 @@
 import hashlib
+import asyncio
 import logging
 import traceback
 
@@ -8,6 +9,7 @@ from app.celery_app import celery_app
 from app.config import REDIS_URL, EVICTION_FLOOR
 from app.services.context_adjuster import ContextAdjusterService
 from app.services.memory_chromaDB import get_memory_service, _pool
+from app.services.service_factory import get_context_adjuster_service
 
 logger = logging.getLogger("dejaq.tasks.cache")
 
@@ -30,7 +32,7 @@ def _get_adjuster() -> ContextAdjusterService:
     global _context_adjuster
     if _context_adjuster is None:
         logger.info("Initializing ContextAdjusterService in worker...")
-        _context_adjuster = ContextAdjusterService()
+        _context_adjuster = get_context_adjuster_service()
     return _context_adjuster
 
 
@@ -61,7 +63,7 @@ def generalize_and_store_task(
     try:
         context_adjuster = _get_adjuster()
         memory = get_memory_service(cache_namespace)
-        generalized = context_adjuster.generalize(answer)
+        generalized = asyncio.run(context_adjuster.generalize(answer))
         doc_id = memory.store_interaction(clean_query, generalized, original_query, user_id)
         logger.info(
             "Task complete: generalized + stored for query '%s' (namespace=%s, doc_id=%s)",

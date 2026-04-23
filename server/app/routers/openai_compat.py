@@ -20,14 +20,17 @@ from app.schemas.openai_compat import (
     OAIStreamDelta,
     OAIUsage,
 )
-from app.services.normalizer import NormalizerService
-from app.services.llm_router import LLMRouterService, _LOCAL_MODEL_NAME
+from app.services.llm_router import _LOCAL_MODEL_NAME
 from app.services.external_llm import ExternalLLMService
-from app.services.context_adjuster import ContextAdjusterService
 from app.services.memory_chromaDB import get_memory_service
-from app.services.context_enricher import ContextEnricherService
 from app.services import cache_filter
 from app.services.classifier import ClassifierService
+from app.services.service_factory import (
+    get_context_adjuster_service,
+    get_context_enricher_service,
+    get_llm_router_service,
+    get_normalizer_service,
+)
 from app.tasks.cache_tasks import generalize_and_store_task
 from app.config import USE_CELERY, EXTERNAL_MODEL_NAME
 from app.utils.exceptions import ExternalLLMError
@@ -40,10 +43,10 @@ router = APIRouter()
 
 # --- Service singletons (shared with main process; each service is safe to instantiate once per router module) ---
 logger.info("Initializing OpenAI-compat services...")
-_normalizer = NormalizerService()
-_llm_router = LLMRouterService()
-_adjuster = ContextAdjusterService()
-_enricher = ContextEnricherService()
+_normalizer = get_normalizer_service()
+_llm_router = get_llm_router_service()
+_adjuster = get_context_adjuster_service()
+_enricher = get_context_enricher_service()
 _classifier = ClassifierService()
 _external_llm = ExternalLLMService()
 # MemoryService is namespace-aware; use get_memory_service(namespace) per-request
@@ -66,7 +69,7 @@ def _bg_generalize_and_store(
     clean_query: str, answer: str, original_query: str, tenant_id: str, cache_namespace: str = "dejaq_default"
 ) -> None:
     try:
-        generalized = _adjuster.generalize(answer)
+        generalized = asyncio.run(_adjuster.generalize(answer))
         memory = get_memory_service(cache_namespace)
         memory.store_interaction(clean_query, generalized, original_query, tenant_id)
     except Exception:
@@ -177,14 +180,14 @@ async def chat_completions(
 
     # 1. Enrich
     try:
-        enriched = _enricher.enrich(user_query, history)
+        enriched = await _enricher.enrich(user_query, history)
     except Exception:
         logger.error("Enricher failed: %s", traceback.format_exc())
         enriched = user_query
 
     # 2. Normalize
     try:
-        clean_query = _normalizer.normalize(enriched)
+        clean_query = await _normalizer.normalize(enriched)
     except Exception:
         logger.error("Normalizer failed: %s", traceback.format_exc())
         clean_query = enriched
@@ -199,7 +202,7 @@ async def chat_completions(
     if cache_result is not None:
         cached_answer, _entry_id, _cache_distance = cache_result
         try:
-            answer = _adjuster.adjust(user_query, cached_answer)
+            answer = await _adjuster.adjust(user_query, cached_answer)
         except Exception:
             answer = cached_answer
         model_used = "cache"
@@ -273,7 +276,7 @@ async def chat_completions(
                 system_prompt
                 or "You are a helpful assistant. Answer the user's query concisely and accurately."
             )
-            answer, _ = _llm_router.generate_local_response(
+            answer, _ = await _llm_router.generate_local_response(
                 user_query,
                 history=history,
                 max_tokens=max_tokens,

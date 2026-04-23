@@ -2,6 +2,14 @@ import pytest
 
 from app.services.cache_filter import should_cache
 from app.services.memory_chromaDB import MemoryService
+from app.services.service_factory import (
+    _backend_pool,
+    _service_pool,
+    get_context_adjuster_service,
+    get_context_enricher_service,
+    get_llm_router_service,
+    get_normalizer_service,
+)
 
 
 # ── No-model fixtures (function-scoped for isolation) ──
@@ -15,26 +23,30 @@ def memory_service():
 
 @pytest.fixture(scope="session")
 def normalizer_service():
-    from app.services.normalizer import NormalizerService
-    return NormalizerService()
+    _backend_pool.clear()
+    _service_pool.clear()
+    return get_normalizer_service()
 
 
 @pytest.fixture(scope="session")
 def context_enricher_service():
-    from app.services.context_enricher import ContextEnricherService
-    return ContextEnricherService()
+    _backend_pool.clear()
+    _service_pool.clear()
+    return get_context_enricher_service()
 
 
 @pytest.fixture(scope="session")
 def context_adjuster_service():
-    from app.services.context_adjuster import ContextAdjusterService
-    return ContextAdjusterService()
+    _backend_pool.clear()
+    _service_pool.clear()
+    return get_context_adjuster_service()
 
 
 @pytest.fixture(scope="session")
 def llm_router_service():
-    from app.services.llm_router import LLMRouterService
-    return LLMRouterService()
+    _backend_pool.clear()
+    _service_pool.clear()
+    return get_llm_router_service()
 
 
 @pytest.fixture(scope="session")

@@ -1,7 +1,7 @@
 import logging
 import time
 
-from app.services.model_loader import ModelManager
+from app.services.model_backends import CompletionRequest, ModelBackend
 
 logger = logging.getLogger("dejaq.services.context_enricher")
 
@@ -9,10 +9,11 @@ logger = logging.getLogger("dejaq.services.context_enricher")
 class ContextEnricherService:
     """Rewrites context-dependent queries into standalone questions using conversation history."""
 
-    def __init__(self):
-        self.llm = ModelManager.load_qwen_1_5b()
+    def __init__(self, backend: ModelBackend, model_name: str):
+        self.backend = backend
+        self.model_name = model_name
 
-    def enrich(self, message: str, history: list[dict]) -> str:
+    async def enrich(self, message: str, history: list[dict]) -> str:
         """Enrich a message with conversation context to make it standalone.
 
         If there's no history, returns the message as-is (skip inference).
@@ -35,8 +36,10 @@ class ContextEnricherService:
 
         start = time.time()
 
-        output = self.llm.create_chat_completion(
-            messages=[
+        enriched = await self.backend.complete(
+            CompletionRequest(
+                model_name=self.model_name,
+                messages=[
                 {"role": "system", "content": "You are a query rewriter. Given a conversation history and a follow-up message, rewrite the follow-up into a standalone question that includes all necessary context. Output ONLY the rewritten question. If the message is already standalone, return it unchanged."},
                 # Example 1: pronoun resolution
                 {"role": "user", "content": "HISTORY:\nUser: What is Python?\nAssistant: Python is a high-level programming language.\n\nFOLLOW-UP: Tell me more about its features"},
@@ -52,12 +55,12 @@ class ContextEnricherService:
                 {"role": "assistant", "content": "What is the capital of France?"},
                 # Actual query
                 {"role": "user", "content": f"HISTORY:\n{context_block}\n\nFOLLOW-UP: {message}"},
-            ],
-            max_tokens=256,
-            temperature=0.0
+                ],
+                max_tokens=256,
+                temperature=0.0,
+            )
         )
 
-        enriched = output["choices"][0]["message"]["content"].strip()
         latency = (time.time() - start) * 1000
         logger.info(
             "Enrichment completed in %.2f ms. Original: '%s' -> Enriched: '%s'",

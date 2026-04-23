@@ -48,46 +48,69 @@ DEJAQ_USE_CELERY=false uv run uvicorn app.main:app --reload
 | `DEJAQ_USE_CELERY` | `true` | Set to `false` to disable Celery and run tasks in-process |
 | `DEJAQ_STATS_DB` | `dejaq_stats.db` | Path to SQLite request log (used by `dejaq-admin stats`) |
 | `DEJAQ_EVICTION_FLOOR` | `-5.0` | Score floor for cache eviction; entries below this are deleted by the beat task |
+| `GEMINI_API_KEY` | `` | API key for Google Gemini (external LLM for hard queries) |
+| `DEJAQ_EXTERNAL_MODEL` | `gemini-2.5-flash` | Gemini model name for hard-query routing |
+| `DEJAQ_CHROMA_HOST` | `127.0.0.1` | ChromaDB HTTP server host |
+| `DEJAQ_CHROMA_PORT` | `8001` | ChromaDB HTTP server port |
 
 ### Endpoints
-- `GET /health` — health check
+- `GET /health` — health check; also reports Celery worker status
 - `POST /v1/chat/completions` — OpenAI-compatible chat (streaming + non-streaming); requires `Authorization: Bearer <api-key>` and optional `X-DejaQ-Department` header; response includes `X-DejaQ-Response-Id` header when the response is cached or stored to cache
-- `POST /v1/feedback` — submit thumbs-up/down feedback on a cached response; requires `Authorization: Bearer <api-key>`; body: `{"response_id": "<X-DejaQ-Response-Id value>", "rating": "positive"|"negative", "comment": "<optional>"}`
-- Org/department management endpoints — see `dejaq-admin` CLI (`dejaq-admin org`, `dept`, `key`)
+- `POST /v1/feedback` — thumbs-up/down feedback on a cached response; requires `Authorization: Bearer <api-key>`; body: `{"response_id": "<X-DejaQ-Response-Id value>", "rating": "positive"|"negative", "comment": "<optional>"}`; first negative deletes entry, subsequent negatives decrement score by 2.0; positive increments score by 1.0
+- Org/department management endpoints — see `dejaq-admin` CLI (`dejaq-admin org`, `dept`, `key`, `stats`)
 
 ## Architecture
 
 ```
 app/
 ├── main.py              # FastAPI init, CORS, startup/shutdown, health check
-├── config.py            # Centralized settings (Redis URL, feature flags)
+├── config.py            # Centralized settings (Redis URL, Gemini key, ChromaDB host/port, feature flags)
 ├── celery_app.py        # Celery configuration (broker, queues, serialization)
+├── db/
+│   ├── base.py          # SQLAlchemy declarative base
+│   ├── session.py       # Sync session factory (SQLite via Alembic)
+│   ├── org_repo.py      # Org CRUD
+│   ├── dept_repo.py     # Department CRUD
+│   ├── api_key_repo.py  # API key lookup + caching
+│   └── models/
+│       ├── org.py       # Organization ORM model
+│       ├── department.py # Department ORM model (cache_namespace, org FK)
+│       └── api_key.py   # ApiKey ORM model
+├── dependencies/
+│   └── auth.py          # FastAPI dependency: resolve org/dept from Bearer token
 ├── middleware/
 │   └── api_key.py       # Bearer token → org/department resolution; sets request.state
 ├── routers/
 │   ├── openai_compat.py # Sole chat endpoint (POST /v1/chat/completions), stateless, OpenAI-compatible
-│   └── departments.py   # Org/department CRUD
+│   ├── departments.py   # Org/department CRUD
+│   └── feedback.py      # POST /v1/feedback — score-based cache feedback
 ├── tasks/
 │   └── cache_tasks.py   # Celery task: generalize_and_store_task (Phi-3.5 + ChromaDB)
 ├── services/
-│   ├── model_loader.py  # ModelManager singleton (Qwen 0.5B, Qwen 1.5B, Llama 3.2 1B, Phi-3.5 Mini)
+│   ├── model_loader.py  # ModelManager singleton (Qwen 0.5B, Qwen 1.5B, Gemma 4 E4B, Gemma 4 E2B, Phi-3.5 Mini)
 │   ├── normalizer.py    # Query cleaning via Qwen 2.5-0.5B
-│   ├── llm_router.py    # Routes "easy"→Llama 3.2 1B local, "hard"→external API
+│   ├── llm_router.py    # Routes "easy"→Gemma 4 E4B local, "hard"→Gemini
+│   ├── external_llm.py  # Gemini client singleton (google-genai, async)
 │   ├── context_adjuster.py # generalize() strips tone via Phi-3.5 Mini, adjust() adds tone via Qwen 2.5-1.5B
 │   ├── context_enricher.py # Rewrites context-dependent queries into standalone ones (Qwen 1.5B + regex gate, v5)
 │   ├── cache_filter.py  # Smart heuristic filter: skips non-cacheable prompts (too short, filler, vague)
 │   ├── classifier.py    # NVIDIA DeBERTa-based prompt complexity classifier (easy/hard routing)
-│   ├── memory_chromaDB.py # ChromaDB semantic cache (HttpClient, cosine ≤ 0.15)
-│   └── request_logger.py  # Async SQLite request log (org, dept, latency, cache hit/miss, model)
+│   ├── memory_chromaDB.py # ChromaDB semantic cache (HttpClient, cosine ≤ 0.15); score-based eviction
+│   └── request_logger.py  # Async SQLite request log (org, dept, latency, cache hit/miss, model, feedback)
 ├── schemas/
 │   ├── chat.py          # ExternalLLMRequest/Response only
-│   └── openai_compat.py # OpenAI-compatible request/response schemas
-├── models/              # TODO: DB models (PostgreSQL)
-├── repositories/        # TODO: DB access layer
-└── utils/logger.py      # Centralized logging config
+│   ├── openai_compat.py # OpenAI-compatible request/response schemas
+│   ├── feedback.py      # FeedbackRequest schema
+│   ├── org.py           # Org schemas
+│   └── department.py    # Department schemas
+└── utils/
+    ├── logger.py        # Centralized logging config
+    └── exceptions.py    # ExternalLLMError, ExternalLLMAuthError, ExternalLLMTimeoutError
 cli/
 ├── admin.py             # dejaq-admin CLI (org, dept, key, stats subcommands)
-└── stats.py             # dejaq-admin stats — Rich TUI usage dashboard
+├── stats.py             # Stats queries + Rich table rendering
+├── tui.py               # dejaq-admin-tui — full Textual TUI dashboard
+└── ui.py                # Shared Rich console helpers
 ```
 
 **Key patterns:**
@@ -100,6 +123,9 @@ cli/
 - Context enricher rewrites follow-up queries ("tell me more") into standalone questions before normalization
 - Cache filter skips storing trivial messages (filler words, too short, too vague)
 - Per-request stats logged to SQLite (fire-and-forget via asyncio.create_task)
+- Feedback adjusts ChromaDB entry scores (+1.0 positive, −2.0 negative); first negative deletes immediately
+- External LLM is Google Gemini via `google-genai` async client; `ExternalLLMService` is a singleton
+- Org/dept/API-key data lives in SQLite (SQLAlchemy + Alembic); `dejaq.db` by default
 
 ## Coding Conventions
 
@@ -114,15 +140,16 @@ cli/
 | Role | Model | Size | Loader |
 |------|-------|------|--------|
 | Context Enricher (v5) | Qwen 2.5-1.5B-Instruct | Q4_K_M | `ModelManager.load_qwen_1_5b()` |
-| Normalizer | Qwen 2.5-0.5B-Instruct | Q4_K_M | `ModelManager.load_qwen()` |
+| Normalizer (cleaning) | Qwen 2.5-0.5B-Instruct | Q4_K_M | `ModelManager.load_qwen()` |
+| Normalizer (opinion rewrite, v22) | Gemma 4 E2B-Instruct | Q4_K_M | `ModelManager.load_gemma_e2b()` |
 | Context Adjuster (adjust) | Qwen 2.5-1.5B-Instruct | Q4_K_M | `ModelManager.load_qwen_1_5b()` |
 | Generalizer (strip tone) | Phi-3.5-Mini-Instruct | Q4_K_M | `ModelManager.load_phi()` |
-| Local LLM (generation) | Llama 3.2-1B-Instruct | Q8_0 | `ModelManager.load_llama()` |
+| Local LLM (generation) | Gemma 4 E4B-Instruct | Q4_K_M | `ModelManager.load_gemma()` |
 | Difficulty Classifier | NVIDIA DeBERTa-v3-base | Full | `ClassifierService` (singleton) |
 
 ## Test Harnesses
 
-Both services have dedicated offline eval harnesses. Run from their respective directories with `uv`.
+Three offline eval harnesses exist. Run from their respective directories with `uv`.
 
 ### enricher-test/ — Context Enricher eval
 
@@ -167,14 +194,23 @@ uv run python -m harness.runner
 
 Best config: `v22` (BGE-small embedder + opinion LLM gate) — 81% Hit@0.20.
 
+### adjuster-test/ — Context Adjuster eval
+
+```bash
+cd adjuster-test
+uv run python -m harness.runner
+uv run python -m harness.runner --configs baseline_qwen_1_5b
+uv run python -m harness.runner --metrics-only
+```
+
+Uses an LLM judge (requires `ANTHROPIC_API_KEY`) for scoring. Configs in `configs/`, datasets in `dataset/`.
+
 ## Current Status
 
-**Working:** FastAPI HTTP, Normalizer (Qwen 0.5B, v22), LLM Router (Llama 3.2 1B local), Context Adjuster (generalize via Phi-3.5 + adjust via Qwen 1.5B), Semantic cache (ChromaDB, cosine ≤ 0.15), Background generalize+store on cache miss, Hardware acceleration (Metal/CUDA), Context Enricher v5 (Qwen 1.5B + regex gate, 88.7% @0.15 across 5 datasets), Smart Cache Filter (skip non-cacheable prompts), Difficulty Classifier (NVIDIA DeBERTa — routes easy→local, hard→external), Celery + Redis task queue (non-blocking generalize+store), OpenAI-compatible endpoint with API-key auth + per-department cache namespacing, Org/department/API-key management (CLI + SQLite), Stats tracking (SQLite + Rich TUI — `dejaq-admin stats`)
-**In progress:** Database integration (PostgreSQL)
-**Planned:** External LLM APIs (GPT/Gemini), Feedback loop (redesign), Offload user-facing inference to Celery inference queue (multi-user parallelism), Subject-extraction preprocessing for bare comparative failures ("Which is cheaper?" — 1.5B model not sufficient)
+**Working:** FastAPI HTTP, Normalizer (Qwen 0.5B, v22), LLM Router (Gemma 4 E4B local → Gemini 2.5 Flash external), Context Adjuster (generalize via Phi-3.5 + adjust via Qwen 1.5B), Semantic cache (ChromaDB, cosine ≤ 0.15), Background generalize+store on cache miss, Hardware acceleration (Metal/CUDA), Context Enricher v5 (Qwen 1.5B + regex gate, 88.7% @0.15 across 5 datasets), Smart Cache Filter (skip non-cacheable prompts), Difficulty Classifier (NVIDIA DeBERTa — routes easy→local, hard→Gemini), Celery + Redis task queue (non-blocking generalize+store), OpenAI-compatible endpoint with API-key auth + per-department cache namespacing, Org/department/API-key management (SQLAlchemy + Alembic SQLite + `dejaq-admin` CLI), Stats tracking (SQLite + Rich TUI — `dejaq-admin stats` / `dejaq-admin-tui`), Score-based cache eviction (Celery beat), Feedback API (score adjustments + delete on first negative), End-to-end demo script (`server/demo.sh`)
+**In progress:** Offload user-facing inference to Celery inference queue (multi-user parallelism)
+**Planned:** PostgreSQL migration, Subject-extraction preprocessing for bare comparative failures ("Which is cheaper?" — 1.5B model not sufficient)
 
 ## Active Technologies
-- Python 3.13+ + FastAPI + Uvicorn, ChromaDB (HttpClient), redis-py (Celery dependency), Pydantic v2, Celery, aiosqlite (request log), Rich (stats TUI), SQLAlchemy + Alembic (org/dept DB)
 
-## Recent Changes
-- `services-tuning` branch: deployed v5 enricher (Qwen 1.5B + regex gate) — +5.4pp @0.15 vs baseline; built enricher-test harness (5 datasets, configs: baseline / v2_regex_gate / v3_improved_fewshots / v4_gate_fix / v5_qwen_1_5b)
+- Python 3.13+ + FastAPI + Uvicorn, ChromaDB (HttpClient), redis-py (Celery dependency), Pydantic v2, Celery, aiosqlite (request log), Rich + Textual (stats TUI), SQLAlchemy + Alembic (org/dept/key DB, SQLite), google-genai (Gemini external LLM)

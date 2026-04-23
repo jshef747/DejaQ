@@ -57,6 +57,14 @@ free_port() {
 
 cd "$PROJECT_DIR"
 
+# Load local env file so uvicorn, celery worker, and beat share the same config
+if [[ -f "$PROJECT_DIR/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$PROJECT_DIR/.env"
+  set +a
+fi
+
 # ── 1. ChromaDB ─────────────────────────────────────────────────────────────
 echo -e "${CYAN}[1/4] Starting ChromaDB server...${NC}"
 free_port 8001
