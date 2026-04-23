@@ -6,6 +6,10 @@ chroma_data/
 dump.rdb
 *.db
 test_reports/
+.agent/
+.codex/
+.claude/scheduled_tasks.lock
+server/celerybeat-schedule
 
 # Python defaults
 __pycache__/
