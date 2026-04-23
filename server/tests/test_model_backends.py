@@ -1,5 +1,5 @@
 import asyncio
-import importlib
+import time
 
 import httpx
 
@@ -83,7 +83,7 @@ def test_ollama_backend_posts_chat_request():
 
     assert result == "from ollama"
     assert captured["url"] == "http://ollama.test/api/chat"
-    assert '"model":"qwen2.5:1.5b-instruct"' in captured["payload"]
+    assert '"model":"qwen2.5:1.5b"' in captured["payload"]
 
 
 def test_services_send_logical_model_names_to_backend():
@@ -151,3 +151,76 @@ def test_llm_router_can_switch_to_ollama_by_config(monkeypatch):
     result = asyncio.run(service.generate_response("hello", "easy"))
 
     assert result == "ollama:gemma_local"
+
+
+def test_in_process_backend_offloads_blocking_work(monkeypatch):
+    class SleepingModel:
+        def create_chat_completion(self, **kwargs):
+            time.sleep(0.2)
+            return {"choices": [{"message": {"content": "done"}}]}
+
+    monkeypatch.setattr(
+        "app.services.model_loader.ModelManager.load_gemma",
+        lambda: SleepingModel(),
+    )
+
+    backend = InProcessBackend()
+    request = CompletionRequest(
+        model_name="gemma_local",
+        messages=[{"role": "user", "content": "hello"}],
+        max_tokens=16,
+        temperature=0.0,
+    )
+
+    async def ticker(stop: asyncio.Event, ticks: list[int]) -> None:
+        while not stop.is_set():
+            ticks[0] += 1
+            await asyncio.sleep(0.01)
+
+    async def run_batch() -> tuple[float, list[str], int]:
+        stop = asyncio.Event()
+        ticks = [0]
+        ticker_task = asyncio.create_task(ticker(stop, ticks))
+        started = time.perf_counter()
+        try:
+            results = await asyncio.gather(*(backend.complete(request) for _ in range(3)))
+        finally:
+            stop.set()
+            await ticker_task
+        return time.perf_counter() - started, results, ticks[0]
+
+    elapsed, results, tick_count = asyncio.run(run_batch())
+    assert results == ["done", "done", "done"]
+    assert elapsed >= 0.5
+    assert tick_count > 10
+
+
+def test_ollama_backend_requests_can_overlap():
+    class SleepingClient:
+        async def post(self, url: str, json: dict) -> httpx.Response:
+            await asyncio.sleep(0.2)
+            return httpx.Response(
+                200,
+                json={"message": {"role": "assistant", "content": "done"}},
+                request=httpx.Request("POST", f"http://ollama.test{url}"),
+            )
+
+    backend = OllamaBackend(
+        base_url="http://ollama.test",
+        timeout_seconds=5.0,
+        client=SleepingClient(),  # type: ignore[arg-type]
+    )
+    request = CompletionRequest(
+        model_name="qwen_1_5b",
+        messages=[{"role": "user", "content": "hello"}],
+        max_tokens=16,
+        temperature=0.0,
+    )
+
+    async def run_batch() -> float:
+        started = time.perf_counter()
+        await asyncio.gather(*(backend.complete(request) for _ in range(5)))
+        return time.perf_counter() - started
+
+    elapsed = asyncio.run(run_batch())
+    assert elapsed < 0.7

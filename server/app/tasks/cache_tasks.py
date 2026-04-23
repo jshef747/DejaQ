@@ -25,6 +25,7 @@ def _is_suppressed(clean_query: str) -> bool:
 
 # Lazy-initialized adjuster (one per worker process; MemoryService is pooled per namespace)
 _context_adjuster: ContextAdjusterService | None = None
+_worker_loop: asyncio.AbstractEventLoop | None = None
 
 
 def _get_adjuster() -> ContextAdjusterService:
@@ -34,6 +35,14 @@ def _get_adjuster() -> ContextAdjusterService:
         logger.info("Initializing ContextAdjusterService in worker...")
         _context_adjuster = get_context_adjuster_service()
     return _context_adjuster
+
+
+def _run_async_in_worker(coro):
+    """Reuse one event loop per worker process for async backend calls."""
+    global _worker_loop
+    if _worker_loop is None or _worker_loop.is_closed():
+        _worker_loop = asyncio.new_event_loop()
+    return _worker_loop.run_until_complete(coro)
 
 
 @celery_app.task(
@@ -63,7 +72,7 @@ def generalize_and_store_task(
     try:
         context_adjuster = _get_adjuster()
         memory = get_memory_service(cache_namespace)
-        generalized = asyncio.run(context_adjuster.generalize(answer))
+        generalized = _run_async_in_worker(context_adjuster.generalize(answer))
         doc_id = memory.store_interaction(clean_query, generalized, original_query, user_id)
         logger.info(
             "Task complete: generalized + stored for query '%s' (namespace=%s, doc_id=%s)",

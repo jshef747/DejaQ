@@ -39,6 +39,11 @@ uv run celery -A app.celery_app:celery_app worker --queues=background --pool=sol
 
 # Without Redis (fallback mode — generalize+store runs in-process):
 DEJAQ_USE_CELERY=false uv run uvicorn app.main:app --reload
+
+# Benchmark backend concurrency directly
+cd server
+uv run python scripts/benchmark_backend_concurrency.py --backend in_process --model qwen_0_5b --concurrency 10
+uv run python scripts/benchmark_backend_concurrency.py --backend ollama --model qwen_0_5b --concurrency 10
 ```
 
 ### Environment Variables
@@ -52,6 +57,13 @@ DEJAQ_USE_CELERY=false uv run uvicorn app.main:app --reload
 | `DEJAQ_EXTERNAL_MODEL` | `gemini-2.5-flash` | Gemini model name for hard-query routing |
 | `DEJAQ_CHROMA_HOST` | `127.0.0.1` | ChromaDB HTTP server host |
 | `DEJAQ_CHROMA_PORT` | `8001` | ChromaDB HTTP server port |
+| `DEJAQ_OLLAMA_URL` | `http://127.0.0.1:11434` | Shared Ollama HTTP endpoint for service roles using `ollama` backend |
+| `DEJAQ_OLLAMA_TIMEOUT_SECONDS` | `60.0` | Timeout for Ollama backend requests |
+| `DEJAQ_ENRICHER_BACKEND` | `in_process` | Backend mode for context enricher (`in_process` or `ollama`) |
+| `DEJAQ_NORMALIZER_BACKEND` | `in_process` | Backend mode for normalizer opinion-rewrite path (`in_process` or `ollama`) |
+| `DEJAQ_LOCAL_LLM_BACKEND` | `in_process` | Backend mode for local generation (`in_process` or `ollama`) |
+| `DEJAQ_GENERALIZER_BACKEND` | `in_process` | Backend mode for background tone-stripping generalizer |
+| `DEJAQ_CONTEXT_ADJUSTER_BACKEND` | `in_process` | Backend mode for tone-adjustment path on cache hits |
 
 ### Endpoints
 - `GET /health` — health check; also reports Celery worker status
@@ -116,6 +128,7 @@ cli/
 **Key patterns:**
 - ModelManager is a singleton — models load once on first use
 - Models use GGUF format via `llama-cpp-python` for cross-platform GPU support (Metal/CUDA)
+- In-process backend runs blocking local completion work in `asyncio.to_thread` so one request does not stall the main FastAPI event loop
 - All schemas use Pydantic BaseModel
 - Client sends full message history in the `messages` array (stateless; no server-side conversation store)
 - Cache miss triggers background generalization + storage via Celery task queue (falls back to in-process if Celery disabled) — only if cache filter passes
@@ -146,6 +159,12 @@ cli/
 | Generalizer (strip tone) | Phi-3.5-Mini-Instruct | Q4_K_M | `ModelManager.load_phi()` |
 | Local LLM (generation) | Gemma 4 E4B-Instruct | Q4_K_M | `ModelManager.load_gemma()` |
 | Difficulty Classifier | NVIDIA DeBERTa-v3-base | Full | `ClassifierService` (singleton) |
+
+## Backend Concurrency
+
+- `in_process`: best for development and demos. DejaQ offloads blocking local completion calls to worker threads so concurrent requests are not forced to wait on the main async event loop. Shared access to the same in-process GGUF model is serialized per logical model for safety because concurrent `llama-cpp-python` calls against one loaded model can crash. Result: the server stays responsive, but throughput may still look close to serialized for a single shared local model.
+- `ollama`: DejaQ sends independent async HTTP requests to the Ollama server. This is usually the better operator choice for concurrent serving because inference is decoupled from the FastAPI process, though total throughput still depends on Ollama deployment capacity.
+- Benchmark before choosing: use `server/scripts/benchmark_backend_concurrency.py` to compare one request vs ten concurrent requests on your actual hardware. A good Ollama run should be well below naive 10x serial time; an `in_process` run may stay responsive but still serialize per model instance.
 
 ## Test Harnesses
 

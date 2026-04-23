@@ -61,6 +61,9 @@ class ModelBackend(Protocol):
 
 
 class InProcessBackend:
+    def __init__(self) -> None:
+        self._model_locks: dict[str, asyncio.Lock] = {}
+
     def _get_model(self, logical_model_name: str):
         try:
             runtime_spec = MODEL_RUNTIME_SPECS[logical_model_name]
@@ -77,6 +80,7 @@ class InProcessBackend:
     async def complete(self, request: CompletionRequest) -> str:
         logger.debug("Model completion backend=in_process model=%s", request.model_name)
         model = self._get_model(request.model_name)
+        model_lock = self._model_locks.setdefault(request.model_name, asyncio.Lock())
 
         def _run_completion() -> str:
             output = model.create_chat_completion(
@@ -86,7 +90,11 @@ class InProcessBackend:
             )
             return output["choices"][0]["message"]["content"].strip()
 
-        return await asyncio.to_thread(_run_completion)
+        # `llama-cpp-python` completion is blocking, so run it in a worker
+        # thread. Access to a shared model instance is serialized per logical
+        # model because concurrent calls into the same GGUF runtime can crash.
+        async with model_lock:
+            return await asyncio.to_thread(_run_completion)
 
 
 class OllamaBackend:
