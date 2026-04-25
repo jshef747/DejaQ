@@ -50,11 +50,10 @@ class ExternalLLMService:
             temperature=request.temperature,
         )
 
-        logger.info(
-            "Sending hard query to Gemini (model=%s, history_turns=%d): %.80s",
+        logger.debug(
+            "Sending hard query to Gemini model=%s history_turns=%d",
             request.model,
             len(request.history),
-            request.query,
         )
 
         start = time.perf_counter()
@@ -78,7 +77,7 @@ class ExternalLLMService:
         text = response.text or ""
         usage = response.usage_metadata
 
-        logger.info(
+        logger.debug(
             "Gemini request successful (model=%s, latency=%.2f ms, prompt_tokens=%d, completion_tokens=%d)",
             request.model,
             latency_ms,

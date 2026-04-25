@@ -60,7 +60,7 @@ class MemoryService:
         latency_ms = (time.time() - start) * 1000
 
         if not (results["distances"] and results["distances"][0] and results["ids"] and results["ids"][0]):
-            logger.info("Cache MISS (empty collection, latency=%.1fms) for query: %s", latency_ms, normalized_query)
+            logger.debug("Cache MISS empty_collection latency=%.1fms", latency_ms)
             return None
 
         candidates = []
@@ -72,19 +72,20 @@ class MemoryService:
 
         if not candidates:
             nearest_dist = results["distances"][0][0]
-            logger.info(
-                "Cache MISS (distance=%.4f, latency=%.1fms) for query: %s",
-                nearest_dist, latency_ms, normalized_query,
-            )
+            logger.debug("Cache MISS distance=%.4f latency=%.1fms", nearest_dist, latency_ms)
             return None
 
         # Sort by score descending, pick best
         candidates.sort(key=lambda c: c[0], reverse=True)
         best_score, best_dist, best_id, best_meta = candidates[0]
         answer = best_meta["generalized_answer"]
-        logger.info(
-            "Cache HIT (distance=%.4f, score=%.1f, threshold=%.2f, latency=%.1fms) for query: %s",
-            best_dist, best_score, SIMILARITY_THRESHOLD, latency_ms, normalized_query,
+        logger.debug(
+            "Cache HIT distance=%.4f score=%.1f threshold=%.2f latency=%.1fms entry_id=%s",
+            best_dist,
+            best_score,
+            SIMILARITY_THRESHOLD,
+            latency_ms,
+            best_id,
         )
         return answer, best_id, best_dist
 

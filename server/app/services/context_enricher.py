@@ -62,7 +62,7 @@ class ContextEnricherService:
         )
 
         latency = (time.time() - start) * 1000
-        logger.info(
+        logger.debug(
             "Enrichment completed in %.2f ms. Original: '%s' -> Enriched: '%s'",
             latency, message[:60], enriched[:60],
         )

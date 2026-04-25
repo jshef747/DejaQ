@@ -1,7 +1,7 @@
 import hashlib
 import asyncio
 import logging
-import traceback
+import time
 
 import redis as redis_lib
 
@@ -65,8 +65,10 @@ def generalize_and_store_task(
     All arguments are plain strings — no model objects or unpickleable data.
     cache_namespace selects the ChromaDB collection (department isolation).
     """
+    start = time.perf_counter()
+    doc_id = hashlib.sha256(clean_query.encode()).hexdigest()[:16]
     if _is_suppressed(clean_query):
-        logger.info("Storage suppressed for query '%s'", clean_query[:60])
+        logger.info("cache_store status=suppressed namespace=%s doc_id=%s", cache_namespace, doc_id)
         return {"status": "suppressed", "clean_query": clean_query}
 
     try:
@@ -74,15 +76,16 @@ def generalize_and_store_task(
         memory = get_memory_service(cache_namespace)
         generalized = _run_async_in_worker(context_adjuster.generalize(answer))
         doc_id = memory.store_interaction(clean_query, generalized, original_query, user_id)
+        latency_ms = int((time.perf_counter() - start) * 1000)
         logger.info(
-            "Task complete: generalized + stored for query '%s' (namespace=%s, doc_id=%s)",
-            clean_query[:60],
+            "cache_store status=stored namespace=%s doc_id=%s latency=%dms",
             cache_namespace,
             doc_id,
+            latency_ms,
         )
         return {"status": "stored", "clean_query": clean_query, "namespace": cache_namespace, "doc_id": doc_id}
     except Exception as exc:
-        logger.error("generalize_and_store_task failed: %s", traceback.format_exc())
+        logger.exception("cache_store status=failed namespace=%s doc_id=%s", cache_namespace, doc_id)
         raise self.retry(exc=exc)
 
 
@@ -99,8 +102,6 @@ def evict_low_score_entries() -> dict:
             memory = get_memory_service(namespace)
             deleted = memory.evict_below_floor(EVICTION_FLOOR)
             total_deleted += deleted
-            if deleted:
-                logger.info("Evicted %d entries from namespace '%s'", deleted, namespace)
         except Exception:
             logger.error("Eviction failed for namespace '%s'", namespace, exc_info=True)
     logger.info("Eviction run complete: %d total entries removed (floor=%.1f)", total_deleted, EVICTION_FLOOR)

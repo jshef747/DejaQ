@@ -3,7 +3,6 @@ import asyncio
 import hashlib
 import logging
 import time
-import traceback
 import uuid
 from typing import AsyncGenerator
 
@@ -34,6 +33,8 @@ from app.services.service_factory import (
 from app.tasks.cache_tasks import generalize_and_store_task
 from app.config import USE_CELERY, EXTERNAL_MODEL_NAME
 from app.utils.exceptions import ExternalLLMError
+from app.utils.logger import clear_request_id, content_snippet, set_request_id
+from app.utils.pipeline_trace import PipelineTrace
 from app.schemas.chat import ExternalLLMRequest
 from app.services.request_logger import request_logger
 
@@ -65,15 +66,38 @@ def _new_completion_id() -> str:
     return "chatcmpl-" + uuid.uuid4().hex[:24]
 
 
+def _short_request_id(completion_id: str) -> str:
+    return completion_id[:17]
+
+
 def _bg_generalize_and_store(
     clean_query: str, answer: str, original_query: str, tenant_id: str, cache_namespace: str = "dejaq_default"
 ) -> None:
+    start = time.perf_counter()
+    doc_id = _doc_id(clean_query)
     try:
         generalized = asyncio.run(_adjuster.generalize(answer))
         memory = get_memory_service(cache_namespace)
-        memory.store_interaction(clean_query, generalized, original_query, tenant_id)
+        doc_id = memory.store_interaction(clean_query, generalized, original_query, tenant_id)
+        latency_ms = int((time.perf_counter() - start) * 1000)
+        query = content_snippet(clean_query)
+        if query:
+            logger.info(
+                "background_store status=stored namespace=%s doc_id=%s latency=%dms query=%s",
+                cache_namespace,
+                doc_id,
+                latency_ms,
+                query,
+            )
+        else:
+            logger.info(
+                "background_store status=stored namespace=%s doc_id=%s latency=%dms",
+                cache_namespace,
+                doc_id,
+                latency_ms,
+            )
     except Exception:
-        logger.error("Failed to generalize/store: %s", traceback.format_exc())
+        logger.exception("background_store status=failed namespace=%s doc_id=%s", cache_namespace, doc_id)
 
 
 async def _increment_hit_count_bg(namespace: str, doc_id: str) -> None:
@@ -158,16 +182,10 @@ async def chat_completions(
     background_tasks: BackgroundTasks,
 ):
     _t0 = time.monotonic()
+    trace = PipelineTrace()
     cache_namespace: str = getattr(raw_request.state, "cache_namespace", "dejaq_default")
     org_slug: str = getattr(raw_request.state, "org_slug", "anonymous")
     dept = raw_request.headers.get("X-DejaQ-Department") or "default"
-    logger.info(
-        "POST /v1/chat/completions model=%s stream=%s org=%s namespace=%s",
-        oai_request.model,
-        oai_request.stream,
-        org_slug,
-        cache_namespace,
-    )
 
     user_query, history, system_prompt = _extract_pipeline_inputs(oai_request)
 
@@ -176,58 +194,217 @@ async def chat_completions(
         raise HTTPException(status_code=422, detail="No user message found in messages array")
 
     completion_id = _new_completion_id()
+    request_token = set_request_id(_short_request_id(completion_id))
     max_tokens = oai_request.max_tokens or 1024
-
-    # 1. Enrich
     try:
-        enriched = await _enricher.enrich(user_query, history)
-    except Exception:
-        logger.error("Enricher failed: %s", traceback.format_exc())
-        enriched = user_query
+        query = content_snippet(user_query)
+        if query:
+            logger.info(
+                "start org=%s dept=%s namespace=%s model=%s stream=%s query=%s",
+                org_slug,
+                dept,
+                cache_namespace,
+                oai_request.model,
+                str(oai_request.stream).lower(),
+                query,
+            )
+        else:
+            logger.info(
+                "start org=%s dept=%s namespace=%s model=%s stream=%s",
+                org_slug,
+                dept,
+                cache_namespace,
+                oai_request.model,
+                str(oai_request.stream).lower(),
+            )
 
-    # 2. Normalize
-    try:
-        clean_query = await _normalizer.normalize(enriched)
-    except Exception:
-        logger.error("Normalizer failed: %s", traceback.format_exc())
-        clean_query = enriched
-
-    # 3. Cache lookup
-    cache_result = None
-    try:
-        cache_result = get_memory_service(cache_namespace).check_cache(clean_query)
-    except Exception:
-        logger.error("Cache check failed: %s", traceback.format_exc())
-
-    if cache_result is not None:
-        cached_answer, _entry_id, _cache_distance = cache_result
+        # 1. Enrich
         try:
-            answer = await _adjuster.adjust(user_query, cached_answer)
+            with trace.step("enrich"):
+                enriched = await _enricher.enrich(user_query, history)
         except Exception:
-            answer = cached_answer
-        model_used = "cache"
+            logger.exception("Enricher failed")
+            enriched = user_query
 
-        response_id = f"{cache_namespace}:{_entry_id}"
+        # 2. Normalize
+        try:
+            with trace.step("normalize"):
+                clean_query = await _normalizer.normalize(enriched)
+        except Exception:
+            logger.exception("Normalizer failed")
+            clean_query = enriched
+
+        # 3. Cache lookup
+        cache_result = None
+        try:
+            with trace.step("cache"):
+                cache_result = get_memory_service(cache_namespace).check_cache(clean_query)
+        except Exception:
+            logger.exception("Cache check failed")
+
+        if cache_result is not None:
+            cached_answer, _entry_id, _cache_distance = cache_result
+            try:
+                with trace.step("adjust"):
+                    answer = await _adjuster.adjust(user_query, cached_answer)
+            except Exception:
+                logger.exception("Context adjuster failed")
+                answer = cached_answer
+            model_used = "cache"
+
+            response_id = f"{cache_namespace}:{_entry_id}"
+            _latency = int((time.monotonic() - _t0) * 1000)
+            asyncio.create_task(request_logger.log(org_slug, dept, _latency, True, None, None, response_id))
+            asyncio.create_task(_increment_hit_count_bg(cache_namespace, _entry_id))
+            logger.info(
+                "done cache=hit route=cache model=%s response_id=%s latency=%dms steps=%s",
+                model_used,
+                response_id,
+                _latency,
+                trace.summary(),
+            )
+
+            if oai_request.stream:
+                words = answer.split(" ")
+                chunks = [w + " " for w in words[:-1]] + [words[-1]] if words else [answer]
+                headers = {
+                    "x-dejaq-model-used": model_used,
+                    "x-dejaq-conversation-id": completion_id,
+                    "x-dejaq-response-id": response_id,
+                }
+                return StreamingResponse(
+                    _stream_generator(chunks, completion_id, oai_request.model, model_used),
+                    media_type="text/event-stream",
+                    headers=headers,
+                )
+
+            # Non-streaming cache hit
+            prompt_tokens = int(len(clean_query.split()) * 1.3)
+            response = OAIChatResponse(
+                id=completion_id,
+                created=_now_ts(),
+                model=oai_request.model,
+                choices=[OAIChoice(message=OAIMessageResponse(content=answer))],
+                usage=OAIUsage(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=0,
+                    total_tokens=prompt_tokens,
+                ),
+            )
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse(
+                content=response.model_dump(),
+                headers={
+                    "x-dejaq-model-used": model_used,
+                    "x-dejaq-conversation-id": completion_id,
+                    "x-dejaq-response-id": response_id,
+                },
+            )
+
+        # 4. Cache miss — classify then route
+        try:
+            with trace.step("classify"):
+                classification = _classifier.predict_complexity(user_query)
+        except Exception:
+            logger.exception("Classifier failed")
+            classification = {"complexity": "easy", "score": 0.0, "task_type": "Unknown"}
+
+        complexity = classification["complexity"]
+        answer: str = ""
+        model_used: str = _LOCAL_MODEL_NAME
+        route = "external" if complexity == "hard" else "local"
+
+        try:
+            with trace.step("generate"):
+                if complexity == "hard":
+                    ext_request = ExternalLLMRequest(
+                        query=user_query,
+                        history=history,
+                        model=EXTERNAL_MODEL_NAME,
+                    )
+                    ext_response = await _external_llm.generate_response(ext_request)
+                    answer = ext_response.text
+                    model_used = ext_response.model_used
+                else:
+                    llm_system_prompt = (
+                        system_prompt
+                        or "You are a helpful assistant. Answer the user's query concisely and accurately."
+                    )
+                    answer, _ = await _llm_router.generate_local_response(
+                        user_query,
+                        history=history,
+                        max_tokens=max_tokens,
+                        system_prompt=llm_system_prompt,
+                    )
+                    model_used = _LOCAL_MODEL_NAME
+        except ExternalLLMError:
+            logger.exception("ExternalLLMService failed")
+            answer = "I'm sorry, I couldn't process your request right now. Please try again later."
+            model_used = "error"
+            route = "error"
+        except Exception:
+            logger.exception("LLM generation failed")
+            answer = "I'm sorry, I couldn't process your request right now. Please try again later."
+            model_used = "error"
+            route = "error"
+
+        # 5. Cache filter + background store
+        will_cache = False
+        try:
+            with trace.step("filter"):
+                will_cache, _ = cache_filter.should_cache(enriched, clean_query)
+        except Exception:
+            logger.exception("Cache filter failed")
+
+        store_status = "skipped"
+        # Compute response_id deterministically (same hash as store_interaction uses)
+        miss_response_id: str | None = None
+        if will_cache:
+            miss_doc_id = _doc_id(clean_query)
+            miss_response_id = f"{cache_namespace}:{miss_doc_id}"
+            with trace.step("store"):
+                if USE_CELERY:
+                    generalize_and_store_task.delay(clean_query, answer, user_query, org_slug, cache_namespace)
+                    store_status = "queued"
+                else:
+                    background_tasks.add_task(
+                        _bg_generalize_and_store, clean_query, answer, user_query, org_slug, cache_namespace
+                    )
+                    store_status = "background"
+
+        # 6. Return response
         _latency = int((time.monotonic() - _t0) * 1000)
-        asyncio.create_task(request_logger.log(org_slug, dept, _latency, True, None, None, response_id))
-        asyncio.create_task(_increment_hit_count_bg(cache_namespace, _entry_id))
+        asyncio.create_task(request_logger.log(org_slug, dept, _latency, False, complexity, model_used, miss_response_id))
+        logger.info(
+            "done cache=miss route=%s model=%s store=%s response_id=%s latency=%dms steps=%s",
+            route,
+            model_used,
+            store_status,
+            miss_response_id or "none",
+            _latency,
+            trace.summary(),
+        )
+
+        prompt_tokens = int(len(clean_query.split()) * 1.3)
+        completion_tokens = int(len(answer.split()) * 1.3)
+
+        miss_headers: dict[str, str] = {
+            "x-dejaq-model-used": model_used,
+            "x-dejaq-conversation-id": completion_id,
+        }
+        if miss_response_id:
+            miss_headers["x-dejaq-response-id"] = miss_response_id
 
         if oai_request.stream:
             words = answer.split(" ")
             chunks = [w + " " for w in words[:-1]] + [words[-1]] if words else [answer]
-            headers = {
-                "x-dejaq-model-used": model_used,
-                "x-dejaq-conversation-id": completion_id,
-                "x-dejaq-response-id": response_id,
-            }
             return StreamingResponse(
                 _stream_generator(chunks, completion_id, oai_request.model, model_used),
                 media_type="text/event-stream",
-                headers=headers,
+                headers=miss_headers,
             )
 
-        # Non-streaming cache hit
-        prompt_tokens = int(len(clean_query.split()) * 1.3)
         response = OAIChatResponse(
             id=completion_id,
             created=_now_ts(),
@@ -235,119 +412,15 @@ async def chat_completions(
             choices=[OAIChoice(message=OAIMessageResponse(content=answer))],
             usage=OAIUsage(
                 prompt_tokens=prompt_tokens,
-                completion_tokens=0,
-                total_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=prompt_tokens + completion_tokens,
             ),
         )
         from fastapi.responses import JSONResponse
 
         return JSONResponse(
             content=response.model_dump(),
-            headers={
-                "x-dejaq-model-used": model_used,
-                "x-dejaq-conversation-id": completion_id,
-                "x-dejaq-response-id": response_id,
-            },
-        )
-
-    # 4. Cache miss — classify then route
-    try:
-        classification = _classifier.predict_complexity(user_query)
-    except Exception:
-        logger.error("Classifier failed: %s", traceback.format_exc())
-        classification = {"complexity": "easy", "score": 0.0, "task_type": "Unknown"}
-
-    complexity = classification["complexity"]
-    answer: str = ""
-    model_used: str = _LOCAL_MODEL_NAME
-
-    try:
-        if complexity == "hard":
-            ext_request = ExternalLLMRequest(
-                query=user_query,
-                history=history,
-                model=EXTERNAL_MODEL_NAME,
-            )
-            ext_response = await _external_llm.generate_response(ext_request)
-            answer = ext_response.text
-            model_used = ext_response.model_used
-        else:
-            llm_system_prompt = (
-                system_prompt
-                or "You are a helpful assistant. Answer the user's query concisely and accurately."
-            )
-            answer, _ = await _llm_router.generate_local_response(
-                user_query,
-                history=history,
-                max_tokens=max_tokens,
-                system_prompt=llm_system_prompt,
-            )
-            model_used = _LOCAL_MODEL_NAME
-    except ExternalLLMError as exc:
-        logger.error("ExternalLLMService failed: %s", exc)
-        answer = "I'm sorry, I couldn't process your request right now. Please try again later."
-        model_used = "error"
-    except Exception:
-        logger.error("LLM generation failed: %s", traceback.format_exc())
-        answer = "I'm sorry, I couldn't process your request right now. Please try again later."
-        model_used = "error"
-
-    # 5. Cache filter + background store
-    will_cache = False
-    try:
-        will_cache, _ = cache_filter.should_cache(enriched, clean_query)
-    except Exception:
-        pass
-
-    # Compute response_id deterministically (same hash as store_interaction uses)
-    miss_response_id: str | None = None
-    if will_cache:
-        miss_doc_id = _doc_id(clean_query)
-        miss_response_id = f"{cache_namespace}:{miss_doc_id}"
-        if USE_CELERY:
-            generalize_and_store_task.delay(clean_query, answer, user_query, org_slug, cache_namespace)
-        else:
-            background_tasks.add_task(
-                _bg_generalize_and_store, clean_query, answer, user_query, org_slug, cache_namespace
-            )
-
-    # 6. Return response
-    _latency = int((time.monotonic() - _t0) * 1000)
-    asyncio.create_task(request_logger.log(org_slug, dept, _latency, False, complexity, model_used, miss_response_id))
-
-    prompt_tokens = int(len(clean_query.split()) * 1.3)
-    completion_tokens = int(len(answer.split()) * 1.3)
-
-    miss_headers: dict[str, str] = {
-        "x-dejaq-model-used": model_used,
-        "x-dejaq-conversation-id": completion_id,
-    }
-    if miss_response_id:
-        miss_headers["x-dejaq-response-id"] = miss_response_id
-
-    if oai_request.stream:
-        words = answer.split(" ")
-        chunks = [w + " " for w in words[:-1]] + [words[-1]] if words else [answer]
-        return StreamingResponse(
-            _stream_generator(chunks, completion_id, oai_request.model, model_used),
-            media_type="text/event-stream",
             headers=miss_headers,
         )
-
-    response = OAIChatResponse(
-        id=completion_id,
-        created=_now_ts(),
-        model=oai_request.model,
-        choices=[OAIChoice(message=OAIMessageResponse(content=answer))],
-        usage=OAIUsage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=prompt_tokens + completion_tokens,
-        ),
-    )
-    from fastapi.responses import JSONResponse
-
-    return JSONResponse(
-        content=response.model_dump(),
-        headers=miss_headers,
-    )
+    finally:
+        clear_request_id(request_token)

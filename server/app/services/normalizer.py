@@ -206,7 +206,7 @@ class NormalizerService:
         if not _is_opinion(query):
             normalized = query.strip().lower()
             latency = (time.time() - start) * 1000
-            logger.info(
+            logger.debug(
                 "Normalization (passthrough) in %.2f ms. Raw: %r -> Normalized: %r",
                 latency, raw_query, normalized,
             )
@@ -224,7 +224,7 @@ class NormalizerService:
         normalized = _postprocess(raw_output, raw_query)
 
         latency = (time.time() - start) * 1000
-        logger.info(
+        logger.debug(
             "Normalization (opinion rewrite) in %.2f ms. Raw: %r -> Normalized: %r",
             latency, raw_query, normalized,
         )

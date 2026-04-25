@@ -194,10 +194,7 @@ class ClassifierService:
         task_type = result["task_type_1"][0]
         complexity = "hard" if score >= COMPLEXITY_THRESHOLD else "easy"
 
-        logger.info(
-            "Query classified as %s (score=%.4f, task=%s): %s",
-            complexity, score, task_type, query[:80],
-        )
+        logger.debug("Query classified as %s (score=%.4f, task=%s)", complexity, score, task_type)
 
         return {
             "complexity": complexity,

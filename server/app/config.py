@@ -66,6 +66,10 @@ STATS_DB_PATH = os.getenv("DEJAQ_STATS_DB", "dejaq_stats.db")
 # Feature flags
 USE_CELERY = os.getenv("DEJAQ_USE_CELERY", "true").lower() == "true"
 
+# Logging
+LOG_LEVEL = _get_text("DEJAQ_LOG_LEVEL", "INFO").upper()
+LOG_SHOW_CONTENT = _get_bool("DEJAQ_LOG_SHOW_CONTENT", False)
+
 # Cache eviction
 EVICTION_FLOOR = _get_float("DEJAQ_EVICTION_FLOOR", -5.0)
 

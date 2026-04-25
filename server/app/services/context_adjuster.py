@@ -48,7 +48,7 @@ class ContextAdjusterService:
         )
 
         latency = (time.time() - start) * 1000
-        logger.info(f"Generalization completed in {latency:.2f} ms")
+        logger.debug("Generalization completed in %.2f ms", latency)
         return generalized
 
     async def adjust(self, original_query: str, general_answer: str) -> str:
@@ -79,5 +79,5 @@ class ContextAdjusterService:
         )
 
         latency = (time.time() - start) * 1000
-        logger.info(f"Context adjustment completed in {latency:.2f} ms for query: {original_query}")
+        logger.debug("Context adjustment completed in %.2f ms", latency)
         return adjusted

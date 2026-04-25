@@ -22,22 +22,22 @@ def should_cache(enriched_query: str, normalized_query: str) -> tuple[bool, str]
     word_count = len(normalized_query.split())
     if word_count < MIN_WORD_COUNT:
         reason = f"query too short ({word_count} words)"
-        logger.info("Skip cache: %s — query: '%s'", reason, normalized_query)
+        logger.debug("Skip cache: %s", reason)
         return False, reason
 
     # Rule 2: Conversational filler
     stripped = enriched_query.strip().rstrip("?.,!")
     if FILLER_PATTERNS.match(stripped):
         reason = "conversational filler"
-        logger.info("Skip cache: %s — query: '%s'", reason, enriched_query)
+        logger.debug("Skip cache: %s", reason)
         return False, reason
 
     # Rule 3: Too vague even after enrichment (very short enriched query)
     enriched_words = len(enriched_query.split())
     if enriched_words < MIN_WORD_COUNT:
         reason = f"enriched query too vague ({enriched_words} words)"
-        logger.info("Skip cache: %s — enriched: '%s'", reason, enriched_query)
+        logger.debug("Skip cache: %s", reason)
         return False, reason
 
-    logger.debug("Cache filter: PASS for '%s'", normalized_query[:60])
+    logger.debug("Cache filter: PASS")
     return True, "passed"

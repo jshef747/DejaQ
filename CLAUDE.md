@@ -26,6 +26,9 @@ uv sync
 
 ### Run
 ```bash
+# Preferred: start the full local stack with deployment-mode selection
+./server/scripts/start.sh
+
 # Terminal 1: Start Redis
 redis-server
 

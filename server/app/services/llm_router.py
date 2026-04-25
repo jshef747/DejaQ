@@ -39,12 +39,12 @@ class LLMRouterService:
             )
         )
         latency_ms = (time.time() - start) * 1000
-        logger.debug("Local LLM response generated in %.2f ms for query: %s", latency_ms, query)
+        logger.debug("Local LLM response generated in %.2f ms", latency_ms)
         return response, latency_ms
 
     # Kept for backwards compatibility — used by tests and callers that don't need metadata.
     async def generate_response(self, query: str, complexity: str, history: list[dict] | None = None) -> str:
-        logger.info("Routing query (complexity=%s): %.80s", complexity, query)
+        logger.debug("Routing query complexity=%s", complexity)
         if not self.is_hard(complexity):
             text, _ = await self.generate_local_response(query, history=history)
             return text
