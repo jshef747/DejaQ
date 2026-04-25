@@ -19,6 +19,7 @@ from app.db.base import Base  # noqa: E402
 import app.db.models.org  # noqa: E402, F401
 import app.db.models.department  # noqa: E402, F401
 import app.db.models.api_key  # noqa: E402, F401
+import app.db.models.org_llm_config  # noqa: E402, F401
 
 target_metadata = Base.metadata
 

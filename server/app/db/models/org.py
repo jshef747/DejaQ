@@ -22,3 +22,9 @@ class Organization(Base):
     api_keys: Mapped[list["ApiKey"]] = relationship(  # noqa: F821
         "ApiKey", back_populates="organization", cascade="all, delete-orphan"
     )
+    llm_config: Mapped["OrgLlmConfig | None"] = relationship(  # noqa: F821
+        "OrgLlmConfig",
+        back_populates="organization",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )

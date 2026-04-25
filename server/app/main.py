@@ -4,6 +4,7 @@ load_dotenv()
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import openai_compat, departments, feedback
+from app.routers.admin import router as admin_router
 from app.middleware.api_key import ApiKeyMiddleware
 from app.utils.logger import setup_logging
 from app.config import (
@@ -19,6 +20,7 @@ from app.config import (
     NORMALIZER_MODEL_NAME,
     OLLAMA_URL,
     USE_CELERY,
+    get_admin_token,
 )
 from app.services.request_logger import request_logger
 from app.services.service_factory import (
@@ -33,10 +35,17 @@ from contextlib import asynccontextmanager
 # 1. Setup Global Logging
 setup_logging()
 logger = logging.getLogger("dejaq.main")
+admin_logger = logging.getLogger("dejaq.admin")
+
+
+def _log_admin_api_status() -> None:
+    if not get_admin_token():
+        admin_logger.warning("DEJAQ_ADMIN_TOKEN not set; /admin/v1/* disabled")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("DejaQ Middleware starting up...")
+    _log_admin_api_status()
     logger.info(
         "Model config: enricher=%s/%s normalizer=%s/%s local_llm=%s/%s generalizer=%s/%s context_adjuster=%s/%s",
         ENRICHER_BACKEND,
@@ -90,6 +99,7 @@ app.add_middleware(ApiKeyMiddleware)
 app.include_router(openai_compat.router, prefix="/v1")
 app.include_router(feedback.router, prefix="/v1")
 app.include_router(departments.router)
+app.include_router(admin_router)
 
 # Replaced by lifespan context manager
 

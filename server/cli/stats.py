@@ -2,7 +2,6 @@
 Standalone stats viewer: uv run python -m cli.stats
 """
 import os
-import sqlite3
 import sys
 
 from rich.console import Console
@@ -11,6 +10,8 @@ from rich.panel import Panel
 from rich.columns import Columns
 from rich.text import Text
 from rich import box
+
+from app.services import stats_service
 
 _TOKENS_PER_HIT = 150
 
@@ -38,42 +39,14 @@ def run() -> None:
         Console().print(f"[red]Stats DB not found:[/red] {db_path}\nStart the server and send some requests first.")
         sys.exit(1)
 
-    con = sqlite3.connect(db_path)
-    cur = con.cursor()
+    org_report = stats_service.org_stats()
+    department_rows = []
+    for org in org_report.items:
+        department_rows.extend(stats_service.department_stats(org.org).items)
 
-    rows = cur.execute("""
-        SELECT
-            org,
-            department,
-            COUNT(*)                                          AS total,
-            SUM(cache_hit)                                   AS hits,
-            COUNT(*) - SUM(cache_hit)                        AS misses,
-            AVG(latency_ms)                                  AS avg_lat,
-            SUM(CASE WHEN difficulty = 'easy' THEN 1 ELSE 0 END) AS easy,
-            SUM(CASE WHEN difficulty = 'hard' THEN 1 ELSE 0 END) AS hard,
-            GROUP_CONCAT(DISTINCT model_used)                AS models
-        FROM requests
-        GROUP BY org, department
-        ORDER BY org, department
-    """).fetchall()
-
-    if not rows:
+    if not department_rows:
         Console().print("[dim]No requests recorded yet.[/dim]")
-        con.close()
         return
-
-    totals = cur.execute("""
-        SELECT
-            COUNT(*)                                          AS total,
-            SUM(cache_hit)                                   AS hits,
-            COUNT(*) - SUM(cache_hit)                        AS misses,
-            AVG(latency_ms)                                  AS avg_lat,
-            SUM(CASE WHEN difficulty = 'easy' THEN 1 ELSE 0 END) AS easy,
-            SUM(CASE WHEN difficulty = 'hard' THEN 1 ELSE 0 END) AS hard,
-            GROUP_CONCAT(DISTINCT model_used)                AS models
-        FROM requests
-    """).fetchone()
-    con.close()
 
     table = Table(
         title="[bold]DejaQ Usage Stats[/bold]",
@@ -91,47 +64,37 @@ def run() -> None:
     table.add_column("Hard Misses", justify="right")
     table.add_column("Models Used")
 
-    for org, dept, total, hits, misses, avg_lat, easy, hard, models in rows:
-        hits = hits or 0
-        easy = easy or 0
-        hard = hard or 0
-        hit_rate = hits / total if total else 0
-        style = _style(hit_rate)
-        tokens_saved = hits * _TOKENS_PER_HIT
-        model_list = ", ".join(m for m in (models or "").split(",") if m) or "—"
+    for row in department_rows:
+        style = _style(row.hit_rate)
+        model_list = ", ".join(row.models_used) or "—"
         table.add_row(
-            org,
-            dept,
-            str(total),
-            _fmt_pct(hits, total),
-            _fmt_latency(avg_lat),
-            f"{tokens_saved:,}",
-            str(easy),
-            str(hard),
+            row.org,
+            row.department,
+            str(row.requests),
+            _fmt_pct(row.hits, row.requests),
+            _fmt_latency(row.avg_latency_ms),
+            f"{row.est_tokens_saved:,}",
+            str(row.easy_count),
+            str(row.hard_count),
             model_list,
             style=style,
         )
 
     # Total row
-    if totals:
-        t_total, t_hits, t_misses, t_avg_lat, t_easy, t_hard, t_models = totals
-        t_hits = t_hits or 0
-        t_easy = t_easy or 0
-        t_hard = t_hard or 0
-        t_hit_rate = t_hits / t_total if t_total else 0
-        t_style = _style(t_hit_rate)
-        t_tokens = t_hits * _TOKENS_PER_HIT
-        t_model_list = ", ".join(m for m in (t_models or "").split(",") if m) or "—"
+    if org_report.total.requests:
+        total = org_report.total
+        t_style = _style(total.hit_rate)
+        t_model_list = ", ".join(total.models_used) or "—"
         table.add_section()
         table.add_row(
             "[bold]TOTAL[/bold]",
             "",
-            f"[bold]{t_total}[/bold]",
-            f"[bold]{_fmt_pct(t_hits, t_total)}[/bold]",
-            f"[bold]{_fmt_latency(t_avg_lat)}[/bold]",
-            f"[bold]{t_tokens:,}[/bold]",
-            f"[bold]{t_easy}[/bold]",
-            f"[bold]{t_hard}[/bold]",
+            f"[bold]{total.requests}[/bold]",
+            f"[bold]{_fmt_pct(total.hits, total.requests)}[/bold]",
+            f"[bold]{_fmt_latency(total.avg_latency_ms)}[/bold]",
+            f"[bold]{total.est_tokens_saved:,}[/bold]",
+            f"[bold]{total.easy_count}[/bold]",
+            f"[bold]{total.hard_count}[/bold]",
             f"[bold]{t_model_list}[/bold]",
             style=t_style,
         )

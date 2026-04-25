@@ -33,6 +33,18 @@ def _get_text(name: str, default: str) -> str:
     value = os.getenv(name, default).strip()
     return value or default
 
+
+def _get_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def get_admin_token() -> str:
+    """Return the configured admin token, treating blank values as disabled."""
+    return os.getenv("DEJAQ_ADMIN_TOKEN", "").strip()
+
 # Redis
 REDIS_URL = os.getenv("DEJAQ_REDIS_URL", "redis://localhost:6379/0")
 
@@ -43,6 +55,7 @@ CHROMA_PORT = int(os.getenv("DEJAQ_CHROMA_PORT", "8001"))
 # External LLM
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 EXTERNAL_MODEL_NAME = os.getenv("DEJAQ_EXTERNAL_MODEL", "gemini-2.5-flash")
+ROUTING_THRESHOLD = _get_float("DEJAQ_ROUTING_THRESHOLD", 0.3)
 
 # API key cache
 KEY_CACHE_TTL = int(os.getenv("DEJAQ_KEY_CACHE_TTL", "60"))

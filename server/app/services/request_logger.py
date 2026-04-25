@@ -33,6 +33,14 @@ CREATE TABLE IF NOT EXISTS feedback_log (
 )
 """
 
+_CREATE_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_requests_ts ON requests(ts)",
+    "CREATE INDEX IF NOT EXISTS idx_requests_org_department_ts ON requests(org, department, ts)",
+    "CREATE INDEX IF NOT EXISTS idx_feedback_log_ts_id ON feedback_log(ts, id)",
+    "CREATE INDEX IF NOT EXISTS idx_feedback_log_org_department ON feedback_log(org, department)",
+    "CREATE INDEX IF NOT EXISTS idx_feedback_log_response_id ON feedback_log(response_id)",
+)
+
 
 class RequestLogger:
     def __init__(self) -> None:
@@ -42,6 +50,8 @@ class RequestLogger:
         self._db = await aiosqlite.connect(STATS_DB_PATH)
         await self._db.execute(_CREATE_REQUESTS_TABLE)
         await self._db.execute(_CREATE_FEEDBACK_TABLE)
+        for statement in _CREATE_INDEXES:
+            await self._db.execute(statement)
         # Migrate existing requests table — add response_id if missing
         try:
             cols = [row[1] for row in await (await self._db.execute("PRAGMA table_info(requests)")).fetchall()]

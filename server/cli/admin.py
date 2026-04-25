@@ -5,9 +5,7 @@ from rich.panel import Panel
 from rich.prompt import Confirm
 from rich.text import Text
 
-from app.db import dept_repo, org_repo
-from app.db import api_key_repo
-from app.db.session import get_session
+from app.services import admin_service
 from cli.ui import console, print_error, print_header, print_success, print_table, print_warning
 from cli.stats import run as _run_stats
 
@@ -38,9 +36,8 @@ def org_create(name: str) -> None:
     """Create a new organization."""
     with console.status("[cyan]Creating organization…[/cyan]", spinner="dots"):
         try:
-            with get_session() as session:
-                result = org_repo.create_org(session, name)
-        except ValueError as e:
+            result = admin_service.create_org(name)
+        except admin_service.DuplicateSlug as e:
             print_error(str(e))
             sys.exit(1)
 
@@ -58,8 +55,7 @@ def org_create(name: str) -> None:
 @org.command("list")
 def org_list() -> None:
     """List all organizations."""
-    with get_session() as session:
-        orgs = org_repo.list_orgs(session)
+    orgs = admin_service.list_orgs()
 
     print_table(
         "Organizations",
@@ -76,12 +72,11 @@ def org_list() -> None:
 def org_delete(slug: str) -> None:
     """Delete an organization and all its departments."""
     # Preview cascade
-    with get_session() as session:
-        org_data = org_repo.get_org_by_slug(session, slug)
-        if org_data is None:
-            print_error(f"Organization '{slug}' not found.")
-            sys.exit(1)
-        depts = dept_repo.list_depts(session, org_slug=slug)
+    try:
+        depts = admin_service.list_departments(org_slug=slug)
+    except admin_service.OrgNotFound:
+        print_error(f"Organization '{slug}' not found.")
+        sys.exit(1)
 
     if depts:
         dept_list = "\n".join(f"  • [dim cyan]{d.slug}[/dim cyan]" for d in depts)
@@ -98,12 +93,11 @@ def org_delete(slug: str) -> None:
             sys.exit(0)
 
     with console.status("[cyan]Deleting…[/cyan]", spinner="dots"):
-        with get_session() as session:
-            dept_count = org_repo.delete_org(session, slug)
+        result = admin_service.delete_org(slug)
 
     print_success(
         f"Organization [bold]{slug}[/bold] deleted"
-        + (f" (and {dept_count} department(s) removed)." if dept_count else ".")
+        + (f" (and {result.departments_removed} department(s) removed)." if result.departments_removed else ".")
     )
 
 
@@ -123,9 +117,8 @@ def dept_create(org_slug: str, name: str) -> None:
     """Create a new department under an org."""
     with console.status("[cyan]Creating department…[/cyan]", spinner="dots"):
         try:
-            with get_session() as session:
-                result = dept_repo.create_dept(session, org_slug, name)
-        except ValueError as e:
+            result = admin_service.create_department(org_slug, name)
+        except (admin_service.OrgNotFound, admin_service.DuplicateSlug) as e:
             print_error(str(e))
             sys.exit(1)
 
@@ -147,16 +140,8 @@ def dept_create(org_slug: str, name: str) -> None:
 def dept_list(org_slug: str | None) -> None:
     """List departments, optionally filtered by org."""
     try:
-        with get_session() as session:
-            depts = dept_repo.list_depts(session, org_slug=org_slug)
-            # Need org slug for each dept when listing all
-            if not org_slug:
-                from app.db.models.org import Organization
-                org_map = {
-                    o.id: o.slug
-                    for o in session.query(Organization).all()
-                }
-    except ValueError as e:
+        depts = admin_service.list_departments(org_slug=org_slug)
+    except admin_service.OrgNotFound as e:
         print_error(str(e))
         sys.exit(1)
 
@@ -182,7 +167,7 @@ def dept_list(org_slug: str | None) -> None:
             [
                 [
                     str(d.id),
-                    org_map.get(d.org_id, "?"),
+                    d.org_slug,
                     d.name,
                     d.slug,
                     d.cache_namespace,
@@ -198,22 +183,26 @@ def dept_list(org_slug: str | None) -> None:
 @click.option("--slug", required=True, help="Department slug to delete.")
 def dept_delete(org_slug: str, slug: str) -> None:
     """Delete a department."""
-    with get_session() as session:
-        dept_data = dept_repo.get_dept(session, org_slug, slug)
-        if dept_data is None:
-            print_error(f"Department '{slug}' not found under org '{org_slug}'.")
-            sys.exit(1)
+    try:
+        dept_data = next(
+            (dept for dept in admin_service.list_departments(org_slug=org_slug) if dept.slug == slug),
+            None,
+        )
+    except admin_service.OrgNotFound:
+        dept_data = None
+    if dept_data is None:
+        print_error(f"Department '{slug}' not found under org '{org_slug}'.")
+        sys.exit(1)
 
     if not Confirm.ask(f"[yellow]Delete department [bold]{slug}[/bold] (namespace: [cyan]{dept_data.cache_namespace}[/cyan])?[/yellow]"):
         print_warning("Aborted.")
         sys.exit(0)
 
     with console.status("[cyan]Deleting…[/cyan]", spinner="dots"):
-        with get_session() as session:
-            deleted = dept_repo.delete_dept(session, org_slug, slug)
+        deleted = admin_service.delete_department(org_slug, slug)
 
     print_success(
-        f"Department [bold]{deleted.slug}[/bold] deleted. "
+        f"Department [bold]{slug}[/bold] deleted. "
         f"Freed namespace: [cyan]{deleted.cache_namespace}[/cyan]"
     )
 
@@ -232,38 +221,27 @@ def key() -> None:
 @click.option("--force", is_flag=True, default=False, help="Revoke existing active key and generate a new one.")
 def key_generate(org_slug: str, force: bool) -> None:
     """Generate an API key for an org."""
-    with get_session() as session:
-        org_data = org_repo.get_org_by_slug(session, org_slug)
-        if org_data is None:
-            print_error(f"Organization '{org_slug}' not found.")
-            sys.exit(1)
-
-        existing = api_key_repo.get_active_key_for_org(session, org_data.id)
-        if existing and not force:
-            print_error(
-                f"Organization '{org_slug}' already has an active key (id={existing.id}). "
-                "Use --force to revoke it and generate a new one."
-            )
-            sys.exit(1)
-
-        if existing and force:
-            api_key_repo.revoke_key(session, existing.id)
-            print_warning(f"Revoked existing key id={existing.id}.")
-
-        new_key = api_key_repo.create_key(session, org_data.id)
-        key_id = new_key.id
-        key_token = new_key.token
-        key_created_at = new_key.created_at
+    try:
+        new_key = admin_service.generate_key(org_slug, force=force)
+    except admin_service.OrgNotFound:
+        print_error(f"Organization '{org_slug}' not found.")
+        sys.exit(1)
+    except admin_service.ActiveKeyExists as e:
+        print_error(
+            f"Organization '{org_slug}' already has an active key (id={e.key_id}). "
+            "Use --force to revoke it and generate a new one."
+        )
+        sys.exit(1)
 
     content = Text()
     content.append("  id           ", style="dim")
-    content.append(f"{key_id}\n", style="bright_white")
+    content.append(f"{new_key.id}\n", style="bright_white")
     content.append("  org          ", style="dim")
     content.append(f"{org_slug}\n", style="bright_white")
     content.append("  token        ", style="dim")
-    content.append(f"{key_token}\n", style="bold bright_cyan")
+    content.append(f"{new_key.token}\n", style="bold bright_cyan")
     content.append("  created_at   ", style="dim")
-    content.append(f"{key_created_at.strftime('%Y-%m-%d %H:%M:%S UTC')}", style="bright_white")
+    content.append(f"{new_key.created_at.strftime('%Y-%m-%d %H:%M:%S UTC')}", style="bright_white")
 
     console.print(Panel(content, title="[green]API key generated[/green]", border_style="green", padding=(0, 2)))
 
@@ -272,17 +250,11 @@ def key_generate(org_slug: str, force: bool) -> None:
 @click.option("--org", "org_slug", required=True, help="Org slug to list keys for.")
 def key_list(org_slug: str) -> None:
     """List all API keys for an org."""
-    with get_session() as session:
-        org_data = org_repo.get_org_by_slug(session, org_slug)
-        if org_data is None:
-            print_error(f"Organization '{org_slug}' not found.")
-            sys.exit(1)
-        raw_keys = api_key_repo.list_keys_for_org(session, org_data.id)
-        # Snapshot values before session closes to avoid DetachedInstanceError
-        keys = [
-            (k.id, k.token, k.created_at, k.revoked_at)
-            for k in raw_keys
-        ]
+    try:
+        keys = admin_service.list_keys(org_slug)
+    except admin_service.OrgNotFound:
+        print_error(f"Organization '{org_slug}' not found.")
+        sys.exit(1)
 
     if not keys:
         console.print(f"[dim]No API keys found for org '{org_slug}'.[/dim]")
@@ -293,12 +265,12 @@ def key_list(org_slug: str) -> None:
         ["ID", "Token", "Created", "Revoked"],
         [
             [
-                str(kid),
-                token[:12] + "...",
-                created_at.strftime("%Y-%m-%d %H:%M"),
-                revoked_at.strftime("%Y-%m-%d %H:%M") if revoked_at else "—",
+                str(k.id),
+                k.token_prefix,
+                k.created_at.strftime("%Y-%m-%d %H:%M"),
+                k.revoked_at.strftime("%Y-%m-%d %H:%M") if k.revoked_at else "—",
             ]
-            for kid, token, created_at, revoked_at in keys
+            for k in keys
         ],
     )
 
@@ -307,24 +279,18 @@ def key_list(org_slug: str) -> None:
 @click.option("--id", "key_id", required=True, type=int, help="ID of the key to revoke.")
 def key_revoke(key_id: int) -> None:
     """Revoke an API key by its ID."""
-    with get_session() as session:
-        from app.db.models.api_key import ApiKey as ApiKeyModel
-        existing = session.query(ApiKeyModel).filter(ApiKeyModel.id == key_id).first()
-        if existing is None:
-            print_error(f"Key id={key_id} not found.")
-            sys.exit(1)
-        already_revoked = existing.revoked_at is not None
-        result = api_key_repo.revoke_key(session, key_id)
-        # Snapshot before session closes
-        result_id = result.id
-        result_revoked_at = result.revoked_at
+    try:
+        result = admin_service.revoke_key(key_id)
+    except admin_service.KeyNotFound:
+        print_error(f"Key id={key_id} not found.")
+        sys.exit(1)
 
-    if already_revoked:
-        print_warning(f"Key id={key_id} was already revoked at {result_revoked_at.strftime('%Y-%m-%d %H:%M:%S UTC')}.")
+    if result.already_revoked:
+        print_warning(f"Key id={key_id} was already revoked at {result.revoked_at.strftime('%Y-%m-%d %H:%M:%S UTC')}.")
         return
 
     print_success(
-        f"Key id={result_id} revoked at {result_revoked_at.strftime('%Y-%m-%d %H:%M:%S UTC')}."
+        f"Key id={result.id} revoked at {result.revoked_at.strftime('%Y-%m-%d %H:%M:%S UTC')}."
     )
 
 

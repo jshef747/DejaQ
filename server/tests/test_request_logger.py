@@ -48,6 +48,30 @@ class TestRequestLoggerInit:
 
         asyncio.run(run())
 
+    def test_creates_management_query_indexes(self, logger):
+        rl, db_path = logger
+
+        async def run():
+            await rl.init()
+            await rl.close()
+
+        asyncio.run(run())
+
+        con = sqlite3.connect(db_path)
+        rows = con.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'"
+        ).fetchall()
+        con.close()
+
+        names = {row[0] for row in rows}
+        assert {
+            "idx_requests_ts",
+            "idx_requests_org_department_ts",
+            "idx_feedback_log_ts_id",
+            "idx_feedback_log_org_department",
+            "idx_feedback_log_response_id",
+        }.issubset(names)
+
 
 class TestRequestLoggerLog:
     def test_cache_hit_row(self, logger):
