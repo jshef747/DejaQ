@@ -17,7 +17,7 @@ def test_org_list_uses_admin_service(monkeypatch):
 
     calls = []
 
-    def _list_orgs():
+    def _list_orgs(ctx=None):
         calls.append("list")
         return [
             _Org(
@@ -120,7 +120,8 @@ def test_cli_smoke_flow_uses_shared_services(isolated_org_db, isolated_stats_db,
     assert "acme" in key_list
     assert "..." in key_list
 
-    key_id = original_list_keys("acme")[0].id
+    from app.dependencies.management_auth import ManagementAuthContext
+    key_id = original_list_keys("acme", ctx=ManagementAuthContext.system())[0].id
     key_revoke = _invoke_ok(["key", "revoke", "--id", str(key_id)])
     assert f"Key id={key_id} revoked" in key_revoke
 

@@ -30,6 +30,7 @@ dependencies = [
     "rich>=14.3.3",
     "textual>=8.2.3",
     "aiosqlite>=0.22.1",
+    "supabase-auth>=2.0.0,<3.0.0",
 ]
 
 [project.scripts]
