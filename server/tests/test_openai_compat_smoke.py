@@ -32,8 +32,13 @@ class StubClassifier:
         return {"complexity": "easy", "score": 0.0, "task_type": "qa"}
 
 
+class HardClassifier:
+    def predict_complexity(self, query: str) -> dict:
+        return {"complexity": "hard", "score": 0.99, "task_type": "qa"}
+
+
 class StubExternalLLM:
-    async def generate_response(self, request):
+    async def generate_response(self, request, provider=None, api_key=None):
         raise AssertionError("External LLM should not be called for easy query smoke test")
 
 
@@ -194,3 +199,55 @@ def test_chat_completions_logs_summary_when_enricher_fails(monkeypatch, caplog):
         record.name == "dejaq.router.openai_compat" and record.message.startswith("done ")
         for record in caplog.records
     )
+
+
+def test_hard_query_without_org_credential_returns_402_without_env_fallback(monkeypatch):
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setenv("GEMINI_API_KEY", "platform-key-must-not-be-used")
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_classifier", HardClassifier())
+    monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+
+    client = TestClient(app)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "Explain a hard thing."}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 402
+    assert response.json()["detail"].startswith("No google API key configured")
+
+
+def test_hard_query_unmapped_external_model_returns_422(monkeypatch):
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(openai_compat, "EXTERNAL_MODEL_NAME", "mystery-model")
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_classifier", HardClassifier())
+    monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+
+    client = TestClient(app)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "Explain a hard thing."}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 422
+    assert "not mapped to a supported provider" in response.json()["detail"]

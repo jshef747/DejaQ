@@ -1,5 +1,6 @@
 """Demo seed: idempotent setup of demo org, departments, local user, membership, and sample stats."""
 import logging
+import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
@@ -74,13 +75,29 @@ def _init_stats_db(con: sqlite3.Connection) -> None:
     con.commit()
 
 
-def seed_demo(stats_db_path: str | None = None) -> dict:
+def seed_demo(
+    stats_db_path: str | None = None,
+    provider_key_provider: str | None = None,
+    provider_key: str | None = None,
+) -> dict:
     """Idempotently seed demo org, departments, user, membership, and sample stats.
 
     Returns a summary dict with what was created vs. already existed.
     """
     db_path = stats_db_path or config.STATS_DB_PATH
-    summary = {"org": None, "departments": [], "user": None, "membership": None, "stats_rows": 0}
+    env_provider, env_key = _provider_key_from_env()
+    if provider_key_provider is None and provider_key is None:
+        provider_key_provider = env_provider
+        provider_key = env_key
+
+    summary = {
+        "org": None,
+        "departments": [],
+        "user": None,
+        "membership": None,
+        "stats_rows": 0,
+        "credential": "not_supplied",
+    }
 
     with get_session() as session:
         # 1. Org
@@ -154,7 +171,35 @@ def seed_demo(stats_db_path: str | None = None) -> dict:
         con.commit()
         summary["stats_rows"] = inserted
 
+    # 6. Optional encrypted provider credential
+    if provider_key_provider or provider_key:
+        if not provider_key_provider or provider_key is None:
+            raise ValueError("Provider credential requires both provider and key.")
+
+        encryption_key = os.getenv("DEJAQ_CREDENTIAL_ENCRYPTION_KEY", config.CREDENTIAL_ENCRYPTION_KEY).strip()
+        if not encryption_key:
+            summary["credential"] = "skipped_missing_encryption_key"
+            return summary
+
+        config.CREDENTIAL_ENCRYPTION_KEY = encryption_key
+        from app.services.credential_service import CredentialService
+
+        with get_session() as session:
+            org = session.query(Organization).filter_by(slug=DEMO_ORG_SLUG).first()
+            CredentialService().upsert(session, org.id, provider_key_provider, provider_key)
+        summary["credential"] = f"{provider_key_provider}:upserted"
+
     return summary
+
+
+def _provider_key_from_env() -> tuple[str | None, str | None]:
+    value = os.getenv("DEJAQ_SEED_PROVIDER_KEY", "").strip()
+    if not value:
+        return None, None
+    provider, sep, key = value.partition(":")
+    if not sep or not provider.strip() or not key.strip():
+        raise ValueError("DEJAQ_SEED_PROVIDER_KEY must use <provider>:<key> format.")
+    return provider.strip(), key.strip()
 
 
 def _ensure_supabase_user() -> str:

@@ -100,6 +100,234 @@ def test_admin_llm_config_defaults_update_and_clear(isolated_org_db, authed_admi
     assert empty.status_code == 422
 
 
+def test_admin_credentials_round_trip_and_llm_config_presence(
+    isolated_org_db,
+    authed_admin_client,
+    monkeypatch,
+):
+    from cryptography.fernet import Fernet
+    import app.config as config
+
+    key = Fernet.generate_key().decode()
+    monkeypatch.setenv("DEJAQ_CREDENTIAL_ENCRYPTION_KEY", key)
+    monkeypatch.setattr(config, "CREDENTIAL_ENCRYPTION_KEY", key, raising=False)
+
+    client, headers = authed_admin_client
+    client.post("/admin/v1/orgs", json={"name": "Acme"}, headers=headers)
+
+    empty = client.get("/admin/v1/orgs/acme/credentials", headers=headers)
+    upserted = client.put(
+        "/admin/v1/orgs/acme/credentials/google",
+        json={"api_key": "AIzaFoo123Bar"},
+        headers=headers,
+    )
+    listed = client.get("/admin/v1/orgs/acme/credentials", headers=headers)
+    config_resp = client.get("/admin/v1/orgs/acme/llm-config", headers=headers)
+    deleted = client.delete("/admin/v1/orgs/acme/credentials/google", headers=headers)
+    deleted_again = client.delete("/admin/v1/orgs/acme/credentials/google", headers=headers)
+
+    assert empty.status_code == 200
+    assert empty.json() == []
+    assert upserted.status_code == 200
+    assert upserted.json()["key_preview"] == "AIza****3Bar"
+    assert "AIzaFoo123Bar" not in upserted.text
+    assert [item["provider"] for item in listed.json()] == ["google"]
+    assert config_resp.json()["credentials_configured"] == ["google"]
+    assert deleted.json() == {"deleted": True}
+    assert deleted_again.status_code == 404
+
+
+def test_admin_credentials_invalid_provider_and_empty_key_return_422(
+    isolated_org_db,
+    authed_admin_client,
+    monkeypatch,
+):
+    from cryptography.fernet import Fernet
+    import app.config as config
+
+    key = Fernet.generate_key().decode()
+    monkeypatch.setenv("DEJAQ_CREDENTIAL_ENCRYPTION_KEY", key)
+    monkeypatch.setattr(config, "CREDENTIAL_ENCRYPTION_KEY", key, raising=False)
+
+    client, headers = authed_admin_client
+    client.post("/admin/v1/orgs", json={"name": "Acme"}, headers=headers)
+
+    empty_key = client.put(
+        "/admin/v1/orgs/acme/credentials/google",
+        json={"api_key": "   "},
+        headers=headers,
+    )
+    invalid_provider = client.put(
+        "/admin/v1/orgs/acme/credentials/unknown_provider",
+        json={"api_key": "AIzaFoo123Bar"},
+        headers=headers,
+    )
+
+    assert empty_key.status_code == 422
+    assert invalid_provider.status_code == 422
+
+
+def test_admin_test_provider_uses_stored_org_credential(
+    isolated_org_db,
+    authed_admin_client,
+    monkeypatch,
+):
+    from cryptography.fernet import Fernet
+    import app.config as config
+    from app.routers.admin import test_provider
+    from app.schemas.chat import ExternalLLMResponse
+
+    key = Fernet.generate_key().decode()
+    monkeypatch.setenv("DEJAQ_CREDENTIAL_ENCRYPTION_KEY", key)
+    monkeypatch.setattr(config, "CREDENTIAL_ENCRYPTION_KEY", key, raising=False)
+
+    calls = []
+
+    class StubExternalLLM:
+        async def generate_response(self, request, provider, api_key):
+            calls.append((request, provider, api_key))
+            return ExternalLLMResponse(
+                text="provider is reachable",
+                model_used=request.model,
+                prompt_tokens=3,
+                completion_tokens=4,
+                latency_ms=12.5,
+            )
+
+    monkeypatch.setattr(test_provider, "_external_llm", StubExternalLLM())
+
+    client, headers = authed_admin_client
+    client.post("/admin/v1/orgs", json={"name": "Acme"}, headers=headers)
+    client.put(
+        "/admin/v1/orgs/acme/credentials/anthropic",
+        json={"api_key": "sk-ant-live"},
+        headers=headers,
+    )
+
+    response = client.post(
+        "/admin/v1/orgs/acme/test-provider",
+        json={"prompt": "  ping  ", "model": "claude-sonnet-4-6"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "text": "provider is reachable",
+        "model_used": "claude-sonnet-4-6",
+        "provider": "anthropic",
+        "latency_ms": 12.5,
+        "prompt_tokens": 3,
+        "completion_tokens": 4,
+    }
+    assert len(calls) == 1
+    request, provider, api_key = calls[0]
+    assert request.query == "ping"
+    assert request.model == "claude-sonnet-4-6"
+    assert request.max_tokens == 256
+    assert request.temperature == 0.0
+    assert provider == "anthropic"
+    assert api_key == "sk-ant-live"
+
+
+def test_admin_test_provider_missing_credential_returns_402(
+    isolated_org_db,
+    authed_admin_client,
+    monkeypatch,
+):
+    from cryptography.fernet import Fernet
+    import app.config as config
+
+    key = Fernet.generate_key().decode()
+    monkeypatch.setenv("DEJAQ_CREDENTIAL_ENCRYPTION_KEY", key)
+    monkeypatch.setattr(config, "CREDENTIAL_ENCRYPTION_KEY", key, raising=False)
+
+    client, headers = authed_admin_client
+    client.post("/admin/v1/orgs", json={"name": "Acme"}, headers=headers)
+
+    response = client.post(
+        "/admin/v1/orgs/acme/test-provider",
+        json={"prompt": "ping", "model": "gpt-5.4-mini"},
+        headers=headers,
+    )
+
+    assert response.status_code == 402
+    assert "openai" in response.json()["detail"]
+
+
+def test_admin_test_provider_unmapped_model_returns_422(isolated_org_db, authed_admin_client):
+    client, headers = authed_admin_client
+    client.post("/admin/v1/orgs", json={"name": "Acme"}, headers=headers)
+
+    response = client.post(
+        "/admin/v1/orgs/acme/test-provider",
+        json={"prompt": "ping", "model": "unknown-model"},
+        headers=headers,
+    )
+
+    assert response.status_code == 422
+    assert "Unknown provider" in response.json()["detail"]
+
+
+def test_admin_test_provider_maps_provider_errors(
+    isolated_org_db,
+    authed_admin_client,
+    monkeypatch,
+):
+    from cryptography.fernet import Fernet
+    import app.config as config
+    from app.routers.admin import test_provider
+    from app.utils.exceptions import ExternalLLMAuthError, ExternalLLMError, ExternalLLMTimeoutError
+
+    key = Fernet.generate_key().decode()
+    monkeypatch.setenv("DEJAQ_CREDENTIAL_ENCRYPTION_KEY", key)
+    monkeypatch.setattr(config, "CREDENTIAL_ENCRYPTION_KEY", key, raising=False)
+
+    class StubExternalLLM:
+        mode = "auth"
+
+        async def generate_response(self, request, provider, api_key):
+            if self.mode == "auth":
+                raise ExternalLLMAuthError(f"bad key {api_key}")
+            if self.mode == "timeout":
+                raise ExternalLLMTimeoutError("timed out")
+            raise ExternalLLMError(f"provider leaked {api_key}")
+
+    stub = StubExternalLLM()
+    monkeypatch.setattr(test_provider, "_external_llm", stub)
+
+    client, headers = authed_admin_client
+    client.post("/admin/v1/orgs", json={"name": "Acme"}, headers=headers)
+    client.put(
+        "/admin/v1/orgs/acme/credentials/google",
+        json={"api_key": "AIza-secret"},
+        headers=headers,
+    )
+
+    auth = client.post(
+        "/admin/v1/orgs/acme/test-provider",
+        json={"prompt": "ping", "model": "gemini-2.5-flash"},
+        headers=headers,
+    )
+    stub.mode = "timeout"
+    timeout = client.post(
+        "/admin/v1/orgs/acme/test-provider",
+        json={"prompt": "ping", "model": "gemini-2.5-flash"},
+        headers=headers,
+    )
+    stub.mode = "generic"
+    generic = client.post(
+        "/admin/v1/orgs/acme/test-provider",
+        json={"prompt": "ping", "model": "gemini-2.5-flash"},
+        headers=headers,
+    )
+
+    assert auth.status_code == 401
+    assert timeout.status_code == 504
+    assert generic.status_code == 502
+    assert "AIza-secret" not in auth.text
+    assert "AIza-secret" not in generic.text
+
+
 def test_admin_feedback_submit_and_list(isolated_org_db, isolated_stats_db, authed_admin_client, monkeypatch):
     from app.services import feedback_service
     from tests.test_feedback_service import FakeMemory

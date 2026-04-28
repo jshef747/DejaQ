@@ -4,7 +4,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from app.config import EXTERNAL_MODEL_NAME, LOCAL_LLM_MODEL_NAME, ROUTING_THRESHOLD
-from app.db import llm_config_repo
+from app.db import credential_repo, llm_config_repo
 from app.db.models.org import Organization
 from app.db.session import get_session
 
@@ -26,9 +26,10 @@ class LlmConfigResult(BaseModel):
     overrides: dict[str, str | float]
     updated_at: datetime | None
     is_default: bool
+    credentials_configured: list[str]
 
 
-def _effective(row) -> LlmConfigResult:
+def _effective(row, credentials_configured: list[str] | None = None) -> LlmConfigResult:
     values = {
         "external_model": row.external_model if row and row.external_model is not None else EXTERNAL_MODEL_NAME,
         "local_model": row.local_model if row and row.local_model is not None else LOCAL_LLM_MODEL_NAME,
@@ -50,6 +51,7 @@ def _effective(row) -> LlmConfigResult:
         overrides=overrides,
         updated_at=row.updated_at if row else None,
         is_default=not overrides,
+        credentials_configured=credentials_configured or [],
     )
 
 
@@ -64,7 +66,8 @@ def read_for_org(org_slug: str) -> LlmConfigResult:
     with get_session() as session:
         org = _get_org(session, org_slug)
         row = llm_config_repo.get_for_org(session, org.id)
-        return _effective(row)
+        credentials = [item.provider for item in credential_repo.list_credentials(session, org.id)]
+        return _effective(row, credentials)
 
 
 def update_for_org(
@@ -78,4 +81,5 @@ def update_for_org(
     with get_session() as session:
         org = _get_org(session, org_slug)
         row = llm_config_repo.upsert_for_org(session, org.id, payload, fields_set)
-        return _effective(row)
+        credentials = [item.provider for item in credential_repo.list_credentials(session, org.id)]
+        return _effective(row, credentials)

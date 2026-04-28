@@ -190,6 +190,42 @@ def test_user_actor_update_llm_config_forbidden_without_membership(seeded_db, sc
     assert resp.status_code == 403
 
 
+# ── credentials routes ───────────────────────────────────────────────────────
+
+def test_user_actor_list_credentials_forbidden_without_membership(seeded_db, scoped_admin_client):
+    client, headers = scoped_admin_client([])
+    resp = client.get("/admin/v1/orgs/acme/credentials", headers=headers)
+    assert resp.status_code == 403
+
+
+def test_user_actor_upsert_credentials_forbidden_without_membership(seeded_db, scoped_admin_client):
+    client, headers = scoped_admin_client([])
+    resp = client.put(
+        "/admin/v1/orgs/acme/credentials/google",
+        json={"api_key": "AIzaFoo123Bar"},
+        headers=headers,
+    )
+    assert resp.status_code == 403
+
+
+def test_user_actor_delete_credentials_forbidden_without_membership(seeded_db, scoped_admin_client):
+    client, headers = scoped_admin_client([])
+    resp = client.delete("/admin/v1/orgs/acme/credentials/google", headers=headers)
+    assert resp.status_code == 403
+
+
+# ── provider test route ──────────────────────────────────────────────────────
+
+def test_user_actor_test_provider_forbidden_without_membership(seeded_db, scoped_admin_client):
+    client, headers = scoped_admin_client([])
+    resp = client.post(
+        "/admin/v1/orgs/acme/test-provider",
+        json={"prompt": "ping", "model": "gemini-2.5-flash"},
+        headers=headers,
+    )
+    assert resp.status_code == 403
+
+
 # ── whoami ────────────────────────────────────────────────────────────────────
 
 def test_user_actor_whoami_returns_user_info(isolated_org_db, scoped_admin_client):

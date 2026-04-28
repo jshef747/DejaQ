@@ -72,6 +72,11 @@ The `/admin/v1/*` management API requires a Supabase project for JWT authenticat
    ```bash
    cd server && uv run dejaq-admin seed demo
    ```
+   To seed the demo org's external LLM credential without putting the key on argv:
+   ```bash
+   echo $GEMINI_API_KEY | uv run dejaq-admin seed demo --provider-key-stdin google
+   DEJAQ_SEED_PROVIDER_KEY=google:$GEMINI_API_KEY uv run dejaq-admin seed demo
+   ```
    Demo credentials: `demo@dejaq.local` / `demo1234`
 
 > **Note:** `/v1/chat/completions` and `/v1/feedback` continue to use DejaQ org API keys, not Supabase JWTs. Only `/admin/v1/*` uses Supabase authentication.
@@ -88,7 +93,8 @@ When adding a new `DEJAQ_*_BACKEND` variable, update the env examples in all thr
 | `DEJAQ_USE_CELERY` | `true` | Set to `false` to disable Celery and run tasks in-process |
 | `DEJAQ_STATS_DB` | `dejaq_stats.db` | Path to SQLite request log (used by `dejaq-admin stats`) |
 | `DEJAQ_EVICTION_FLOOR` | `-5.0` | Score floor for cache eviction; entries below this are deleted by the beat task |
-| `GEMINI_API_KEY` | `` | API key for Google Gemini (external LLM for hard queries) |
+| `DEJAQ_CREDENTIAL_ENCRYPTION_KEY` | `` | Fernet key used to encrypt org provider credentials. Generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`; back it up because losing it makes stored credentials unrecoverable |
+| `GEMINI_API_KEY` | `` | Optional operator reference key for Google Gemini; no longer read at request time for hard-query routing |
 | `DEJAQ_EXTERNAL_MODEL` | `gemini-2.5-flash` | Gemini model name for hard-query routing |
 | `DEJAQ_ROUTING_THRESHOLD` | `0.3` | Default per-org LLM routing threshold used when no org override exists |
 | `DEJAQ_CHROMA_HOST` | `127.0.0.1` | ChromaDB HTTP server host |
@@ -103,7 +109,7 @@ When adding a new `DEJAQ_*_BACKEND` variable, update the env examples in all thr
 
 ### Endpoints
 - `GET /health` — health check; also reports Celery worker status
-- `POST /v1/chat/completions` — OpenAI-compatible chat (streaming + non-streaming); requires `Authorization: Bearer <api-key>` and optional `X-DejaQ-Department` header; response includes `X-DejaQ-Response-Id` header when the response is cached or stored to cache
+- `POST /v1/chat/completions` — OpenAI-compatible chat (streaming + non-streaming); requires `Authorization: Bearer <api-key>` and optional `X-DejaQ-Department` header; response includes `X-DejaQ-Response-Id` header when the response is cached or stored to cache. Hard queries return HTTP 402 Payment Required when the org has no credential for the configured external provider.
 - `POST /v1/feedback` — thumbs-up/down feedback on a cached response; requires `Authorization: Bearer <api-key>`; body: `{"response_id": "<X-DejaQ-Response-Id value>", "rating": "positive"|"negative", "comment": "<optional>"}`; first negative deletes entry, subsequent negatives decrement score by 2.0; positive increments score by 1.0
 - `/admin/v1/*` management endpoints — auth via Supabase JWT (Bearer token validated through Supabase Auth SDK); send a Supabase access token as `Authorization: Bearer <supabase-access-token>`:
   - `GET /admin/v1/whoami`
@@ -112,6 +118,10 @@ When adding a new `DEJAQ_*_BACKEND` variable, update the env examples in all thr
   - `GET|POST /admin/v1/orgs/{org_slug}/keys`, `DELETE /admin/v1/keys/{key_id}`
   - `GET /admin/v1/stats/orgs`, `GET /admin/v1/stats/orgs/{org_slug}/departments`
   - `GET|PUT /admin/v1/orgs/{org_slug}/llm-config`
+  - `GET /admin/v1/orgs/{org_slug}/credentials`
+  - `PUT /admin/v1/orgs/{org_slug}/credentials/{provider}`
+  - `DELETE /admin/v1/orgs/{org_slug}/credentials/{provider}`
+  - `POST /admin/v1/orgs/{org_slug}/test-provider`
   - `GET|POST /admin/v1/feedback`
 
 ## Architecture
@@ -119,7 +129,7 @@ When adding a new `DEJAQ_*_BACKEND` variable, update the env examples in all thr
 ```
 app/
 ├── main.py              # FastAPI init, CORS, startup/shutdown, health check
-├── config.py            # Centralized settings (Redis URL, Gemini key, ChromaDB host/port, feature flags)
+├── config.py            # Centralized settings (Redis URL, credential encryption key, ChromaDB host/port, feature flags)
 ├── celery_app.py        # Celery configuration (broker, queues, serialization)
 ├── db/
 │   ├── base.py          # SQLAlchemy declarative base
@@ -128,11 +138,13 @@ app/
 │   ├── dept_repo.py     # Department CRUD
 │   ├── api_key_repo.py  # API key lookup + caching
 │   ├── llm_config_repo.py # Per-org LLM config CRUD
+│   ├── credential_repo.py # Per-org provider credential CRUD
 │   └── models/
 │       ├── org.py       # Organization ORM model
 │       ├── department.py # Department ORM model (cache_namespace, org FK)
 │       ├── api_key.py   # ApiKey ORM model
-│       └── org_llm_config.py # Org-level LLM routing config
+│       ├── org_llm_config.py # Org-level LLM routing config
+│       └── org_provider_credentials.py # Encrypted org provider API keys
 ├── dependencies/
 │   └── auth.py          # FastAPI dependency: resolve org/dept from Bearer token
 ├── middleware/
@@ -151,8 +163,11 @@ app/
 │   ├── llm_config_service.py # Per-org LLM config defaults/update logic
 │   ├── feedback_service.py # Shared cache feedback score/logging behavior
 │   ├── normalizer.py    # Query cleaning via Qwen 2.5-0.5B
-│   ├── llm_router.py    # Routes "easy"→Gemma 4 E4B local, "hard"→Gemini
-│   ├── external_llm.py  # Gemini client singleton (google-genai, async)
+│   ├── llm_router.py    # Routes "easy"→Gemma 4 E4B local; hard queries go through provider clients
+│   ├── credential_service.py # Fernet encryption/decryption and masked credential responses
+│   ├── provider_inference.py # External model name → provider mapping
+│   ├── external_llm.py  # External provider dispatcher
+│   ├── llm_providers/   # Google, OpenAI, Anthropic provider clients
 │   ├── context_adjuster.py # generalize() strips tone via Phi-3.5 Mini, adjust() adds tone via Qwen 2.5-1.5B
 │   ├── context_enricher.py # Rewrites context-dependent queries into standalone ones (Qwen 1.5B + regex gate, v5)
 │   ├── cache_filter.py  # Smart heuristic filter: skips non-cacheable prompts (too short, filler, vague)
@@ -238,6 +253,7 @@ Use this for laptop demos and local development when you do not want an external
 
 ```bash
 export DEJAQ_USE_CELERY=true
+export DEJAQ_CREDENTIAL_ENCRYPTION_KEY=<fernet-key>  # Back this up; losing it is unrecoverable.
 export DEJAQ_ENRICHER_BACKEND=in_process
 export DEJAQ_NORMALIZER_BACKEND=in_process
 export DEJAQ_LOCAL_LLM_BACKEND=in_process
@@ -274,6 +290,7 @@ ollama pull phi3.5:latest
 
 ```bash
 export DEJAQ_USE_CELERY=true
+export DEJAQ_CREDENTIAL_ENCRYPTION_KEY=<fernet-key>  # Back this up; losing it is unrecoverable.
 export DEJAQ_OLLAMA_URL=http://<lan-host>:11434
 export DEJAQ_ENRICHER_BACKEND=ollama
 export DEJAQ_NORMALIZER_BACKEND=ollama
@@ -308,6 +325,7 @@ ollama pull phi3.5:latest
 
 ```bash
 export DEJAQ_USE_CELERY=true
+export DEJAQ_CREDENTIAL_ENCRYPTION_KEY=<fernet-key>  # Back this up; losing it is unrecoverable.
 export DEJAQ_OLLAMA_URL=https://<cloud-ollama-endpoint>
 export DEJAQ_ENRICHER_BACKEND=ollama
 export DEJAQ_NORMALIZER_BACKEND=ollama
@@ -387,13 +405,13 @@ Uses an LLM judge (requires `ANTHROPIC_API_KEY`) for scoring. Configs in `config
 
 ## Current Status
 
-**Working:** FastAPI HTTP, Normalizer (Qwen 0.5B, v22), LLM Router (Gemma 4 E4B local → Gemini 2.5 Flash external), Context Adjuster (generalize via Phi-3.5 + adjust via Qwen 1.5B), Semantic cache (ChromaDB, cosine ≤ 0.15), Background generalize+store on cache miss, Hardware acceleration (Metal/CUDA), Context Enricher v5 (Qwen 1.5B + regex gate, 88.7% @0.15 across 5 datasets), Smart Cache Filter (skip non-cacheable prompts), Difficulty Classifier (NVIDIA DeBERTa — routes easy→local, hard→Gemini), Celery + Redis task queue (non-blocking generalize+store), OpenAI-compatible endpoint with API-key auth + per-department cache namespacing, Org/department/API-key management (SQLAlchemy + Alembic SQLite + `dejaq-admin` CLI), Stats tracking (SQLite + Rich TUI — `dejaq-admin stats` / `dejaq-admin-tui`), Score-based cache eviction (Celery beat), Feedback API (score adjustments + delete on first negative), End-to-end demo script (`scripts/demo.sh`), Three documented deployment modes (in-process / self-hosted / cloud) validated against the end-to-end demo.
+**Working:** FastAPI HTTP, Normalizer (Qwen 0.5B, v22), LLM Router (Gemma 4 E4B local → provider-backed external LLMs), Context Adjuster (generalize via Phi-3.5 + adjust via Qwen 1.5B), Semantic cache (ChromaDB, cosine ≤ 0.15), Background generalize+store on cache miss, Hardware acceleration (Metal/CUDA), Context Enricher v5 (Qwen 1.5B + regex gate, 88.7% @0.15 across 5 datasets), Smart Cache Filter (skip non-cacheable prompts), Difficulty Classifier (NVIDIA DeBERTa — routes easy→local, hard→org credential backed provider), Celery + Redis task queue (non-blocking generalize+store), OpenAI-compatible endpoint with API-key auth + per-department cache namespacing, Org/department/API-key/credential management (SQLAlchemy + Alembic SQLite + `dejaq-admin` CLI), Stats tracking (SQLite + Rich TUI — `dejaq-admin stats` / `dejaq-admin-tui`), Score-based cache eviction (Celery beat), Feedback API (score adjustments + delete on first negative), End-to-end demo script (`scripts/demo.sh`), Three documented deployment modes (in-process / self-hosted / cloud) validated against the end-to-end demo. `GEMINI_API_KEY` is no longer read at request time; keep it only as operator reference, while runtime credentials come from `org_provider_credentials`.
 **In progress:** Offload user-facing inference to Celery inference queue (multi-user parallelism)
 **Planned:** PostgreSQL migration, Subject-extraction preprocessing for bare comparative failures ("Which is cheaper?" — 1.5B model not sufficient)
 
 ## Active Technologies
 
-- Python 3.13+ + FastAPI + Uvicorn, ChromaDB (HttpClient), redis-py (Celery dependency), Pydantic v2, Celery, aiosqlite (request log), Rich + Textual (stats TUI), SQLAlchemy + Alembic (org/dept/key DB, SQLite), google-genai (Gemini external LLM)
+- Python 3.13+ + FastAPI + Uvicorn, ChromaDB (HttpClient), redis-py (Celery dependency), Pydantic v2, Celery, aiosqlite (request log), Rich + Textual (stats TUI), SQLAlchemy + Alembic (org/dept/key/credential DB, SQLite), cryptography/Fernet, google-genai, openai, anthropic
 
 ## Frontend (dashboard)
 

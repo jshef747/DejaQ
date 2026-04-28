@@ -28,6 +28,11 @@ class Organization(Base):
         cascade="all, delete-orphan",
         uselist=False,
     )
+    provider_credentials: Mapped[list["OrgProviderCredentials"]] = relationship(  # noqa: F821
+        "OrgProviderCredentials",
+        back_populates="organization",
+        cascade="all, delete-orphan",
+    )
     memberships: Mapped[list["UserOrgMembership"]] = relationship(  # noqa: F821
         "UserOrgMembership", back_populates="organization", cascade="all, delete-orphan"
     )

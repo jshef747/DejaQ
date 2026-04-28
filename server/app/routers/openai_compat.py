@@ -7,7 +7,7 @@ import uuid
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, BackgroundTasks, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.schemas.openai_compat import (
     OAIChatChunk,
@@ -21,7 +21,10 @@ from app.schemas.openai_compat import (
 )
 from app.services.llm_router import _LOCAL_MODEL_NAME
 from app.services.external_llm import ExternalLLMService
+from app.services.credential_service import CredentialService, SUPPORTED_PROVIDERS
+from app.services.llm_providers import LIVE_PROVIDERS
 from app.services.memory_chromaDB import get_memory_service
+from app.services.provider_inference import provider_for_model
 from app.services import cache_filter
 from app.services.classifier import ClassifierService
 from app.services.service_factory import (
@@ -32,6 +35,7 @@ from app.services.service_factory import (
 )
 from app.tasks.cache_tasks import generalize_and_store_task
 from app.config import USE_CELERY, EXTERNAL_MODEL_NAME
+from app.db.session import get_session
 from app.utils.exceptions import ExternalLLMError
 from app.utils.logger import clear_request_id, content_snippet, set_request_id
 from app.utils.pipeline_trace import PipelineTrace
@@ -185,6 +189,7 @@ async def chat_completions(
     trace = PipelineTrace()
     cache_namespace: str = getattr(raw_request.state, "cache_namespace", "dejaq_default")
     org_slug: str = getattr(raw_request.state, "org_slug", "anonymous")
+    org_id: int | None = getattr(raw_request.state, "org_id", None)
     dept = raw_request.headers.get("X-DejaQ-Department") or "default"
 
     user_query, history, system_prompt = _extract_pipeline_inputs(oai_request)
@@ -291,8 +296,6 @@ async def chat_completions(
                     total_tokens=prompt_tokens,
                 ),
             )
-            from fastapi.responses import JSONResponse
-
             return JSONResponse(
                 content=response.model_dump(),
                 headers={
@@ -318,12 +321,62 @@ async def chat_completions(
         try:
             with trace.step("generate"):
                 if complexity == "hard":
+                    try:
+                        provider = provider_for_model(EXTERNAL_MODEL_NAME)
+                    except ValueError:
+                        return JSONResponse(
+                            status_code=422,
+                            content={
+                                "detail": (
+                                    f"Configured external model '{EXTERNAL_MODEL_NAME}' "
+                                    "is not mapped to a supported provider."
+                                )
+                            },
+                        )
+
+                    if provider in SUPPORTED_PROVIDERS and provider not in LIVE_PROVIDERS:
+                        return JSONResponse(
+                            status_code=422,
+                            content={
+                                "detail": (
+                                    f"Provider '{provider}' is not yet wired to a live client. "
+                                    "Configure a model from a supported provider (google, openai, anthropic)."
+                                )
+                            },
+                        )
+
+                    decrypted_key: str | None = None
+                    if org_id is not None:
+                        try:
+                            with get_session() as session:
+                                decrypted_key = CredentialService().get_decrypted_key(session, org_id, provider)
+                        except ValueError as exc:
+                            return JSONResponse(status_code=500, content={"detail": str(exc)})
+                    if decrypted_key is None:
+                        return JSONResponse(
+                            status_code=402,
+                            content={
+                                "detail": (
+                                    f"No {provider} API key configured for this organization. "
+                                    "Add one via the credentials settings."
+                                )
+                            },
+                        )
+
                     ext_request = ExternalLLMRequest(
                         query=user_query,
                         history=history,
                         model=EXTERNAL_MODEL_NAME,
+                        max_tokens=max_tokens,
+                        system_prompt=system_prompt
+                        or "You are a helpful assistant. Answer the user's query concisely and accurately.",
+                        temperature=oai_request.temperature or 0.7,
                     )
-                    ext_response = await _external_llm.generate_response(ext_request)
+                    ext_response = await _external_llm.generate_response(
+                        ext_request,
+                        provider=provider,
+                        api_key=decrypted_key,
+                    )
                     answer = ext_response.text
                     model_used = ext_response.model_used
                 else:
@@ -338,7 +391,9 @@ async def chat_completions(
                         system_prompt=llm_system_prompt,
                     )
                     model_used = _LOCAL_MODEL_NAME
-        except ExternalLLMError:
+        except ExternalLLMError as exc:
+            if "not wired to a live client" in str(exc):
+                return JSONResponse(status_code=422, content={"detail": str(exc)})
             logger.exception("ExternalLLMService failed")
             answer = "I'm sorry, I couldn't process your request right now. Please try again later."
             model_used = "error"
@@ -416,8 +471,6 @@ async def chat_completions(
                 total_tokens=prompt_tokens + completion_tokens,
             ),
         )
-        from fastapi.responses import JSONResponse
-
         return JSONResponse(
             content=response.model_dump(),
             headers=miss_headers,

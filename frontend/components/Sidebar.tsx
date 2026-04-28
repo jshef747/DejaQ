@@ -1,8 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { signOut } from "@/app/actions/auth";
+import { listOrgs } from "@/app/actions/orgs";
+import type { OrgItem } from "@/lib/types";
 
 const NAV_ITEMS = [
   { href: "/dashboard/organizations", label: "Organizations", icon: OrgIcon },
@@ -13,12 +16,62 @@ const NAV_ITEMS = [
   { href: "/dashboard/chat", label: "Chat Demo", icon: ChatIcon },
 ];
 
+// Pages that don't use ?org= — nav links go bare
+const ORG_SCOPED_PATHS = ["/dashboard/departments", "/dashboard/keys", "/dashboard/organizations", "/dashboard/settings"];
+
 interface SidebarProps {
   email: string;
 }
 
 export default function Sidebar({ email }: SidebarProps) {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const activeOrg = searchParams.get("org") ?? "";
+
+  const [orgs, setOrgs] = useState<OrgItem[]>([]);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    listOrgs().then(setOrgs).catch(() => {});
+  }, []);
+
+  // Auto-select first org if we're on an org-scoped page with no ?org=
+  useEffect(() => {
+    if (!activeOrg && orgs.length > 0) {
+      const isScoped = ORG_SCOPED_PATHS.some((p) => pathname.startsWith(p));
+      if (isScoped) {
+        router.replace(`${pathname}?org=${orgs[0].slug}`);
+      }
+    }
+  }, [activeOrg, orgs, pathname, router]);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    if (!dropdownOpen) return;
+    function handleClick(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setDropdownOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [dropdownOpen]);
+
+  function buildHref(base: string) {
+    const isScoped = ORG_SCOPED_PATHS.some((p) => base.startsWith(p));
+    return isScoped && activeOrg ? `${base}?org=${activeOrg}` : base;
+  }
+
+  function switchOrg(slug: string) {
+    setDropdownOpen(false);
+    const isScoped = ORG_SCOPED_PATHS.some((p) => pathname.startsWith(p));
+    const target = isScoped ? `${pathname}?org=${slug}` : `/dashboard/departments?org=${slug}`;
+    router.push(target);
+  }
+
+  const displayOrg = orgs.find((o) => o.slug === activeOrg) ?? orgs[0];
   const initials = email.slice(0, 2).toUpperCase();
 
   return (
@@ -85,60 +138,139 @@ export default function Sidebar({ email }: SidebarProps) {
       </div>
 
       {/* Org switcher */}
-      <button
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "8px",
-          padding: "7px 8px",
-          background: "var(--bg-2)",
-          border: "1px solid var(--border)",
-          borderRadius: "5px",
-          marginBottom: "10px",
-          cursor: "pointer",
-          width: "100%",
-          color: "var(--fg)",
-          textAlign: "left",
-        }}
-        onMouseEnter={(e) =>
-          ((e.currentTarget as HTMLButtonElement).style.background = "var(--bg-3)")
-        }
-        onMouseLeave={(e) =>
-          ((e.currentTarget as HTMLButtonElement).style.background = "var(--bg-2)")
-        }
-      >
-        <span
+      <div ref={dropdownRef} style={{ position: "relative", marginBottom: "10px" }}>
+        <button
+          onClick={() => orgs.length > 1 && setDropdownOpen((v) => !v)}
           style={{
-            width: "14px",
-            height: "14px",
-            background: "var(--accent-bg)",
-            border: "1px solid var(--accent-border)",
-            borderRadius: "3px",
-            display: "grid",
-            placeItems: "center",
-            color: "var(--accent)",
-            fontFamily: "var(--font-mono)",
-            fontSize: "9px",
-            fontWeight: 700,
-            flexShrink: 0,
+            alignItems: "center",
+            background: "var(--bg-2)",
+            border: "1px solid var(--border)",
+            borderRadius: "5px",
+            color: "var(--fg)",
+            cursor: orgs.length > 1 ? "pointer" : "default",
+            display: "flex",
+            gap: "8px",
+            padding: "7px 8px",
+            textAlign: "left",
+            width: "100%",
           }}
-        >
-          D
-        </span>
-        <span
-          style={{
-            fontSize: "12px",
-            fontWeight: 500,
-            flex: 1,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
+          onMouseEnter={(e) => {
+            if (orgs.length > 1)
+              (e.currentTarget as HTMLButtonElement).style.background = "var(--bg-3)";
           }}
+          onMouseLeave={(e) =>
+            ((e.currentTarget as HTMLButtonElement).style.background = "var(--bg-2)")
+          }
         >
-          demo-org
-        </span>
-        <ChevIcon />
-      </button>
+          <span
+            style={{
+              background: "var(--accent-bg)",
+              border: "1px solid var(--accent-border)",
+              borderRadius: "3px",
+              color: "var(--accent)",
+              display: "grid",
+              flexShrink: 0,
+              fontFamily: "var(--font-mono)",
+              fontSize: "9px",
+              fontWeight: 700,
+              height: "14px",
+              placeItems: "center",
+              width: "14px",
+            }}
+          >
+            {displayOrg?.name?.[0]?.toUpperCase() ?? "?"}
+          </span>
+          <span
+            style={{
+              flex: 1,
+              fontSize: "12px",
+              fontWeight: 500,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {displayOrg?.name ?? "Select org"}
+          </span>
+          {orgs.length > 1 && <ChevIcon />}
+        </button>
+
+        {dropdownOpen && (
+          <div
+            style={{
+              background: "var(--bg-2)",
+              border: "1px solid var(--border-2)",
+              borderRadius: "5px",
+              boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+              left: 0,
+              overflow: "hidden",
+              position: "absolute",
+              right: 0,
+              top: "calc(100% + 4px)",
+              zIndex: 20,
+            }}
+          >
+            {orgs.map((org) => (
+              <button
+                key={org.slug}
+                onClick={() => switchOrg(org.slug)}
+                style={{
+                  alignItems: "center",
+                  background: org.slug === activeOrg ? "var(--bg-3)" : "transparent",
+                  border: "none",
+                  color: org.slug === activeOrg ? "var(--fg)" : "var(--fg-dim)",
+                  cursor: "pointer",
+                  display: "flex",
+                  fontSize: "12px",
+                  gap: "8px",
+                  padding: "8px 10px",
+                  textAlign: "left",
+                  width: "100%",
+                }}
+                onMouseEnter={(e) =>
+                  ((e.currentTarget as HTMLButtonElement).style.background = "var(--bg-3)")
+                }
+                onMouseLeave={(e) =>
+                  ((e.currentTarget as HTMLButtonElement).style.background =
+                    org.slug === activeOrg ? "var(--bg-3)" : "transparent")
+                }
+              >
+                <span
+                  style={{
+                    background: "var(--accent-bg)",
+                    border: "1px solid var(--accent-border)",
+                    borderRadius: "3px",
+                    color: "var(--accent)",
+                    display: "grid",
+                    flexShrink: 0,
+                    fontFamily: "var(--font-mono)",
+                    fontSize: "9px",
+                    fontWeight: 700,
+                    height: "14px",
+                    placeItems: "center",
+                    width: "14px",
+                  }}
+                >
+                  {org.name[0].toUpperCase()}
+                </span>
+                <span
+                  style={{
+                    flex: 1,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {org.name}
+                </span>
+                {org.slug === activeOrg && (
+                  <span style={{ color: "var(--accent)", fontSize: "11px" }}>✓</span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Nav section label */}
       <div
@@ -160,7 +292,7 @@ export default function Sidebar({ email }: SidebarProps) {
         return (
           <Link
             key={href}
-            href={href}
+            href={buildHref(href)}
             style={{
               display: "flex",
               alignItems: "center",

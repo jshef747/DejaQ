@@ -10,6 +10,7 @@ class LlmConfigResponse(BaseModel):
     overrides: dict[str, str | float]
     updated_at: datetime | None
     is_default: bool
+    credentials_configured: list[str]
 
 
 class LlmConfigUpdate(BaseModel):

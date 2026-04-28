@@ -20,6 +20,7 @@ import app.db.models.org  # noqa: E402, F401
 import app.db.models.department  # noqa: E402, F401
 import app.db.models.api_key  # noqa: E402, F401
 import app.db.models.org_llm_config  # noqa: E402, F401
+import app.db.models.org_provider_credentials  # noqa: E402, F401
 import app.db.models.user  # noqa: E402, F401
 import app.db.models.user_org_membership  # noqa: E402, F401
 

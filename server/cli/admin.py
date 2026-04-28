@@ -317,12 +317,30 @@ def seed() -> None:
 
 
 @seed.command("demo")
-def seed_demo_cmd() -> None:
+@click.option(
+    "--provider-key-stdin",
+    "provider_key_stdin",
+    metavar="PROVIDER",
+    default=None,
+    help="Read a provider API key from stdin and seed it for the demo org.",
+)
+def seed_demo_cmd(provider_key_stdin: str | None) -> None:
     """Idempotently seed demo org, departments, user, membership, and sample stats."""
     from cli.seed import seed_demo
 
+    provider_key = None
+    if provider_key_stdin:
+        provider_key = sys.stdin.read().strip()
+        if not provider_key:
+            print_error("--provider-key-stdin was provided, but stdin was empty.")
+            sys.exit(1)
+
     with console.status("[cyan]Seeding demo workspace…[/cyan]", spinner="dots"):
-        summary = seed_demo()
+        try:
+            summary = seed_demo(provider_key_provider=provider_key_stdin, provider_key=provider_key)
+        except ValueError as exc:
+            print_error(str(exc))
+            sys.exit(1)
 
     console.print(f"[green]Demo seed complete.[/green]")
     console.print(f"  org:         {summary['org']}")
@@ -330,5 +348,11 @@ def seed_demo_cmd() -> None:
     console.print(f"  user:        {summary['user']}")
     console.print(f"  membership:  {summary['membership']}")
     console.print(f"  stats rows inserted: {summary['stats_rows']}")
+    if summary.get("credential") == "skipped_missing_encryption_key":
+        print_warning(
+            "Provider credential supplied, but DEJAQ_CREDENTIAL_ENCRYPTION_KEY is not set; skipped credential upsert."
+        )
+    elif summary.get("credential") != "not_supplied":
+        console.print(f"  provider credential: {summary['credential']}")
     console.print("")
     console.print(f"  [dim]Demo credentials:[/dim] demo@dejaq.local / demo1234")

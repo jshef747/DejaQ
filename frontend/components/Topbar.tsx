@@ -1,9 +1,10 @@
 interface TopbarProps {
   section: string;
   orgId?: string;
+  sub?: string;
 }
 
-export default function Topbar({ section, orgId = "demo-org" }: TopbarProps) {
+export default function Topbar({ section, orgId, sub }: TopbarProps) {
   return (
     <div
       style={{
@@ -27,9 +28,21 @@ export default function Topbar({ section, orgId = "demo-org" }: TopbarProps) {
           fontFamily: "var(--font-mono)",
         }}
       >
-        <span style={{ color: "var(--fg-dimmer)" }}>{orgId}</span>
-        <span style={{ color: "var(--fg-dimmer)" }}>/</span>
-        <span style={{ color: "var(--fg)" }}>{section}</span>
+        {orgId && (
+          <>
+            <span style={{ color: "var(--fg-dimmer)" }}>{orgId}</span>
+            <span style={{ color: "var(--fg-dimmer)" }}>/</span>
+          </>
+        )}
+        {sub ? (
+          <>
+            <span>{section}</span>
+            <span style={{ color: "var(--fg-dimmer)" }}>/</span>
+            <span style={{ color: "var(--fg)" }}>{sub}</span>
+          </>
+        ) : (
+          <span style={{ color: "var(--fg)" }}>{section}</span>
+        )}
       </div>
 
       <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "8px" }}>

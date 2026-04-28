@@ -109,3 +109,56 @@ def test_demo_seed_second_run_inserts_zero_stats(isolated_org_db, isolated_stats
 
     second = seed_demo(stats_db_path=str(isolated_stats_db))
     assert second["stats_rows"] == 0
+
+
+@pytest.mark.no_model
+def test_demo_seed_provider_key_upserts_credential(isolated_org_db, isolated_stats_db, monkeypatch):
+    from cryptography.fernet import Fernet
+
+    import app.config as config
+    from app.db.models.org import Organization
+    from app.db.session import get_session
+    from app.services.credential_service import CredentialService
+    from cli.seed import seed_demo
+
+    key = Fernet.generate_key().decode()
+    monkeypatch.setenv("DEJAQ_CREDENTIAL_ENCRYPTION_KEY", key)
+    monkeypatch.setattr(config, "CREDENTIAL_ENCRYPTION_KEY", key, raising=False)
+
+    summary = seed_demo(
+        stats_db_path=str(isolated_stats_db),
+        provider_key_provider="google",
+        provider_key="AIzaFoo123Bar",
+    )
+
+    assert summary["credential"] == "google:upserted"
+    with get_session() as session:
+        org = session.query(Organization).filter_by(slug="demo").first()
+        assert CredentialService().get_decrypted_key(session, org.id, "google") == "AIzaFoo123Bar"
+
+
+@pytest.mark.no_model
+def test_demo_seed_provider_key_skips_without_encryption_key(
+    isolated_org_db,
+    isolated_stats_db,
+    monkeypatch,
+):
+    import app.config as config
+    from app.db import credential_repo
+    from app.db.models.org import Organization
+    from app.db.session import get_session
+    from cli.seed import seed_demo
+
+    monkeypatch.delenv("DEJAQ_CREDENTIAL_ENCRYPTION_KEY", raising=False)
+    monkeypatch.setattr(config, "CREDENTIAL_ENCRYPTION_KEY", "", raising=False)
+
+    summary = seed_demo(
+        stats_db_path=str(isolated_stats_db),
+        provider_key_provider="google",
+        provider_key="AIzaFoo123Bar",
+    )
+
+    assert summary["credential"] == "skipped_missing_encryption_key"
+    with get_session() as session:
+        org = session.query(Organization).filter_by(slug="demo").first()
+        assert credential_repo.list_credentials(session, org.id) == []

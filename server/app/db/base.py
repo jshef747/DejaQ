@@ -18,3 +18,6 @@ SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 class Base(DeclarativeBase):
     pass
+
+
+import app.db.models.org_provider_credentials  # noqa: E402, F401
