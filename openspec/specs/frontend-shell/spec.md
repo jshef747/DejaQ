@@ -54,7 +54,7 @@ All routes under `/dashboard/*` SHALL require an authenticated session. Unauthen
 - **THEN** the session cookie is cleared and the user is redirected to `/login`
 
 ### Requirement: Sidebar navigation
-The dashboard layout SHALL include a persistent sidebar with the following nav items in order: Organizations, Departments, API Keys, Analytics, Settings, Chat Demo. The sidebar SHALL display the signed-in user's email, a 22×22px avatar circle with the user's initials, and a sign-out button. The sidebar background SHALL be `#181818` (distinct from the page background `#1c1c1c`).
+The dashboard layout SHALL include a persistent sidebar with the following nav items in order: Organizations, Departments, API Keys, Analytics, Settings. The sidebar SHALL display the signed-in user's email, a 22×22px avatar circle with the user's initials, and a sign-out button. The sidebar background SHALL be `#181818` (distinct from the page background `#1c1c1c`).
 
 #### Scenario: Active page highlighted
 - **WHEN** the user is on `/dashboard/organizations`
@@ -91,7 +91,7 @@ The `/dashboard` route SHALL render a real page — not a placeholder. It SHALL 
 - **THEN** the page renders with a "Backend unavailable" status card, not an error page
 
 ### Requirement: Placeholder pages for future sections
-Routes `/dashboard/organizations`, `/dashboard/departments`, `/dashboard/keys`, `/dashboard/analytics`, `/dashboard/settings`, and `/dashboard/chat` SHALL each render a styled placeholder page within the protected layout. Each placeholder SHALL display the section name and a "Coming soon" indicator.
+Routes `/dashboard/organizations`, `/dashboard/departments`, `/dashboard/keys`, `/dashboard/analytics`, and `/dashboard/settings` SHALL each render a styled placeholder page within the protected layout. Each placeholder SHALL display the section name and a "Coming soon" indicator.
 
 #### Scenario: Placeholder renders in layout
 - **WHEN** an authenticated user visits `/dashboard/organizations`

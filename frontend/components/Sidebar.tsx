@@ -13,7 +13,6 @@ const NAV_ITEMS = [
   { href: "/dashboard/keys", label: "API Keys", icon: KeyIcon },
   { href: "/dashboard/analytics", label: "Analytics", icon: ChartIcon },
   { href: "/dashboard/settings", label: "Settings", icon: SettingsIcon },
-  { href: "/dashboard/chat", label: "Chat Demo", icon: ChatIcon },
 ];
 
 // Pages that don't use ?org= — nav links go bare
@@ -444,14 +443,6 @@ function SettingsIcon({ size = 14, style }: { size?: number; style?: React.CSSPr
     <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" style={style}>
       <circle cx="8" cy="8" r="2.5" />
       <path d="M8 1v1.5M8 13.5V15M1 8h1.5M13.5 8H15M3.05 3.05l1.06 1.06M11.89 11.89l1.06 1.06M3.05 12.95l1.06-1.06M11.89 4.11l1.06-1.06" />
-    </svg>
-  );
-}
-
-function ChatIcon({ size = 14, style }: { size?: number; style?: React.CSSProperties }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" style={style}>
-      <path d="M2 3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H6l-4 3V3z" />
     </svg>
   );
 }

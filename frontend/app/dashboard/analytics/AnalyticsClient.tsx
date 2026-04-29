@@ -614,25 +614,6 @@ export default function AnalyticsClient({
             <div style={{ marginBottom: 8 }}>
               No data yet — send a request through the API to see analytics here.
             </div>
-            <a
-              href="/dashboard/chat"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 6,
-                padding: "6px 14px",
-                borderRadius: 5,
-                border: "1px solid var(--accent-border)",
-                background: "var(--accent-bg)",
-                color: "var(--accent)",
-                fontSize: 12,
-                fontWeight: 500,
-                textDecoration: "none",
-                marginTop: 4,
-              }}
-            >
-              Open Chat Demo →
-            </a>
           </div>
         ) : (
           <div style={{ overflowX: "auto" }}>
