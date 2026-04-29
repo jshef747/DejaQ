@@ -2,7 +2,9 @@
 
 ## Purpose
 Define per-organization LLM routing configuration persistence and the management endpoints used to read and update effective overrides.
+
 ## Requirements
+
 ### Requirement: Per-org LLM config is persisted
 
 The system SHALL persist a single LLM configuration record per organization in a new `org_llm_config` table with columns: `org_id` (PK, FK to `organizations.id`, ON DELETE CASCADE), `external_model` (TEXT, nullable), `local_model` (TEXT, nullable), `routing_threshold` (REAL, nullable), `updated_at` (TIMESTAMP, NOT NULL). Nullable config columns with `NULL` values SHALL fall back to the global defaults defined in `app.config`.
@@ -19,12 +21,17 @@ The system SHALL persist a single LLM configuration record per organization in a
 
 ### Requirement: Read LLM config endpoint
 
-The system SHALL expose `GET /admin/v1/orgs/{org_slug}/llm-config` returning HTTP 200 with `{external_model, local_model, routing_threshold, overrides, updated_at, is_default}`. The top-level model fields SHALL contain effective values after merging stored overrides with global defaults. The `overrides` object SHALL contain only fields currently overridden by the org row. The `is_default` field SHALL be `true` when no row exists or every nullable config column is `NULL`; otherwise `false`. `updated_at` SHALL be `null` when no row exists. If a row exists but all nullable config columns are `NULL`, `is_default=true`, `overrides={}`, and `updated_at` SHALL return the row timestamp. Unknown org SHALL return HTTP 404.
+The system SHALL expose `GET /admin/v1/orgs/{org_slug}/llm-config` returning HTTP 200 with `{external_model, local_model, routing_threshold, overrides, updated_at, is_default, credentials_configured}`. The top-level model fields SHALL contain effective values after merging stored overrides with global defaults. The `overrides` object SHALL contain only fields currently overridden by the org row. The `is_default` field SHALL be `true` when no row exists or every nullable config column is `NULL`; otherwise `false`. `updated_at` SHALL be `null` when no row exists. If a row exists but all nullable config columns are `NULL`, `is_default=true`, `overrides={}`, and `updated_at` SHALL return the row timestamp. Unknown org SHALL return HTTP 404. The `credentials_configured` field SHALL be a list of provider strings for which the org has a credential row (may be empty).
 
 #### Scenario: Read config for org with no row
 
 - **WHEN** an authorized client calls `GET /admin/v1/orgs/acme/llm-config` and `acme` has no `org_llm_config` row
-- **THEN** the response is HTTP 200 with the global defaults, `"overrides": {}`, `"updated_at": null`, and `"is_default": true`
+- **THEN** the response is HTTP 200 with the global defaults, `"overrides": {}`, `"updated_at": null`, `"is_default": true`, and `"credentials_configured": []`
+
+#### Scenario: Read config for org with credentials configured
+
+- **WHEN** an authorized client calls `GET /admin/v1/orgs/acme/llm-config` and `acme` has a `google` credential
+- **THEN** the response includes `"credentials_configured": ["google"]`
 
 #### Scenario: Read config for unknown org
 
@@ -33,7 +40,7 @@ The system SHALL expose `GET /admin/v1/orgs/{org_slug}/llm-config` returning HTT
 
 ### Requirement: Update LLM config endpoint
 
-The system SHALL expose `PUT /admin/v1/orgs/{org_slug}/llm-config` accepting any non-empty subset of `{external_model, local_model, routing_threshold}` where each field may be omitted, non-null, or explicit `null`. Empty `{}` bodies SHALL return HTTP 422 and SHALL NOT create or update a row. The endpoint SHALL upsert the `org_llm_config` row, set `updated_at = now()`, and return HTTP 200 with the resulting effective config. Fields not present in the request body SHALL retain their previous stored value. Explicit `null` SHALL clear that org-level override and make reads fall back to the global default for that field. Unknown org SHALL return HTTP 404. Invalid `routing_threshold` (not a number, or outside `[0.0, 1.0]`) SHALL return HTTP 422.
+The system SHALL expose `PUT /admin/v1/orgs/{org_slug}/llm-config` accepting any non-empty subset of `{external_model, local_model, routing_threshold}` where each field may be omitted, non-null, or explicit `null`. Empty `{}` bodies SHALL return HTTP 422 and SHALL NOT create or update a row. The endpoint SHALL upsert the `org_llm_config` row, set `updated_at = now()`, and return HTTP 200 with the resulting effective config including `credentials_configured`. Fields not present in the request body SHALL retain their previous stored value. Explicit `null` SHALL clear that org-level override and make reads fall back to the global default for that field. Unknown org SHALL return HTTP 404. Invalid `routing_threshold` (not a number, or outside `[0.0, 1.0]`) SHALL return HTTP 422.
 
 #### Scenario: Partial update preserves untouched fields
 
