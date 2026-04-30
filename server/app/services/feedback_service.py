@@ -17,10 +17,6 @@ class FeedbackNamespaceMismatch(Exception):
     pass
 
 
-class FeedbackOrgNotFound(Exception):
-    pass
-
-
 class FeedbackDeptNotFound(Exception):
     pass
 

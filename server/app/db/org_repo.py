@@ -1,20 +1,13 @@
-import re
-
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models.org import Organization
+from app.db.slug import slugify_name
 from app.schemas.org import OrgRead
 
 
-def _slugify(name: str) -> str:
-    slug = name.lower().strip()
-    slug = re.sub(r"[^a-z0-9]+", "-", slug)
-    return slug.strip("-")
-
-
 def create_org(session: Session, name: str) -> OrgRead:
-    slug = _slugify(name)
+    slug = slugify_name(name)
     org = Organization(name=name, slug=slug)
     session.add(org)
     try:

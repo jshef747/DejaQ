@@ -1,21 +1,37 @@
 import logging
 import time
+from functools import lru_cache
 
 import anthropic
 
 from app.schemas.chat import ExternalLLMRequest, ExternalLLMResponse
-from app.services.llm_providers import redact_api_key
+from app.services.llm_providers.common import elapsed_ms, ensure_query, redact_api_key
 from app.utils.exceptions import ExternalLLMAuthError, ExternalLLMError, ExternalLLMTimeoutError
 
 logger = logging.getLogger("dejaq.services.llm_providers.anthropic")
 
 
+@lru_cache(maxsize=32)
+def _get_client(api_key: str) -> anthropic.AsyncAnthropic:
+    return anthropic.AsyncAnthropic(api_key=api_key)
+
+
+_client_factory = anthropic.AsyncAnthropic
+
+
+def _clear_client_cache_if_factory_changed() -> None:
+    global _client_factory
+    if _client_factory is not anthropic.AsyncAnthropic:
+        _get_client.cache_clear()
+        _client_factory = anthropic.AsyncAnthropic
+
+
 class AnthropicProviderClient:
     async def generate_response(self, request: ExternalLLMRequest, api_key: str) -> ExternalLLMResponse:
-        if not request.query:
-            raise ValueError("ExternalLLMRequest.query must not be empty.")
+        ensure_query(request)
 
-        client = anthropic.AsyncAnthropic(api_key=api_key)
+        _clear_client_cache_if_factory_changed()
+        client = _get_client(api_key)
         messages = [msg for msg in request.history if msg["role"] in {"user", "assistant"}]
         messages.append({"role": "user", "content": request.query})
 
@@ -42,7 +58,7 @@ class AnthropicProviderClient:
             logger.error("Anthropic API error: %s", msg)
             raise ExternalLLMError(f"Provider error: {msg}") from exc
 
-        latency_ms = (time.perf_counter() - start) * 1000
+        latency_ms = elapsed_ms(start)
         text = response.content[0].text if response.content else ""
         logger.debug(
             "Anthropic request successful (model=%s, latency=%.2f ms, prompt_tokens=%d, completion_tokens=%d)",

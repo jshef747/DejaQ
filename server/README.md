@@ -1,232 +1,125 @@
-# DejaQ - AI Middleware & Organizational Memory
+# DejaQ Server
 
-**DejaQ** is an intelligent middleware layer designed to optimize LLM interactions. It intelligently routes queries between a local semantic cache, lightweight local models (Llama/Qwen), and high-performance external APIs (GPT-4/Gemini) to minimize latency and cost.
+FastAPI backend for the DejaQ gateway, semantic cache, management API, CLI/TUI, and background cache tasks.
 
-## Quick Start
-
-### 1. Prerequisites
-
-- **Python 3.13+**
-- **uv** (Fast Python package manager)
-  - **Mac/Linux:** `curl -LsSf https://astral.sh/uv/install.sh | sh`
-  - **Windows:** `powershell -c "irm https://astral.sh/uv/install.ps1 | iex"`
-- **Redis** (message broker for background task queue)
-
-#### Installing Redis
-
-**Mac (Homebrew)**
-```bash
-brew install redis
-brew services start redis
-```
-
-**Linux (Ubuntu/Debian)**
-```bash
-sudo apt update && sudo apt install redis-server
-sudo systemctl start redis
-sudo systemctl enable redis
-```
-
-**Windows**
-Redis does not run natively on Windows. Choose one of these options:
-- **WSL2 (Recommended):** Install WSL2, then follow the Linux instructions above
-- **Memurai:** Native Windows Redis alternative — download from [memurai.com](https://www.memurai.com/)
-
----
-
-### 2. Installation & Hardware Optimization
-
-Clone the repository and navigate to the server directory:
+## Setup
 
 ```bash
-git clone <your-repo-url>
-cd dejaq/server
+cd server
+uv sync
+uv run alembic upgrade head
+cp .env.example .env
 ```
 
-#### Enable GPU Acceleration
+For Apple Silicon local model acceleration:
 
-**Mac (Apple Silicon M1/M2/M3/M4)** — Metal acceleration
 ```bash
 CMAKE_ARGS="-DLLAMA_METAL=on" uv sync
 ```
 
-**Windows (NVIDIA GPU)** — CUDA acceleration
-*Requires [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads)*
-```powershell
-$env:CMAKE_ARGS = "-DLLAMA_CUBLAS=on"
-uv sync
-```
+For NVIDIA CUDA builds:
 
-**Linux (NVIDIA GPU)** — CUDA acceleration
-*Requires [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads)*
 ```bash
 CMAKE_ARGS="-DLLAMA_CUBLAS=on" uv sync
 ```
 
-**CPU Only (any platform)**
-```bash
-uv sync
-```
+## Run
 
----
-
-### 3. Running the Server
-
-From the repository root, the startup script can configure and launch the stack for `in-process`, `self-hosted`, or `cloud` deployment modes:
+Recommended local stack:
 
 ```bash
-./server/scripts/start.sh
-./server/scripts/start.sh --mode=in-process
-./server/scripts/start.sh --mode=self-hosted --ollama-url=http://<lan-host>:11434
-./server/scripts/start.sh --mode=cloud --ollama-url=https://<cloud-ollama-endpoint>
-```
-
-DejaQ requires three processes: Redis, the FastAPI server, and a Celery worker.
-
-On the first run, the system will automatically download the necessary model files (~1GB).
-
-**Mac / Linux**
-```bash
-# Terminal 1: Redis (skip if already running as a service)
 redis-server
-
-# Terminal 2: FastAPI server
 uv run uvicorn app.main:app --reload
-
-# Terminal 3: Celery background worker
 uv run celery -A app.celery_app:celery_app worker --queues=background --pool=solo --loglevel=info
 ```
 
-**Windows**
-```powershell
-# Terminal 1: Redis (via WSL2 or Memurai)
-redis-server
-
-# Terminal 2: FastAPI server
-uv run uvicorn app.main:app --reload
-
-# Terminal 3: Celery background worker
-uv run celery -A app.celery_app:celery_app worker --queues=background --pool=solo --loglevel=info
-```
-
-**Server:** [http://127.0.0.1:8000](http://127.0.0.1:8000)
-**Demo UI:** Open `openai-compat-demo.html` in your browser
-
-#### Scaling with Multiple Workers
-
-Each worker processes tasks sequentially (`--pool=solo`). To handle multiple users in parallel, run additional worker instances — each in its own terminal:
-
-```bash
-# Worker 1 (already running from step above)
-uv run celery -A app.celery_app:celery_app worker --queues=background --pool=solo --loglevel=info --hostname=worker1@%h
-
-# Worker 2 (new terminal)
-uv run celery -A app.celery_app:celery_app worker --queues=background --pool=solo --loglevel=info --hostname=worker2@%h
-```
-
-Celery distributes tasks across workers automatically via Redis. Each worker loads its own copy of the Phi-3.5 model (~2.3GB RAM), so scale based on available memory.
-
-> **Why `--pool=solo`?** The `prefork` pool uses `fork()` which crashes on macOS with Metal GPU acceleration (SIGABRT). The `solo` pool runs in-process and is compatible with all platforms (Mac, Windows, Linux). Parallelism is achieved by running multiple worker instances instead.
-
-#### Running Without Redis (Fallback Mode)
-
-For quick local development without Redis, you can disable Celery. Background tasks will run in-process (blocking for WebSocket):
+Single-process local fallback:
 
 ```bash
 DEJAQ_USE_CELERY=false uv run uvicorn app.main:app --reload
 ```
 
----
+The startup helper can write deployment-mode env choices:
 
-## Architecture
-
-```
-User Request
-     |
-     v
-┌─────────────────────────────────────────────────────┐
-│  FastAPI (uvicorn)                                  │
-│  ├── Context Enricher (Qwen 0.5B)                  │
-│  ├── Normalizer (Qwen 0.5B)                        │
-│  ├── Cache Check (ChromaDB, cosine ≤ 0.15)         │
-│  ├── Classifier (NVIDIA DeBERTa)                   │
-│  ├── LLM Router (easy→Llama 1B / hard→external)    │
-│  └── Context Adjuster (adjust tone via Qwen 1.5B)  │
-└───────────────────┬─────────────────────────────────┘
-                    │ .delay() (fire-and-forget)
-                    v
-              ┌───────────┐
-              │   Redis    │  (message broker)
-              └─────┬─────┘
-                    v
-┌─────────────────────────────────────────────────────┐
-│  Celery Worker (background queue)                   │
-│  ├── Generalize response (Phi-3.5 Mini)             │
-│  └── Store in ChromaDB semantic cache               │
-└─────────────────────────────────────────────────────┘
+```bash
+./scripts/start.sh --mode=in-process
+./scripts/start.sh --mode=self-hosted --ollama-url=http://127.0.0.1:11434
+./scripts/start.sh --mode=cloud --ollama-url=https://<ollama-endpoint>
 ```
 
-### File Structure
+## API Surfaces
 
+| Method | Path | Auth | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/health` | none | Health and dependency status |
+| `POST` | `/v1/chat/completions` | DejaQ org API key | OpenAI-compatible chat gateway |
+| `POST` | `/v1/feedback` | DejaQ org API key | Positive/negative cache feedback |
+| `GET/POST/...` | `/admin/v1/*` | Supabase JWT | Management API for dashboard and operators |
+
+Hard-query external provider calls use encrypted per-org credentials stored through `/admin/v1/orgs/{org}/credentials/{provider}` or `dejaq-admin credential`. There is no runtime platform `GEMINI_API_KEY` fallback.
+
+## Key Environment Variables
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SUPABASE_URL` | empty | Supabase project URL for management JWT verification |
+| `SUPABASE_ANON_KEY` | empty | Supabase anon/public key |
+| `SUPABASE_SERVICE_ROLE_KEY` | empty | Demo seed only |
+| `DEJAQ_CREDENTIAL_ENCRYPTION_KEY` | empty | Fernet key for org provider credentials |
+| `DEJAQ_REDIS_URL` | `redis://localhost:6379/0` | Celery broker/result backend |
+| `DEJAQ_USE_CELERY` | `true` | Run background storage in Celery or in process |
+| `DEJAQ_KEY_CACHE_TTL` | `60` | Org API key lookup cache TTL |
+| `DEJAQ_STATS_DB` | `dejaq_stats.db` | SQLite request log path |
+| `DEJAQ_LOG_LEVEL` | `INFO` | App log level |
+| `DEJAQ_LOG_SHOW_CONTENT` | `false` | Include prompt/response content in request logs |
+| `DEJAQ_EVICTION_FLOOR` | `-5.0` | Cache score floor for eviction |
+| `DEJAQ_EXTERNAL_MODEL` | `gemini-2.5-flash` | Default hard-query model when org config has no override |
+| `DEJAQ_ROUTING_THRESHOLD` | `0.3` | Default easy/hard threshold |
+| `DEJAQ_CHROMA_HOST` | `127.0.0.1` | ChromaDB host |
+| `DEJAQ_CHROMA_PORT` | `8001` | ChromaDB port |
+| `DEJAQ_OLLAMA_URL` | `http://127.0.0.1:11434` | Shared Ollama endpoint |
+| `DEJAQ_*_BACKEND` | `in_process` | `in_process` or `ollama` per model role |
+| `DEJAQ_*_MODEL_NAME` | role-specific | Logical model labels emitted in traces/stats |
+
+See `.env.example` for the complete editable template.
+
+## CLI
+
+```bash
+uv run dejaq-admin --help
+uv run dejaq-admin seed demo
+uv run dejaq-admin-tui
 ```
+
+The CLI manages orgs, departments, API keys, credentials, stats, feedback, and the demo workspace. Provider keys should be supplied through stdin or `DEJAQ_SEED_PROVIDER_KEY`, not command-line args.
+
+## Architecture Map
+
+```text
 app/
-├── main.py              # FastAPI init, CORS, health check
-├── config.py            # Centralized settings (Redis URL, feature flags)
-├── celery_app.py        # Celery configuration (broker, queues, serialization)
-├── routers/chat.py      # All endpoints (HTTP + WebSocket) + conversation CRUD
-├── tasks/
-│   └── cache_tasks.py   # Celery task: generalize + store in cache
-├── services/
-│   ├── model_loader.py  # ModelManager singleton (lazy model loading)
-│   ├── normalizer.py    # Query normalization (Qwen 0.5B)
-│   ├── llm_router.py    # Routes easy→local Llama, hard→external API
-│   ├── context_adjuster.py  # generalize() + adjust() for tone handling
-│   ├── context_enricher.py  # Rewrites follow-up queries into standalone
-│   ├── cache_filter.py      # Heuristic filter for non-cacheable prompts
-│   ├── classifier.py        # DeBERTa complexity classifier
-│   ├── memory_chromaDB.py   # ChromaDB semantic cache
-│   └── request_logger.py    # Async SQLite request log
-├── schemas/
-│   ├── chat.py          # ExternalLLMRequest/Response only
-│   └── openai_compat.py # OpenAI-compatible request/response schemas
-└── utils/logger.py      # Centralized logging config
+  main.py                 FastAPI app and route registration
+  config.py               Environment-backed settings
+  routers/openai_compat.py /v1/chat/completions gateway
+  routers/feedback.py     /v1/feedback gateway feedback
+  routers/admin/          /admin/v1/* management API
+  db/                     SQLAlchemy repos, models, migrations-backed schema
+  services/               Pipeline, provider, auth, stats, feedback logic
+  tasks/cache_tasks.py    Celery generalize-and-store task
+  schemas/                Pydantic request/response contracts
+cli/                      Rich/Textual admin tools
 ```
 
----
+## Tests
 
-## API Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/health` | Health check (includes Celery/Redis status) |
-| `POST` | `/normalize` | Normalize a query |
-| `POST` | `/chat` | Full chat pipeline (normalize → cache check → LLM → respond) |
-| `POST` | `/generalize` | Test endpoint: strip tone from an answer |
-| `GET` | `/cache/entries` | List all cached entries with metadata |
-| `DELETE` | `/cache/entries/{id}` | Delete a single cache entry |
-| `GET` | `/conversations` | List all conversations (newest first) |
-| `GET` | `/conversations/{id}/messages` | Get conversation message history |
-| `DELETE` | `/conversations/{id}` | Delete a conversation |
-| `WS` | `/ws/chat` | Real-time WebSocket chat |
-
----
-
-## Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DEJAQ_REDIS_URL` | `redis://localhost:6379/0` | Redis connection URL for Celery broker and result backend |
-| `DEJAQ_USE_CELERY` | `true` | Set to `false` to disable Celery (tasks run in-process) |
-
----
-
-## Models
-
-| Role | Model | Quantization | Purpose |
-|------|-------|--------------|---------|
-| Normalizer | Qwen 2.5-0.5B-Instruct | Q4_K_M | Extract core topic from query |
-| Context Enricher | Qwen 2.5-0.5B-Instruct | Q4_K_M | Rewrite follow-ups into standalone queries |
-| Context Adjuster | Qwen 2.5-1.5B-Instruct | Q4_K_M | Match tone of cached responses to user style |
-| Generalizer | Phi-3.5-Mini-Instruct | Q4_K_M | Strip tone from responses for cache storage |
-| Local LLM | Llama 3.2-1B-Instruct | Q8_0 | Generate responses for "easy" queries |
-| Classifier | NVIDIA DeBERTa-v3-base | Full | Route queries by complexity (easy/hard) |
+```bash
+uv run pytest --collect-only -q
+uv run pytest -q -m no_model
+uv run pytest -q \
+  tests/test_admin_api_resources.py \
+  tests/test_feedback_service.py \
+  tests/test_openai_compat_smoke.py \
+  tests/test_provider_clients_contract.py \
+  tests/test_provider_clients_logging.py \
+  tests/test_stats_service.py \
+  tests/test_memory_chromadb.py
+```

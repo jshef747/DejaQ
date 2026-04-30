@@ -18,8 +18,5 @@ class PipelineTrace:
         finally:
             self.steps[name] = int((time.perf_counter() - start) * 1000)
 
-    def set_step(self, name: str, latency_ms: int) -> None:
-        self.steps[name] = latency_ms
-
     def summary(self) -> str:
         return " ".join(f"{name}:{latency}ms" for name, latency in self.steps.items())

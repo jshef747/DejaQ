@@ -20,16 +20,11 @@ def list_feedback(
     ctx: ManagementAuthContext = Depends(require_management_auth),
 ):
     accessible_slugs = None if ctx.is_system else {o.slug for o in ctx.accessible_orgs}
-    effective_org = org
     if not ctx.is_system and org and (accessible_slugs is not None and org not in accessible_slugs):
         raise HTTPException(status_code=403, detail=f"Access denied to organization '{org}'.")
-    if not ctx.is_system and org is None:
-        # No filter: caller can only see their own orgs; pass None to let list_feedback filter via org kwarg
-        # We'll pass individual org requests or rely on service returning all then filter
-        pass
 
     return feedback_service.list_feedback(
-        org=effective_org,
+        org=org,
         department=department,
         response_id=response_id,
         limit=limit,

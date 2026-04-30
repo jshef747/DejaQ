@@ -1,24 +1,17 @@
-import re
-
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models.department import Department
 from app.db.models.org import Organization
+from app.db.slug import slugify_name
 from app.schemas.department import DeptRead
-
-
-def _slugify(name: str) -> str:
-    slug = name.lower().strip()
-    slug = re.sub(r"[^a-z0-9]+", "-", slug)
-    return slug.strip("-")
 
 
 def create_dept(session: Session, org_slug: str, name: str) -> DeptRead:
     org = session.query(Organization).filter_by(slug=org_slug).first()
     if org is None:
         raise ValueError(f"Organization '{org_slug}' not found.")
-    dept_slug = _slugify(name)
+    dept_slug = slugify_name(name)
     cache_namespace = f"{org_slug}__{dept_slug}"
     dept = Department(
         org_id=org.id,

@@ -1,16 +1,15 @@
-import logging
+from __future__ import annotations
+
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Literal
-
-logger = logging.getLogger("dejaq.dependencies.management_auth")
-
 
 @dataclass(frozen=True)
 class OrgRef:
     id: int
     name: str
     slug: str
-    created_at: object  # datetime, kept as object to avoid circular import issues
+    created_at: datetime
 
 
 @dataclass(frozen=True)

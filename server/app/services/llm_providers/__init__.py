@@ -1,6 +1,7 @@
 from typing import Protocol
 
 from app.schemas.chat import ExternalLLMRequest, ExternalLLMResponse
+from app.services.llm_providers.common import redact_api_key
 
 LIVE_PROVIDERS = {"google", "openai", "anthropic"}
 
@@ -12,10 +13,3 @@ class LLMProviderClient(Protocol):
         api_key: str,
     ) -> ExternalLLMResponse:
         ...
-
-
-def redact_api_key(message: object, api_key: str) -> str:
-    text = str(message)
-    if api_key:
-        return text.replace(api_key, "<redacted>")
-    return text

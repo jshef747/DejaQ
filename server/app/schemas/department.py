@@ -3,11 +3,6 @@ from datetime import datetime
 from pydantic import BaseModel
 
 
-class DeptCreate(BaseModel):
-    org_slug: str
-    name: str
-
-
 class DeptRead(BaseModel):
     id: int
     org_id: int

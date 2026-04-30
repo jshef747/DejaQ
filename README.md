@@ -1,159 +1,99 @@
 # DejaQ
 
-DejaQ is an AI middleware layer that sits between users and language models, with the goal of making enterprise-style chat systems faster, cheaper, and smarter over time.
+DejaQ is an LLM gateway that reduces cost and latency with semantic caching, local routing, and organization-scoped provider credentials. Existing clients can use the OpenAI-compatible API while operators manage organizations, API keys, credentials, stats, and feedback through the management API, CLI, TUI, or dashboard.
 
-Instead of sending every prompt directly to an expensive model, DejaQ enriches the request with context, normalizes the query, checks a semantic cache, routes simple work to local models, and only escalates harder requests to external providers when needed.
-
-## Why DejaQ
-
-- Reduce API cost by answering repeated or simple questions locally
-- Improve latency with semantic cache hits and lightweight routing
-- Build shared organizational memory across teams and departments
-- Stay compatible with existing clients through an OpenAI-style API
-- Experiment safely with normalization and enrichment strategies before promoting them into production
-
-## How It Works
+## Runtime Flow
 
 ```text
-Incoming request
-  -> Context enrichment
-  -> Query normalization
-  -> Semantic cache lookup
-     -> hit: adjust response tone and return
-     -> miss: classify difficulty
+OpenAI-compatible request
+  -> context enrichment
+  -> normalization
+  -> ChromaDB semantic cache lookup
+     -> hit: context adjuster re-tones cached answer
+     -> miss: difficulty classifier
         -> easy: local model
-        -> hard: external LLM
-  -> Background feedback + cache storage
+        -> hard: org provider credential
+  -> response
+  -> background generalize + store when cacheable
 ```
-
-Core building blocks in the current codebase include:
-
-- `FastAPI` for the API layer
-- `ChromaDB` for semantic memory
-- `Celery` + `Redis` for background processing
-- Local GGUF models via `llama-cpp-python`
-- OpenAI-compatible chat completions endpoints
-- Evaluation harnesses for normalizer and context enricher iteration
 
 ## Repository Structure
 
 ```text
-server/              Main FastAPI application and middleware pipeline
-normalization-test/  Standalone harness for query-normalizer experiments
-enricher-test/       Standalone harness for context-enricher experiments
-docs/                Product and API notes
-openspec/            Specs, proposals, and archived change records
+server/              FastAPI app, gateway, management API, CLI/TUI, Celery tasks
+frontend/            Next.js dashboard using Supabase auth and /admin/v1/*
+normalization-test/  Offline query-normalizer eval harness
+enricher-test/       Offline context-enricher eval harness
+adjuster-test/       Offline context-adjuster eval harness
+docs/                Current product/API notes
+openspec/            Archived specs and proposal history
 ```
 
 ## Quick Start
 
-### 1. Prerequisites
-
-- Python `3.13+`
-- [`uv`](https://docs.astral.sh/uv/)
-- `Redis` for background jobs
-
-### 2. Install server dependencies
-
 ```bash
 cd server
 uv sync
+uv run alembic upgrade head
+redis-server
+uv run uvicorn app.main:app --reload
 ```
 
-For GPU-backed local inference, the project already documents platform-specific install flags in [server/README.md](/Users/jonathansheffer/Desktop/Coding/DejaQ/server/README.md).
-
-### 3. Run the app
-
-Start these processes from `server/`:
+Start a worker in a second `server/` terminal:
 
 ```bash
-# Terminal 1
-redis-server
-
-# Terminal 2
-uv run uvicorn app.main:app --reload
-
-# Terminal 3
 uv run celery -A app.celery_app:celery_app worker --queues=background --pool=solo --loglevel=info
 ```
 
-Then open:
-
-- API health: `http://127.0.0.1:8000/health`
-- OpenAI-compatible base URL: `http://127.0.0.1:8000/v1`
-- Demo UI: `server/openai-compat-demo.html`
-
-If you want a lighter local setup, the server can also run without Celery:
+For local development without Redis:
 
 ```bash
 DEJAQ_USE_CELERY=false uv run uvicorn app.main:app --reload
 ```
 
-## OpenAI-Compatible API
-
-DejaQ exposes a `POST /v1/chat/completions` endpoint so existing OpenAI SDK clients can point at DejaQ with minimal change.
-
-Python example:
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="http://127.0.0.1:8000/v1",
-    api_key="any-string",
-)
-
-response = client.chat.completions.create(
-    model="gpt-4o",
-    messages=[{"role": "user", "content": "Why is the sky blue?"}],
-)
-
-print(response.choices[0].message.content)
-```
-
-More details live in [docs/openai-compat-api.md](/Users/jonathansheffer/Desktop/Coding/DejaQ/docs/openai-compat-api.md).
-
-## Experimentation Harnesses
-
-DejaQ includes two separate offline evaluation projects for improving pipeline quality without destabilizing the main server.
-
-### `normalization-test/`
-
-Used to compare query-normalizer configurations against fixed groups of semantically equivalent prompts.
+## Frontend
 
 ```bash
-cd normalization-test
-uv sync
-uv run python -m harness.runner
+cd frontend
+npm install
+cp .env.local.example .env.local
+npm run dev
 ```
 
-Results are written to timestamped `reports/` folders. See [normalization-test/README.md](/Users/jonathansheffer/Desktop/Coding/DejaQ/normalization-test/README.md).
+The dashboard runs at `http://localhost:3000` and talks to the backend through `NEXT_PUBLIC_API_BASE_URL`.
 
-### `enricher-test/`
+## Main Interfaces
 
-Used to benchmark context-enricher variants across conversation datasets.
+- `GET /health`
+- `POST /v1/chat/completions` — OpenAI-compatible gateway, authenticated by DejaQ org API key
+- `POST /v1/feedback` — cache feedback, authenticated by DejaQ org API key
+- `/admin/v1/*` — management API, authenticated by Supabase JWT
+- `dejaq-admin` — org, department, key, credential, stats, feedback, and demo seed CLI
+- `dejaq-admin-tui` — terminal dashboard for operational workflows
+
+See [docs/openai-compat-api.md](/Users/jonathansheffer/Desktop/Coding/DejaQ/docs/openai-compat-api.md), [docs/cli-instructions.md](/Users/jonathansheffer/Desktop/Coding/DejaQ/docs/cli-instructions.md), [server/README.md](/Users/jonathansheffer/Desktop/Coding/DejaQ/server/README.md), and [frontend/README.md](/Users/jonathansheffer/Desktop/Coding/DejaQ/frontend/README.md).
+
+## Demo Flow
 
 ```bash
-cd enricher-test
-uv sync
-uv run python -m harness.runner
+cd server
+uv run dejaq-admin seed demo
+echo "$OPENAI_API_KEY" | uv run dejaq-admin seed demo --provider-key-stdin openai
 ```
 
-## Documentation
+Demo dashboard account:
 
-- [server/README.md](/Users/jonathansheffer/Desktop/Coding/DejaQ/server/README.md) - server setup, architecture, models, endpoints
-- [docs/openai-compat-api.md](/Users/jonathansheffer/Desktop/Coding/DejaQ/docs/openai-compat-api.md) - OpenAI-compatible API behavior
-- [docs/services/normalizer.md](/Users/jonathansheffer/Desktop/Coding/DejaQ/docs/services/normalizer.md) - normalizer notes
-- [docs/services/context-enricher.md](/Users/jonathansheffer/Desktop/Coding/DejaQ/docs/services/context-enricher.md) - context enricher notes
-- [server/docs/project_overview.md](/Users/jonathansheffer/Desktop/Coding/DejaQ/server/docs/project_overview.md) - product direction and architecture rationale
+- Email: `demo@dejaq.local`
+- Password: `demo1234`
 
-## Current Focus
+## Verification
 
-The repo already includes:
+```bash
+cd server
+uv run pytest --collect-only -q
+uv run pytest -q -m no_model
 
-- A FastAPI middleware server with health checks, chat routing, feedback endpoints, and OpenAI-compatible chat completions
-- Department and organization data models with Alembic migrations
-- Background caching flow with Celery
-- Local experimentation loops for improving normalization and enrichment quality
-
-The broader product vision is to turn repeated organizational questions into reusable memory, while preserving a familiar LLM interface for users and client apps.
+cd ../frontend
+npx tsc --noEmit --pretty false
+npm run build
+```

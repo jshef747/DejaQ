@@ -68,6 +68,9 @@ export default function SettingsClient({
   const [testBusy, setTestBusy] = useState(false);
   const [testResult, setTestResult] = useState<TestResult>(null);
 
+  const configKey = JSON.stringify(initialConfig);
+  const credsKey = JSON.stringify(initialCredentials);
+
   useEffect(() => {
     const nextProvider = providerForExternalModel(initialConfig.external_model);
     setProvider(nextProvider);
@@ -75,7 +78,8 @@ export default function SettingsClient({
     setThreshold(initialConfig.routing_threshold ?? 0.75);
     setCredentials(initialCredentials);
     setApiKey("");
-  }, [initialConfig, initialCredentials]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configKey, credsKey]);
 
   const currentCredential = credentials.find((item) => item.provider === provider);
   const models = useMemo(() => {

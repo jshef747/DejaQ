@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { apiFetch } from "@/lib/api";
 import type { ApiKeyCreated, ApiKeyItem } from "@/lib/types";
+import { responseErrorMessage } from "./errors";
 
 export async function listKeys(orgSlug: string): Promise<ApiKeyItem[]> {
   const res = await apiFetch(`/admin/v1/orgs/${encodeURIComponent(orgSlug)}/keys`);
@@ -27,13 +28,7 @@ export async function generateKey(
   }
 
   if (!res.ok) {
-    let msg = `Generate failed (${res.status})`;
-    try {
-      const j = await res.json();
-      if (j?.detail) msg = j.detail;
-      else if (j?.message) msg = j.message;
-    } catch {}
-    return { ok: false, error: msg };
+    return { ok: false, error: await responseErrorMessage(res, `Generate failed (${res.status})`) };
   }
 
   const key = (await res.json()) as ApiKeyCreated;
@@ -52,13 +47,7 @@ export async function revokeKey(
   }
 
   if (!res.ok) {
-    let msg = `Revoke failed (${res.status})`;
-    try {
-      const j = await res.json();
-      if (j?.detail) msg = j.detail;
-      else if (j?.message) msg = j.message;
-    } catch {}
-    return { ok: false, error: msg };
+    return { ok: false, error: await responseErrorMessage(res, `Revoke failed (${res.status})`) };
   }
 
   revalidatePath("/dashboard/keys");

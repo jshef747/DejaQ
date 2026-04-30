@@ -1,241 +1,87 @@
-# DejaQ Admin CLI — Instructions
+# DejaQ Admin CLI
 
-All commands run from the `server/` directory using `uv run`.
+Run all commands from `server/` with `uv run`.
 
-## Prerequisites
+## Setup
 
 ```bash
 cd server
-uv sync          # install dependencies
-alembic upgrade head   # ensure database schema is up to date
+uv sync
+uv run alembic upgrade head
 ```
 
----
-
-## Admin CLI (`dejaq-admin`)
-
-The admin CLI manages orgs, departments, and API keys stored in `dejaq.db`.
-
-### `org` — Manage organizations
-
----
-
-#### `org create`
-
-Create a new organization. The slug is auto-derived from the name.
+## Organizations
 
 ```bash
 uv run dejaq-admin org create --name "Acme Corp"
-```
-
-Output: `id`, `name`, `slug`
-
----
-
-#### `org list`
-
-List all organizations.
-
-```bash
 uv run dejaq-admin org list
+uv run dejaq-admin org delete --slug acme-corp
 ```
 
-Output: table of `ID`, `Name`, `Slug`, `Created`
+Org slugs are derived from names with the shared slug helper used by the management API.
 
----
-
-#### `org delete`
-
-Delete an organization and all its departments (cascade). Prompts for confirmation if departments exist.
+## Departments
 
 ```bash
-uv run dejaq-admin org delete --slug "acme-corp"
-```
-
-Flag | Description
------|------------
-`--slug` | Slug of the org to delete (required)
-
----
-
-### `dept` — Manage departments
-
-Each department gets a `cache_namespace` in the format `{org_slug}__{dept_slug}`. This is the ChromaDB collection name used for cache isolation.
-
----
-
-#### `dept create`
-
-Create a department under an org.
-
-```bash
-uv run dejaq-admin dept create --org "acme-corp" --name "Customer Support"
-```
-
-Flag | Description
------|------------
-`--org` | Parent org slug (required)
-`--name` | Display name for the department (required)
-
-Output: `id`, `name`, `slug`, `cache_namespace`
-
----
-
-#### `dept list`
-
-List departments. Without `--org`, lists all departments across all orgs.
-
-```bash
-# All departments across all orgs
+uv run dejaq-admin dept create --org acme-corp --name "Customer Support"
 uv run dejaq-admin dept list
-
-# Departments under a specific org
-uv run dejaq-admin dept list --org "acme-corp"
+uv run dejaq-admin dept list --org acme-corp
+uv run dejaq-admin dept delete --org acme-corp --slug customer-support
 ```
 
-Flag | Description
------|------------
-`--org` | Filter by org slug (optional)
+Departments isolate cache namespaces with `{org_slug}__{dept_slug}`.
 
----
-
-#### `dept delete`
-
-Delete a department by slug. Prompts for confirmation.
+## Gateway API Keys
 
 ```bash
-uv run dejaq-admin dept delete --org "acme-corp" --slug "customer-support"
-```
-
-Flag | Description
------|------------
-`--org` | Parent org slug (required)
-`--slug` | Department slug to delete (required)
-
----
-
-### `key` — Manage API keys
-
-Each org gets one active API key at a time. Chatbots send the key as a Bearer token. Keys are long-lived — revoke and regenerate to rotate.
-
----
-
-#### `key generate`
-
-Generate an API key for an org. Fails if the org already has an active key unless `--force` is passed.
-
-```bash
-# First key
-uv run dejaq-admin key generate --org "acme-corp"
-
-# Rotate — revokes the existing key and issues a new one
-uv run dejaq-admin key generate --org "acme-corp" --force
-```
-
-Flag | Description
------|------------
-`--org` | Org slug (required)
-`--force` | Revoke existing active key and generate a new one
-
-Output: `id`, `org`, full token value, `created_at`
-
-> Copy the token immediately — it is only shown once at generation time (though it is stored in plaintext in `dejaq.db`).
-
----
-
-#### `key list`
-
-List all keys (active and revoked) for an org.
-
-```bash
-uv run dejaq-admin key list --org "acme-corp"
-```
-
-Flag | Description
------|------------
-`--org` | Org slug (required)
-
-Output: table of `ID`, truncated token, `Created`, `Revoked` (`—` if still active)
-
----
-
-#### `key revoke`
-
-Revoke a key by its numeric ID. The key remains in the database for audit purposes but stops being accepted within one TTL window (default 60 seconds).
-
-```bash
+uv run dejaq-admin key generate --org acme-corp
+uv run dejaq-admin key generate --org acme-corp --force
+uv run dejaq-admin key list --org acme-corp
 uv run dejaq-admin key revoke --id 3
 ```
 
-Flag | Description
------|------------
-`--id` | Numeric ID of the key to revoke (required)
+Keys authenticate `/v1/chat/completions` and `/v1/feedback`. Revoked keys may remain accepted until `DEJAQ_KEY_CACHE_TTL` expires.
 
----
+## Provider Credentials
 
-## Typical end-to-end setup
+Provider credentials are encrypted per org with `DEJAQ_CREDENTIAL_ENCRYPTION_KEY`.
 
 ```bash
-# 1. Create an org
-uv run dejaq-admin org create --name "Acme Corp"
-
-# 2. Create departments (optional — for cache isolation between teams)
-uv run dejaq-admin dept create --org "acme-corp" --name "Customer Support"
-uv run dejaq-admin dept create --org "acme-corp" --name "Engineering"
-
-# 3. Generate the org's API key
-uv run dejaq-admin key generate --org "acme-corp"
-# → token: <paste this into your chatbot config>
-
-# 4. Point your chatbot at DejaQ
-#    Authorization: Bearer <token>
-#    X-DejaQ-Department: customer-support   ← optional, for dept isolation
+uv run dejaq-admin credential list --org acme-corp
+echo "$OPENAI_API_KEY" | uv run dejaq-admin credential set --org acme-corp --provider openai --stdin
+uv run dejaq-admin credential delete --org acme-corp --provider openai
 ```
 
----
+Supported live providers are `google`, `openai`, and `anthropic`. Runtime hard-query routing uses these stored org credentials; there is no platform `GEMINI_API_KEY` fallback.
 
-## TUI — Interactive Terminal Interface (`dejaq-admin-tui`)
-
-The TUI is a fullscreen interactive alternative to the CLI. It lets you browse orgs and departments visually and create or delete them without typing flags.
-
-### Launch
+## Demo Seed
 
 ```bash
-cd server
+uv run dejaq-admin seed demo
+echo "$OPENAI_API_KEY" | uv run dejaq-admin seed demo --provider-key-stdin openai
+DEJAQ_SEED_PROVIDER_KEY=openai:<key> uv run dejaq-admin seed demo
+```
+
+The demo seed creates the demo org, departments, API key, sample stats, and Supabase demo user when `SUPABASE_SERVICE_ROLE_KEY` is configured.
+
+Demo login:
+
+- `demo@dejaq.local`
+- `demo1234`
+
+## Stats And Feedback
+
+```bash
+uv run dejaq-admin stats
+uv run dejaq-admin feedback list --org acme-corp
+```
+
+Stats read `DEJAQ_STATS_DB` and mirror the dashboard/admin API aggregate shapes.
+
+## TUI
+
+```bash
 uv run dejaq-admin-tui
 ```
 
-### Layout
-
-```
-┌─────────────────────────────────────────────────────┐
-│ Header                                    [clock]   │
-├──────────────────┬──────────────────────────────────┤
-│  Organizations   │  Departments — <selected org>    │
-│  ─────────────   │  ┌────┬──────┬──────┬─────────┐  │
-│  Acme Corp       │  │ ID │ Name │ Slug │ NS      │  │
-│  Beta Inc        │  │ …  │ …    │ …    │ …       │  │
-│  …               │  └────┴──────┴──────┴─────────┘  │
-├──────────────────┴──────────────────────────────────┤
-│ Footer: n=New  d=Delete  q=Quit                     │
-└─────────────────────────────────────────────────────┘
-```
-
-### Keyboard shortcuts
-
-Key | Action
-----|-------
-`↑` / `↓` | Navigate org list or department table
-`n` | **New** — opens a dialog to create an org (if no org selected) or a department (if an org is selected)
-`d` | **Delete** — deletes the focused org or department
-`q` | Quit
-
-### Notes
-
-- Selecting an org in the left sidebar loads its departments in the right panel.
-- Pressing `n` with no org selected opens the **New Organization** dialog.
-- Pressing `n` with an org selected opens the **New Department** dialog scoped to that org.
-- Pressing `d` with a department row focused deletes that department.
-- Pressing `d` with an org highlighted (and no department focused) deletes the org and all its departments.
-- Status messages appear at the bottom of the screen after each action.
-- The TUI does not manage API keys — use the CLI `key` commands for that.
+The Textual TUI provides keyboard-driven org, department, API-key, credential, stats, and feedback workflows.

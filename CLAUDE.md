@@ -74,8 +74,8 @@ The `/admin/v1/*` management API requires a Supabase project for JWT authenticat
    ```
    To seed the demo org's external LLM credential without putting the key on argv:
    ```bash
-   echo $GEMINI_API_KEY | uv run dejaq-admin seed demo --provider-key-stdin google
-   DEJAQ_SEED_PROVIDER_KEY=google:$GEMINI_API_KEY uv run dejaq-admin seed demo
+   echo "$OPENAI_API_KEY" | uv run dejaq-admin seed demo --provider-key-stdin openai
+   DEJAQ_SEED_PROVIDER_KEY=openai:<key> uv run dejaq-admin seed demo
    ```
    Demo credentials: `demo@dejaq.local` / `demo1234`
 
@@ -91,11 +91,13 @@ When adding a new `DEJAQ_*_BACKEND` variable, update the env examples in all thr
 | `SUPABASE_SERVICE_ROLE_KEY` | `` | Supabase service-role key — only used by `dejaq-admin seed demo` |
 | `DEJAQ_REDIS_URL` | `redis://localhost:6379/0` | Redis connection URL (broker + result backend) |
 | `DEJAQ_USE_CELERY` | `true` | Set to `false` to disable Celery and run tasks in-process |
+| `DEJAQ_KEY_CACHE_TTL` | `60` | Org API-key lookup cache TTL in seconds |
 | `DEJAQ_STATS_DB` | `dejaq_stats.db` | Path to SQLite request log (used by `dejaq-admin stats`) |
+| `DEJAQ_LOG_LEVEL` | `INFO` | App logging level |
+| `DEJAQ_LOG_SHOW_CONTENT` | `false` | Include prompt/response content in request logs when explicitly enabled |
 | `DEJAQ_EVICTION_FLOOR` | `-5.0` | Score floor for cache eviction; entries below this are deleted by the beat task |
 | `DEJAQ_CREDENTIAL_ENCRYPTION_KEY` | `` | Fernet key used to encrypt org provider credentials. Generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`; back it up because losing it makes stored credentials unrecoverable |
-| `GEMINI_API_KEY` | `` | Optional operator reference key for Google Gemini; no longer read at request time for hard-query routing |
-| `DEJAQ_EXTERNAL_MODEL` | `gemini-2.5-flash` | Gemini model name for hard-query routing |
+| `DEJAQ_EXTERNAL_MODEL` | `gemini-2.5-flash` | Default hard-query model when org config has no override; provider is inferred from model name |
 | `DEJAQ_ROUTING_THRESHOLD` | `0.3` | Default per-org LLM routing threshold used when no org override exists |
 | `DEJAQ_CHROMA_HOST` | `127.0.0.1` | ChromaDB HTTP server host |
 | `DEJAQ_CHROMA_PORT` | `8001` | ChromaDB HTTP server port |
@@ -106,6 +108,11 @@ When adding a new `DEJAQ_*_BACKEND` variable, update the env examples in all thr
 | `DEJAQ_LOCAL_LLM_BACKEND` | `in_process` | Backend mode for local generation (`in_process` or `ollama`) |
 | `DEJAQ_GENERALIZER_BACKEND` | `in_process` | Backend mode for background tone-stripping generalizer |
 | `DEJAQ_CONTEXT_ADJUSTER_BACKEND` | `in_process` | Backend mode for tone-adjustment path on cache hits |
+| `DEJAQ_ENRICHER_MODEL_NAME` | `qwen_1_5b` | Logical model label for context enricher traces/stats |
+| `DEJAQ_NORMALIZER_MODEL_NAME` | `gemma_e2b` | Logical model label for normalizer traces/stats |
+| `DEJAQ_LOCAL_LLM_MODEL_NAME` | `gemma_local` | Logical model label for local generation traces/stats |
+| `DEJAQ_GENERALIZER_MODEL_NAME` | `phi_generalizer` | Logical model label for background generalizer traces/stats |
+| `DEJAQ_CONTEXT_ADJUSTER_MODEL_NAME` | `qwen_1_5b` | Logical model label for context adjuster traces/stats |
 
 ### Endpoints
 - `GET /health` — health check; also reports Celery worker status
@@ -202,12 +209,12 @@ cli/
 - Cache filter skips storing trivial messages (filler words, too short, too vague)
 - Per-request stats logged to SQLite (fire-and-forget via asyncio.create_task)
 - Feedback adjusts ChromaDB entry scores (+1.0 positive, −2.0 negative); first negative deletes immediately
-- External LLM is Google Gemini via `google-genai` async client; `ExternalLLMService` is a singleton
+- External LLM routing supports Google, OpenAI, and Anthropic provider clients through encrypted org credentials; `ExternalLLMService` is a singleton
 - Org/dept/API-key data lives in SQLite (SQLAlchemy + Alembic); `dejaq.db` by default
 
 ### Management API
 
-`/admin/v1/*` is a separate operator surface from the OpenAI-compatible `/v1/*` gateway. Auth is being migrated to Supabase JWT (per-user ownership); endpoints are currently unprotected while the JWT layer is implemented.
+`/admin/v1/*` is a separate operator surface from the OpenAI-compatible `/v1/*` gateway. It requires Supabase JWT authentication; system access is reserved for configured service paths such as demo seeding.
 
 The org API-key middleware skips `/admin/v1/*` before parsing or logging `Authorization`, so admin tokens are never treated as customer API keys.
 
@@ -405,7 +412,7 @@ Uses an LLM judge (requires `ANTHROPIC_API_KEY`) for scoring. Configs in `config
 
 ## Current Status
 
-**Working:** FastAPI HTTP, Normalizer (Qwen 0.5B, v22), LLM Router (Gemma 4 E4B local → provider-backed external LLMs), Context Adjuster (generalize via Phi-3.5 + adjust via Qwen 1.5B), Semantic cache (ChromaDB, cosine ≤ 0.15), Background generalize+store on cache miss, Hardware acceleration (Metal/CUDA), Context Enricher v5 (Qwen 1.5B + regex gate, 88.7% @0.15 across 5 datasets), Smart Cache Filter (skip non-cacheable prompts), Difficulty Classifier (NVIDIA DeBERTa — routes easy→local, hard→org credential backed provider), Celery + Redis task queue (non-blocking generalize+store), OpenAI-compatible endpoint with API-key auth + per-department cache namespacing, Org/department/API-key/credential management (SQLAlchemy + Alembic SQLite + `dejaq-admin` CLI), Stats tracking (SQLite + Rich TUI — `dejaq-admin stats` / `dejaq-admin-tui`), Score-based cache eviction (Celery beat), Feedback API (score adjustments + delete on first negative), End-to-end demo script (`scripts/demo.sh`), Three documented deployment modes (in-process / self-hosted / cloud) validated against the end-to-end demo. `GEMINI_API_KEY` is no longer read at request time; keep it only as operator reference, while runtime credentials come from `org_provider_credentials`.
+**Working:** FastAPI HTTP, Normalizer (Qwen 0.5B, v22), LLM Router (Gemma 4 E4B local → provider-backed external LLMs), Context Adjuster (generalize via Phi-3.5 + adjust via Qwen 1.5B), Semantic cache (ChromaDB, cosine ≤ 0.15), Background generalize+store on cache miss, Hardware acceleration (Metal/CUDA), Context Enricher v5 (Qwen 1.5B + regex gate, 88.7% @0.15 across 5 datasets), Smart Cache Filter (skip non-cacheable prompts), Difficulty Classifier (NVIDIA DeBERTa — routes easy→local, hard→org credential backed provider), Celery + Redis task queue (non-blocking generalize+store), OpenAI-compatible endpoint with API-key auth + per-department cache namespacing, Org/department/API-key/credential management (SQLAlchemy + Alembic SQLite + `dejaq-admin` CLI), Stats tracking (SQLite + Rich TUI — `dejaq-admin stats` / `dejaq-admin-tui`), Score-based cache eviction (Celery beat), Feedback API (score adjustments + delete on first negative), Supabase-authenticated dashboard, End-to-end demo script (`scripts/demo.sh`), Three documented deployment modes (in-process / self-hosted / cloud). Hard-query runtime credentials come from encrypted `org_provider_credentials`.
 **In progress:** Offload user-facing inference to Celery inference queue (multi-user parallelism)
 **Planned:** PostgreSQL migration, Subject-extraction preprocessing for bare comparative failures ("Which is cheaper?" — 1.5B model not sufficient)
 

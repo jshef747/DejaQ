@@ -1,18 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { responseErrorMessage as errorMessage } from "@/app/actions/errors";
 import { apiFetch } from "@/lib/api";
 import type { CredentialItem, Provider } from "@/lib/types";
-
-async function errorMessage(res: Response, fallback: string) {
-  let msg = fallback;
-  try {
-    const body = await res.json();
-    if (typeof body?.detail === "string") msg = body.detail;
-    else if (typeof body?.message === "string") msg = body.message;
-  } catch {}
-  return msg;
-}
 
 export async function listCredentials(orgSlug: string): Promise<CredentialItem[]> {
   const res = await apiFetch(`/admin/v1/orgs/${encodeURIComponent(orgSlug)}/credentials`);

@@ -1,36 +1,49 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# DejaQ Dashboard
 
-## Getting Started
+Next.js dashboard for the DejaQ management API. It uses Supabase email/password auth, stores the session through `@supabase/ssr`, and sends the Supabase access token to FastAPI `/admin/v1/*` routes.
 
-First, run the development server:
+## Setup
+
+```bash
+cd frontend
+npm install
+cp .env.local.example .env.local
+```
+
+Fill in:
+
+```bash
+NEXT_PUBLIC_SUPABASE_URL=https://<project-id>.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon-key>
+NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
+```
+
+## Run
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open `http://localhost:3000`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Demo credentials after `cd server && uv run dejaq-admin seed demo`:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- `demo@dejaq.local`
+- `demo1234`
 
-## Learn More
+## What It Manages
 
-To learn more about Next.js, take a look at the following resources:
+- Organizations and departments
+- Org API keys for `/v1/chat/completions` and `/v1/feedback`
+- Org provider credentials for Google, OpenAI, and Anthropic
+- Per-org LLM config and provider test calls
+- Request stats and cache feedback review
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+The dashboard does not call the gateway with Supabase auth. Gateway requests still use DejaQ org API keys.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Verify
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+npx tsc --noEmit --pretty false
+npm run build
+```

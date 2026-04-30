@@ -1,52 +1,23 @@
 import sqlite3
 from datetime import date, datetime, time, timezone
 
-from pydantic import BaseModel
-
 import app.config as config
 from app.db.models.department import Department
 from app.db.models.org import Organization
 from app.db.session import get_session
+from app.schemas.admin.stats import (
+    DepartmentStats,
+    DepartmentStatsReport,
+    OrgStats,
+    OrgStatsReport,
+    StatsMetrics,
+)
 
 _TOKENS_PER_HIT = 150
 
 
 class InvalidDateRange(Exception):
     pass
-
-
-class StatsMetrics(BaseModel):
-    requests: int
-    hits: int
-    misses: int
-    hit_rate: float
-    avg_latency_ms: float | None
-    est_tokens_saved: int
-    easy_count: int
-    hard_count: int
-    models_used: list[str]
-
-
-class OrgStats(StatsMetrics):
-    org: str
-    org_name: str
-
-
-class DepartmentStats(StatsMetrics):
-    org: str
-    department: str
-    department_name: str
-
-
-class OrgStatsReport(BaseModel):
-    items: list[OrgStats]
-    total: StatsMetrics
-
-
-class DepartmentStatsReport(BaseModel):
-    org: str
-    items: list[DepartmentStats]
-    total: StatsMetrics
 
 
 def _bound(value: date | None) -> str | None:

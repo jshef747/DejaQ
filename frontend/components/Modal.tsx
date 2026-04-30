@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useId, useRef } from "react";
 
 interface ModalProps {
   open: boolean;
@@ -11,7 +11,8 @@ interface ModalProps {
 }
 
 export default function Modal({ open, onClose, title, children, widthPx = 360 }: ModalProps) {
-  const firstFocusRef = useRef<HTMLElement | null>(null);
+  const panelId = useId();
+  const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -21,16 +22,11 @@ export default function Modal({ open, onClose, title, children, widthPx = 360 }:
   }, [open, onClose]);
 
   useEffect(() => {
-    if (open) {
-      // Focus first focusable element inside the panel
-      setTimeout(() => {
-        const panel = document.getElementById("modal-panel");
-        const focusable = panel?.querySelector<HTMLElement>(
-          "input, button, select, textarea, [tabindex]:not([tabindex='-1'])"
-        );
-        focusable?.focus();
-      }, 0);
-    }
+    if (!open) return;
+    const focusable = panelRef.current?.querySelector<HTMLElement>(
+      "input, button, select, textarea, [tabindex]:not([tabindex='-1'])"
+    );
+    focusable?.focus();
   }, [open]);
 
   if (!open) return null;
@@ -49,10 +45,11 @@ export default function Modal({ open, onClose, title, children, widthPx = 360 }:
       }}
     >
       <div
-        id="modal-panel"
+        ref={panelRef}
+        id={panelId}
         role="dialog"
         aria-modal="true"
-        aria-labelledby="modal-title"
+        aria-labelledby={`${panelId}-title`}
         onClick={(e) => e.stopPropagation()}
         style={{
           background: "var(--bg-2)",
@@ -72,7 +69,7 @@ export default function Modal({ open, onClose, title, children, widthPx = 360 }:
           }}
         >
           <span
-            id="modal-title"
+            id={`${panelId}-title`}
             style={{ fontWeight: 600, fontSize: "14px", letterSpacing: "-0.01em" }}
           >
             {title}

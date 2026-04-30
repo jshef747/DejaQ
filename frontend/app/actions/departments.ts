@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { apiFetch } from "@/lib/api";
 import type { DepartmentItem, DeptStatsReport } from "@/lib/types";
+import { responseErrorMessage } from "./errors";
 
 export async function listDepartments(orgSlug: string): Promise<DepartmentItem[]> {
   const res = await apiFetch(`/admin/v1/departments?org=${encodeURIComponent(orgSlug)}`);
@@ -31,13 +32,7 @@ export async function createDepartment(
   }
 
   if (!res.ok) {
-    let msg = `Create failed (${res.status})`;
-    try {
-      const j = await res.json();
-      if (j?.detail) msg = j.detail;
-      else if (j?.message) msg = j.message;
-    } catch {}
-    return { ok: false, error: msg };
+    return { ok: false, error: await responseErrorMessage(res, `Create failed (${res.status})`) };
   }
 
   const dept = (await res.json()) as DepartmentItem;
@@ -60,13 +55,7 @@ export async function deleteDepartment(
   }
 
   if (!res.ok) {
-    let msg = `Delete failed (${res.status})`;
-    try {
-      const j = await res.json();
-      if (j?.detail) msg = j.detail;
-      else if (j?.message) msg = j.message;
-    } catch {}
-    return { ok: false, error: msg };
+    return { ok: false, error: await responseErrorMessage(res, `Delete failed (${res.status})`) };
   }
 
   revalidatePath("/dashboard/departments");

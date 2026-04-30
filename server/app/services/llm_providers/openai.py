@@ -1,21 +1,37 @@
 import logging
 import time
+from functools import lru_cache
 
 import openai
 
 from app.schemas.chat import ExternalLLMRequest, ExternalLLMResponse
-from app.services.llm_providers import redact_api_key
+from app.services.llm_providers.common import elapsed_ms, ensure_query, redact_api_key
 from app.utils.exceptions import ExternalLLMAuthError, ExternalLLMError, ExternalLLMTimeoutError
 
 logger = logging.getLogger("dejaq.services.llm_providers.openai")
 
 
+@lru_cache(maxsize=32)
+def _get_client(api_key: str) -> openai.AsyncOpenAI:
+    return openai.AsyncOpenAI(api_key=api_key)
+
+
+_client_factory = openai.AsyncOpenAI
+
+
+def _clear_client_cache_if_factory_changed() -> None:
+    global _client_factory
+    if _client_factory is not openai.AsyncOpenAI:
+        _get_client.cache_clear()
+        _client_factory = openai.AsyncOpenAI
+
+
 class OpenAIProviderClient:
     async def generate_response(self, request: ExternalLLMRequest, api_key: str) -> ExternalLLMResponse:
-        if not request.query:
-            raise ValueError("ExternalLLMRequest.query must not be empty.")
+        ensure_query(request)
 
-        client = openai.AsyncOpenAI(api_key=api_key)
+        _clear_client_cache_if_factory_changed()
+        client = _get_client(api_key)
         messages = [{"role": "system", "content": request.system_prompt}]
         messages.extend(request.history)
         messages.append({"role": "user", "content": request.query})
@@ -42,7 +58,7 @@ class OpenAIProviderClient:
             logger.error("OpenAI API error: %s", msg)
             raise ExternalLLMError(f"Provider error: {msg}") from exc
 
-        latency_ms = (time.perf_counter() - start) * 1000
+        latency_ms = elapsed_ms(start)
         usage = response.usage
         content = response.choices[0].message.content or ""
         logger.debug(

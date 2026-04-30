@@ -1,5 +1,6 @@
 import logging
 import time
+from functools import lru_cache
 
 import httpx
 from google import genai
@@ -7,18 +8,33 @@ from google.genai import errors as genai_errors
 from google.genai import types
 
 from app.schemas.chat import ExternalLLMRequest, ExternalLLMResponse
-from app.services.llm_providers import redact_api_key
+from app.services.llm_providers.common import elapsed_ms, ensure_query, redact_api_key
 from app.utils.exceptions import ExternalLLMAuthError, ExternalLLMError, ExternalLLMTimeoutError
 
 logger = logging.getLogger("dejaq.services.llm_providers.google")
 
 
+@lru_cache(maxsize=32)
+def _get_client(api_key: str) -> genai.Client:
+    return genai.Client(api_key=api_key)
+
+
+_client_factory = genai.Client
+
+
+def _clear_client_cache_if_factory_changed() -> None:
+    global _client_factory
+    if _client_factory is not genai.Client:
+        _get_client.cache_clear()
+        _client_factory = genai.Client
+
+
 class GoogleProviderClient:
     async def generate_response(self, request: ExternalLLMRequest, api_key: str) -> ExternalLLMResponse:
-        if not request.query:
-            raise ValueError("ExternalLLMRequest.query must not be empty.")
+        ensure_query(request)
 
-        client = genai.Client(api_key=api_key)
+        _clear_client_cache_if_factory_changed()
+        client = _get_client(api_key)
         contents: list[types.Content] = []
         for msg in request.history:
             role = "model" if msg["role"] == "assistant" else msg["role"]
@@ -55,7 +71,7 @@ class GoogleProviderClient:
             logger.error("Google API error: %s", msg)
             raise ExternalLLMError(f"Provider error: {msg}") from exc
 
-        latency_ms = (time.perf_counter() - start) * 1000
+        latency_ms = elapsed_ms(start)
         usage = response.usage_metadata
         logger.debug(
             "Google request successful (model=%s, latency=%.2f ms, prompt_tokens=%d, completion_tokens=%d)",

@@ -1,33 +1,37 @@
 # OpenAI-Compatible API
 
-DejaQ exposes an OpenAI-compatible chat completions endpoint. Any client that works with the OpenAI SDK can point at DejaQ instead and get transparent semantic caching, query normalization, and model routing — no code changes required.
+DejaQ exposes `POST /v1/chat/completions` so OpenAI SDK clients can point at the gateway and receive semantic caching, local routing, and org-scoped external provider fallback.
 
 ## Base URL
 
-```
+```text
 http://127.0.0.1:8000/v1
 ```
 
 ## Authentication
 
-Pass any string as a Bearer token. Auth enforcement is not yet active — all requests are served. Unrecognized keys are logged and treated as `anonymous`.
+Gateway calls require a DejaQ organization API key:
 
-```
-Authorization: Bearer <your-api-key>
+```text
+Authorization: Bearer <dejaq-org-api-key>
 ```
 
----
+Use `dejaq-admin key generate --org <slug>` or the dashboard key screen to create keys. `/admin/v1/*` uses Supabase JWTs instead; those tokens are not accepted by the gateway.
+
+Optional department isolation:
+
+```text
+X-DejaQ-Department: <department-slug>
+```
 
 ## POST /v1/chat/completions
-
-### Request
 
 ```json
 {
   "model": "gpt-4o",
   "messages": [
     { "role": "system", "content": "You are a helpful assistant." },
-    { "role": "user",   "content": "Why is the sky blue?" }
+    { "role": "user", "content": "Why is the sky blue?" }
   ],
   "stream": false,
   "max_tokens": 1024,
@@ -35,31 +39,28 @@ Authorization: Bearer <your-api-key>
 }
 ```
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `model` | string | Yes | Any model name — used as an echo field in the response. DejaQ routes internally regardless of value. |
-| `messages` | array | Yes | OpenAI-format message array. Supports `system`, `user`, and `assistant` roles. The last `user` message is the active query; prior messages are conversation history. |
-| `stream` | boolean | No | `false` (default) returns a single JSON response. `true` returns an SSE stream. |
-| `max_tokens` | integer | No | Max tokens for local model generation. Default: `1024`. Ignored on cache hits. |
-| `temperature` | float | No | Accepted but currently unused (local model uses `0.7`). |
+| Field | Required | Notes |
+| --- | --- | --- |
+| `model` | yes | Accepted for OpenAI compatibility; DejaQ routes internally and returns the requested model in the OpenAI response body. |
+| `messages` | yes | Last `user` message is the active query. Prior messages are history. |
+| `stream` | no | `false` returns JSON; `true` returns SSE chunks. |
+| `max_tokens` | no | Passed to generation providers where applicable. |
+| `temperature` | no | Passed to generation providers where applicable. |
 
----
+## Responses
 
-### Response (non-streaming)
+Non-streaming responses use the OpenAI chat-completion shape:
 
 ```json
 {
-  "id": "chatcmpl-a1b2c3d4e5f6a1b2c3d4e5f6",
+  "id": "chatcmpl-...",
   "object": "chat.completion",
   "created": 1713100000,
   "model": "gpt-4o",
   "choices": [
     {
       "index": 0,
-      "message": {
-        "role": "assistant",
-        "content": "The sky is blue because of Rayleigh scattering..."
-      },
+      "message": { "role": "assistant", "content": "..." },
       "finish_reason": "stop"
     }
   ],
@@ -71,95 +72,69 @@ Authorization: Bearer <your-api-key>
 }
 ```
 
-On a **cache hit**, `completion_tokens` and `total_tokens` equal `prompt_tokens` (no generation occurred).
+Streaming responses emit OpenAI-style `data:` SSE chunks followed by `data: [DONE]`.
 
----
+Gateway headers:
 
-### Response (streaming, `"stream": true`)
+| Header | Meaning |
+| --- | --- |
+| `x-dejaq-model-used` | `cache`, local model name, or external model name |
+| `x-dejaq-conversation-id` | OpenAI-compatible response id |
+| `x-dejaq-response-id` | Cache entry response id when feedback can be submitted |
 
-Server-Sent Events stream. Each event is a `data:` line containing a JSON chunk.
+## Pipeline Behavior
 
-**First chunk** — carries role:
-```
-data: {"id":"chatcmpl-...","object":"chat.completion.chunk","created":1713100000,"model":"gpt-4o","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
-```
-
-**Content chunks** — one per word:
-```
-data: {"id":"chatcmpl-...","object":"chat.completion.chunk","created":1713100000,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":"The "},"finish_reason":null}]}
-data: {"id":"chatcmpl-...","object":"chat.completion.chunk","created":1713100000,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":"sky "},"finish_reason":null}]}
-```
-
-**Final chunk** — signals completion:
-```
-data: {"id":"chatcmpl-...","object":"chat.completion.chunk","created":1713100000,"model":"gpt-4o","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
-
-data: [DONE]
+```text
+request
+  -> context enricher
+  -> normalizer
+  -> ChromaDB cache lookup
+     -> hit: context adjuster + return
+     -> miss: difficulty classifier
+        -> easy: local model
+        -> hard: encrypted org provider credential
+  -> background generalize + store when cacheable
 ```
 
----
+- Cache hit: `x-dejaq-model-used: cache`.
+- Easy miss: served by the configured local model backend.
+- Hard miss: served by the provider inferred from the org's configured model, using encrypted org credentials.
+- Missing hard-query credentials return `402 Payment Required`.
 
-### Response headers
+There is no runtime `GEMINI_API_KEY` fallback. Store provider credentials through the dashboard, `/admin/v1/orgs/{org}/credentials/{provider}`, or `dejaq-admin credential`.
 
-Both streaming and non-streaming responses include:
-
-| Header | Example | Description |
-|---|---|---|
-| `x-dejaq-model-used` | `gemma-4-e4b` | Which backend served the response: local model name, external model name, or `cache`. |
-| `x-dejaq-conversation-id` | `chatcmpl-abc123` | Matches the `id` field in the response body. |
-
----
-
-## Internal pipeline
-
-Each request flows through the DejaQ pipeline before reaching any LLM:
-
-```
-Request
-  └─ Context Enricher   — rewrites follow-up queries into standalone form
-       └─ Normalizer     — lowercases + spell-corrects + opinion rewrite
-            └─ Cache check (ChromaDB, cosine ≤ 0.15)
-                 ├─ HIT  → Context Adjuster adds tone → return
-                 └─ MISS → Classifier (easy / hard)
-                               ├─ easy → Gemma 4 E4B (local)
-                               └─ hard → External LLM (Gemini)
-                                    └─ Background: generalize + store in cache
-```
-
-- **Cache hit**: `x-dejaq-model-used: cache`. Response is the generalized cached answer re-toned to match the current query's phrasing.
-- **Easy miss**: `x-dejaq-model-used: gemma-4-e4b`. Served by the local Gemma 4 E4B GGUF model.
-- **Hard miss**: `x-dejaq-model-used: <external-model>`. Requires `GEMINI_API_KEY` env var. Falls back to error message if not set.
-
----
-
-## OpenAI SDK example
+## SDK Example
 
 ```python
 from openai import OpenAI
 
 client = OpenAI(
     base_url="http://127.0.0.1:8000/v1",
-    api_key="any-string",
+    api_key="<dejaq-org-api-key>",
 )
 
 response = client.chat.completions.create(
     model="gpt-4o",
-    messages=[
-        {"role": "user", "content": "Why is the sky blue?"}
-    ],
+    messages=[{"role": "user", "content": "Why is the sky blue?"}],
 )
+
 print(response.choices[0].message.content)
-print(response.headers.get("x-dejaq-model-used"))  # "cache" or "gemma-4-e4b"
 ```
 
-### Streaming
+## Feedback
 
-```python
-stream = client.chat.completions.create(
-    model="gpt-4o",
-    messages=[{"role": "user", "content": "Explain quantum entanglement"}],
-    stream=True,
-)
-for chunk in stream:
-    print(chunk.choices[0].delta.content or "", end="", flush=True)
+If the gateway returns `x-dejaq-response-id`, submit feedback to:
+
+```http
+POST /v1/feedback
+Authorization: Bearer <dejaq-org-api-key>
+Content-Type: application/json
+```
+
+```json
+{
+  "response_id": "<x-dejaq-response-id>",
+  "rating": "positive",
+  "comment": "optional"
+}
 ```
