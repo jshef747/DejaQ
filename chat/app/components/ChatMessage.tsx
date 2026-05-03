@@ -1,5 +1,7 @@
 "use client";
 
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { FeedbackRating } from "./chat-api";
 
 // The full feedback lifecycle for a single assistant message.
@@ -19,6 +21,7 @@ export interface AppMessage {
   feedbackPhase?: FeedbackPhase;
   latencyMs?: number;
   cacheHit?: boolean;
+  promptDifficulty?: string | null;
 }
 
 interface Props {
@@ -145,11 +148,11 @@ export default function ChatMessage({ message, onFeedback, onInspect, inspected 
             fontSize: "13px",
             lineHeight: 1.6,
             padding: "10px 14px",
-            whiteSpace: "pre-wrap",
+            whiteSpace: isUser ? "pre-wrap" : "normal",
             wordBreak: "break-word",
           }}
         >
-          {message.content}
+          {isUser ? message.content : <MarkdownContent content={message.content} />}
         </div>
       </div>
 
@@ -242,6 +245,25 @@ export default function ChatMessage({ message, onFeedback, onInspect, inspected 
           {formatTs(message.ts)}
         </span>
       )}
+    </div>
+  );
+}
+
+function MarkdownContent({ content }: { content: string }) {
+  return (
+    <div className="dq-markdown">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          a: ({ children, ...props }) => (
+            <a {...props} target="_blank" rel="noreferrer">
+              {children}
+            </a>
+          ),
+        }}
+      >
+        {content}
+      </ReactMarkdown>
     </div>
   );
 }

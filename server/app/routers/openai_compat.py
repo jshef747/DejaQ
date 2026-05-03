@@ -526,6 +526,7 @@ async def chat_completions(
         miss_headers: dict[str, str] = {
             "x-dejaq-model-used": model_used,
             "x-dejaq-conversation-id": completion_id,
+            "x-dejaq-prompt-difficulty": complexity,
         }
         if miss_response_id:
             miss_headers["x-dejaq-response-id"] = miss_response_id

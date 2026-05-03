@@ -60,8 +60,11 @@ interface InspectorProps {
   asDrawer: boolean;
 }
 
+type InspectorTone = "green" | "amber" | "red" | "blue" | "neutral";
+
 function RequestInspector({ message, onClose, asDrawer }: InspectorProps) {
   const [copied, setCopied] = useState(false);
+  const difficulty = difficultyMeta(message?.promptDifficulty, message?.cacheHit);
 
   function copyResponseId() {
     if (!message?.responseId) return;
@@ -76,13 +79,13 @@ function RequestInspector({ message, onClose, asDrawer }: InspectorProps) {
         background: "var(--bg-2)",
         borderTop: "1px solid var(--border-2)",
         bottom: 0,
+        display: "flex",
+        flexDirection: "column",
         left: 0,
+        maxHeight: "48vh",
         position: "fixed",
         right: 0,
         zIndex: 40,
-        maxHeight: "38vh",
-        overflowY: "auto",
-        padding: "16px 20px",
         boxShadow: "0 -4px 24px rgba(0,0,0,0.4)",
       }
     : {
@@ -91,21 +94,22 @@ function RequestInspector({ message, onClose, asDrawer }: InspectorProps) {
         display: "flex",
         flexDirection: "column",
         flexShrink: 0,
-        overflowY: "auto",
-        width: "260px",
+        minWidth: "320px",
+        overflow: "hidden",
+        width: "340px",
       };
 
   return (
-    <div style={panelStyle}>
+    <aside style={panelStyle}>
       {/* Header */}
       <div
         style={{
           alignItems: "center",
           borderBottom: "1px solid var(--border)",
           display: "flex",
+          flexShrink: 0,
           gap: "8px",
-          marginBottom: "14px",
-          paddingBottom: "10px",
+          padding: asDrawer ? "12px 18px" : "12px 14px",
         }}
       >
         <span
@@ -140,148 +144,259 @@ function RequestInspector({ message, onClose, asDrawer }: InspectorProps) {
         </button>
       </div>
 
-      {!message ? (
-        <p style={{ color: "var(--fg-dimmer)", fontSize: "12px", lineHeight: 1.5, margin: 0 }}>
-          Click the inspect icon on an assistant message to view its metadata here.
-        </p>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
-          {/* Cache HIT / MISS pill */}
-          <div>
-            <FieldLabel>Cache Status</FieldLabel>
-            <span
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: "auto",
+          padding: asDrawer ? "14px 18px 18px" : "14px",
+        }}
+      >
+        {!message ? (
+          <p style={{ color: "var(--fg-dimmer)", fontSize: "12px", lineHeight: 1.5, margin: 0 }}>
+            Click the inspect icon on an assistant message to view its metadata here.
+          </p>
+        ) : (
+          <div style={{ display: "grid", gap: "12px" }}>
+            <div
               style={{
-                borderRadius: "5px",
-                display: "inline-block",
-                fontSize: "11px",
-                fontWeight: 600,
-                letterSpacing: "0.04em",
-                padding: "3px 9px",
-                ...(message.cacheHit
-                  ? {
-                      background: "var(--green-bg)",
-                      border: "1px solid rgba(34,197,94,0.3)",
-                      color: "var(--green)",
-                    }
-                  : {
-                      background: "var(--amber-bg)",
-                      border: "1px solid var(--amber-border)",
-                      color: "var(--amber)",
-                    }),
+                display: "grid",
+                gap: "10px",
+                gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
               }}
             >
-              {message.cacheHit ? "HIT" : "MISS"}
-            </span>
-          </div>
-
-          {/* Model used */}
-          <div>
-            <FieldLabel>Model</FieldLabel>
-            <span
-              style={{
-                color: "var(--fg)",
-                fontFamily: "var(--font-mono)",
-                fontSize: "11px",
-                wordBreak: "break-all",
-              }}
-            >
-              {message.modelUsed ?? "—"}
-            </span>
-          </div>
-
-          {/* Latency */}
-          <div>
-            <FieldLabel>Latency</FieldLabel>
-            <span style={{ color: "var(--fg)", fontFamily: "var(--font-mono)", fontSize: "11px" }}>
-              {message.latencyMs !== undefined ? `${message.latencyMs} ms` : "—"}
-            </span>
-          </div>
-
-          {/* Token counts */}
-          <div>
-            <FieldLabel>Tokens</FieldLabel>
-            <div style={{ display: "flex", gap: "12px" }}>
-              <TokenCount label="Prompt" value={message.promptTokens} />
-              <TokenCount label="Completion" value={message.completionTokens} />
+              <MetricCard label="Cache">
+                <StatusPill tone={message.cacheHit ? "green" : "amber"}>
+                  {message.cacheHit ? "HIT" : "MISS"}
+                </StatusPill>
+              </MetricCard>
+              <MetricCard label="Difficulty">
+                <StatusPill tone={difficulty.tone}>{difficulty.label}</StatusPill>
+              </MetricCard>
+              <MetricCard label="Model" wide>
+                <MonoValue>{message.modelUsed ?? "-"}</MonoValue>
+              </MetricCard>
+              <MetricCard label="Latency">
+                <MonoValue>{message.latencyMs !== undefined ? `${message.latencyMs} ms` : "-"}</MonoValue>
+              </MetricCard>
             </div>
-          </div>
 
-          {/* Response ID */}
-          {message.responseId && (
-            <div>
-              <FieldLabel>Response ID</FieldLabel>
-              <div style={{ alignItems: "center", display: "flex", gap: "6px" }}>
+            <InspectorSection title="Tokens">
+              <div
+                style={{
+                  display: "grid",
+                  gap: "10px",
+                  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                }}
+              >
+                <TokenCount label="Prompt" value={message.promptTokens} />
+                <TokenCount label="Completion" value={message.completionTokens} />
+              </div>
+            </InspectorSection>
+
+            {message.responseId && (
+              <InspectorSection
+                title="Response ID"
+                action={
+                  <button
+                    onClick={copyResponseId}
+                    title="Copy response ID"
+                    style={{
+                      alignItems: "center",
+                      background: copied ? "var(--green-bg)" : "var(--bg-3)",
+                      border: `1px solid ${copied ? "rgba(34,197,94,0.3)" : "var(--border)"}`,
+                      borderRadius: "4px",
+                      color: copied ? "var(--green)" : "var(--fg-dimmer)",
+                      cursor: "pointer",
+                      display: "flex",
+                      flexShrink: 0,
+                      fontSize: "10px",
+                      padding: "3px 7px",
+                      transition: "background 0.15s, color 0.15s",
+                    }}
+                  >
+                    {copied ? "Copied" : "Copy"}
+                  </button>
+                }
+              >
                 <span
                   style={{
                     color: "var(--fg-dim)",
-                    fontFamily: "var(--font-mono)",
-                    fontSize: "10px",
+                    display: "block",
+                    fontFamily: "var(--font-jetbrains-mono, ui-monospace, 'SF Mono', Menlo, monospace)",
+                    fontSize: "11px",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
                     whiteSpace: "nowrap",
-                    flex: 1,
-                    minWidth: 0,
                   }}
                   title={message.responseId}
                 >
-                  {message.responseId.length > 22
-                    ? `${message.responseId.slice(0, 10)}…${message.responseId.slice(-8)}`
-                    : message.responseId}
+                  {message.responseId}
                 </span>
-                <button
-                  onClick={copyResponseId}
-                  title="Copy response ID"
-                  style={{
-                    alignItems: "center",
-                    background: copied ? "var(--green-bg)" : "var(--bg-3)",
-                    border: `1px solid ${copied ? "rgba(34,197,94,0.3)" : "var(--border)"}`,
-                    borderRadius: "4px",
-                    color: copied ? "var(--green)" : "var(--fg-dimmer)",
-                    cursor: "pointer",
-                    display: "flex",
-                    flexShrink: 0,
-                    fontSize: "10px",
-                    padding: "3px 7px",
-                    transition: "background 0.15s, color 0.15s",
-                  }}
-                >
-                  {copied ? "Copied" : "Copy"}
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
+              </InspectorSection>
+            )}
+          </div>
+        )}
+      </div>
+    </aside>
   );
 }
 
-function FieldLabel({ children }: { children: React.ReactNode }) {
+function MetricCard({
+  label,
+  children,
+  wide = false,
+}: {
+  label: string;
+  children: React.ReactNode;
+  wide?: boolean;
+}) {
   return (
-    <p
+    <div
       style={{
-        color: "var(--fg-dimmer)",
-        fontSize: "10px",
-        fontWeight: 500,
-        letterSpacing: "0.05em",
-        margin: "0 0 4px",
-        textTransform: "uppercase",
+        background: "var(--bg-2)",
+        border: "1px solid var(--border)",
+        borderRadius: "7px",
+        gridColumn: wide ? "span 2" : undefined,
+        minWidth: 0,
+        padding: "10px",
       }}
     >
-      {children}
-    </p>
+      <InspectorLabel>{label}</InspectorLabel>
+      <div style={{ marginTop: "6px", minWidth: 0 }}>{children}</div>
+    </div>
   );
 }
 
 function TokenCount({ label, value }: { label: string; value?: number }) {
   return (
-    <div>
-      <p style={{ color: "var(--fg-dimmer)", fontSize: "10px", margin: "0 0 2px" }}>{label}</p>
-      <span style={{ color: "var(--fg)", fontFamily: "var(--font-mono)", fontSize: "11px" }}>
+    <div
+      style={{
+        background: "#181818",
+        border: "1px solid var(--border)",
+        borderRadius: "6px",
+        padding: "9px",
+      }}
+    >
+      <InspectorLabel>{label}</InspectorLabel>
+      <div
+        style={{
+          color: "var(--fg)",
+          fontFamily: "var(--font-jetbrains-mono, ui-monospace, 'SF Mono', Menlo, monospace)",
+          fontSize: "13px",
+          marginTop: "5px",
+        }}
+      >
         {value ?? 0}
-      </span>
+      </div>
     </div>
   );
+}
+
+function InspectorSection({
+  title,
+  children,
+  action,
+}: {
+  title: string;
+  children: React.ReactNode;
+  action?: React.ReactNode;
+}) {
+  return (
+    <section
+      style={{
+        background: "var(--bg-2)",
+        border: "1px solid var(--border)",
+        borderRadius: "7px",
+        padding: "10px",
+      }}
+    >
+      <div style={{ alignItems: "center", display: "flex", gap: "8px", marginBottom: "8px" }}>
+        <InspectorLabel>{title}</InspectorLabel>
+        <div style={{ flex: 1 }} />
+        {action}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function InspectorLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        color: "var(--fg-dimmer)",
+        fontSize: "10px",
+        fontWeight: 600,
+        letterSpacing: "0.05em",
+        textTransform: "uppercase",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function MonoValue({ children }: { children: React.ReactNode }) {
+  return (
+    <span
+      style={{
+        color: "var(--fg)",
+        display: "block",
+        fontFamily: "var(--font-jetbrains-mono, ui-monospace, 'SF Mono', Menlo, monospace)",
+        fontSize: "12px",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+      }}
+      title={typeof children === "string" ? children : undefined}
+    >
+      {children}
+    </span>
+  );
+}
+
+function StatusPill({
+  children,
+  tone,
+}: {
+  children: React.ReactNode;
+  tone: InspectorTone;
+}) {
+  const toneStyles: Record<InspectorTone, React.CSSProperties> = {
+    green: { background: "var(--green-bg)", border: "1px solid rgba(34,197,94,0.3)", color: "var(--green)" },
+    amber: { background: "var(--amber-bg)", border: "1px solid var(--amber-border)", color: "var(--amber)" },
+    red: { background: "var(--red-bg)", border: "1px solid var(--red-border)", color: "var(--red)" },
+    blue: { background: "var(--blue-bg)", border: "1px solid var(--blue-border)", color: "var(--blue)" },
+    neutral: { background: "var(--bg-3)", border: "1px solid var(--border)", color: "var(--fg-dim)" },
+  };
+  return (
+    <span
+      style={{
+        borderRadius: "5px",
+        display: "inline-flex",
+        fontSize: "11px",
+        fontWeight: 700,
+        letterSpacing: "0.04em",
+        maxWidth: "100%",
+        padding: "3px 8px",
+        ...toneStyles[tone],
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function difficultyMeta(
+  difficulty: string | null | undefined,
+  cacheHit: boolean | undefined,
+): { label: string; tone: InspectorTone } {
+  const normalized = difficulty?.toLowerCase();
+  if (normalized === "easy") return { label: "EASY", tone: "green" };
+  if (normalized === "hard") return { label: "HARD", tone: "red" };
+  if (cacheHit) return { label: "CACHED", tone: "blue" };
+  return { label: "-", tone: "neutral" };
 }
 
 // ─── ChatApp ───────────────────────────────────────────────────────────────────
@@ -430,6 +545,7 @@ export default function ChatApp() {
       feedbackPhase: "idle",
       latencyMs: result.latencyMs,
       cacheHit: result.cacheHit,
+      promptDifficulty: result.promptDifficulty,
     };
 
     const finalMessages = [...withUserMsg, assistantMsg];

@@ -15,6 +15,7 @@ export interface ChatSuccess {
   modelUsed: string | null;
   responseId: string | null;
   conversationId: string | null;
+  promptDifficulty: string | null;
   promptTokens: number;
   completionTokens: number;
   latencyMs: number;
@@ -90,6 +91,7 @@ export async function sendChatMessage(
     modelUsed,
     responseId: data.responseId ?? null,
     conversationId: data.conversationId ?? null,
+    promptDifficulty: data.promptDifficulty ?? null,
     promptTokens: data.promptTokens ?? 0,
     completionTokens: data.completionTokens ?? 0,
     latencyMs: data.latencyMs ?? 0,

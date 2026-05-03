@@ -54,6 +54,7 @@ export async function POST(request: NextRequest) {
     modelUsed: response.headers.get("x-dejaq-model-used"),
     responseId: response.headers.get("x-dejaq-response-id"),
     conversationId: response.headers.get("x-dejaq-conversation-id"),
+    promptDifficulty: response.headers.get("x-dejaq-prompt-difficulty"),
     promptTokens: usage.prompt_tokens ?? 0,
     completionTokens: usage.completion_tokens ?? 0,
     latencyMs,
