@@ -25,7 +25,7 @@ from app.services.llm_router import _LOCAL_MODEL_NAME
 from app.services.external_llm import ExternalLLMService
 from app.services.credential_service import CredentialService, SUPPORTED_PROVIDERS
 from app.services.llm_providers import LIVE_PROVIDERS
-from app.services.memory_chromaDB import get_memory_service
+from app.services.memory_chromaDB import CacheLookupResult, get_memory_service
 from app.services.provider_inference import provider_for_model
 from app.services import cache_filter, llm_config_service
 from app.services.classifier import ClassifierService
@@ -157,6 +157,70 @@ def _new_completion_id() -> str:
 
 def _short_request_id(completion_id: str) -> str:
     return completion_id[:17]
+
+
+def _diagnostic_prompt(text: str | None, limit: int = 200) -> str | None:
+    if not text:
+        return None
+    prompt = " ".join(text.split())
+    if not prompt:
+        return None
+    if len(prompt) <= limit:
+        return prompt
+    return prompt[:limit]
+
+
+def _nearest_headers(cache_lookup: CacheLookupResult) -> dict[str, str]:
+    prompt = _diagnostic_prompt(cache_lookup.nearest_prompt)
+    if cache_lookup.nearest_distance is None or prompt is None:
+        return {}
+    return {
+        "x-dejaq-nearest-cache-distance": f"{cache_lookup.nearest_distance:.4f}",
+        "x-dejaq-nearest-cache-prompt": prompt,
+    }
+
+
+def _nearest_log_suffix(cache_lookup: CacheLookupResult) -> str:
+    prompt = _diagnostic_prompt(cache_lookup.nearest_prompt)
+    if cache_lookup.nearest_distance is None or prompt is None:
+        return ""
+    return f" nearest_distance={cache_lookup.nearest_distance:.4f} nearest_prompt={prompt}"
+
+
+def _enriched_log_suffix(enriched: str, enrich_succeeded: bool) -> str:
+    if not enrich_succeeded:
+        return ""
+    prompt = _diagnostic_prompt(enriched)
+    if prompt is None:
+        return ""
+    return f" enriched_prompt={prompt}"
+
+
+def _legacy_cache_lookup(cache_result: tuple[str, ...] | None) -> CacheLookupResult:
+    if cache_result is None:
+        return CacheLookupResult(hit=False)
+    if len(cache_result) == 3:
+        answer, entry_id, distance = cache_result
+        matched_query = ""
+    else:
+        answer, entry_id, distance, matched_query = cache_result[:4]
+    return CacheLookupResult(
+        hit=True,
+        generalized_answer=answer,
+        entry_id=entry_id,
+        distance=float(distance),
+        matched_query=matched_query,
+        nearest_distance=float(distance),
+        nearest_prompt=matched_query or None,
+    )
+
+
+def _cache_lookup(memory: object, clean_query: str) -> CacheLookupResult:
+    lookup = getattr(memory, "lookup_cache", None)
+    if callable(lookup):
+        return lookup(clean_query)
+    check_cache = getattr(memory, "check_cache")
+    return _legacy_cache_lookup(check_cache(clean_query))
 
 
 def _bg_generalize_and_store(
@@ -318,9 +382,11 @@ async def chat_completions(
             )
 
         # 1. Enrich
+        enrich_succeeded = False
         try:
             with trace.step("enrich"):
                 enriched = await services.enricher.enrich(user_query, history)
+                enrich_succeeded = True
         except Exception:
             logger.exception("Enricher failed")
             enriched = user_query
@@ -334,15 +400,18 @@ async def chat_completions(
             clean_query = enriched
 
         # 3. Cache lookup
-        cache_result = None
+        cache_lookup = CacheLookupResult(hit=False)
         try:
             with trace.step("cache"):
-                cache_result = get_memory_service(cache_namespace).check_cache(clean_query)
+                cache_lookup = _cache_lookup(get_memory_service(cache_namespace), clean_query)
         except Exception:
             logger.exception("Cache check failed")
 
-        if cache_result is not None:
-            cached_answer, _entry_id, _cache_distance = cache_result
+        if cache_lookup.hit:
+            cached_answer = cache_lookup.generalized_answer or ""
+            _entry_id = cache_lookup.entry_id or ""
+            _cache_distance = float(cache_lookup.distance or 0.0)
+            _cache_matched_query = _diagnostic_prompt(cache_lookup.matched_query) or ""
             try:
                 with trace.step("adjust"):
                     answer = await services.adjuster.adjust(user_query, cached_answer)
@@ -356,25 +425,31 @@ async def chat_completions(
             asyncio.create_task(request_logger.log(org_slug, dept, _latency, True, None, None, response_id))
             asyncio.create_task(_increment_hit_count_bg(cache_namespace, _entry_id))
             logger.info(
-                "done cache=hit route=cache model=%s response_id=%s latency=%dms steps=%s",
+                "done cache=hit route=cache model=%s response_id=%s latency=%dms steps=%s%s%s",
                 model_used,
                 response_id,
                 _latency,
                 trace.summary(),
+                _enriched_log_suffix(enriched, enrich_succeeded),
+                _nearest_log_suffix(cache_lookup),
             )
+
+            _hit_headers = {
+                "x-dejaq-model-used": model_used,
+                "x-dejaq-conversation-id": completion_id,
+                "x-dejaq-response-id": response_id,
+                "x-dejaq-cache-distance": f"{_cache_distance:.4f}",
+                "x-dejaq-cache-matched-query": _cache_matched_query,
+            }
+            _hit_headers.update(_nearest_headers(cache_lookup))
 
             if oai_request.stream:
                 words = answer.split(" ")
                 chunks = [w + " " for w in words[:-1]] + [words[-1]] if words else [answer]
-                headers = {
-                    "x-dejaq-model-used": model_used,
-                    "x-dejaq-conversation-id": completion_id,
-                    "x-dejaq-response-id": response_id,
-                }
                 return StreamingResponse(
                     _stream_generator(chunks, completion_id, oai_request.model, model_used),
                     media_type="text/event-stream",
-                    headers=headers,
+                    headers=_hit_headers,
                 )
 
             # Non-streaming cache hit
@@ -390,14 +465,7 @@ async def chat_completions(
                     total_tokens=prompt_tokens,
                 ),
             )
-            return JSONResponse(
-                content=response.model_dump(),
-                headers={
-                    "x-dejaq-model-used": model_used,
-                    "x-dejaq-conversation-id": completion_id,
-                    "x-dejaq-response-id": response_id,
-                },
-            )
+            return JSONResponse(content=response.model_dump(), headers=_hit_headers)
 
         # 4. Cache miss — classify then route
         if routing_mode == ROUTING_MODE_EASY_LOCAL:
@@ -545,14 +613,18 @@ async def chat_completions(
         # 6. Return response
         _latency = int((time.monotonic() - _t0) * 1000)
         asyncio.create_task(request_logger.log(org_slug, dept, _latency, False, complexity, model_used, miss_response_id))
+        diff_score = float(classification.get("score", 0.0))
         logger.info(
-            "done cache=miss route=%s model=%s store=%s response_id=%s latency=%dms steps=%s",
+            "done cache=miss route=%s model=%s store=%s response_id=%s latency=%dms difficulty_score=%.4f steps=%s%s%s",
             route,
             model_used,
             store_status,
             miss_response_id or "none",
             _latency,
+            diff_score,
             trace.summary(),
+            _enriched_log_suffix(enriched, enrich_succeeded),
+            _nearest_log_suffix(cache_lookup),
         )
 
         prompt_tokens = int(len(clean_query.split()) * 1.3)
@@ -562,7 +634,9 @@ async def chat_completions(
             "x-dejaq-model-used": model_used,
             "x-dejaq-conversation-id": completion_id,
             "x-dejaq-prompt-difficulty": complexity,
+            "x-dejaq-prompt-difficulty-score": f"{diff_score:.4f}",
         }
+        miss_headers.update(_nearest_headers(cache_lookup))
         if miss_response_id:
             miss_headers["x-dejaq-response-id"] = miss_response_id
 

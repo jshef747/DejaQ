@@ -2,6 +2,7 @@
 .DS_Store
 .idea/
 .logs/
+logs/
 chroma_data/
 dump.rdb
 *.db

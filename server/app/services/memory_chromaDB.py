@@ -1,6 +1,7 @@
 import hashlib
 import time
 import logging
+from dataclasses import dataclass
 from typing import Optional
 
 import chromadb
@@ -27,6 +28,17 @@ def _embed(text: str) -> list[float]:
     return _get_embedder().encode(text, normalize_embeddings=True).tolist()
 
 
+@dataclass(frozen=True)
+class CacheLookupResult:
+    hit: bool
+    generalized_answer: str | None = None
+    entry_id: str | None = None
+    distance: float | None = None
+    matched_query: str | None = None
+    nearest_distance: float | None = None
+    nearest_prompt: str | None = None
+
+
 class MemoryService:
     def __init__(
         self,
@@ -42,8 +54,8 @@ class MemoryService:
         )
         logger.info("ChromaDB ready — %d documents in collection '%s'", self._collection.count(), collection_name)
 
-    def check_cache(self, normalized_query: str) -> Optional[tuple[str, str, float]]:
-        """Return (generalized_answer, entry_id, distance) on cache hit, None on miss.
+    def lookup_cache(self, normalized_query: str) -> CacheLookupResult:
+        """Return cache hit details plus nearest Chroma prompt/distance.
 
         Fetches top-5 candidates, filters to those within SIMILARITY_THRESHOLD,
         then returns the one with the highest score (absent score treated as 0.0).
@@ -61,23 +73,34 @@ class MemoryService:
 
         if not (results["distances"] and results["distances"][0] and results["ids"] and results["ids"][0]):
             logger.debug("Cache MISS empty_collection latency=%.1fms", latency_ms)
-            return None
+            return CacheLookupResult(hit=False)
+
+        nearest_dist = float(results["distances"][0][0])
+        nearest_prompt = None
+        if results["documents"] and results["documents"][0]:
+            nearest_prompt = results["documents"][0][0] or None
 
         candidates = []
         for i, (dist, entry_id) in enumerate(zip(results["distances"][0], results["ids"][0])):
             if dist <= SIMILARITY_THRESHOLD:
                 meta = results["metadatas"][0][i] if results["metadatas"] and results["metadatas"][0] else {}
                 score = float(meta.get("score", 0.0))
-                candidates.append((score, dist, entry_id, meta))
+                matched_query = ""
+                if results["documents"] and results["documents"][0]:
+                    matched_query = results["documents"][0][i] or ""
+                candidates.append((score, float(dist), entry_id, meta, matched_query))
 
         if not candidates:
-            nearest_dist = results["distances"][0][0]
             logger.debug("Cache MISS distance=%.4f latency=%.1fms", nearest_dist, latency_ms)
-            return None
+            return CacheLookupResult(
+                hit=False,
+                nearest_distance=nearest_dist,
+                nearest_prompt=nearest_prompt,
+            )
 
         # Sort by score descending, pick best
         candidates.sort(key=lambda c: c[0], reverse=True)
-        best_score, best_dist, best_id, best_meta = candidates[0]
+        best_score, best_dist, best_id, best_meta, matched_query = candidates[0]
         answer = best_meta["generalized_answer"]
         logger.debug(
             "Cache HIT distance=%.4f score=%.1f threshold=%.2f latency=%.1fms entry_id=%s",
@@ -87,7 +110,27 @@ class MemoryService:
             latency_ms,
             best_id,
         )
-        return answer, best_id, best_dist
+        return CacheLookupResult(
+            hit=True,
+            generalized_answer=answer,
+            entry_id=best_id,
+            distance=best_dist,
+            matched_query=matched_query,
+            nearest_distance=nearest_dist,
+            nearest_prompt=nearest_prompt,
+        )
+
+    def check_cache(self, normalized_query: str) -> Optional[tuple[str, str, float, str]]:
+        """Return (generalized_answer, entry_id, distance, matched_query) on cache hit, None on miss."""
+        result = self.lookup_cache(normalized_query)
+        if not result.hit:
+            return None
+        return (
+            result.generalized_answer or "",
+            result.entry_id or "",
+            float(result.distance or 0.0),
+            result.matched_query or "",
+        )
 
     def store_interaction(
         self,

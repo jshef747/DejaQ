@@ -80,7 +80,17 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["x-dejaq-model-used", "x-dejaq-conversation-id", "x-dejaq-response-id"],
+    expose_headers=[
+        "x-dejaq-model-used",
+        "x-dejaq-conversation-id",
+        "x-dejaq-response-id",
+        "x-dejaq-prompt-difficulty",
+        "x-dejaq-prompt-difficulty-score",
+        "x-dejaq-cache-distance",
+        "x-dejaq-cache-matched-query",
+        "x-dejaq-nearest-cache-distance",
+        "x-dejaq-nearest-cache-prompt",
+    ],
 )
 
 # 3b. API key middleware (runs after CORS)

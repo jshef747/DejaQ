@@ -6,32 +6,53 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVER_DIR="$ROOT_DIR/server"
 FRONTEND_DIR="$ROOT_DIR/frontend"
 CHAT_DIR="$ROOT_DIR/chat"
-LOG_DIR="$ROOT_DIR/.logs"
+RUN_DATE="${DEJAQ_RUN_DATE:-$(date +%Y-%m-%d_%H-%M-%S)}"
+LOG_DIR="$ROOT_DIR/logs/$RUN_DATE"
 VENV="$SERVER_DIR/.venv"
+
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
+LOG_SEPARATOR="────────────────────────────────────────────────────────────────────────"
+
+format_terminal_logs() {
+  while IFS= read -r line; do
+    printf '%s\n%s\n' "$LOG_SEPARATOR" "$line"
+  done
+}
+
+if [[ "${1:-}" == "--format-log-lines" ]]; then
+  format_terminal_logs
+  exit 0
+fi
+
 mkdir -p "$LOG_DIR"
 touch "$LOG_DIR/redis.log"
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
-
 STACK_ARG=""
 MODE_ARG=""
+LOG_MODE_ARG=""
 OLLAMA_URL_ARG=""
 OLLAMA_URL_FLAG_SET=false
 DRY_RUN=false
 ENV_STACK="${DEJAQ_STACK:-}"
 ENV_MODE="${DEJAQ_MODE:-}"
 ENV_OLLAMA_URL="${DEJAQ_OLLAMA_URL:-}"
+ENV_START_LOGS="${DEJAQ_START_LOGS:-}"
 
 usage() {
-  echo "Usage: $0 [--stack=server|all] [--mode=in-process|self-hosted|cloud] [--ollama-url URL] [--dry-run]"
+  echo "Usage: $0 [--stack=server|all] [--mode=in-process|self-hosted|cloud] [--logs=requests|all] [--ollama-url URL] [--dry-run]"
   echo ""
   echo "Stacks:"
   echo "  server   Start backend services only: ChromaDB, Redis, Celery, FastAPI"
   echo "  all      Start server plus dashboard frontend and chat app"
   echo ""
+  echo "Logs:"
+  echo "  requests Tail compact request/response logs only"
+  echo "  all      Tail all service logs"
+  echo ""
   echo "Environment:"
   echo "  DEJAQ_STACK        Non-interactive stack selection: server or all"
   echo "  DEJAQ_MODE         Non-interactive deployment mode selection"
+  echo "  DEJAQ_START_LOGS   Non-interactive log mode selection: requests or all"
   echo "  DEJAQ_OLLAMA_URL   Required for self-hosted and cloud modes"
 }
 
@@ -54,6 +75,12 @@ for arg in "$@"; do
       ;;
     --mode)
       echo -e "${RED}Use --mode=<mode>${NC}"; exit 1
+      ;;
+    --logs=*)
+      LOG_MODE_ARG="${arg#*=}"
+      ;;
+    --logs)
+      echo -e "${RED}Use --logs=<requests|all>${NC}"; exit 1
       ;;
     --ollama-url=*)
       OLLAMA_URL_ARG="${arg#*=}"
@@ -197,6 +224,43 @@ normalize_mode() {
   esac
 }
 
+normalize_log_mode() {
+  case "$1" in
+    requests|request|req|clean|compact)
+      echo "requests"
+      ;;
+    all|full|verbose|services)
+      echo "all"
+      ;;
+    *)
+      echo ""
+      ;;
+  esac
+}
+
+select_log_mode() {
+  local selected="${LOG_MODE_ARG:-${DEJAQ_START_LOGS:-}}"
+  if [[ -n "$selected" ]]; then
+    selected="$(normalize_log_mode "$selected")"
+    if [[ -z "$selected" ]]; then
+      echo -e "${RED}Invalid log mode. Choose requests or all.${NC}" >&2
+      exit 1
+    fi
+    echo "$selected"
+    return
+  fi
+
+  echo -e "${CYAN}Select terminal log output:${NC}" >&2
+  echo "  1) requests  (request/response logs only)" >&2
+  echo "  2) all       (all service logs)" >&2
+  read -r -p "Logs [1-2]: " selected
+  case "$selected" in
+    1|requests|request|clean) echo "requests" ;;
+    2|all|full|verbose) echo "all" ;;
+    *) echo -e "${RED}Invalid log mode selection.${NC}" >&2; exit 1 ;;
+  esac
+}
+
 select_mode() {
   local selected="${MODE_ARG:-${DEJAQ_MODE:-}}"
   if [[ -n "$selected" ]]; then
@@ -306,13 +370,19 @@ fi
 if [[ -n "$ENV_OLLAMA_URL" ]]; then
   DEJAQ_OLLAMA_URL="$ENV_OLLAMA_URL"
 fi
+if [[ -n "$ENV_START_LOGS" ]]; then
+  DEJAQ_START_LOGS="$ENV_START_LOGS"
+fi
 
 STACK="$(select_stack)"
 MODE="$(select_mode)"
+LOG_MODE="$(select_log_mode)"
 apply_mode "$MODE"
 
 echo -e "${CYAN}Startup stack: ${STACK}${NC}"
 echo -e "${CYAN}Deployment mode: ${MODE}${NC}"
+echo -e "${CYAN}Log mode: ${LOG_MODE}${NC}"
+echo -e "${CYAN}Logs: ${LOG_DIR}/${NC}"
 echo -e "  DEJAQ_ENRICHER_BACKEND=${DEJAQ_ENRICHER_BACKEND}"
 echo -e "  DEJAQ_NORMALIZER_BACKEND=${DEJAQ_NORMALIZER_BACKEND}"
 echo -e "  DEJAQ_LOCAL_LLM_BACKEND=${DEJAQ_LOCAL_LLM_BACKEND}"
@@ -423,6 +493,17 @@ else
 fi
 echo -e "\n${YELLOW}Press Ctrl+C to stop all services.${NC}\n"
 
-tail -f "${TAIL_LOGS[@]}" &
+if [[ "$LOG_MODE" == "requests" ]]; then
+  (
+    tail -n 0 -f "$LOG_DIR/uvicorn.log" \
+      | grep --line-buffered -E "router\.openai_compat.*(start org=|done cache=)" \
+      | format_terminal_logs
+  ) &
+else
+  (
+    tail -f "${TAIL_LOGS[@]}" \
+      | format_terminal_logs
+  ) &
+fi
 TAIL_PID=$!
 wait $TAIL_PID

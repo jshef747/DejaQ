@@ -2,11 +2,17 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.routers import openai_compat
+from app.services.memory_chromaDB import CacheLookupResult
 
 
 class StubEnricher:
     async def enrich(self, message: str, history: list[dict]) -> str:
         return message
+
+
+class RewritingEnricher:
+    async def enrich(self, message: str, history: list[dict]) -> str:
+        return "What is the capital of France?"
 
 
 class StubNormalizer:
@@ -51,13 +57,39 @@ class StubExternalLLM:
 
 
 class StubMemory:
+    def lookup_cache(self, clean_query: str):
+        return CacheLookupResult(hit=False)
+
+    def check_cache(self, clean_query: str):
+        return None
+
+
+class StubNearestMissMemory:
+    def lookup_cache(self, clean_query: str):
+        return CacheLookupResult(
+            hit=False,
+            nearest_distance=0.23456,
+            nearest_prompt="capital city of france",
+        )
+
     def check_cache(self, clean_query: str):
         return None
 
 
 class StubHitMemory:
+    def lookup_cache(self, clean_query: str):
+        return CacheLookupResult(
+            hit=True,
+            generalized_answer="Cached Paris answer.",
+            entry_id="doc123",
+            distance=0.04,
+            matched_query="capital of france",
+            nearest_distance=0.04,
+            nearest_prompt="capital of france",
+        )
+
     def check_cache(self, clean_query: str):
-        return ("Cached Paris answer.", "doc123", 0.04)
+        return ("Cached Paris answer.", "doc123", 0.04, "capital of france")
 
     def increment_hit_count(self, doc_id: str):
         return None
@@ -93,6 +125,165 @@ def test_chat_completions_smoke_preserves_response_shape(monkeypatch):
     assert payload["choices"][0]["message"]["content"] == "Paris is the capital of France."
     assert response.headers["x-dejaq-model-used"] == openai_compat._LOCAL_MODEL_NAME
     assert "x-dejaq-conversation-id" in response.headers
+
+
+def test_cache_miss_includes_difficulty_and_nearest_cache_headers(monkeypatch, caplog):
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    class ScoredClassifier:
+        def predict_complexity(self, query: str) -> dict:
+            return {"complexity": "easy", "score": 0.42, "task_type": "qa"}
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "_llm_router", StubRouter())
+    monkeypatch.setattr(openai_compat, "_classifier", ScoredClassifier())
+    monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubNearestMissMemory())
+    monkeypatch.setattr(
+        openai_compat,
+        "_read_effective_llm_config",
+        lambda org_slug, org_id: openai_compat.EffectiveLlmConfig(
+            external_model="gemini-2.5-flash",
+            routing_threshold=0.9,
+        ),
+    )
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat, "USE_CELERY", False)
+
+    client = TestClient(app)
+
+    with caplog.at_level("INFO", logger="dejaq.router.openai_compat"):
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "What is the capital of France?"}],
+                "stream": False,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["x-dejaq-prompt-difficulty-score"] == "0.4200"
+    assert response.headers["x-dejaq-nearest-cache-distance"] == "0.2346"
+    assert response.headers["x-dejaq-nearest-cache-prompt"] == "capital city of france"
+
+    done = next(
+        record.message
+        for record in caplog.records
+        if record.name == "dejaq.router.openai_compat" and record.message.startswith("done cache=miss")
+    )
+    assert "difficulty_score=0.4200" in done
+    assert "nearest_distance=0.2346" in done
+    assert "nearest_prompt=capital city of france" in done
+
+
+def test_cache_miss_logs_enriched_prompt_when_enricher_succeeds(monkeypatch, caplog):
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(openai_compat, "_enricher", RewritingEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "_llm_router", StubRouter())
+    monkeypatch.setattr(openai_compat, "_classifier", StubClassifier())
+    monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat, "USE_CELERY", False)
+
+    client = TestClient(app)
+
+    with caplog.at_level("INFO", logger="dejaq.router.openai_compat"):
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "What is its capital?"}],
+                "stream": False,
+            },
+        )
+
+    assert response.status_code == 200
+    done = next(
+        record.message
+        for record in caplog.records
+        if record.name == "dejaq.router.openai_compat" and record.message.startswith("done cache=miss")
+    )
+    assert "enriched_prompt=What is the capital of France?" in done
+
+
+def test_cache_miss_omits_nearest_cache_headers_when_collection_empty(monkeypatch):
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "_llm_router", StubRouter())
+    monkeypatch.setattr(openai_compat, "_classifier", StubClassifier())
+    monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat, "USE_CELERY", False)
+
+    client = TestClient(app)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert "x-dejaq-nearest-cache-distance" not in response.headers
+    assert "x-dejaq-nearest-cache-prompt" not in response.headers
+
+
+def test_cache_hit_includes_nearest_cache_headers_without_difficulty_score(monkeypatch, caplog):
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubHitMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+
+    client = TestClient(app)
+
+    with caplog.at_level("INFO", logger="dejaq.router.openai_compat"):
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "What is the capital of France?"}],
+                "stream": False,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["x-dejaq-cache-distance"] == "0.0400"
+    assert response.headers["x-dejaq-cache-matched-query"] == "capital of france"
+    assert response.headers["x-dejaq-nearest-cache-distance"] == "0.0400"
+    assert response.headers["x-dejaq-nearest-cache-prompt"] == "capital of france"
+    assert "x-dejaq-prompt-difficulty-score" not in response.headers
+
+    done = next(
+        record.message
+        for record in caplog.records
+        if record.name == "dejaq.router.openai_compat" and record.message.startswith("done cache=hit")
+    )
+    assert "nearest_distance=0.0400" in done
+    assert "nearest_prompt=capital of france" in done
+    assert "difficulty_score=" not in done
 
 
 def test_force_easy_local_header_skips_classifier(monkeypatch):
@@ -416,7 +607,7 @@ def test_chat_completions_logs_compact_miss_summary(monkeypatch, caplog):
     assert "route=local" in summaries[0]
     assert "store=skipped" in summaries[0]
     assert "steps=" in summaries[0]
-    assert "What is the capital" not in summaries[0]
+    assert "enriched_prompt=What is the capital of France?" in summaries[0]
 
 
 def test_chat_completions_logs_compact_hit_summary(monkeypatch, caplog):
@@ -490,6 +681,12 @@ def test_chat_completions_logs_summary_when_enricher_fails(monkeypatch, caplog):
         record.name == "dejaq.router.openai_compat" and record.message.startswith("done ")
         for record in caplog.records
     )
+    done = next(
+        record.message
+        for record in caplog.records
+        if record.name == "dejaq.router.openai_compat" and record.message.startswith("done ")
+    )
+    assert "enriched_prompt=" not in done
 
 
 def test_hard_query_without_org_credential_returns_402_without_env_fallback(monkeypatch):

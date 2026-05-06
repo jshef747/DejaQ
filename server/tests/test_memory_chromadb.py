@@ -36,10 +36,11 @@ class TestCacheHitMiss:
         )
         result = memory_service.check_cache("capital of france")
         assert result is not None
-        answer, entry_id, distance = result
+        answer, entry_id, distance, matched_query = result
         assert "Paris" in answer
         assert entry_id is not None
         assert isinstance(distance, float)
+        assert matched_query == "capital of france"
 
     def test_cache_miss_for_unrelated(self, memory_service):
         memory_service.store_interaction(
@@ -108,17 +109,37 @@ class TestCheckCacheReturnType:
         result = svc.check_cache("capital of france")
         assert result is not None
         assert isinstance(result, tuple)
-        assert len(result) == 3
-        answer, entry_id, distance = result
+        assert len(result) == 4
+        answer, entry_id, distance, matched_query = result
         assert "Paris" in answer
         assert isinstance(entry_id, str)
         assert isinstance(distance, float)
+        assert matched_query == "capital of france"
 
     def test_check_cache_returns_none_on_miss(self):
         svc = _make_svc("ret_type_miss")
         svc.store_interaction("capital of france", "Paris is the capital.", "what is the capital?", "u1")
         result = svc.check_cache("how does photosynthesis work")
         assert result is None
+
+    def test_lookup_cache_returns_nearest_prompt_on_miss(self):
+        svc = _make_svc("lookup_nearest_miss")
+        svc.store_interaction("capital of france", "Paris is the capital.", "what is the capital?", "u1")
+        result = svc.lookup_cache("how does photosynthesis work")
+
+        assert result.hit is False
+        assert result.generalized_answer is None
+        assert result.entry_id is None
+        assert result.nearest_distance is not None
+        assert result.nearest_prompt == "capital of france"
+
+    def test_lookup_cache_empty_collection_has_no_nearest_prompt(self):
+        svc = _make_svc("lookup_empty")
+        result = svc.lookup_cache("how does photosynthesis work")
+
+        assert result.hit is False
+        assert result.nearest_distance is None
+        assert result.nearest_prompt is None
 
 
 @chroma_required
