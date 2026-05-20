@@ -4,7 +4,7 @@ import hashlib
 import logging
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, BackgroundTasks, Request
@@ -16,6 +16,7 @@ from app.schemas.openai_compat import (
     OAIChatRequest,
     OAIChatResponse,
     OAIChoice,
+    OAIMessage,
     OAIMessageResponse,
     OAIStreamChoice,
     OAIStreamDelta,
@@ -85,6 +86,27 @@ _classifier = ClassifierService()
 _external_llm = ExternalLLMService()
 # MemoryService is namespace-aware; use get_memory_service(namespace) per-request
 logger.info("OpenAI-compat services ready.")
+
+
+class PipelineError(Exception):
+    """Raised by run_chat_pipeline for HTTP-level failures; callers convert to JSONResponse."""
+
+    def __init__(self, status_code: int, detail: str) -> None:
+        self.status_code = status_code
+        self.detail = detail
+        super().__init__(detail)
+
+
+@dataclass
+class ChatPipelineResult:
+    answer: str
+    response_id: str | None
+    completion_id: str
+    model_used: str
+    stream_chunks: list[str]
+    headers: dict[str, str]
+    prompt_tokens: int
+    completion_tokens: int
 
 
 def _request_model_profile(raw_request: Request) -> str:
@@ -272,13 +294,6 @@ async def _increment_hit_count_bg(namespace: str, doc_id: str) -> None:
         logger.warning("Failed to increment hit_count for %s:%s", namespace, doc_id)
 
 
-def _extract_pipeline_inputs(
-    request: OAIChatRequest,
-) -> tuple[str, list[dict], str | None]:
-    """Return (user_query, history_messages, system_prompt_override)."""
-    return extract_pipeline_inputs(list(request.messages))
-
-
 async def _register_answer_interaction(
     *,
     org_id: int | None,
@@ -350,12 +365,19 @@ async def _stream_generator(
     yield "data: [DONE]\n\n"
 
 
-@router.post("/chat/completions")
-async def chat_completions(
-    oai_request: OAIChatRequest,
+async def run_chat_pipeline(
+    *,
+    messages: list[OAIMessage],
+    model: str,
+    temperature: float | None,
+    max_tokens: int | None,
     raw_request: Request,
     background_tasks: BackgroundTasks,
-):
+) -> ChatPipelineResult:
+    """Core DejaQ pipeline: enrich → normalize → cache → validate → adjust/generate → store.
+
+    Raises PipelineError for HTTP-level failures (402, 422, 500).
+    """
     _t0 = time.monotonic()
     trace = PipelineTrace()
     cache_namespace: str = getattr(raw_request.state, "cache_namespace", "dejaq_default")
@@ -363,39 +385,32 @@ async def chat_completions(
     org_id: int | None = getattr(raw_request.state, "org_id", None)
     dept = raw_request.headers.get("X-DejaQ-Department") or "default"
 
-    user_query, history, system_prompt = _extract_pipeline_inputs(oai_request)
+    # Adapt message list into a minimal OAIChatRequest-like object for extract_pipeline_inputs
+    _pseudo_request = type("_PseudoRequest", (), {"messages": messages})()
+    user_query, history, system_prompt = extract_pipeline_inputs(list(messages))
 
     if not user_query:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=422, detail="No user message found in messages array")
+        raise PipelineError(422, "No user message found in messages array")
 
     completion_id = _new_completion_id()
     request_token = set_request_id(_short_request_id(completion_id))
-    max_tokens = oai_request.max_tokens or 1024
+    _max_tokens = max_tokens or 1024
     model_profile = _request_model_profile(raw_request)
     routing_mode = _request_routing_mode(raw_request)
     llm_config = await run_in_threadpool(_read_effective_llm_config, org_slug, org_id)
     services = _services_for_model_profile(model_profile)
+
     try:
         query = content_snippet(user_query)
         if query:
             logger.info(
-                "start org=%s dept=%s namespace=%s model=%s stream=%s query=%s",
-                org_slug,
-                dept,
-                cache_namespace,
-                oai_request.model,
-                str(oai_request.stream).lower(),
-                query,
+                "start org=%s dept=%s namespace=%s model=%s query=%s",
+                org_slug, dept, cache_namespace, model, query,
             )
         else:
             logger.info(
-                "start org=%s dept=%s namespace=%s model=%s stream=%s",
-                org_slug,
-                dept,
-                cache_namespace,
-                oai_request.model,
-                str(oai_request.stream).lower(),
+                "start org=%s dept=%s namespace=%s model=%s",
+                org_slug, dept, cache_namespace, model,
             )
 
         # 1. Enrich
@@ -431,7 +446,6 @@ async def chat_completions(
             _cache_distance = float(cache_lookup.distance or 0.0)
             _cache_matched_query = _diagnostic_prompt(cache_lookup.matched_query) or ""
 
-            # Validator gate: reject cache hits where the cached answer can't answer the new query
             _validator_accepted = True
             if VALIDATOR_ENABLED:
                 try:
@@ -446,7 +460,6 @@ async def chat_completions(
                     _validator_accepted = False
 
             if not _validator_accepted:
-                # Convert hit to miss, preserving nearest-* for diagnostics
                 cache_lookup = CacheLookupResult(
                     hit=False,
                     nearest_distance=_cache_distance,
@@ -454,9 +467,7 @@ async def chat_completions(
                 )
                 logger.info(
                     "validator rejected cache hit distance=%.4f matched_query=%r steps=%s",
-                    _cache_distance,
-                    _cache_matched_query,
-                    trace.summary(),
+                    _cache_distance, _cache_matched_query, trace.summary(),
                 )
             else:
                 try:
@@ -475,22 +486,22 @@ async def chat_completions(
                     cache_namespace=cache_namespace,
                     served_tier="cache",
                     response_id=response_id,
-                    request_messages=list(oai_request.messages),
+                    request_messages=list(messages),
                 )
                 _latency = int((time.monotonic() - _t0) * 1000)
                 asyncio.create_task(request_logger.log(org_slug, dept, _latency, True, None, None, response_id))
                 asyncio.create_task(_increment_hit_count_bg(cache_namespace, _entry_id))
                 logger.info(
                     "done cache=hit route=cache model=%s response_id=%s latency=%dms steps=%s%s%s",
-                    model_used,
-                    response_id,
-                    _latency,
-                    trace.summary(),
+                    model_used, response_id, _latency, trace.summary(),
                     _enriched_log_suffix(enriched, enrich_succeeded),
                     _nearest_log_suffix(cache_lookup),
                 )
 
-                _hit_headers = {
+                prompt_tokens = int(len(clean_query.split()) * 1.3)
+                words = answer.split(" ")
+                stream_chunks = [w + " " for w in words[:-1]] + [words[-1]] if words else [answer]
+                hit_headers: dict[str, str] = {
                     "x-dejaq-model-used": model_used,
                     "x-dejaq-conversation-id": completion_id,
                     "x-dejaq-interaction-id": interaction.interaction_id,
@@ -500,31 +511,17 @@ async def chat_completions(
                     "x-dejaq-cache-matched-query": _cache_matched_query,
                     "x-dejaq-validator-verdict": "valid",
                 }
-                _hit_headers.update(_nearest_headers(cache_lookup))
-
-                if oai_request.stream:
-                    words = answer.split(" ")
-                    chunks = [w + " " for w in words[:-1]] + [words[-1]] if words else [answer]
-                    return StreamingResponse(
-                        _stream_generator(chunks, completion_id, oai_request.model, model_used),
-                        media_type="text/event-stream",
-                        headers=_hit_headers,
-                    )
-
-                # Non-streaming cache hit
-                prompt_tokens = int(len(clean_query.split()) * 1.3)
-                response = OAIChatResponse(
-                    id=completion_id,
-                    created=_now_ts(),
-                    model=oai_request.model,
-                    choices=[OAIChoice(message=OAIMessageResponse(content=answer))],
-                    usage=OAIUsage(
-                        prompt_tokens=prompt_tokens,
-                        completion_tokens=0,
-                        total_tokens=prompt_tokens,
-                    ),
+                hit_headers.update(_nearest_headers(cache_lookup))
+                return ChatPipelineResult(
+                    answer=answer,
+                    response_id=response_id,
+                    completion_id=completion_id,
+                    model_used=model_used,
+                    stream_chunks=stream_chunks,
+                    headers=hit_headers,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=0,
                 )
-                return JSONResponse(content=response.model_dump(), headers=_hit_headers)
 
         # 4. Cache miss — classify then route
         if routing_mode == ROUTING_MODE_EASY_LOCAL:
@@ -556,25 +553,17 @@ async def chat_completions(
                     try:
                         provider = provider_for_model(llm_config.external_model)
                     except ValueError:
-                        return JSONResponse(
-                            status_code=422,
-                            content={
-                                "detail": (
-                                    f"Configured external model '{llm_config.external_model}' "
-                                    "is not mapped to a supported provider."
-                                )
-                            },
+                        raise PipelineError(
+                            422,
+                            f"Configured external model '{llm_config.external_model}' "
+                            "is not mapped to a supported provider.",
                         )
 
                     if provider in SUPPORTED_PROVIDERS and provider not in LIVE_PROVIDERS:
-                        return JSONResponse(
-                            status_code=422,
-                            content={
-                                "detail": (
-                                    f"Provider '{provider}' is not yet wired to a live client. "
-                                    "Configure a model from a supported provider (google, openai, anthropic)."
-                                )
-                            },
+                        raise PipelineError(
+                            422,
+                            f"Provider '{provider}' is not yet wired to a live client. "
+                            "Configure a model from a supported provider (google, openai, anthropic).",
                         )
 
                     decrypted_key: str | None = None
@@ -583,26 +572,22 @@ async def chat_completions(
                             with get_session() as session:
                                 decrypted_key = CredentialService().get_decrypted_key(session, org_id, provider)
                         except ValueError as exc:
-                            return JSONResponse(status_code=500, content={"detail": str(exc)})
+                            raise PipelineError(500, str(exc)) from exc
                     if decrypted_key is None:
-                        return JSONResponse(
-                            status_code=402,
-                            content={
-                                "detail": (
-                                    f"No {provider} API key configured for this organization. "
-                                    "Add one via the credentials settings."
-                                )
-                            },
+                        raise PipelineError(
+                            402,
+                            f"No {provider} API key configured for this organization. "
+                            "Add one via the credentials settings.",
                         )
 
                     ext_request = ExternalLLMRequest(
                         query=user_query,
                         history=history,
                         model=llm_config.external_model,
-                        max_tokens=max_tokens,
+                        max_tokens=_max_tokens,
                         system_prompt=system_prompt
                         or "You are a helpful assistant. Answer the user's query concisely and accurately.",
-                        temperature=oai_request.temperature or 0.7,
+                        temperature=temperature or 0.7,
                     )
                     ext_response = await _external_llm.generate_response(
                         ext_request,
@@ -619,13 +604,15 @@ async def chat_completions(
                     answer, _ = await services.llm_router.generate_local_response(
                         user_query,
                         history=history,
-                        max_tokens=max_tokens,
+                        max_tokens=_max_tokens,
                         system_prompt=llm_system_prompt,
                     )
                     model_used = _local_model_used(services.llm_router, model_profile)
+        except PipelineError:
+            raise
         except ExternalLLMError as exc:
             if "not wired to a live client" in str(exc):
-                return JSONResponse(status_code=422, content={"detail": str(exc)})
+                raise PipelineError(422, str(exc)) from exc
             logger.exception("ExternalLLMService failed")
             answer = "I'm sorry, I couldn't process your request right now. Please try again later."
             model_used = "error"
@@ -645,7 +632,6 @@ async def chat_completions(
             logger.exception("Cache filter failed")
 
         store_status = "skipped"
-        # Compute response_id deterministically (same hash as store_interaction uses)
         miss_response_id: str | None = None
         if will_cache:
             miss_doc_id = _doc_id(clean_query)
@@ -669,7 +655,7 @@ async def chat_completions(
                     )
                     store_status = "background"
 
-        # 6. Return response
+        # 6. Build result
         _latency = int((time.monotonic() - _t0) * 1000)
         served_tier: ServedTier = "external" if route == "external" else "local"
         interaction = await _register_answer_interaction(
@@ -679,18 +665,15 @@ async def chat_completions(
             cache_namespace=cache_namespace,
             served_tier=served_tier,
             response_id=miss_response_id,
-            request_messages=list(oai_request.messages),
+            request_messages=list(messages),
         )
-        asyncio.create_task(request_logger.log(org_slug, dept, _latency, False, complexity, model_used, miss_response_id))
+        asyncio.create_task(
+            request_logger.log(org_slug, dept, _latency, False, complexity, model_used, miss_response_id)
+        )
         diff_score = float(classification.get("score", 0.0))
         logger.info(
             "done cache=miss route=%s model=%s store=%s response_id=%s latency=%dms difficulty_score=%.4f steps=%s%s%s",
-            route,
-            model_used,
-            store_status,
-            miss_response_id or "none",
-            _latency,
-            diff_score,
+            route, model_used, store_status, miss_response_id or "none", _latency, diff_score,
             trace.summary(),
             _enriched_log_suffix(enriched, enrich_succeeded),
             _nearest_log_suffix(cache_lookup),
@@ -698,6 +681,8 @@ async def chat_completions(
 
         prompt_tokens = int(len(clean_query.split()) * 1.3)
         completion_tokens = int(len(answer.split()) * 1.3)
+        words = answer.split(" ")
+        stream_chunks = [w + " " for w in words[:-1]] + [words[-1]] if words else [answer]
 
         miss_headers: dict[str, str] = {
             "x-dejaq-model-used": model_used,
@@ -713,29 +698,54 @@ async def chat_completions(
         if _validator_verdict is not None:
             miss_headers["x-dejaq-validator-verdict"] = "invalid"
 
-        if oai_request.stream:
-            words = answer.split(" ")
-            chunks = [w + " " for w in words[:-1]] + [words[-1]] if words else [answer]
-            return StreamingResponse(
-                _stream_generator(chunks, completion_id, oai_request.model, model_used),
-                media_type="text/event-stream",
-                headers=miss_headers,
-            )
-
-        response = OAIChatResponse(
-            id=completion_id,
-            created=_now_ts(),
-            model=oai_request.model,
-            choices=[OAIChoice(message=OAIMessageResponse(content=answer))],
-            usage=OAIUsage(
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=prompt_tokens + completion_tokens,
-            ),
-        )
-        return JSONResponse(
-            content=response.model_dump(),
+        return ChatPipelineResult(
+            answer=answer,
+            response_id=miss_response_id,
+            completion_id=completion_id,
+            model_used=model_used,
+            stream_chunks=stream_chunks,
             headers=miss_headers,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
         )
     finally:
         clear_request_id(request_token)
+
+
+@router.post("/chat/completions")
+async def chat_completions(
+    oai_request: OAIChatRequest,
+    raw_request: Request,
+    background_tasks: BackgroundTasks,
+):
+    try:
+        result = await run_chat_pipeline(
+            messages=list(oai_request.messages),
+            model=oai_request.model,
+            temperature=oai_request.temperature,
+            max_tokens=oai_request.max_tokens,
+            raw_request=raw_request,
+            background_tasks=background_tasks,
+        )
+    except PipelineError as exc:
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+    if oai_request.stream:
+        return StreamingResponse(
+            _stream_generator(result.stream_chunks, result.completion_id, oai_request.model, result.model_used),
+            media_type="text/event-stream",
+            headers=result.headers,
+        )
+
+    response = OAIChatResponse(
+        id=result.completion_id,
+        created=_now_ts(),
+        model=oai_request.model,
+        choices=[OAIChoice(message=OAIMessageResponse(content=result.answer))],
+        usage=OAIUsage(
+            prompt_tokens=result.prompt_tokens,
+            completion_tokens=result.completion_tokens,
+            total_tokens=result.prompt_tokens + result.completion_tokens,
+        ),
+    )
+    return JSONResponse(content=response.model_dump(), headers=result.headers)

@@ -3,7 +3,7 @@ load_dotenv()
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import openai_compat, departments, feedback
+from app.routers import openai_compat, openai_responses, departments, feedback
 from app.routers.admin import router as admin_router
 from app.middleware.api_key import ApiKeyMiddleware
 from app.utils.logger import setup_logging
@@ -101,6 +101,7 @@ app.add_middleware(ApiKeyMiddleware)
 
 # 4. Include Routers
 app.include_router(openai_compat.router, prefix="/v1")
+app.include_router(openai_responses.router, prefix="/v1")
 app.include_router(feedback.router, prefix="/v1")
 app.include_router(departments.router)
 app.include_router(admin_router)

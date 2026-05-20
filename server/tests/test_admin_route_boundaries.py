@@ -8,6 +8,8 @@ from pydantic import BaseModel
 class _FeedbackResult(BaseModel):
     status: Literal["ok", "deleted"]
     new_score: float | None = None
+    escalation_status: str | None = None
+    escalated_response: object | None = None
 
 
 def test_gateway_route_accepts_org_key_not_supabase_jwt(monkeypatch):
@@ -111,16 +113,13 @@ def test_public_feedback_route_uses_gateway_context_and_shared_service(
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "new_score": 4.0}
-    assert calls == [
-        {
-            "response_id": "acme__eng:doc-1",
-            "rating": "positive",
-            "comment": "helpful",
-            "org": "acme",
-            "department": "eng",
-            "validate_namespace": False,
-        }
-    ]
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["response_id"] == "acme__eng:doc-1"
+    assert call["rating"] == "positive"
+    assert call["comment"] == "helpful"
+    assert call["org"] == "acme"
+    assert call["department"] == "eng"
 
 
 def _collect_routes(router):

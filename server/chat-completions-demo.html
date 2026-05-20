@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>DejaQ — Responses API Demo</title>
+  <title>DejaQ — OpenAI-Compatible API Demo</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -230,7 +230,7 @@
 
 <!-- Top config bar -->
 <div class="topbar">
-  <div class="topbar-title">DejaQ <span>Responses API Gateway</span></div>
+  <div class="topbar-title">DejaQ <span>OpenAI-Compatible Gateway</span></div>
   <div class="cfg"><label>URL</label><input class="url" id="baseUrl" value="http://localhost:8000/v1"></div>
   <div class="cfg"><label>Key</label><input class="key" id="apiKey" value="demo-key"></div>
   <div class="cfg"><label>Model</label><input class="mdl" id="model" value="gpt-4o"></div>
@@ -484,18 +484,14 @@
 
     rawOutput.textContent = '';
 
-    // Build Responses API input array from full chat history
-    const inputItems = chat.messages.map(m => ({
-      role: m.role,
-      content: [{ type: m.role === 'assistant' ? 'output_text' : 'input_text', text: m.content }],
-    }));
+    const reqMessages = chat.messages.map(m => ({ role: m.role, content: m.content }));
     const t0 = Date.now();
 
     try {
-      const res = await fetch(`${baseUrl}/responses`, {
+      const res = await fetch(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-        body: JSON.stringify({ model, input: inputItems, stream }),
+        body: JSON.stringify({ model, messages: reqMessages, stream }),
       });
 
       const modelUsed = res.headers.get('x-dejaq-model-used') || '?';
@@ -506,7 +502,6 @@
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
-        let currentEvent = null;
 
         while (true) {
           const { value, done } = await reader.read();
@@ -516,33 +511,27 @@
           buffer = lines.pop();
 
           for (const line of lines) {
-            if (line.startsWith('event: ')) {
-              currentEvent = line.slice(7).trim();
-            } else if (line.startsWith('data: ')) {
-              const payload = line.slice(6).trim();
-              rawOutput.textContent += (currentEvent ? `[${currentEvent}] ` : '') + payload + '\n';
-              try {
-                const evt = JSON.parse(payload);
-                if (currentEvent === 'response.output_text.delta' && evt.delta) {
-                  fullText += evt.delta;
-                  aiBubble.textContent = fullText;
-                  aiBubble.appendChild(cursor);
-                  chatArea.scrollTop = chatArea.scrollHeight;
-                } else if (currentEvent === 'response.completed' && evt.response?.usage) {
-                  usage = evt.response.usage;
-                }
-              } catch (_) {}
-              if (!line.trim()) currentEvent = null;
-            } else if (line === '') {
-              currentEvent = null;
-            }
+            if (!line.startsWith('data: ')) continue;
+            const payload = line.slice(6).trim();
+            if (payload === '[DONE]') continue;
+            try {
+              const chunk = JSON.parse(payload);
+              rawOutput.textContent += payload + '\n';
+              const delta = chunk.choices?.[0]?.delta?.content;
+              if (delta) {
+                fullText += delta;
+                aiBubble.textContent = fullText;
+                aiBubble.appendChild(cursor);
+                chatArea.scrollTop = chatArea.scrollHeight;
+              }
+            } catch (_) {}
           }
         }
         aiBubble.textContent = fullText;
       } else {
         const data = await res.json();
         rawOutput.textContent = JSON.stringify(data, null, 2);
-        fullText = data.output_text ?? data.output?.[0]?.content?.[0]?.text ?? '(empty)';
+        fullText = data.choices?.[0]?.message?.content ?? '(empty)';
         usage = data.usage;
         aiBubble.textContent = fullText;
       }
