@@ -216,14 +216,14 @@ def department_stats(
     items = []
     for row in rows:
         slug = row[0]
-        if slug not in dept_name_map:
+        if dept_name_map and slug not in dept_name_map:
             continue
         metrics = _metrics(row[1:])
         items.append(
             DepartmentStats(
                 org=org_slug,
                 department=slug,
-                department_name=dept_name_map[slug],
+                department_name=dept_name_map.get(slug, slug),
                 **metrics.model_dump(),
             )
         )

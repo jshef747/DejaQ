@@ -38,6 +38,72 @@ class TestRequestLoggerInit:
         assert cur.fetchone() is not None
         con.close()
 
+    def test_creates_escalation_logging_columns(self, logger):
+        rl, db_path = logger
+
+        async def run():
+            await rl.init()
+            await rl.close()
+
+        asyncio.run(run())
+
+        con = sqlite3.connect(db_path)
+        request_cols = {row[1] for row in con.execute("PRAGMA table_info(requests)").fetchall()}
+        feedback_cols = {row[1] for row in con.execute("PRAGMA table_info(feedback_log)").fetchall()}
+        con.close()
+
+        assert {
+            "source",
+            "interaction_id",
+            "parent_interaction_id",
+            "served_tier",
+            "external_provider_used",
+        }.issubset(request_cols)
+        assert "interaction_id" in feedback_cols
+
+    def test_migrates_existing_stats_db_before_creating_new_indexes(self, logger):
+        rl, db_path = logger
+        con = sqlite3.connect(db_path)
+        con.execute("""CREATE TABLE requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            org TEXT NOT NULL,
+            department TEXT NOT NULL,
+            latency_ms INTEGER NOT NULL,
+            cache_hit INTEGER NOT NULL,
+            difficulty TEXT,
+            model_used TEXT,
+            response_id TEXT
+        )""")
+        con.execute("""CREATE TABLE feedback_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            response_id TEXT NOT NULL,
+            org TEXT NOT NULL,
+            department TEXT NOT NULL,
+            rating TEXT NOT NULL,
+            comment TEXT
+        )""")
+        con.commit()
+        con.close()
+
+        async def run():
+            await rl.init()
+            await rl.close()
+
+        asyncio.run(run())
+
+        con = sqlite3.connect(db_path)
+        request_cols = {row[1] for row in con.execute("PRAGMA table_info(requests)").fetchall()}
+        feedback_cols = {row[1] for row in con.execute("PRAGMA table_info(feedback_log)").fetchall()}
+        indexes = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='index'").fetchall()}
+        con.close()
+
+        assert "interaction_id" in request_cols
+        assert "interaction_id" in feedback_cols
+        assert "idx_requests_interaction_id" in indexes
+        assert "idx_feedback_log_interaction_id" in indexes
+
     def test_idempotent_init(self, logger):
         rl, db_path = logger
 
@@ -89,6 +155,37 @@ class TestRequestLoggerLog:
         con.close()
 
         assert row == ("acme", "engineering", 120, 1, None, None)
+
+    def test_escalation_row(self, logger):
+        rl, db_path = logger
+
+        async def run():
+            await rl.init()
+            await rl.log(
+                "acme",
+                "support",
+                900,
+                False,
+                "hard",
+                "gpt-5.4-mini",
+                response_id=None,
+                source="feedback_escalation",
+                interaction_id="int_child",
+                parent_interaction_id="int_parent",
+                served_tier="external",
+                external_provider_used=True,
+            )
+            await rl.close()
+
+        asyncio.run(run())
+
+        con = sqlite3.connect(db_path)
+        row = con.execute(
+            "SELECT source, interaction_id, parent_interaction_id, served_tier, external_provider_used FROM requests"
+        ).fetchone()
+        con.close()
+
+        assert row == ("feedback_escalation", "int_child", "int_parent", "external", 1)
 
     def test_easy_miss_row(self, logger):
         rl, db_path = logger
@@ -162,6 +259,29 @@ class TestRequestLoggerLog:
             await rl.log("acme", "eng", 100, True, None, None)
 
         asyncio.run(run())  # must not raise
+
+    def test_feedback_log_can_store_interaction_id(self, logger):
+        rl, db_path = logger
+
+        async def run():
+            await rl.init()
+            await rl.log_feedback(
+                "int_parent",
+                "acme",
+                "support",
+                "negative",
+                "bad",
+                interaction_id="int_parent",
+            )
+            await rl.close()
+
+        asyncio.run(run())
+
+        con = sqlite3.connect(db_path)
+        row = con.execute("SELECT response_id, interaction_id, rating FROM feedback_log").fetchone()
+        con.close()
+
+        assert row == ("int_parent", "int_parent", "negative")
 
 
 class TestStatsCLI:

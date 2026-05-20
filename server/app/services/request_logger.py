@@ -17,7 +17,12 @@ CREATE TABLE IF NOT EXISTS requests (
     cache_hit   INTEGER NOT NULL,
     difficulty  TEXT,
     model_used  TEXT,
-    response_id TEXT
+    response_id TEXT,
+    source      TEXT    NOT NULL DEFAULT 'chat',
+    interaction_id TEXT,
+    parent_interaction_id TEXT,
+    served_tier TEXT,
+    external_provider_used INTEGER NOT NULL DEFAULT 0
 )
 """
 
@@ -29,7 +34,8 @@ CREATE TABLE IF NOT EXISTS feedback_log (
     org         TEXT    NOT NULL,
     department  TEXT    NOT NULL,
     rating      TEXT    NOT NULL,
-    comment     TEXT
+    comment     TEXT,
+    interaction_id TEXT
 )
 """
 
@@ -39,6 +45,9 @@ _CREATE_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_feedback_log_ts_id ON feedback_log(ts, id)",
     "CREATE INDEX IF NOT EXISTS idx_feedback_log_org_department ON feedback_log(org, department)",
     "CREATE INDEX IF NOT EXISTS idx_feedback_log_response_id ON feedback_log(response_id)",
+    "CREATE INDEX IF NOT EXISTS idx_requests_interaction_id ON requests(interaction_id)",
+    "CREATE INDEX IF NOT EXISTS idx_requests_source ON requests(source)",
+    "CREATE INDEX IF NOT EXISTS idx_feedback_log_interaction_id ON feedback_log(interaction_id)",
 )
 
 
@@ -50,15 +59,30 @@ class RequestLogger:
         self._db = await aiosqlite.connect(STATS_DB_PATH)
         await self._db.execute(_CREATE_REQUESTS_TABLE)
         await self._db.execute(_CREATE_FEEDBACK_TABLE)
-        for statement in _CREATE_INDEXES:
-            await self._db.execute(statement)
-        # Migrate existing requests table — add response_id if missing
+        # Migrate existing tables with additive nullable/default columns.
         try:
             cols = [row[1] for row in await (await self._db.execute("PRAGMA table_info(requests)")).fetchall()]
-            if "response_id" not in cols:
-                await self._db.execute("ALTER TABLE requests ADD COLUMN response_id TEXT")
+            request_columns = {
+                "response_id": "TEXT",
+                "source": "TEXT NOT NULL DEFAULT 'chat'",
+                "interaction_id": "TEXT",
+                "parent_interaction_id": "TEXT",
+                "served_tier": "TEXT",
+                "external_provider_used": "INTEGER NOT NULL DEFAULT 0",
+            }
+            for name, definition in request_columns.items():
+                if name not in cols:
+                    await self._db.execute(f"ALTER TABLE requests ADD COLUMN {name} {definition}")
+
+            feedback_cols = [
+                row[1] for row in await (await self._db.execute("PRAGMA table_info(feedback_log)")).fetchall()
+            ]
+            if "interaction_id" not in feedback_cols:
+                await self._db.execute("ALTER TABLE feedback_log ADD COLUMN interaction_id TEXT")
         except Exception:
-            logger.warning("Could not migrate requests table", exc_info=True)
+            logger.warning("Could not migrate stats tables", exc_info=True)
+        for statement in _CREATE_INDEXES:
+            await self._db.execute(statement)
         await self._db.commit()
         logger.info("RequestLogger initialized at %s", STATS_DB_PATH)
 
@@ -71,15 +95,51 @@ class RequestLogger:
         difficulty: str | None,
         model_used: str | None,
         response_id: str | None = None,
+        *,
+        source: str = "chat",
+        interaction_id: str | None = None,
+        parent_interaction_id: str | None = None,
+        served_tier: str | None = None,
+        external_provider_used: bool = False,
     ) -> None:
         if self._db is None:
             return
         ts = datetime.now(timezone.utc).isoformat()
         try:
             await self._db.execute(
-                "INSERT INTO requests (ts, org, department, latency_ms, cache_hit, difficulty, model_used, response_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (ts, org, department, latency_ms, int(cache_hit), difficulty, model_used, response_id),
+                """
+                INSERT INTO requests (
+                    ts,
+                    org,
+                    department,
+                    latency_ms,
+                    cache_hit,
+                    difficulty,
+                    model_used,
+                    response_id,
+                    source,
+                    interaction_id,
+                    parent_interaction_id,
+                    served_tier,
+                    external_provider_used
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    ts,
+                    org,
+                    department,
+                    latency_ms,
+                    int(cache_hit),
+                    difficulty,
+                    model_used,
+                    response_id,
+                    source,
+                    interaction_id,
+                    parent_interaction_id,
+                    served_tier,
+                    int(external_provider_used),
+                ),
             )
             await self._db.commit()
         except Exception:
@@ -92,15 +152,17 @@ class RequestLogger:
         department: str,
         rating: str,
         comment: str | None,
+        *,
+        interaction_id: str | None = None,
     ) -> None:
         if self._db is None:
             return
         ts = datetime.now(timezone.utc).isoformat()
         try:
             await self._db.execute(
-                "INSERT INTO feedback_log (ts, response_id, org, department, rating, comment) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (ts, response_id, org, department, rating, comment),
+                "INSERT INTO feedback_log (ts, response_id, org, department, rating, comment, interaction_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (ts, response_id, org, department, rating, comment, interaction_id),
             )
             await self._db.commit()
         except Exception:

@@ -43,7 +43,9 @@ from app.utils.exceptions import ExternalLLMError
 from app.utils.logger import clear_request_id, content_snippet, set_request_id
 from app.utils.pipeline_trace import PipelineTrace
 from app.schemas.chat import ExternalLLMRequest
+from app.services.chat_messages import extract_pipeline_inputs
 from app.services.request_logger import request_logger
+from app.services.response_registry import ResponseInteraction, ServedTier, response_registry
 
 logger = logging.getLogger("dejaq.router.openai_compat")
 
@@ -274,32 +276,42 @@ def _extract_pipeline_inputs(
     request: OAIChatRequest,
 ) -> tuple[str, list[dict], str | None]:
     """Return (user_query, history_messages, system_prompt_override)."""
-    messages = request.messages
-    # Last user message is the current query
-    user_query: str = ""
-    for msg in reversed(messages):
-        if msg.role == "user":
-            user_query = msg.content
-            break
+    return extract_pipeline_inputs(list(request.messages))
 
-    # Collect system prompt content
-    system_parts = [m.content for m in messages if m.role == "system"]
-    system_prompt: str | None = "\n".join(system_parts) if system_parts else None
 
-    # History = all messages before the last user message (excluding system messages)
-    last_user_idx = -1
-    for i in reversed(range(len(messages))):
-        if messages[i].role == "user":
-            last_user_idx = i
-            break
-
-    history: list[dict] = [
-        {"role": m.role, "content": m.content}
-        for m in messages[:last_user_idx]
-        if m.role in ("user", "assistant")
-    ]
-
-    return user_query, history, system_prompt
+async def _register_answer_interaction(
+    *,
+    org_id: int | None,
+    org_slug: str,
+    department: str,
+    cache_namespace: str,
+    served_tier: ServedTier,
+    response_id: str | None,
+    request_messages: list[object],
+) -> ResponseInteraction:
+    try:
+        return await response_registry.register(
+            org_id=org_id,
+            org_slug=org_slug,
+            department=department,
+            cache_namespace=cache_namespace,
+            served_tier=served_tier,
+            response_id=response_id,
+            messages=request_messages,
+        )
+    except RuntimeError:
+        # Tests often call the app without lifespan. Production initializes this
+        # in main.lifespan before requests are served.
+        await response_registry.init()
+        return await response_registry.register(
+            org_id=org_id,
+            org_slug=org_slug,
+            department=department,
+            cache_namespace=cache_namespace,
+            served_tier=served_tier,
+            response_id=response_id,
+            messages=request_messages,
+        )
 
 
 async def _stream_generator(
@@ -456,6 +468,15 @@ async def chat_completions(
                 model_used = "cache"
 
                 response_id = f"{cache_namespace}:{_entry_id}"
+                interaction = await _register_answer_interaction(
+                    org_id=org_id,
+                    org_slug=org_slug,
+                    department=dept,
+                    cache_namespace=cache_namespace,
+                    served_tier="cache",
+                    response_id=response_id,
+                    request_messages=list(oai_request.messages),
+                )
                 _latency = int((time.monotonic() - _t0) * 1000)
                 asyncio.create_task(request_logger.log(org_slug, dept, _latency, True, None, None, response_id))
                 asyncio.create_task(_increment_hit_count_bg(cache_namespace, _entry_id))
@@ -472,6 +493,8 @@ async def chat_completions(
                 _hit_headers = {
                     "x-dejaq-model-used": model_used,
                     "x-dejaq-conversation-id": completion_id,
+                    "x-dejaq-interaction-id": interaction.interaction_id,
+                    "x-dejaq-tier": "cache",
                     "x-dejaq-response-id": response_id,
                     "x-dejaq-cache-distance": f"{_cache_distance:.4f}",
                     "x-dejaq-cache-matched-query": _cache_matched_query,
@@ -648,6 +671,16 @@ async def chat_completions(
 
         # 6. Return response
         _latency = int((time.monotonic() - _t0) * 1000)
+        served_tier: ServedTier = "external" if route == "external" else "local"
+        interaction = await _register_answer_interaction(
+            org_id=org_id,
+            org_slug=org_slug,
+            department=dept,
+            cache_namespace=cache_namespace,
+            served_tier=served_tier,
+            response_id=miss_response_id,
+            request_messages=list(oai_request.messages),
+        )
         asyncio.create_task(request_logger.log(org_slug, dept, _latency, False, complexity, model_used, miss_response_id))
         diff_score = float(classification.get("score", 0.0))
         logger.info(
@@ -669,6 +702,8 @@ async def chat_completions(
         miss_headers: dict[str, str] = {
             "x-dejaq-model-used": model_used,
             "x-dejaq-conversation-id": completion_id,
+            "x-dejaq-interaction-id": interaction.interaction_id,
+            "x-dejaq-tier": served_tier,
             "x-dejaq-prompt-difficulty": complexity,
             "x-dejaq-prompt-difficulty-score": f"{diff_score:.4f}",
         }

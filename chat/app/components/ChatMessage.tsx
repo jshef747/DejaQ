@@ -13,12 +13,17 @@ export interface AppMessage {
   role: "user" | "assistant";
   content: string;
   ts: number;
+  sourceLabel?: string;
   // Assistant-only fields:
   modelUsed?: string | null;
+  interactionId?: string | null;
+  tier?: "cache" | "local" | "external" | null;
   responseId?: string | null;
+  requestMessages?: Array<{ role: "user" | "assistant" | "system"; content: string }>;
   promptTokens?: number;
   completionTokens?: number;
   feedbackPhase?: FeedbackPhase;
+  feedbackScore?: number | null;
   latencyMs?: number;
   cacheHit?: boolean;
   promptDifficulty?: string | null;
@@ -52,6 +57,13 @@ function classifyModelSource(modelUsed: string | null | undefined): ModelSource 
     return "external";
   }
   return "local";
+}
+
+function tierLabel(tier: AppMessage["tier"], modelUsed: string | null | undefined): string {
+  if (tier === "cache") return "cache";
+  if (tier === "local") return modelUsed ?? "local";
+  if (tier === "external") return modelUsed ?? "external";
+  return modelUsed ?? "cache";
 }
 
 // Color scheme: green = cache hit, amber = local model, red = external provider.
@@ -167,8 +179,13 @@ export default function ChatMessage({ message, onFeedback, onInspect, inspected 
           }}
         >
           {message.modelUsed !== undefined && (
-            <span style={modelBadgeStyle(classifyModelSource(message.modelUsed))}>
-              {message.modelUsed ?? "cache"}
+            <span style={modelBadgeStyle(message.tier ?? classifyModelSource(message.modelUsed))}>
+              {tierLabel(message.tier, message.modelUsed)}
+            </span>
+          )}
+          {message.sourceLabel && (
+            <span style={{ color: "var(--fg-dimmer)", fontSize: "10px" }}>
+              {message.sourceLabel}
             </span>
           )}
           {(message.promptTokens !== undefined || message.completionTokens !== undefined) && (
@@ -204,7 +221,7 @@ export default function ChatMessage({ message, onFeedback, onInspect, inspected 
       )}
 
       {/* Feedback row — icon-only thumbs, no comment box, immediate submit on click */}
-      {!isUser && message.responseId && (
+      {!isUser && (message.responseId || message.interactionId) && (
         <div style={{ alignItems: "center", display: "flex", gap: "4px", paddingLeft: "38px" }}>
           {(phase === "idle" || phase === "error" || phase === "submitting") && (
             <>
@@ -234,6 +251,11 @@ export default function ChatMessage({ message, onFeedback, onInspect, inspected 
           {phase === "negative" && (
             <span style={feedbackDoneStyle("negative")}>
               <ThumbDownIcon />
+            </span>
+          )}
+          {typeof message.feedbackScore === "number" && (phase === "positive" || phase === "negative") && (
+            <span style={feedbackScoreStyle()}>
+              score {message.feedbackScore.toFixed(1)}
             </span>
           )}
         </div>
@@ -298,6 +320,15 @@ function feedbackDoneStyle(rating: FeedbackRating): React.CSSProperties {
     color: ok ? "var(--green)" : "var(--red)",
     display: "flex",
     padding: "4px 6px",
+  };
+}
+
+function feedbackScoreStyle(): React.CSSProperties {
+  return {
+    color: "var(--fg-dimmer)",
+    fontFamily: "var(--font-mono)",
+    fontSize: "10px",
+    padding: "0 4px",
   };
 }
 

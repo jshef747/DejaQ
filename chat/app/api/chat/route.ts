@@ -15,6 +15,8 @@ export const dynamic = "force-dynamic";
 
 const SSE_HEADERS_TO_FORWARD = [
   "x-dejaq-model-used",
+  "x-dejaq-interaction-id",
+  "x-dejaq-tier",
   "x-dejaq-response-id",
   "x-dejaq-conversation-id",
   "x-dejaq-prompt-difficulty",

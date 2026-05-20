@@ -176,6 +176,11 @@ function RequestInspector({ message, onClose, asDrawer }: InspectorProps) {
               <MetricCard label="Model" wide>
                 <MonoValue>{message.modelUsed ?? "-"}</MonoValue>
               </MetricCard>
+              <MetricCard label="Tier">
+                <StatusPill tone={message.tier === "cache" ? "green" : message.tier === "external" ? "red" : "amber"}>
+                  {message.tier?.toUpperCase() ?? "-"}
+                </StatusPill>
+              </MetricCard>
               <MetricCard label="Latency">
                 <MonoValue>{message.latencyMs !== undefined ? `${message.latencyMs} ms` : "-"}</MonoValue>
               </MetricCard>
@@ -232,6 +237,24 @@ function RequestInspector({ message, onClose, asDrawer }: InspectorProps) {
                   title={message.responseId}
                 >
                   {message.responseId}
+                </span>
+              </InspectorSection>
+            )}
+            {message.interactionId && (
+              <InspectorSection title="Interaction ID">
+                <span
+                  style={{
+                    color: "var(--fg-dim)",
+                    display: "block",
+                    fontFamily: "var(--font-jetbrains-mono, ui-monospace, 'SF Mono', Menlo, monospace)",
+                    fontSize: "11px",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                  title={message.interactionId}
+                >
+                  {message.interactionId}
                 </span>
               </InspectorSection>
             )}
@@ -413,8 +436,13 @@ export default function ChatApp() {
   const [inspectedMsgId, setInspectedMsgId] = useState<string | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<AppMessage[]>([]);
   const windowWidth = useWindowWidth();
   const isNarrow = windowWidth < 1024;
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   // Load settings and conversation history from localStorage on first render.
   useEffect(() => {
@@ -564,7 +592,10 @@ export default function ChatApp() {
                 ...m,
                 content: result.text || m.content,
                 modelUsed: result.modelUsed,
+                interactionId: result.interactionId,
+                tier: result.tier,
                 responseId: result.responseId,
+                requestMessages: history,
                 promptTokens: result.promptTokens,
                 completionTokens: result.completionTokens,
                 feedbackPhase: "idle" as const,
@@ -591,14 +622,41 @@ export default function ChatApp() {
     );
   }
 
+  function persistCurrentMessages(nextMessages: AppMessage[]) {
+    if (activeConvId) {
+      persistConversation(activeConvId, nextMessages);
+    }
+  }
+
+  function escalationToast(status: string | null | undefined): string | null {
+    switch (status) {
+      case "no_further_escalation":
+        return "No higher answer tier is available for this response.";
+      case "no_credential":
+        return "No external provider credential is configured for a better answer.";
+      case "provider_error":
+        return "The higher answer tier failed. Feedback was still recorded.";
+      case "timeout":
+        return "The higher answer tier timed out. Feedback was still recorded.";
+      case "message_mismatch":
+        return "Could not re-answer because the saved request context no longer matches.";
+      case "already_escalated":
+        return "This answer was already escalated.";
+      default:
+        return null;
+    }
+  }
+
   async function handleFeedback(msgId: string, rating: FeedbackRating, comment: string) {
-    const msg = messages.find((m) => m.id === msgId);
-    if (!msg?.responseId) return;
+    const msg = messagesRef.current.find((m) => m.id === msgId);
+    if (!msg?.responseId && !msg?.interactionId) return;
 
     updateFeedbackPhase(msgId, "submitting");
 
     const result = await sendFeedback(
-      msg.responseId,
+      msg.responseId ?? null,
+      msg.interactionId ?? null,
+      msg.requestMessages ?? null,
       rating,
       comment,
       settings.deptSlug,
@@ -610,13 +668,48 @@ export default function ChatApp() {
       return;
     }
 
-    updateFeedbackPhase(msgId, rating);
-
     if (result.status === "deleted") {
       addToast("info", "Feedback recorded — the cached response was removed.");
+    } else if (typeof result.newScore === "number") {
+      addToast("success", `Feedback recorded. New score: ${result.newScore.toFixed(1)}`);
     } else {
-      addToast("success", `Feedback recorded. New score: ${result.newScore?.toFixed(1) ?? "—"}`);
+      addToast("success", "Feedback recorded.");
     }
+
+    const feedbackScore = typeof result.newScore === "number" ? result.newScore : null;
+    const reanswered =
+      rating === "negative" && result.escalatedResponse
+        ? ({
+            id: newId(),
+            role: "assistant",
+            content: result.escalatedResponse.content,
+            ts: Date.now(),
+            modelUsed: result.escalatedResponse.tier,
+            interactionId: result.escalatedResponse.interactionId,
+            tier: result.escalatedResponse.tier,
+            responseId: result.escalatedResponse.responseId,
+            requestMessages: msg.requestMessages,
+            feedbackPhase: "idle",
+            cacheHit: false,
+            sourceLabel: `Re-answered by ${result.escalatedResponse.tier}`,
+          } satisfies AppMessage)
+        : null;
+
+    const updatedMessages = messagesRef.current.map((m) =>
+      m.id === msgId ? { ...m, feedbackPhase: rating, feedbackScore } : m
+    );
+    const nextMessages = reanswered ? [...updatedMessages, reanswered] : updatedMessages;
+    messagesRef.current = nextMessages;
+    setMessages(nextMessages);
+    persistCurrentMessages(nextMessages);
+
+    if (rating === "negative" && result.escalatedResponse) {
+      addToast("success", `Re-answered by ${result.escalatedResponse.tier}.`);
+      return;
+    }
+
+    const toast = escalationToast(result.escalationStatus);
+    if (toast) addToast("info", toast);
   }
 
   function handleWelcomePrompt(prompt: string) {

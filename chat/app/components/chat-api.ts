@@ -13,6 +13,8 @@ export interface ChatSuccess {
   kind: "success";
   text: string;
   modelUsed: string | null;
+  interactionId: string | null;
+  tier: "cache" | "local" | "external" | null;
   responseId: string | null;
   conversationId: string | null;
   promptDifficulty: string | null;
@@ -86,6 +88,9 @@ export async function sendChatMessage(
 
   // Read headers before consuming the body.
   const modelUsed = response.headers.get("x-dejaq-model-used") ?? null;
+  const interactionId = response.headers.get("x-dejaq-interaction-id") ?? null;
+  const rawTier = response.headers.get("x-dejaq-tier");
+  const tier = rawTier === "cache" || rawTier === "local" || rawTier === "external" ? rawTier : null;
   const responseId = response.headers.get("x-dejaq-response-id") ?? null;
   const conversationId = response.headers.get("x-dejaq-conversation-id") ?? null;
   const promptDifficulty = response.headers.get("x-dejaq-prompt-difficulty") ?? null;
@@ -134,6 +139,8 @@ export async function sendChatMessage(
     kind: "success",
     text,
     modelUsed,
+    interactionId,
+    tier,
     responseId,
     conversationId,
     promptDifficulty,
@@ -150,12 +157,30 @@ export interface FeedbackSuccess {
   kind: "success";
   status: "ok" | "deleted";
   newScore?: number;
+  escalatedResponse?: {
+    content: string;
+    tier: "local" | "external";
+    interactionId: string | null;
+    responseId: string | null;
+  } | null;
+  escalationStatus?:
+    | "answered"
+    | "not_requested"
+    | "no_further_escalation"
+    | "no_credential"
+    | "provider_error"
+    | "timeout"
+    | "message_mismatch"
+    | "already_escalated"
+    | null;
 }
 
 export type FeedbackResult = FeedbackSuccess | ApiError;
 
 export async function sendFeedback(
-  responseId: string,
+  responseId: string | null,
+  interactionId: string | null,
+  messages: ChatApiMessage[] | null,
   rating: FeedbackRating,
   comment: string,
   deptSlug: string,
@@ -165,7 +190,7 @@ export async function sendFeedback(
     response = await fetch("/api/feedback", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ responseId, rating, comment, deptSlug }),
+      body: JSON.stringify({ responseId, interactionId, messages, rating, comment, deptSlug }),
     });
   } catch {
     return { kind: "error", status: 0, message: "Network error. Could not submit feedback." };
@@ -177,7 +202,13 @@ export async function sendFeedback(
   }
 
   const data = await response.json();
-  return { kind: "success", status: data.status, newScore: data.newScore };
+  return {
+    kind: "success",
+    status: data.status,
+    newScore: data.newScore,
+    escalatedResponse: data.escalatedResponse ?? null,
+    escalationStatus: data.escalationStatus ?? null,
+  };
 }
 
 export interface Department {

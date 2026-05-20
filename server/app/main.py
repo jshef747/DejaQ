@@ -22,6 +22,7 @@ from app.config import (
     USE_CELERY,
 )
 from app.services.request_logger import request_logger
+from app.services.response_registry import response_registry
 from app.services.service_factory import (
     get_context_adjuster_service,
     get_context_enricher_service,
@@ -66,7 +67,9 @@ async def lifespan(app: FastAPI):
     get_context_adjuster_service()
     get_context_enricher_service()
     await request_logger.init()
+    await response_registry.init()
     yield
+    await response_registry.close()
     await request_logger.close()
     logger.info("DejaQ Middleware shutting down...")
 

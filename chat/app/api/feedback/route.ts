@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  API_TIMEOUT_MS,
+  FEEDBACK_TIMEOUT_MS,
   backendUnavailableError,
   buildGatewayHeaders,
   getDejaQConfig,
@@ -22,13 +22,15 @@ export async function POST(request: NextRequest) {
       method: "POST",
       headers: buildGatewayHeaders(config.apiKey, body.deptSlug),
       body: JSON.stringify({
-        response_id: body.responseId,
+        ...(body.responseId ? { response_id: body.responseId } : {}),
+        ...(body.interactionId ? { interaction_id: body.interactionId } : {}),
         rating: body.rating,
+        ...(Array.isArray(body.messages) ? { messages: body.messages } : {}),
         ...(typeof body.comment === "string" && body.comment.trim()
           ? { comment: body.comment.trim() }
           : {}),
       }),
-      signal: AbortSignal.timeout(API_TIMEOUT_MS),
+      signal: AbortSignal.timeout(FEEDBACK_TIMEOUT_MS),
     });
   } catch {
     return backendUnavailableError();
@@ -39,5 +41,17 @@ export async function POST(request: NextRequest) {
   }
 
   const data = await response.json();
-  return NextResponse.json({ status: data.status, newScore: data.new_score });
+  return NextResponse.json({
+    status: data.status,
+    newScore: data.new_score,
+    escalatedResponse: data.escalated_response
+      ? {
+          content: data.escalated_response.content,
+          tier: data.escalated_response.tier,
+          interactionId: data.escalated_response.interaction_id ?? null,
+          responseId: data.escalated_response.response_id ?? null,
+        }
+      : null,
+    escalationStatus: data.escalation_status ?? null,
+  });
 }

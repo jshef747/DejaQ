@@ -95,6 +95,30 @@ class StubHitMemory:
         return None
 
 
+class CapturingRegistry:
+    def __init__(self, interaction_id: str = "int_test") -> None:
+        self.interaction_id = interaction_id
+        self.calls: list[dict] = []
+
+    async def register(self, **kwargs):
+        self.calls.append(kwargs)
+        from app.services.response_registry import ResponseInteraction
+
+        return ResponseInteraction(
+            interaction_id=self.interaction_id,
+            org_id=kwargs["org_id"],
+            org_slug=kwargs["org_slug"],
+            department=kwargs["department"],
+            cache_namespace=kwargs["cache_namespace"],
+            served_tier=kwargs["served_tier"],
+            response_id=kwargs["response_id"],
+            message_hash="hash",
+            created_at="2026-01-01T00:00:00+00:00",
+            escalation_attempted=False,
+            escalation_attempted_at=None,
+        )
+
+
 def test_chat_completions_smoke_preserves_response_shape(monkeypatch):
     async def _noop_log(*args, **kwargs):
         return None
@@ -125,6 +149,71 @@ def test_chat_completions_smoke_preserves_response_shape(monkeypatch):
     assert payload["choices"][0]["message"]["content"] == "Paris is the capital of France."
     assert response.headers["x-dejaq-model-used"] == openai_compat._LOCAL_MODEL_NAME
     assert "x-dejaq-conversation-id" in response.headers
+
+
+def test_local_answer_registers_interaction_and_emits_tier_headers(monkeypatch):
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    registry = CapturingRegistry("int_local")
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "_llm_router", StubRouter())
+    monkeypatch.setattr(openai_compat, "_classifier", StubClassifier())
+    monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat, "USE_CELERY", False)
+    monkeypatch.setattr(openai_compat, "response_registry", registry, raising=False)
+
+    client = TestClient(app)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-dejaq-interaction-id"] == "int_local"
+    assert response.headers["x-dejaq-tier"] == "local"
+    assert registry.calls
+    assert registry.calls[0]["served_tier"] == "local"
+    assert registry.calls[0]["response_id"] is None
+
+
+def test_cache_answer_registers_interaction_and_emits_tier_headers(monkeypatch):
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    registry = CapturingRegistry("int_cache")
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubHitMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+    monkeypatch.setattr(openai_compat, "response_registry", registry, raising=False)
+
+    client = TestClient(app)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-dejaq-interaction-id"] == "int_cache"
+    assert response.headers["x-dejaq-tier"] == "cache"
+    assert response.headers["x-dejaq-response-id"].endswith(":doc123")
+    assert registry.calls[0]["served_tier"] == "cache"
+    assert registry.calls[0]["response_id"].endswith(":doc123")
 
 
 def test_cache_miss_includes_difficulty_and_nearest_cache_headers(monkeypatch, caplog):
