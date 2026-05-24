@@ -2,6 +2,10 @@
 
 DejaQ is an LLM gateway that reduces cost and latency with semantic caching, local routing, and organization-scoped provider credentials. Existing clients can use the OpenAI-compatible API while operators manage organizations, API keys, credentials, stats, and feedback through the management API, CLI, TUI, or dashboard.
 
+## Project Document
+
+[Project document](https://docs.google.com/document/d/18XAP_r1MI7rwU2BvKt5mA25AI7YqmIRA5KEmLbwauAo/edit?tab=t.0)
+
 ## Runtime Flow
 
 ```text
@@ -9,10 +13,12 @@ OpenAI-compatible request
   -> context enrichment
   -> normalization
   -> ChromaDB semantic cache lookup
-     -> hit: context adjuster re-tones cached answer
+     -> hit: cache validator (Gemma E2B) checks coverage
+        -> VALID: context adjuster re-tones cached answer
+        -> INVALID: treat as miss
      -> miss: difficulty classifier
-        -> easy: local model
-        -> hard: org provider credential
+        -> easy: local model (Gemma 4 E4B)
+        -> hard: org provider credential (OpenAI / Anthropic / Google)
   -> response
   -> background generalize + store when cacheable
 ```
@@ -26,6 +32,7 @@ chat/                Standalone Next.js chat app with server-side org API key pr
 normalization-test/  Offline query-normalizer eval harness
 enricher-test/       Offline context-enricher eval harness
 adjuster-test/       Offline context-adjuster eval harness
+validator-test/      Offline cache-answer validator (Gemma E2B) eval harness
 docs/                Current product/API notes
 openspec/            Archived specs and proposal history
 ```
@@ -84,13 +91,14 @@ Fill `DEJAQ_API_KEY` in `chat/.env.local`. The chat app runs at `http://localhos
 ## Main Interfaces
 
 - `GET /health`
-- `POST /v1/chat/completions` — OpenAI-compatible gateway, authenticated by DejaQ org API key
-- `POST /v1/feedback` — cache feedback, authenticated by DejaQ org API key
+- `POST /v1/chat/completions` — OpenAI Chat Completions-compatible gateway, authenticated by DejaQ org API key
+- `POST /v1/responses` — OpenAI Responses API (newer recommended format), same auth, stateless (`previous_response_id` rejected)
+- `POST /v1/feedback` — cache feedback with optional thumbs-down escalation to the next serving tier (cache → local → external), authenticated by DejaQ org API key
 - `/admin/v1/*` — management API, authenticated by Supabase JWT
 - `dejaq-admin` — org, department, key, credential, stats, feedback, and demo seed CLI
 - `dejaq-admin-tui` — terminal dashboard for operational workflows
 
-See [docs/openai-compat-api.md](/Users/jonathansheffer/Desktop/Coding/DejaQ/docs/openai-compat-api.md), [docs/cli-instructions.md](/Users/jonathansheffer/Desktop/Coding/DejaQ/docs/cli-instructions.md), [server/README.md](/Users/jonathansheffer/Desktop/Coding/DejaQ/server/README.md), and [frontend/README.md](/Users/jonathansheffer/Desktop/Coding/DejaQ/frontend/README.md).
+Responses include `X-DejaQ-Interaction-Id`, `X-DejaQ-Tier` (`cache`|`local`|`external`), and (when cached) `X-DejaQ-Response-Id` headers. See [docs/openai-compat-api.md](docs/openai-compat-api.md), [docs/cli-instructions.md](docs/cli-instructions.md), [server/README.md](server/README.md), and [frontend/README.md](frontend/README.md).
 
 ## Demo Flow
 
