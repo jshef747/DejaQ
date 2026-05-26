@@ -160,12 +160,13 @@ def delete_org(slug: str, ctx: ManagementAuthContext = _SYSTEM_CTX) -> OrgDelete
         if org is None:
             raise OrgNotFound(slug)
         _check_org_access(ctx, org)
-        namespaces = [d.cache_namespace for d in org.departments]
-        departments_removed = len(namespaces)
+        dept_pairs = [(d.slug, d.cache_namespace) for d in org.departments]
+        departments_removed = len(dept_pairs)
         session.delete(org)
         session.flush()
-    for ns in namespaces:
+    for dept_slug, ns in dept_pairs:
         _delete_chroma_namespace(ns)
+        _delete_dept_stats(slug, dept_slug)
     return OrgDeleteResult(deleted=True, departments_removed=departments_removed)
 
 
@@ -212,7 +213,10 @@ def create_department(
             message = str(exc)
             slug = message.split("'")[1] if "'" in message else name
             raise DuplicateSlug(slug) from exc
-        return _dept_item(dept, org_slug)
+        item = _dept_item(dept, org_slug)
+    _delete_chroma_namespace(item.cache_namespace)
+    _delete_dept_stats(org_slug, item.slug)
+    return item
 
 
 def delete_department(
@@ -231,6 +235,7 @@ def delete_department(
             raise DeptNotFound(org_slug, dept_slug) from exc
         namespace = deleted.cache_namespace
     _delete_chroma_namespace(namespace)
+    _delete_dept_stats(org_slug, dept_slug)
     return DeptDeleteResult(deleted=True, cache_namespace=namespace)
 
 
@@ -246,9 +251,37 @@ def _delete_chroma_namespace(namespace: str) -> None:
         if namespace in existing:
             client.delete_collection(namespace)
             logger.info("Deleted ChromaDB collection '%s'", namespace)
+            still_there = [c.name for c in client.list_collections()]
+            if namespace in still_there:
+                logger.error("ChromaDB collection '%s' still exists after delete", namespace)
         _pool.pop(namespace, None)
     except Exception:
         logger.warning("Could not delete ChromaDB collection '%s'", namespace, exc_info=True)
+
+
+def _delete_dept_stats(org_slug: str, dept_slug: str) -> None:
+    logger = logging.getLogger("dejaq.admin_service")
+    try:
+        import sqlite3
+        from app.config import STATS_DB_PATH
+
+        with sqlite3.connect(STATS_DB_PATH) as conn:
+            for table, org_col, dept_col in (
+                ("requests", "org", "department"),
+                ("feedback_log", "org", "department"),
+                ("response_interactions", "org_slug", "department"),
+            ):
+                try:
+                    conn.execute(
+                        f"DELETE FROM {table} WHERE {org_col} = ? AND {dept_col} = ?",
+                        (org_slug, dept_slug),
+                    )
+                except sqlite3.OperationalError:
+                    pass
+            conn.commit()
+        logger.info("Cleared stats rows for %s/%s", org_slug, dept_slug)
+    except Exception:
+        logger.warning("Could not clear stats rows for %s/%s", org_slug, dept_slug, exc_info=True)
 
 
 def list_keys(

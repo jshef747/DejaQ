@@ -2,98 +2,76 @@
 
 ## Goal
 
-Add full OpenAI **Responses API** (`POST /v1/responses`) support to DejaQ alongside the existing `POST /v1/chat/completions` endpoint, so customers using the latest OpenAI SDK (`client.responses.create`) can point at DejaQ unchanged.
+Fix department delete/recreate stale stats bug: when a department is deleted and recreated with the same name, the dashboard was showing the previous department's statistics.
 
 ---
 
-## Current Progress — COMPLETE
+## Current Progress — COMPLETE (pending user verification)
 
-### What was shipped this session
+### What was diagnosed
 
-1. **`server/app/schemas/openai_responses.py`** — Pydantic models for the Responses API wire format:
-   - `OAIResponsesRequest` (`input`, `instructions`, `model`, `stream`, `max_output_tokens`; validator rejects `previous_response_id` / `conversation` with 400)
-   - `OAIResponse` non-streaming shape (`id`, `object:"response"`, `output[]`, `output_text`, `usage:{input_tokens, output_tokens, total_tokens}`)
-   - Full set of typed streaming event models: `ResponseCreatedEvent`, `ResponseOutputItemAddedEvent`, `ResponseContentPartAddedEvent`, `ResponseOutputTextDeltaEvent`, `ResponseOutputTextDoneEvent`, `ResponseContentPartDoneEvent`, `ResponseOutputItemDoneEvent`, `ResponseCompletedEvent`
+1. **Stats SQLite (`server/dejaq_stats.db`)** — `requests`, `feedback_log`, and `response_interactions` rows were never deleted on department delete. All three tables key by plain `org`/`department` slug strings with no FK/cascade. `slugify_name` is deterministic, so recreating a dept with the same name resurfaces all old rows.
+2. **ChromaDB** — `_delete_chroma_namespace` already deleted collections on dept delete but swallowed all exceptions silently, so silent failures left the old namespace intact.
+3. **Pre-existing orphans** — The user's specific symptom (dept `demo|demo`, requests dated 2026-05-06/07, still showing today) was caused by rows from a dept deleted *before* the cleanup code existed. The delete-side fix alone wouldn't catch these.
 
-2. **`server/app/routers/openai_responses.py`** — `POST /v1/responses` handler:
-   - `_responses_request_to_messages()` adapter: converts `instructions` → system message, `input` (string or list) → `OAIMessage` list
-   - Calls shared `run_chat_pipeline()` from `openai_compat`
-   - Streaming emits typed SSE events with `event:` prefix lines
-   - Non-streaming returns `OAIResponse` shape
+### What was shipped
 
-3. **`server/app/routers/openai_compat.py`** — refactored to extract shared pipeline:
-   - New `PipelineError(status_code, detail)` exception — all HTTP-level failures (402, 422, 500) raise this instead of returning `JSONResponse` directly
-   - New `ChatPipelineResult` dataclass — `answer`, `response_id`, `completion_id`, `model_used`, `stream_chunks`, `headers`, `prompt_tokens`, `completion_tokens`
-   - `run_chat_pipeline(*, messages, model, temperature, max_tokens, raw_request, background_tasks) → ChatPipelineResult` — the full enrich→normalize→cache→validate→adjust/generate→store pipeline; exported for use by both routers
-   - `/chat/completions` is now a thin wrapper around `run_chat_pipeline`
+Two rounds of edits to **`server/app/services/admin_service.py`**:
 
-4. **`server/app/main.py`** — registers `openai_responses.router` at `/v1`
+**Round 1 (delete-side fix):**
+- Added `_delete_dept_stats(org_slug, dept_slug)` helper — sync `sqlite3` connection to `STATS_DB_PATH`, DELETEs from `requests` (keyed `org`/`department`), `feedback_log` (same), and `response_interactions` (keyed `org_slug`/`department`). Best-effort, logs warning on failure.
+- `delete_department` now calls `_delete_chroma_namespace(namespace)` then `_delete_dept_stats(org_slug, dept_slug)` after the DB delete.
+- `delete_org` now carries `(dept_slug, cache_namespace)` pairs per child dept and calls both cleanups in the loop.
+- `_delete_chroma_namespace` now does a post-delete re-check and logs `error` if the collection still exists after delete.
 
-5. **`server/openai-compat-demo.html`** — rewritten to call `/v1/responses`:
-   - Sends `input: [{role, content: [{type, text}]}]` array
-   - Parses typed SSE events by tracking `event:` lines before each `data:` line
-   - Extracts `response.output_text.delta` for streaming
-   - Extracts `output_text` for non-streaming
+**Round 2 (idempotent create — the actual fix for current user symptom):**
+- `create_department` now also calls `_delete_chroma_namespace(item.cache_namespace)` and `_delete_dept_stats(org_slug, item.slug)` *after* the session commits. This wipes any orphan state from prior incarnations on every create — no-op when nothing exists.
+- Session block restructured: `item = _dept_item(dept, org_slug)` captured inside the `with`, cleanup called after `with` block exits, then `return item`.
 
-6. **`server/chat-completions-demo.html`** — preserved copy of the old Chat Completions demo (unchanged)
+### Current DB state
 
-7. **`server/tests/test_admin_route_boundaries.py`** — fixed pre-existing test failure: `_FeedbackResult` stub was missing `escalation_status` / `escalated_response` fields added to the real `FeedbackResult` schema; also tightened assertion to check only the fields the test cares about
-
-8. **`CLAUDE.md`** — documented `POST /v1/responses` in the Endpoints section
-
-### Test status
-**279 passed, 15 skipped, 0 failed** (was 278 passed, 1 failed before the stub fix).
+As of this session: `demo|demo` rows (4 requests, 2 feedback) are still in the DB because the user hasn't deleted + recreated the dept yet under the new code. The fix will wipe them on the next `POST /admin/v1/orgs/demo/departments` for a dept named "demo".
 
 ---
 
 ## What Worked
 
-- Extracting the pipeline into `run_chat_pipeline()` and having both routers call it: clean, no duplication
-- `PipelineError` exception pattern: clear separation between pipeline logic and HTTP response formatting
-- Typed SSE events with `event:` + `data:` pairs rather than just `data:` lines — matches the actual OpenAI Responses API wire format exactly
+- Adding defensive wipe on `create_department` — handles pre-existing orphans even if the delete never ran the cleanup
+- Sync `sqlite3` in an otherwise-sync admin service — simple, no async bridge needed
+- Reusing `_delete_chroma_namespace` pattern exactly for consistency
 
 ## What Didn't Work / Decisions Made
 
-- **Did not replace** `/v1/chat/completions` — kept both endpoints. Replacing would break every existing integration (LangChain, LiteLLM, demo HTML, roadmap docs, test harnesses).
-- **Did not implement `previous_response_id`** — DejaQ is intentionally stateless. Orgs send full history on every request (same as Chat Completions). `previous_response_id` / `conversation` fields are rejected with HTTP 400.
-- **Did not add multimodal image processing** — `input_image` content parts are accepted without crashing (adapter ignores them gracefully), but no pipeline routing to a vision model yet. Tracked in CLAUDE.md "Planned" section.
+- **Delete-side fix alone was insufficient** — the user's orphans pre-dated the fix, so delete-on-create was needed as the true idempotency guarantee
+- **Did not add a CLI `clean-orphan-stats` command** — the create-side wipe makes it unnecessary for normal operations; if ever needed for bulk cleanup it would be a future addition
 
 ---
 
 ## Next Steps
 
-### Immediate / high confidence
-- **Smoke test end-to-end** (stack not running during this session):
-  ```bash
-  ./start.sh --stack=server --mode=in-process
-  # non-streaming
-  curl -s -X POST http://127.0.0.1:8000/v1/responses \
-    -H "Authorization: Bearer <demo-org-key>" \
-    -H "Content-Type: application/json" \
-    -d '{"model":"gpt-4o","input":"What is the capital of France?"}' | jq
-  # streaming
-  curl -N -X POST http://127.0.0.1:8000/v1/responses \
-    -H "Authorization: Bearer <demo-org-key>" \
-    -H "Content-Type: application/json" \
-    -d '{"model":"gpt-4o","input":"Tell me a joke","stream":true}'
-  # reject previous_response_id
-  curl -s -X POST http://127.0.0.1:8000/v1/responses \
-    -H "Content-Type: application/json" \
-    -d '{"model":"gpt-4o","input":"hi","previous_response_id":"abc"}' | jq
-  ```
-- **OpenAI SDK compatibility test**:
-  ```python
-  from openai import OpenAI
-  c = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="<demo-org-key>")
-  r = c.responses.create(model="gpt-4o", input="ping")
-  print(r.output_text)
-  ```
-- Open `server/openai-compat-demo.html` in browser and confirm streaming + non-streaming both render correctly
+### Verify the fix works
 
-### Future / medium term
-- **Add dedicated tests** for `/v1/responses` — non-streaming shape, streaming event sequence, `previous_response_id` rejection, `instructions` → system message mapping. Mirror `tests/test_openai_compat_smoke.py` patterns.
-- **Frontend badge** — `DepartmentsClient.tsx:305` shows a static `POST /v1/chat/completions` label in the department endpoint card; update to show both endpoints or the newer one.
-- **Multimodal** — `input_image` content parts are silently ignored today. When the "File & image support" roadmap item is tackled, the adapter in `_responses_request_to_messages()` already stashes image parts; the pipeline needs a vision-model routing step.
+1. In the dashboard, delete the `demo` dept and recreate it with the same name.
+2. Confirm stats show zero:
+   ```bash
+   cd server
+   sqlite3 dejaq_stats.db "SELECT COUNT(*) FROM requests WHERE org='demo' AND department='demo';"
+   sqlite3 dejaq_stats.db "SELECT COUNT(*) FROM feedback_log WHERE org='demo' AND department='demo';"
+   sqlite3 dejaq_stats.db "SELECT COUNT(*) FROM response_interactions WHERE org_slug='demo' AND department='demo';"
+   ```
+   All should return `0`.
+3. Confirm uvicorn log shows:
+   ```
+   Cleared stats rows for demo/demo
+   ```
+
+### Remaining items from previous session (Responses API)
+
+The previous session shipped `POST /v1/responses`. Still pending:
+
+- **Smoke test** the Responses API end-to-end — stack was not running during that session.
+- **Add tests** for `/v1/responses` — non-streaming shape, streaming event sequence, `previous_response_id` rejection, `instructions` → system message mapping. Mirror `tests/test_openai_compat_smoke.py`.
+- **Frontend badge** — `DepartmentsClient.tsx:305` shows a static `POST /v1/chat/completions` label; update to show both endpoints.
 
 ---
 
@@ -101,11 +79,11 @@ Add full OpenAI **Responses API** (`POST /v1/responses`) support to DejaQ alongs
 
 | File | Role |
 |------|------|
-| `server/app/routers/openai_responses.py` | New Responses API router |
-| `server/app/schemas/openai_responses.py` | Responses API Pydantic models |
-| `server/app/routers/openai_compat.py` | Legacy Chat Completions router + shared `run_chat_pipeline()` |
-| `server/app/main.py` | Router registration |
-| `server/openai-compat-demo.html` | Updated demo (now uses `/v1/responses`) |
-| `server/chat-completions-demo.html` | Preserved legacy Chat Completions demo |
-| `server/tests/test_admin_route_boundaries.py` | Fixed stale feedback stub |
-| `CLAUDE.md` | Project docs (updated Endpoints section) |
+| `server/app/services/admin_service.py` | `_delete_dept_stats`, `_delete_chroma_namespace` (tightened), `delete_department`, `delete_org`, `create_department` — all modified |
+| `server/dejaq_stats.db` | Live stats SQLite — `requests`, `feedback_log`, `response_interactions` tables |
+| `server/app/services/request_logger.py` | Stats DB schema reference |
+| `server/app/services/response_registry.py` | `response_interactions` table schema (uses `org_slug` col, not `org`) |
+| `server/app/services/stats_service.py` | `department_stats()` — reads from `requests` by `org`/`department` slug |
+| `server/app/routers/openai_responses.py` | Responses API router (previous session) |
+| `server/app/schemas/openai_responses.py` | Responses API Pydantic models (previous session) |
+| `server/app/routers/openai_compat.py` | Shared `run_chat_pipeline()` (previous session) |
