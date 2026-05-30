@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 
-export const API_TIMEOUT_MS = 30_000;
-export const FEEDBACK_TIMEOUT_MS = 70_000;
+// Generous: a cold first request loads several Ollama models + the classifier serially.
+export const API_TIMEOUT_MS = 120_000;
+export const FEEDBACK_TIMEOUT_MS = 120_000;
 
 export type ModelProfile = "default" | "weak_cpu";
 export type RoutingMode = "auto" | "easy_local" | "hard_external";

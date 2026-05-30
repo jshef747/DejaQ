@@ -5,6 +5,8 @@ export async function createClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
+  // In local dev (no Supabase env) this client must not be used; callers gate on
+  // isLocalAuth. Throw only when Supabase is partially configured.
   if (!url) throw new Error("NEXT_PUBLIC_SUPABASE_URL is required");
   if (!key) throw new Error("NEXT_PUBLIC_SUPABASE_ANON_KEY is required");
 

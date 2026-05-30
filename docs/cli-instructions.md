@@ -42,46 +42,17 @@ uv run dejaq-admin key revoke --id 3
 
 Keys authenticate `/v1/chat/completions` and `/v1/feedback`. Revoked keys may remain accepted until `DEJAQ_KEY_CACHE_TTL` expires.
 
-## Provider Credentials
-
-Provider credentials are encrypted per org with `DEJAQ_CREDENTIAL_ENCRYPTION_KEY`.
-
-```bash
-uv run dejaq-admin credential list --org acme-corp
-echo "$OPENAI_API_KEY" | uv run dejaq-admin credential set --org acme-corp --provider openai --stdin
-uv run dejaq-admin credential delete --org acme-corp --provider openai
-```
-
-Supported live providers are `google`, `openai`, and `anthropic`. Runtime hard-query routing uses these stored org credentials; there is no platform `GEMINI_API_KEY` fallback.
-
-## Demo Seed
-
-```bash
-uv run dejaq-admin seed demo
-echo "$OPENAI_API_KEY" | uv run dejaq-admin seed demo --provider-key-stdin openai
-DEJAQ_SEED_PROVIDER_KEY=openai:<key> uv run dejaq-admin seed demo
-```
-
-The demo seed creates the demo org, departments, API key, sample stats, and Supabase demo user when `SUPABASE_SERVICE_ROLE_KEY` is configured.
-
-Demo login:
-
-- `demo@dejaq.local`
-- `demo1234`
-
-## Stats And Feedback
+## Stats
 
 ```bash
 uv run dejaq-admin stats
-uv run dejaq-admin feedback list --org acme-corp
 ```
 
 Stats read `DEJAQ_STATS_DB` and mirror the dashboard/admin API aggregate shapes.
 
-## TUI
+## Provider credentials and feedback
 
-```bash
-uv run dejaq-admin-tui
-```
-
-The Textual TUI provides keyboard-driven org, department, API-key, credential, stats, and feedback workflows.
+Provider credentials (encrypted per org with `DEJAQ_CREDENTIAL_ENCRYPTION_KEY`) and feedback
+are managed through the dashboard or the management API (`/admin/v1/orgs/{slug}/credentials`,
+`/admin/v1/feedback`) — not the CLI. Supported live providers: `google`, `openai`, `anthropic`.
+There is no platform `GEMINI_API_KEY` fallback.

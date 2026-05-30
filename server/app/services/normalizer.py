@@ -59,7 +59,7 @@ _WORD_RE = re.compile(r"([a-zA-Z'-]+|[^a-zA-Z'-]+)")
 logger = logging.getLogger("dejaq.services.normalizer")
 
 # ---------------------------------------------------------------------------
-# Regex gates (ported verbatim from normalization-test/configs/v22_opinion_llm_rewrite_bge_small.py)
+# Regex gates (ported verbatim from evals/normalizer/configs/v22_opinion_llm_rewrite_bge_small.py)
 # ---------------------------------------------------------------------------
 
 _OPINION_GATE = re.compile(

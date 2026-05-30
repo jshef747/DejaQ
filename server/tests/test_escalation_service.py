@@ -7,6 +7,18 @@ import pytest
 pytestmark = pytest.mark.no_model
 
 
+@pytest.fixture(autouse=True)
+def _credential_key(monkeypatch):
+    """Provide a valid Fernet key so CredentialService() can be constructed
+    without depending on a populated server/.env."""
+    from cryptography.fernet import Fernet
+    import app.config as config
+
+    key = Fernet.generate_key().decode()
+    monkeypatch.setenv("DEJAQ_CREDENTIAL_ENCRYPTION_KEY", key)
+    monkeypatch.setattr(config, "CREDENTIAL_ENCRYPTION_KEY", key, raising=False)
+
+
 def _interaction(served_tier: str):
     from app.services.response_registry import ResponseInteraction
 

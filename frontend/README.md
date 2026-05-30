@@ -1,8 +1,12 @@
 # DejaQ Dashboard
 
-Next.js dashboard for the DejaQ management API. It uses Supabase email/password auth, stores the session through `@supabase/ssr`, and sends the Supabase access token to FastAPI `/admin/v1/*` routes.
+Next.js dashboard for the DejaQ management API (`/admin/v1/*`).
 
-The customer chat UI now lives in the standalone `../chat` app. The dashboard no longer imports or serves the chat source.
+**Auth:** by default (no Supabase env) it runs in dev-bypass mode — no login, the backend
+grants a dev-admin context. Set the Supabase vars below to require real email/password login
+(`@supabase/ssr`), which then attaches the session JWT to every `/admin/v1/*` request.
+
+The customer chat UI lives in the standalone `../chat` app.
 
 ## Setup
 
@@ -12,12 +16,12 @@ npm install
 cp .env.local.example .env.local
 ```
 
-Fill in:
+`.env.local` (Supabase vars optional — leave blank for dev bypass):
 
 ```bash
-NEXT_PUBLIC_SUPABASE_URL=https://<project-id>.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon-key>
 NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
+# NEXT_PUBLIC_SUPABASE_URL=https://<project-id>.supabase.co
+# NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon-key>
 ```
 
 ## Run
@@ -26,12 +30,8 @@ NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
 npm run dev
 ```
 
-Open `http://localhost:3000`.
-
-Demo credentials after `cd server && uv run dejaq-admin seed demo`:
-
-- `demo@dejaq.local`
-- `demo1234`
+Open `http://localhost:3000`. In dev-bypass mode you go straight to the dashboard — create an
+organization and generate an API key to start using the gateway.
 
 ## What It Manages
 

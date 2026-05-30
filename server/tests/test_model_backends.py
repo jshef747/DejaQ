@@ -6,7 +6,7 @@ import httpx
 from app.services.context_adjuster import ContextAdjusterService
 from app.services.context_enricher import ContextEnricherService
 from app.services.llm_router import LLMRouterService
-from app.services.model_backends import CompletionRequest, InProcessBackend, OllamaBackend
+from app.services.model_backends import CompletionRequest, OllamaBackend
 from app.services.normalizer import NormalizerService
 
 
@@ -18,31 +18,6 @@ class FakeBackend:
     async def complete(self, request: CompletionRequest) -> str:
         self.requests.append(request)
         return self.response
-
-
-def test_in_process_backend_uses_model_manager_loader(monkeypatch):
-    class FakeModel:
-        def create_chat_completion(self, **kwargs):
-            return {"choices": [{"message": {"content": "  stripped text  "}}]}
-
-    monkeypatch.setattr(
-        "app.services.model_loader.ModelManager.load_gemma",
-        lambda: FakeModel(),
-    )
-
-    backend = InProcessBackend()
-    result = asyncio.run(
-        backend.complete(
-            CompletionRequest(
-                model_name="gemma_local",
-                messages=[{"role": "user", "content": "hello"}],
-                max_tokens=10,
-                temperature=0.1,
-            )
-        )
-    )
-
-    assert result == "stripped text"
 
 
 def test_ollama_backend_posts_chat_request():
@@ -110,15 +85,14 @@ def test_services_send_logical_model_names_to_backend():
     assert backend.requests[3].model_name == "qwen_1_5b"
 
 
-def test_service_factory_selects_ollama_backend_for_configured_role(monkeypatch):
+def test_service_factory_builds_ollama_backend(monkeypatch):
     import app.config as config
     import app.services.service_factory as service_factory
 
-    monkeypatch.setattr(config, "NORMALIZER_BACKEND", "ollama")
     monkeypatch.setattr(config, "NORMALIZER_MODEL_NAME", "gemma_e2b")
     monkeypatch.setattr(config, "OLLAMA_URL", "http://ollama.test")
     monkeypatch.setattr(config, "OLLAMA_TIMEOUT_SECONDS", 9.0)
-    service_factory._backend_pool.clear()
+    service_factory._backend = None
     service_factory._service_pool.clear()
 
     service = service_factory.get_normalizer_service()
@@ -131,9 +105,8 @@ def test_service_factory_can_override_logical_model_for_temporary_profile(monkey
     import app.config as config
     import app.services.service_factory as service_factory
 
-    monkeypatch.setattr(config, "ENRICHER_BACKEND", "in_process")
     monkeypatch.setattr(config, "ENRICHER_MODEL_NAME", "qwen_1_5b")
-    service_factory._backend_pool.clear()
+    service_factory._backend = None
     service_factory._service_pool.clear()
 
     default_service = service_factory.get_context_enricher_service()
@@ -145,7 +118,7 @@ def test_service_factory_can_override_logical_model_for_temporary_profile(monkey
     assert weak_service is not default_service
 
 
-def test_llm_router_can_switch_to_ollama_by_config(monkeypatch):
+def test_llm_router_uses_ollama_backend(monkeypatch):
     import app.config as config
     import app.services.service_factory as service_factory
 
@@ -157,60 +130,17 @@ def test_llm_router_can_switch_to_ollama_by_config(monkeypatch):
         async def complete(self, request: CompletionRequest) -> str:
             return f"ollama:{request.model_name}"
 
-    monkeypatch.setattr(config, "LOCAL_LLM_BACKEND", "ollama")
     monkeypatch.setattr(config, "LOCAL_LLM_MODEL_NAME", "gemma_local")
     monkeypatch.setattr(config, "OLLAMA_URL", "http://ollama.test")
     monkeypatch.setattr(config, "OLLAMA_TIMEOUT_SECONDS", 9.0)
     monkeypatch.setattr(service_factory, "OllamaBackend", FakeOllamaBackend)
-    service_factory._backend_pool.clear()
+    service_factory._backend = None
     service_factory._service_pool.clear()
 
     service = service_factory.get_llm_router_service()
     result = asyncio.run(service.generate_response("hello", "easy"))
 
     assert result == "ollama:gemma_local"
-
-
-def test_in_process_backend_offloads_blocking_work(monkeypatch):
-    class SleepingModel:
-        def create_chat_completion(self, **kwargs):
-            time.sleep(0.2)
-            return {"choices": [{"message": {"content": "done"}}]}
-
-    monkeypatch.setattr(
-        "app.services.model_loader.ModelManager.load_gemma",
-        lambda: SleepingModel(),
-    )
-
-    backend = InProcessBackend()
-    request = CompletionRequest(
-        model_name="gemma_local",
-        messages=[{"role": "user", "content": "hello"}],
-        max_tokens=16,
-        temperature=0.0,
-    )
-
-    async def ticker(stop: asyncio.Event, ticks: list[int]) -> None:
-        while not stop.is_set():
-            ticks[0] += 1
-            await asyncio.sleep(0.01)
-
-    async def run_batch() -> tuple[float, list[str], int]:
-        stop = asyncio.Event()
-        ticks = [0]
-        ticker_task = asyncio.create_task(ticker(stop, ticks))
-        started = time.perf_counter()
-        try:
-            results = await asyncio.gather(*(backend.complete(request) for _ in range(3)))
-        finally:
-            stop.set()
-            await ticker_task
-        return time.perf_counter() - started, results, ticks[0]
-
-    elapsed, results, tick_count = asyncio.run(run_batch())
-    assert results == ["done", "done", "done"]
-    assert elapsed >= 0.5
-    assert tick_count > 10
 
 
 def test_ollama_backend_requests_can_overlap():

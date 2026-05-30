@@ -80,7 +80,12 @@ Gateway headers:
 | --- | --- |
 | `x-dejaq-model-used` | `cache`, local model name, or external model name |
 | `x-dejaq-conversation-id` | OpenAI-compatible response id |
+| `x-dejaq-interaction-id` | Interaction id for feedback / escalation |
+| `x-dejaq-tier` | Serving tier: `cache`, `local`, or `external` |
 | `x-dejaq-response-id` | Cache entry response id when feedback can be submitted |
+
+> `POST /v1/responses` (OpenAI Responses API, newer format) shares the same auth, headers, and
+> pipeline. It is stateless: `previous_response_id` / `conversation` are rejected with HTTP 400.
 
 ## Pipeline Behavior
 
@@ -101,7 +106,7 @@ request
 - Hard miss: served by the provider inferred from the org's configured model, using encrypted org credentials.
 - Missing hard-query credentials return `402 Payment Required`.
 
-There is no runtime `GEMINI_API_KEY` fallback. Store provider credentials through the dashboard, `/admin/v1/orgs/{org}/credentials/{provider}`, or `dejaq-admin credential`.
+There is no runtime `GEMINI_API_KEY` fallback. Store provider credentials through the dashboard or `/admin/v1/orgs/{org}/credentials/{provider}`.
 
 ## SDK Example
 

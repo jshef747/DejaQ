@@ -1,6 +1,6 @@
 # DejaQ Server
 
-FastAPI backend for the DejaQ gateway, semantic cache, management API, CLI/TUI, and background cache tasks.
+FastAPI backend for the DejaQ gateway, semantic cache, management API, `dejaq-admin` CLI, and background cache tasks.
 
 ## Setup
 
@@ -8,7 +8,8 @@ FastAPI backend for the DejaQ gateway, semantic cache, management API, CLI/TUI, 
 cd server
 uv sync
 uv run alembic upgrade head
-cp .env.example .env
+# Optional — only to override defaults:
+# cp .env.example .env
 ```
 
 For Apple Silicon local model acceleration:
@@ -25,6 +26,13 @@ CMAKE_ARGS="-DLLAMA_CUBLAS=on" uv sync
 
 ## Run
 
+Generation runs through Ollama. Start it and pull the tags first:
+
+```bash
+ollama serve
+ollama pull qwen2.5:0.5b qwen2.5:1.5b gemma4:e2b gemma4:e4b phi3.5:latest
+```
+
 Recommended local stack:
 
 ```bash
@@ -39,12 +47,11 @@ Single-process local fallback:
 DEJAQ_USE_CELERY=false uv run uvicorn app.main:app --reload
 ```
 
-The startup helper can write deployment-mode env choices:
+The startup helper selects local vs remote Ollama:
 
 ```bash
-../start.sh --stack=server --mode=in-process
-../start.sh --stack=server --mode=self-hosted --ollama-url=http://127.0.0.1:11434
-../start.sh --stack=server --mode=cloud --ollama-url=https://<ollama-endpoint>
+../start.sh --stack=server --mode=local
+../start.sh --stack=server --mode=remote --ollama-url=http://<host>:11434
 ```
 
 ## API Surfaces
@@ -54,17 +61,20 @@ The startup helper can write deployment-mode env choices:
 | `GET` | `/health` | none | Health and dependency status |
 | `POST` | `/v1/chat/completions` | DejaQ org API key | OpenAI-compatible chat gateway |
 | `POST` | `/v1/feedback` | DejaQ org API key | Positive/negative cache feedback |
-| `GET/POST/...` | `/admin/v1/*` | Supabase JWT | Management API for dashboard and operators |
+| `GET/POST/...` | `/admin/v1/*` | Supabase JWT (deployment) / dev-admin (local) | Management API for dashboard and operators |
 
-Hard-query external provider calls use encrypted per-org credentials stored through `/admin/v1/orgs/{org}/credentials/{provider}` or `dejaq-admin credential`. There is no runtime platform `GEMINI_API_KEY` fallback.
+Management auth is controlled by `DEJAQ_AUTH_MODE` — `local` (dev-admin bypass, default when Supabase is unconfigured) or `supabase` (per-request JWT validation).
+
+Hard-query external provider calls use encrypted per-org credentials stored through `/admin/v1/orgs/{org}/credentials/{provider}` or the dashboard. There is no runtime platform `GEMINI_API_KEY` fallback.
 
 ## Key Environment Variables
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `SUPABASE_URL` | empty | Supabase project URL for management JWT verification |
+| `DEJAQ_AUTH_MODE` | auto | `local` (dev bypass) or `supabase`; auto-selected from `SUPABASE_URL` |
+| `SUPABASE_URL` | empty | Supabase project URL — enables `supabase` auth mode |
 | `SUPABASE_ANON_KEY` | empty | Supabase anon/public key |
-| `SUPABASE_SERVICE_ROLE_KEY` | empty | Demo seed only |
+| `SUPABASE_SERVICE_ROLE_KEY` | empty | Reserved for admin Supabase operations |
 | `DEJAQ_CREDENTIAL_ENCRYPTION_KEY` | empty | Fernet key for org provider credentials |
 | `DEJAQ_REDIS_URL` | `redis://localhost:6379/0` | Celery broker/result backend |
 | `DEJAQ_USE_CELERY` | `true` | Run background storage in Celery or in process |
@@ -77,9 +87,8 @@ Hard-query external provider calls use encrypted per-org credentials stored thro
 | `DEJAQ_ROUTING_THRESHOLD` | `0.3` | Default easy/hard threshold |
 | `DEJAQ_CHROMA_HOST` | `127.0.0.1` | ChromaDB host |
 | `DEJAQ_CHROMA_PORT` | `8001` | ChromaDB port |
-| `DEJAQ_OLLAMA_URL` | `http://127.0.0.1:11434` | Shared Ollama endpoint |
-| `DEJAQ_*_BACKEND` | `in_process` | `in_process` or `ollama` per model role |
-| `DEJAQ_*_MODEL_NAME` | role-specific | Logical model labels emitted in traces/stats |
+| `DEJAQ_OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama endpoint for all generation (local or remote) |
+| `DEJAQ_*_MODEL_NAME` | role-specific | Logical model labels mapped to Ollama tags |
 
 See `.env.example` for the complete editable template.
 
@@ -87,11 +96,13 @@ See `.env.example` for the complete editable template.
 
 ```bash
 uv run dejaq-admin --help
-uv run dejaq-admin seed demo
-uv run dejaq-admin-tui
+uv run dejaq-admin org create --name Demo
+uv run dejaq-admin key generate --org demo
+uv run dejaq-admin stats
 ```
 
-The CLI manages orgs, departments, API keys, credentials, stats, feedback, and the demo workspace. Provider keys should be supplied through stdin or `DEJAQ_SEED_PROVIDER_KEY`, not command-line args.
+The `dejaq-admin` CLI manages orgs, departments, API keys, and stats — the headless/server-only
+bootstrap path. Provider credentials and feedback are managed through the dashboard or `/admin/v1/*`.
 
 ## Architecture Map
 
@@ -106,7 +117,7 @@ app/
   services/               Pipeline, provider, auth, stats, feedback logic
   tasks/cache_tasks.py    Celery generalize-and-store task
   schemas/                Pydantic request/response contracts
-cli/                      Rich/Textual admin tools
+cli/                      Rich-based dejaq-admin CLI
 ```
 
 ## Tests

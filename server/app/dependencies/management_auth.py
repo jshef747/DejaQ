@@ -38,3 +38,12 @@ class ManagementAuthContext:
     @classmethod
     def system(cls) -> "ManagementAuthContext":
         return cls(actor_type="system")
+
+    @classmethod
+    def local_dev(cls) -> "ManagementAuthContext":
+        """Dev-admin context used when AUTH_MODE == 'local' (no Supabase).
+
+        Full access like ``system()`` but carries a friendly email so /whoami
+        reads sensibly. Local development only — never expose remotely.
+        """
+        return cls(actor_type="system", email="dev@localhost")

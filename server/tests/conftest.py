@@ -10,14 +10,19 @@ from app.db.base import Base, SessionLocal
 from app.dependencies.management_auth import ManagementAuthContext
 from app.services.cache_filter import should_cache
 from app.services.memory_chromaDB import MemoryService
+import app.services.service_factory as _sf
 from app.services.service_factory import (
-    _backend_pool,
     _service_pool,
     get_context_adjuster_service,
     get_context_enricher_service,
     get_llm_router_service,
     get_normalizer_service,
 )
+
+
+def _reset_backend() -> None:
+    _sf._backend = None
+    _service_pool.clear()
 
 
 # ── No-model fixtures (function-scoped for isolation) ──
@@ -31,29 +36,25 @@ def memory_service():
 
 @pytest.fixture(scope="session")
 def normalizer_service():
-    _backend_pool.clear()
-    _service_pool.clear()
+    _reset_backend()
     return get_normalizer_service()
 
 
 @pytest.fixture(scope="session")
 def context_enricher_service():
-    _backend_pool.clear()
-    _service_pool.clear()
+    _reset_backend()
     return get_context_enricher_service()
 
 
 @pytest.fixture(scope="session")
 def context_adjuster_service():
-    _backend_pool.clear()
-    _service_pool.clear()
+    _reset_backend()
     return get_context_adjuster_service()
 
 
 @pytest.fixture(scope="session")
 def llm_router_service():
-    _backend_pool.clear()
-    _service_pool.clear()
+    _reset_backend()
     return get_llm_router_service()
 
 

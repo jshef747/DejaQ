@@ -8,15 +8,10 @@ from app.routers.admin import router as admin_router
 from app.middleware.api_key import ApiKeyMiddleware
 from app.utils.logger import setup_logging
 from app.config import (
-    CONTEXT_ADJUSTER_BACKEND,
     CONTEXT_ADJUSTER_MODEL_NAME,
-    ENRICHER_BACKEND,
     ENRICHER_MODEL_NAME,
-    GENERALIZER_BACKEND,
     GENERALIZER_MODEL_NAME,
-    LOCAL_LLM_BACKEND,
     LOCAL_LLM_MODEL_NAME,
-    NORMALIZER_BACKEND,
     NORMALIZER_MODEL_NAME,
     OLLAMA_URL,
     USE_CELERY,
@@ -39,29 +34,14 @@ logger = logging.getLogger("dejaq.main")
 async def lifespan(app: FastAPI):
     logger.info("DejaQ Middleware starting up...")
     logger.info(
-        "Model config: enricher=%s/%s normalizer=%s/%s local_llm=%s/%s generalizer=%s/%s context_adjuster=%s/%s",
-        ENRICHER_BACKEND,
+        "Model config (Ollama): enricher=%s normalizer=%s local_llm=%s generalizer=%s context_adjuster=%s url=%s",
         ENRICHER_MODEL_NAME,
-        NORMALIZER_BACKEND,
         NORMALIZER_MODEL_NAME,
-        LOCAL_LLM_BACKEND,
         LOCAL_LLM_MODEL_NAME,
-        GENERALIZER_BACKEND,
         GENERALIZER_MODEL_NAME,
-        CONTEXT_ADJUSTER_BACKEND,
         CONTEXT_ADJUSTER_MODEL_NAME,
+        OLLAMA_URL,
     )
-    if any(
-        backend == "ollama"
-        for backend in (
-            ENRICHER_BACKEND,
-            NORMALIZER_BACKEND,
-            LOCAL_LLM_BACKEND,
-            GENERALIZER_BACKEND,
-            CONTEXT_ADJUSTER_BACKEND,
-        )
-    ):
-        logger.info("Ollama enabled: url=%s", OLLAMA_URL)
     get_normalizer_service()
     get_llm_router_service()
     get_context_adjuster_service()
@@ -86,7 +66,10 @@ app.add_middleware(
     expose_headers=[
         "x-dejaq-model-used",
         "x-dejaq-conversation-id",
+        "x-dejaq-interaction-id",
+        "x-dejaq-tier",
         "x-dejaq-response-id",
+        "x-dejaq-validator-verdict",
         "x-dejaq-prompt-difficulty",
         "x-dejaq-prompt-difficulty-score",
         "x-dejaq-cache-distance",
