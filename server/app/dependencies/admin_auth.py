@@ -3,6 +3,7 @@ import logging
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+import app.config as config
 from app.dependencies.management_auth import ManagementAuthContext
 from app.services.management_auth_service import (
     SupabaseAuthInvalid,
@@ -19,12 +20,17 @@ _bearer = HTTPBearer(auto_error=False)
 def require_management_auth(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
 ) -> ManagementAuthContext:
-    """FastAPI dependency: validate Supabase JWT and return ManagementAuthContext.
+    """FastAPI dependency: resolve the management auth context.
 
-    Returns a user-scoped ManagementAuthContext on success.
+    In local auth mode (AUTH_MODE == "local", set when Supabase is unconfigured)
+    returns a dev-admin context without validating any token — local development
+    only. Otherwise validates the Supabase JWT.
     Raises 401 for missing/invalid tokens, 503 for SDK configuration or transport failures.
     Never logs token contents or raw authorization headers.
     """
+    if config.AUTH_MODE == "local":
+        return ManagementAuthContext.local_dev()
+
     if credentials is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

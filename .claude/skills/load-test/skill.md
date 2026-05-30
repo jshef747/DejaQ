@@ -30,7 +30,7 @@ curl -s --max-time 3 http://127.0.0.1:8000/health
 Tell the user: "Starting DejaQ stack (in-process mode)..."
 
 ```bash
-DEJAQ_MODE=in-process DEJAQ_EXTERNAL_MODEL=claude-haiku-4-5-20251001 ./server/scripts/start.sh &
+DEJAQ_MODE=in-process DEJAQ_EXTERNAL_MODEL=claude-haiku-4-5-20251001 ./start.sh --stack=server &
 ```
 
 Poll `/health` every 3 seconds (up to 90s) until 200. Tell the user when ready.
@@ -43,7 +43,7 @@ cd server && uv run dejaq-admin org list 2>/dev/null
 
 If `demo` org does not exist:
 ```bash
-cd server && uv run dejaq-admin seed demo 2>/dev/null
+cd server && uv run dejaq-admin org create --name Demo 2>/dev/null
 ```
 
 Get the API key:
@@ -53,7 +53,7 @@ cd server && uv run dejaq-admin key list --org demo 2>/dev/null
 
 If none, create one:
 ```bash
-cd server && uv run dejaq-admin key create --org demo --name "load-test" 2>/dev/null
+cd server && uv run dejaq-admin key generate --org demo 2>/dev/null
 ```
 
 If the CLI only shows truncated tokens, read the full key directly:
@@ -130,7 +130,7 @@ After writing the script to `/tmp/dejaq_load_test.py`, **do NOT run it yourself*
 > ```bash
 > /Users/jonathansheffer/Desktop/Coding/DejaQ/server/.venv/bin/python /tmp/dejaq_load_test.py
 > ```
-> The report will update live at `load-test-reports/<dept-slug>.md`."
+> The report will update live at `evals/load-test-reports/<dept-slug>.md`."
 
 Then skip to step 8 and report what you've set up (persona, dept slug, thread count, turn count).
 
@@ -139,14 +139,14 @@ Then skip to step 8 and report what you've set up (persona, dept slug, thread co
 Write the script to `/tmp/dejaq_load_test.py`. Fill in `CONVERSATIONS`, `API_KEY`, `DEPT_SLUG`,
 `PERSONA`, and `REPORT_PATH`.
 
-`REPORT_PATH` must be set to:
+`REPORT_PATH` must be set to (relative to the repo root):
 ```
-/Users/jonathansheffer/Desktop/Coding/DejaQ/load-test-reports/<dept-slug>.md
+evals/load-test-reports/<dept-slug>.md
 ```
 
 Create the directory if it doesn't exist:
 ```bash
-mkdir -p /Users/jonathansheffer/Desktop/Coding/DejaQ/load-test-reports
+mkdir -p evals/load-test-reports
 ```
 
 **Response type classification:** use `x-dejaq-model-used` header to distinguish three types:
@@ -472,7 +472,7 @@ if __name__ == "__main__":
 ### 8. Report to user
 
 Show the final summary. Tell the user:
-- The live report is at `DejaQ/load-test-reports/<dept-slug>.md` (open in any markdown viewer)
+- The live report is at `evals/load-test-reports/<dept-slug>.md` (open in any markdown viewer)
 - Number of threads, total turns
 - Cache hit rate, easy miss rate, hard miss rate
 - How many hard turns were routed to Anthropic

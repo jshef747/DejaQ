@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { isLocalAuth } from "@/lib/authMode";
 import { apiFetch } from "@/lib/api";
 import Topbar from "@/components/Topbar";
 
@@ -15,8 +16,12 @@ async function getBackendStatus(): Promise<"connected" | "unavailable"> {
 }
 
 export default async function DashboardPage() {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  let email = "dev@localhost";
+  if (!isLocalAuth) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    email = user?.email ?? "unknown";
+  }
   const backendStatus = await getBackendStatus();
   const connected = backendStatus === "connected";
 
@@ -31,7 +36,7 @@ export default async function DashboardPage() {
             <p className="ds-page-sub">
               Signed in as{" "}
               <span style={{ fontFamily: "var(--font-mono)", color: "var(--fg)", fontSize: 12 }}>
-                {user?.email}
+                {email}
               </span>
             </p>
           </div>
@@ -84,8 +89,8 @@ export default async function DashboardPage() {
             </div>
             <div className="ds-card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {[
-                "1. Start the backend: ./server/scripts/start.sh",
-                "2. Seed demo data: cd server && uv run dejaq-admin seed demo",
+                "1. Start the backend: ./start.sh --stack=server",
+                "2. Create an org and API key (Organizations → Keys)",
                 "3. Set NEXT_PUBLIC_API_BASE_URL in frontend/.env.local",
               ].map((step) => (
                 <div key={step} style={{ display: "flex", alignItems: "flex-start", gap: 10, fontSize: 13, color: "var(--fg-dim)" }}>

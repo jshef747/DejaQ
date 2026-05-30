@@ -1,4 +1,10 @@
+import { redirect } from "next/navigation";
+import { isLocalAuth } from "@/lib/authMode";
+
 export default function AuthLayout({ children }: { children: React.ReactNode }) {
+  // Local dev bypass: no login screen — go straight to the dashboard.
+  if (isLocalAuth) redirect("/dashboard");
+
   return (
     <div style={{ minHeight: "100dvh", background: "var(--bg)", color: "var(--fg)", display: "grid", gridTemplateColumns: "1fr 1fr" }}>
       {/* Left marketing panel */}

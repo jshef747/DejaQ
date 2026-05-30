@@ -10,10 +10,14 @@ test_reports/
 .agent/
 .codex/
 .claude/scheduled_tasks.lock
-server/celerybeat-schedule
+server/celerybeat-schedule*
 docs/dejaq-presentation-brief.md
 docs/*.docx
 docs/*.pdf
+
+# Generated eval / load-test output
+evals/**/reports/
+evals/load-test-reports/
 
 # Python defaults
 __pycache__/
@@ -25,7 +29,3 @@ venv/
 
 # VS Code
 .vscode/
-
-# Frontend build artifacts
-dejaq-ui/dist/
-dejaq-ui/.vite/

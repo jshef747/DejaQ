@@ -95,8 +95,26 @@ class TestManagementAuthContextStructure:
         assert not ctx.has_org_access_by_slug("any")
 
 
+class TestLocalAuthMode:
+    def test_local_dev_context_has_full_access(self):
+        ctx = ManagementAuthContext.local_dev()
+        assert ctx.is_system
+        assert ctx.email == "dev@localhost"
+        assert ctx.has_org_access(123)
+        assert ctx.has_org_access_by_slug("anything")
+
+    def test_dependency_bypasses_token_in_local_mode(self, monkeypatch):
+        monkeypatch.setattr("app.config.AUTH_MODE", "local")
+        client = TestClient(_probe_app())
+        # No Authorization header required in local mode.
+        resp = client.get("/probe")
+        assert resp.status_code == 200
+        assert resp.json() == {"authorized": True}
+
+
 class TestSupabaseAuthValidation:
     def test_missing_auth_header_returns_401(self, monkeypatch):
+        monkeypatch.setattr("app.config.AUTH_MODE", "supabase")
         monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
         monkeypatch.setenv("SUPABASE_ANON_KEY", "anon-key")
         from app.services.management_auth_service import _get_auth_client
@@ -292,6 +310,7 @@ class TestSupabaseAuthValidation:
     def test_fastapi_dependency_returns_503_when_not_configured(self, monkeypatch):
         from app.services.management_auth_service import SupabaseAuthNotConfigured, _get_auth_client
         _get_auth_client.cache_clear()
+        monkeypatch.setattr("app.config.AUTH_MODE", "supabase")
         monkeypatch.setattr("app.services.management_auth_service.config.SUPABASE_URL", "")
         monkeypatch.setattr("app.services.management_auth_service.config.SUPABASE_ANON_KEY", "")
 
@@ -304,6 +323,7 @@ class TestSupabaseAuthValidation:
         from app.services.management_auth_service import _get_auth_client
         _get_auth_client.cache_clear()
 
+        monkeypatch.setattr("app.config.AUTH_MODE", "supabase")
         monkeypatch.setattr("app.services.management_auth_service.config.SUPABASE_URL", "https://test.supabase.co")
         monkeypatch.setattr("app.services.management_auth_service.config.SUPABASE_ANON_KEY", "anon-key")
 
@@ -319,6 +339,7 @@ class TestSupabaseAuthValidation:
         from app.services.management_auth_service import _get_auth_client
         _get_auth_client.cache_clear()
 
+        monkeypatch.setattr("app.config.AUTH_MODE", "supabase")
         monkeypatch.setattr("app.services.management_auth_service.config.SUPABASE_URL", "https://test.supabase.co")
         monkeypatch.setattr("app.services.management_auth_service.config.SUPABASE_ANON_KEY", "anon-key")
 

@@ -1,9 +1,13 @@
 import asyncio
 import sqlite3
+from pathlib import Path
 
 import pytest
 
 pytestmark = pytest.mark.no_model
+
+# Server package root — `python -m cli.stats` must run from here.
+_SERVER_DIR = str(Path(__file__).resolve().parents[1])
 
 
 @pytest.fixture
@@ -306,7 +310,7 @@ class TestStatsCLI:
             capture_output=True,
             text=True,
             env={**__import__("os").environ, "DEJAQ_STATS_DB": str(tmp_path / "nonexistent.db")},
-            cwd="/Users/jonathansheffer/Desktop/Coding/DejaQ/server",
+            cwd=_SERVER_DIR,
         )
         assert result.returncode == 1
         assert "not found" in result.stdout.lower() or "not found" in result.stderr.lower()
@@ -320,7 +324,7 @@ class TestStatsCLI:
             capture_output=True,
             text=True,
             env={**__import__("os").environ, "DEJAQ_STATS_DB": db_path},
-            cwd="/Users/jonathansheffer/Desktop/Coding/DejaQ/server",
+            cwd=_SERVER_DIR,
         )
         assert result.returncode == 0
         assert "no requests" in result.stdout.lower()
@@ -338,7 +342,7 @@ class TestStatsCLI:
             capture_output=True,
             text=True,
             env={**__import__("os").environ, "DEJAQ_STATS_DB": db_path},
-            cwd="/Users/jonathansheffer/Desktop/Coding/DejaQ/server",
+            cwd=_SERVER_DIR,
         )
         assert result.returncode == 0
         out = result.stdout
@@ -362,7 +366,7 @@ class TestStatsCLI:
             capture_output=True,
             text=True,
             env={**__import__("os").environ, "DEJAQ_STATS_DB": db_path},
-            cwd="/Users/jonathansheffer/Desktop/Coding/DejaQ/server",
+            cwd=_SERVER_DIR,
         )
         assert result.returncode == 0
         assert "50.0%" in result.stdout
@@ -381,7 +385,7 @@ class TestStatsCLI:
             capture_output=True,
             text=True,
             env={**__import__("os").environ, "DEJAQ_STATS_DB": db_path},
-            cwd="/Users/jonathansheffer/Desktop/Coding/DejaQ/server",
+            cwd=_SERVER_DIR,
         )
         assert result.returncode == 0
         assert "450" in result.stdout

@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Protocol, TypedDict
 
 import httpx
-
-from app.services.model_loader import ModelManager
 
 logger = logging.getLogger("dejaq.services.model_backends")
 
@@ -27,74 +24,21 @@ class CompletionRequest:
 
 @dataclass(frozen=True)
 class ModelRuntimeSpec:
-    loader_name: str
     ollama_model: str
 
 
 MODEL_RUNTIME_SPECS: dict[str, ModelRuntimeSpec] = {
-    "qwen_0_5b": ModelRuntimeSpec(
-        loader_name="load_qwen",
-        ollama_model="qwen2.5:0.5b",
-    ),
-    "qwen_1_5b": ModelRuntimeSpec(
-        loader_name="load_qwen_1_5b",
-        ollama_model="qwen2.5:1.5b",
-    ),
-    "gemma_e2b": ModelRuntimeSpec(
-        loader_name="load_gemma_e2b",
-        ollama_model="gemma4:e2b",
-    ),
-    "gemma_local": ModelRuntimeSpec(
-        loader_name="load_gemma",
-        ollama_model="gemma4:e4b",
-    ),
-    "phi_generalizer": ModelRuntimeSpec(
-        loader_name="load_phi",
-        ollama_model="phi3.5:latest",
-    ),
+    "qwen_0_5b": ModelRuntimeSpec(ollama_model="qwen2.5:0.5b"),
+    "qwen_1_5b": ModelRuntimeSpec(ollama_model="qwen2.5:1.5b"),
+    "gemma_e2b": ModelRuntimeSpec(ollama_model="gemma4:e2b"),
+    "gemma_local": ModelRuntimeSpec(ollama_model="gemma4:e4b"),
+    "phi_generalizer": ModelRuntimeSpec(ollama_model="phi3.5:latest"),
 }
 
 
 class ModelBackend(Protocol):
     async def complete(self, request: CompletionRequest) -> str:
         ...
-
-
-class InProcessBackend:
-    def __init__(self) -> None:
-        self._model_locks: dict[str, asyncio.Lock] = {}
-
-    def _get_model(self, logical_model_name: str):
-        try:
-            runtime_spec = MODEL_RUNTIME_SPECS[logical_model_name]
-        except KeyError as exc:
-            raise ValueError(f"Unknown logical model name: {logical_model_name}") from exc
-
-        loader = getattr(ModelManager, runtime_spec.loader_name, None)
-        if loader is None:
-            raise ValueError(
-                f"Model loader '{runtime_spec.loader_name}' missing for logical model '{logical_model_name}'"
-            )
-        return loader()
-
-    async def complete(self, request: CompletionRequest) -> str:
-        logger.debug("Model completion backend=in_process model=%s", request.model_name)
-        model = self._get_model(request.model_name)
-        model_lock = self._model_locks.setdefault(request.model_name, asyncio.Lock())
-
-        def _run_completion() -> str:
-            output = model.create_chat_completion(
-                messages=request.messages,
-                max_tokens=request.max_tokens,
-                temperature=request.temperature,
-            )
-            return output["choices"][0]["message"]["content"].strip()
-
-        # `llama-cpp-python` completion is blocking, so run it in a worker
-        # thread. Access to a shared model instance is serialized per logical
-        # model because concurrent calls into the same GGUF runtime can crash.
-        async with model_lock:
-            return await asyncio.to_thread(_run_completion)
 
 
 class OllamaBackend:

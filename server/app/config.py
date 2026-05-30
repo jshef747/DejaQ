@@ -21,14 +21,6 @@ def _get_float(name: str, default: float) -> float:
         return default
 
 
-def _get_backend(name: str, default: str = "in_process") -> str:
-    value = os.getenv(name, default).strip().lower()
-    if value not in {"in_process", "ollama"}:
-        logger.warning("Invalid %s value %r; using default %r", name, value, default)
-        return default
-    return value
-
-
 def _get_text(name: str, default: str) -> str:
     value = os.getenv(name, default).strip()
     return value or default
@@ -69,22 +61,23 @@ LOG_SHOW_CONTENT = _get_bool("DEJAQ_LOG_SHOW_CONTENT", False)
 # Cache eviction
 EVICTION_FLOOR = _get_float("DEJAQ_EVICTION_FLOOR", -5.0)
 
-# Model backend config
+# Model backend: generation runs through Ollama (local or remote per this URL).
 OLLAMA_URL = _get_text("DEJAQ_OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_TIMEOUT_SECONDS = _get_float("DEJAQ_OLLAMA_TIMEOUT_SECONDS", 60.0)
-
-ENRICHER_BACKEND = _get_backend("DEJAQ_ENRICHER_BACKEND")
-NORMALIZER_BACKEND = _get_backend("DEJAQ_NORMALIZER_BACKEND")
-LOCAL_LLM_BACKEND = _get_backend("DEJAQ_LOCAL_LLM_BACKEND")
-GENERALIZER_BACKEND = _get_backend("DEJAQ_GENERALIZER_BACKEND")
-CONTEXT_ADJUSTER_BACKEND = _get_backend("DEJAQ_CONTEXT_ADJUSTER_BACKEND")
-VALIDATOR_BACKEND = _get_backend("DEJAQ_VALIDATOR_BACKEND")
 
 # Supabase management auth
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
 # Service-role key: only for explicit setup/seed paths, never for HTTP request auth
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+
+# Management auth mode: "supabase" validates JWTs via Supabase; "local" grants an
+# unauthenticated dev-admin context (local development only — never expose remotely).
+# Defaults to "local" when Supabase is unconfigured, "supabase" otherwise.
+AUTH_MODE = _get_text(
+    "DEJAQ_AUTH_MODE",
+    "local" if not SUPABASE_URL.strip() else "supabase",
+).strip().lower()
 
 ENRICHER_MODEL_NAME = _get_text("DEJAQ_ENRICHER_MODEL_NAME", "qwen_1_5b")
 NORMALIZER_MODEL_NAME = _get_text("DEJAQ_NORMALIZER_MODEL_NAME", "gemma_e2b")
