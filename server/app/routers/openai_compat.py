@@ -638,11 +638,27 @@ async def run_chat_pipeline(
             miss_response_id = f"{cache_namespace}:{miss_doc_id}"
             with trace.step("store"):
                 if USE_CELERY:
-                    generalize_and_store_task.apply_async(
-                        args=(clean_query, answer, user_query, org_slug, cache_namespace),
-                        headers={"dejaq_model_profile": model_profile},
-                    )
-                    store_status = "queued"
+                    try:
+                        generalize_and_store_task.apply_async(
+                            args=(clean_query, answer, user_query, org_slug, cache_namespace),
+                            headers={"dejaq_model_profile": model_profile},
+                            ignore_result=True,
+                        )
+                        store_status = "queued"
+                    except Exception as exc:
+                        # Broker/result-backend down (e.g. Redis outage): degrade to in-process
+                        # storage instead of failing the user-facing chat request.
+                        logger.warning("Celery dispatch failed (%s); storing in-process", type(exc).__name__)
+                        background_tasks.add_task(
+                            _bg_generalize_and_store,
+                            clean_query,
+                            answer,
+                            user_query,
+                            org_slug,
+                            cache_namespace,
+                            model_profile,
+                        )
+                        store_status = "background-fallback"
                 else:
                     background_tasks.add_task(
                         _bg_generalize_and_store,

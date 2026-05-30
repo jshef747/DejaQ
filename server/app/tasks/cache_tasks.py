@@ -53,6 +53,7 @@ def _run_async_in_worker(coro):
 @celery_app.task(
     name="app.tasks.cache_tasks.generalize_and_store_task",
     bind=True,
+    ignore_result=True,  # fire-and-forget: don't subscribe to the result backend on dispatch
     max_retries=2,
     default_retry_delay=5,
     queue="background",
