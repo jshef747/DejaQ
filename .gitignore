@@ -7,6 +7,7 @@ chroma_data/
 dump.rdb
 *.db
 test_reports/
+validator-test/
 .agent/
 .codex/
 .claude/scheduled_tasks.lock
