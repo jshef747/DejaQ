@@ -38,7 +38,7 @@ from app.services.service_factory import (
     get_validator_service,
 )
 from app.tasks.cache_tasks import generalize_and_store_task
-from app.config import USE_CELERY, EXTERNAL_MODEL_NAME, ROUTING_THRESHOLD, VALIDATOR_ENABLED
+from app.config import USE_CELERY, EXTERNAL_MODEL_NAME, ROUTING_THRESHOLD, VALIDATOR_ENABLED, VALIDATOR_SKIP_DISTANCE
 from app.db.session import get_session
 from app.utils.exceptions import ExternalLLMError
 from app.utils.logger import clear_request_id, content_snippet, set_request_id
@@ -447,7 +447,12 @@ async def run_chat_pipeline(
             _cache_matched_query = _diagnostic_prompt(cache_lookup.matched_query) or ""
 
             _validator_accepted = True
-            if VALIDATOR_ENABLED:
+            # Near-identical matches (cosine distance ≤ VALIDATOR_SKIP_DISTANCE) don't
+            # need validation — the embedding already guarantees the cached answer covers
+            # the question. Calling the validator here would only burn latency and risk
+            # an over-rejection on a clearly correct hit.
+            _skip_validation = _cache_distance <= VALIDATOR_SKIP_DISTANCE
+            if VALIDATOR_ENABLED and not _skip_validation:
                 try:
                     with trace.step("validate"):
                         _validator_accepted, _validator_verdict = await services.validator.validate(

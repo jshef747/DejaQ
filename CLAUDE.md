@@ -106,6 +106,7 @@ Generation always runs through Ollama (`DEJAQ_OLLAMA_URL`); there is no per-role
 | `DEJAQ_CONTEXT_ADJUSTER_MODEL_NAME` | `qwen_1_5b` | Logical model label for context adjuster (→ Ollama tag) |
 | `DEJAQ_VALIDATOR_MODEL_NAME` | `gemma_e2b` | Logical model label for cache-answer validator (→ Ollama tag) |
 | `DEJAQ_VALIDATOR_ENABLED` | `true` | Validator is on by default; set `false` to disable (kill switch) |
+| `DEJAQ_VALIDATOR_SKIP_DISTANCE` | `0.05` | Cache hits at or below this cosine distance skip the validator (near-identical match; embedding already guarantees correctness) |
 
 ### Endpoints
 - `GET /health` — health check; also reports Celery worker status
