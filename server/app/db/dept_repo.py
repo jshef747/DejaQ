@@ -50,6 +50,19 @@ def get_dept(session: Session, workspace_slug: str, dept_slug: str) -> DeptRead 
     return DeptRead.model_validate(dept) if dept else None
 
 
+def rename_dept(session: Session, workspace_slug: str, dept_slug: str, new_name: str) -> DeptRead:
+    workspace = session.query(Workspace).filter_by(slug=workspace_slug).first()
+    if workspace is None:
+        raise ValueError(f"Workspace '{workspace_slug}' not found.")
+    dept = session.query(Department).filter_by(workspace_id=workspace.id, slug=dept_slug).first()
+    if dept is None:
+        raise ValueError(f"Department '{dept_slug}' not found under workspace '{workspace_slug}'.")
+    dept.name = new_name
+    session.flush()
+    session.refresh(dept)
+    return DeptRead.model_validate(dept)
+
+
 def delete_dept(session: Session, workspace_slug: str, dept_slug: str) -> DeptRead:
     workspace = session.query(Workspace).filter_by(slug=workspace_slug).first()
     if workspace is None:

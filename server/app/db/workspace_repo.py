@@ -29,6 +29,16 @@ def get_workspace_by_slug(session: Session, slug: str) -> WorkspaceRead | None:
     return WorkspaceRead.model_validate(workspace) if workspace else None
 
 
+def rename_workspace(session: Session, slug: str, new_name: str) -> WorkspaceRead:
+    workspace = session.query(Workspace).filter_by(slug=slug).first()
+    if workspace is None:
+        raise ValueError(f"Workspace '{slug}' not found.")
+    workspace.name = new_name
+    session.flush()
+    session.refresh(workspace)
+    return WorkspaceRead.model_validate(workspace)
+
+
 def delete_workspace(session: Session, slug: str) -> int:
     workspace = session.query(Workspace).filter_by(slug=slug).first()
     if workspace is None:

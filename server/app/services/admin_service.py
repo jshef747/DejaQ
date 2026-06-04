@@ -154,6 +154,15 @@ def create_workspace(name: str, ctx: ManagementAuthContext = _SYSTEM_CTX) -> Wor
         return new_workspace
 
 
+def rename_workspace(slug: str, new_name: str, ctx: ManagementAuthContext = _SYSTEM_CTX) -> WorkspaceRead:
+    with get_session() as session:
+        workspace = session.query(Workspace).filter_by(slug=slug).first()
+        if workspace is None:
+            raise WorkspaceNotFound(slug)
+        _check_workspace_access(ctx, workspace)
+        return workspace_repo.rename_workspace(session, slug, new_name)
+
+
 def delete_workspace(slug: str, ctx: ManagementAuthContext = _SYSTEM_CTX) -> WorkspaceDeleteResult:
     with get_session() as session:
         workspace = session.query(Workspace).filter_by(slug=slug).first()
@@ -212,6 +221,24 @@ def create_department(
             message = str(exc)
             slug = message.split("'")[1] if "'" in message else name
             raise DuplicateSlug(slug) from exc
+        return _dept_item(dept, workspace_slug)
+
+
+def rename_department(
+    workspace_slug: str,
+    dept_slug: str,
+    new_name: str,
+    ctx: ManagementAuthContext = _SYSTEM_CTX,
+) -> DepartmentItem:
+    with get_session() as session:
+        workspace = session.query(Workspace).filter_by(slug=workspace_slug).first()
+        if workspace is None:
+            raise WorkspaceNotFound(workspace_slug)
+        _check_workspace_access(ctx, workspace)
+        try:
+            dept = dept_repo.rename_dept(session, workspace_slug, dept_slug, new_name)
+        except ValueError as exc:
+            raise DeptNotFound(workspace_slug, dept_slug) from exc
         return _dept_item(dept, workspace_slug)
 
 

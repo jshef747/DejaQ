@@ -6,6 +6,7 @@ from app.schemas.admin.departments import (
     DepartmentCreate,
     DepartmentDeleteResponse,
     DepartmentItem,
+    DepartmentUpdate,
 )
 from app.services import admin_service
 
@@ -43,6 +44,26 @@ def create_department(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except admin_service.DuplicateSlug as exc:
         raise HTTPException(status_code=409, detail="Department slug already exists") from exc
+
+
+@router.patch(
+    "/workspaces/{workspace_slug}/departments/{dept_slug}",
+    response_model=DepartmentItem,
+)
+def rename_department(
+    workspace_slug: str,
+    dept_slug: str,
+    body: DepartmentUpdate,
+    ctx: ManagementAuthContext = Depends(require_management_auth),
+):
+    try:
+        return admin_service.rename_department(workspace_slug, dept_slug, body.name, ctx=ctx)
+    except admin_service.WorkspaceNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except admin_service.WorkspaceForbidden as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except admin_service.DeptNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.delete(

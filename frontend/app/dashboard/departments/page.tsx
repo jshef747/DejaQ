@@ -16,14 +16,22 @@ export default async function DepartmentsPage({
 
   let workspaces: WorkspaceItem[] = [];
   let activeSlug = workspace;
+  let backendOk = true;
 
   try {
     workspaces = await listWorkspaces();
   } catch {
-    // Fall through — show no-workspaces state below
+    backendOk = false;
   }
 
-  if (!activeSlug && workspaces.length > 0) {
+  // If the slug from the URL no longer exists (e.g. workspace was deleted), treat as absent.
+  if (activeSlug && !workspaces.some((w) => w.slug === activeSlug)) {
+    activeSlug = undefined;
+  }
+
+  // Redirect to the first valid workspace when none is selected.
+  // IMPORTANT: redirect() throws NEXT_REDIRECT — must NOT be inside a catch block.
+  if (backendOk && !activeSlug && workspaces.length > 0) {
     redirect(`/dashboard/departments?workspace=${workspaces[0].slug}`);
   }
 

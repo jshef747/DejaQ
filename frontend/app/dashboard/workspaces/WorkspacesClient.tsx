@@ -10,6 +10,7 @@ import {
   Briefcase,
   ExternalLink,
   Plus,
+  Pencil,
   Trash2,
 } from "lucide-react";
 import Modal from "@/components/Modal";
@@ -20,7 +21,7 @@ import Field from "@/components/ui/Field";
 import Pill from "@/components/ui/Pill";
 import EmptyState from "@/components/ui/EmptyState";
 import SectionHeader from "@/components/ui/SectionHeader";
-import { createWorkspace, deleteWorkspace } from "@/app/actions/workspaces";
+import { createWorkspace, deleteWorkspace, renameWorkspace } from "@/app/actions/workspaces";
 import type { DepartmentItem, DeptStatsItem, WorkspaceItem } from "@/lib/types";
 
 const fmtDate = new Intl.DateTimeFormat("en-US", { year: "numeric", month: "short", day: "numeric" });
@@ -57,6 +58,11 @@ export default function WorkspacesClient({ workspaces, allDepts, statsMap, error
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteErr, setDeleteErr] = useState<string | null>(null);
 
+  const [renameSlug, setRenameSlug] = useState<string | null>(null);
+  const [renameName, setRenameName] = useState("");
+  const [renameBusy, setRenameBusy] = useState(false);
+  const [renameErr, setRenameErr] = useState<string | null>(null);
+
   async function handleCreate() {
     const trimmed = createName.trim();
     if (!trimmed) { setCreateErr("Name is required."); return; }
@@ -67,6 +73,19 @@ export default function WorkspacesClient({ workspaces, allDepts, statsMap, error
     if (!res.ok) { setCreateErr(res.error); return; }
     setCreateOpen(false);
     setCreateName("");
+    router.refresh();
+  }
+
+  async function handleRename() {
+    const trimmed = renameName.trim();
+    if (!trimmed) { setRenameErr("Name is required."); return; }
+    if (!renameSlug) return;
+    setRenameBusy(true);
+    setRenameErr(null);
+    const res = await renameWorkspace(renameSlug, trimmed);
+    setRenameBusy(false);
+    if (!res.ok) { setRenameErr(res.error); return; }
+    setRenameSlug(null);
     router.refresh();
   }
 
@@ -291,6 +310,14 @@ export default function WorkspacesClient({ workspaces, allDepts, statsMap, error
                         Open <ExternalLink size={10} />
                       </Button>
                       <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => { setRenameErr(null); setRenameName(ws.name); setRenameSlug(ws.slug); }}
+                        aria-label={`Rename workspace ${ws.slug}`}
+                      >
+                        <Pencil size={12} />
+                      </Button>
+                      <Button
                         variant="ghost-danger"
                         size="sm"
                         onClick={() => { setDeleteErr(null); setConfirmDeleteSlug(ws.slug); }}
@@ -406,6 +433,29 @@ export default function WorkspacesClient({ workspaces, allDepts, statsMap, error
             onChange={(e) => setCreateName(e.target.value)}
             placeholder="e.g. Acme Inc"
             disabled={createBusy}
+            autoFocus
+          />
+        </Field>
+      </Modal>
+
+      {/* Rename workspace modal */}
+      <Modal
+        open={!!renameSlug}
+        onClose={() => setRenameSlug(null)}
+        title="Rename workspace"
+        subtitle={`Slug stays the same (${renameSlug ?? ""}). Only the display name changes.`}
+        footer={
+          <>
+            <Button onClick={() => setRenameSlug(null)} disabled={renameBusy}>Cancel</Button>
+            <Button variant="primary" onClick={handleRename} loading={renameBusy}>Save</Button>
+          </>
+        }
+      >
+        <Field label="New name" required error={renameErr ?? undefined}>
+          <Input
+            value={renameName}
+            onChange={(e) => setRenameName(e.target.value)}
+            disabled={renameBusy}
             autoFocus
           />
         </Field>

@@ -14,6 +14,10 @@ class WorkspaceCreate(BaseModel):
     name: str
 
 
+class WorkspaceUpdate(BaseModel):
+    name: str
+
+
 class WorkspaceDeleteResponse(BaseModel):
     deleted: bool
     departments_removed: int

@@ -16,6 +16,10 @@ class DepartmentCreate(BaseModel):
     name: str
 
 
+class DepartmentUpdate(BaseModel):
+    name: str
+
+
 class DepartmentDeleteResponse(BaseModel):
     deleted: bool
     cache_namespace: str

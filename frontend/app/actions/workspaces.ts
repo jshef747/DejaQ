@@ -43,6 +43,29 @@ export async function createWorkspace(
   return { ok: true, workspace };
 }
 
+export async function renameWorkspace(
+  slug: string,
+  name: string,
+): Promise<{ ok: true; workspace: WorkspaceItem } | { ok: false; error: string }> {
+  let res: Response;
+  try {
+    res = await apiFetch(`/admin/v1/workspaces/${encodeURIComponent(slug)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name }),
+    });
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+
+  if (!res.ok) {
+    return { ok: false, error: await responseErrorMessage(res, `Rename failed (${res.status})`) };
+  }
+
+  const workspace = (await res.json()) as WorkspaceItem;
+  revalidatePath("/dashboard/workspaces");
+  return { ok: true, workspace };
+}
+
 export async function deleteWorkspace(
   slug: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {

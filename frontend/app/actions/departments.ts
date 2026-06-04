@@ -40,6 +40,30 @@ export async function createDepartment(
   return { ok: true, dept };
 }
 
+export async function renameDepartment(
+  workspaceSlug: string,
+  deptSlug: string,
+  name: string,
+): Promise<{ ok: true; dept: DepartmentItem } | { ok: false; error: string }> {
+  let res: Response;
+  try {
+    res = await apiFetch(
+      `/admin/v1/workspaces/${encodeURIComponent(workspaceSlug)}/departments/${encodeURIComponent(deptSlug)}`,
+      { method: "PATCH", body: JSON.stringify({ name }) },
+    );
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+
+  if (!res.ok) {
+    return { ok: false, error: await responseErrorMessage(res, `Rename failed (${res.status})`) };
+  }
+
+  const dept = (await res.json()) as DepartmentItem;
+  revalidatePath("/dashboard/departments");
+  return { ok: true, dept };
+}
+
 export async function deleteDepartment(
   workspaceSlug: string,
   deptSlug: string,

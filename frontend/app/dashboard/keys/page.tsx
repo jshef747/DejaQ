@@ -15,15 +15,23 @@ export default async function ApiKeysPage({
   const { workspace } = await searchParams;
 
   let activeSlug = workspace;
-  if (!activeSlug) {
-    try {
-      const workspaces = await listWorkspaces();
-      if (workspaces.length > 0) {
-        redirect(`/dashboard/keys?workspace=${workspaces[0].slug}`);
-      }
-    } catch {
-      // Fall through — show no-workspaces state below
-    }
+  let workspaceList: Awaited<ReturnType<typeof listWorkspaces>> = [];
+  let backendOk = true;
+  try {
+    workspaceList = await listWorkspaces();
+  } catch {
+    backendOk = false;
+  }
+
+  // If the slug from the URL no longer exists (e.g. workspace was deleted), treat as absent.
+  if (activeSlug && !workspaceList.some((w) => w.slug === activeSlug)) {
+    activeSlug = undefined;
+  }
+
+  // Redirect to the first valid workspace when none is selected.
+  // IMPORTANT: redirect() throws NEXT_REDIRECT — must NOT be inside a catch block.
+  if (backendOk && !activeSlug && workspaceList.length > 0) {
+    redirect(`/dashboard/keys?workspace=${workspaceList[0].slug}`);
   }
 
   if (!activeSlug) {

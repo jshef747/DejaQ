@@ -56,9 +56,13 @@ export default function Sidebar({ email }: SidebarProps) {
   }, []);
 
   useEffect(() => {
-    if (!activeWorkspace && workspaces.length > 0) {
-      const isScoped = WORKSPACE_SCOPED_PATHS.some((p) => pathname.startsWith(p));
-      if (isScoped) router.replace(`${pathname}?workspace=${workspaces[0].slug}`);
+    if (workspaces.length === 0) return;
+    const isScoped = WORKSPACE_SCOPED_PATHS.some((p) => pathname.startsWith(p));
+    if (!isScoped) return;
+    const slugValid = workspaces.some((w) => w.slug === activeWorkspace);
+    // Redirect when there is no workspace selected, or when the selected slug no longer exists.
+    if (!activeWorkspace || !slugValid) {
+      router.replace(`${pathname}?workspace=${workspaces[0].slug}`);
     }
   }, [activeWorkspace, workspaces, pathname, router]);
 

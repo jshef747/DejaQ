@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { GripVertical, Hash, Search, Trash2, Plus, Users } from "lucide-react";
+import { GripVertical, Hash, Search, Trash2, Plus, Pencil, Users } from "lucide-react";
 import Modal from "@/components/Modal";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import Button from "@/components/ui/Button";
@@ -11,14 +11,14 @@ import Field from "@/components/ui/Field";
 import Pill from "@/components/ui/Pill";
 import EmptyState from "@/components/ui/EmptyState";
 import SectionHeader from "@/components/ui/SectionHeader";
-import { createDepartment, deleteDepartment } from "@/app/actions/departments";
+import { createDepartment, deleteDepartment, renameDepartment } from "@/app/actions/departments";
 import type { DepartmentItem, DeptStatsItem, WorkspaceItem } from "@/lib/types";
 
 const fmtDate = new Intl.DateTimeFormat("en-US", { year: "numeric", month: "short", day: "numeric" });
 function fmtNum(n: number) { return n.toLocaleString("en-US"); }
 function fmtPct(n: number) { return (n * 100).toFixed(1) + "%"; }
 
-const COL = "1fr 220px 180px 140px 60px";
+const COL = "1fr 220px 180px 140px 90px";
 
 interface Props {
   workspaceSlug: string;
@@ -39,6 +39,11 @@ export default function DepartmentsClient({ workspaceSlug, workspaces, depts, st
   const [confirmDeleteSlug, setConfirmDeleteSlug] = useState<string | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteErr, setDeleteErr] = useState<string | null>(null);
+
+  const [renameSlug, setRenameSlug] = useState<string | null>(null);
+  const [renameName, setRenameName] = useState("");
+  const [renameBusy, setRenameBusy] = useState(false);
+  const [renameErr, setRenameErr] = useState<string | null>(null);
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [drag, setDrag] = useState<{ slug: string } | null>(null);
@@ -81,6 +86,19 @@ export default function DepartmentsClient({ workspaceSlug, workspaces, depts, st
     if (!res.ok) { setDeleteErr(res.error); return; }
     setConfirmDeleteSlug(null);
     setOrder((o) => o.filter((s) => s !== deptSlug));
+    router.refresh();
+  }
+
+  async function handleRename() {
+    const trimmed = renameName.trim();
+    if (!trimmed) { setRenameErr("Name is required."); return; }
+    if (!renameSlug) return;
+    setRenameBusy(true);
+    setRenameErr(null);
+    const res = await renameDepartment(workspaceSlug, renameSlug, trimmed);
+    setRenameBusy(false);
+    if (!res.ok) { setRenameErr(res.error); return; }
+    setRenameSlug(null);
     router.refresh();
   }
 
@@ -251,7 +269,15 @@ export default function DepartmentsClient({ workspaceSlug, workspaces, depts, st
                     <div className="ds-dim" style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>
                       {fmtDate.format(new Date(dept.created_at))}
                     </div>
-                    <div style={{ display: "flex", justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
+                    <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => { setRenameErr(null); setRenameName(dept.name); setRenameSlug(dept.slug); }}
+                        aria-label={`Rename department ${dept.slug}`}
+                      >
+                        <Pencil size={12} />
+                      </Button>
                       <Button
                         variant="ghost-danger"
                         size="sm"
@@ -344,6 +370,29 @@ export default function DepartmentsClient({ workspaceSlug, workspaces, depts, st
             disabled={createBusy}
             autoFocus
             mono
+          />
+        </Field>
+      </Modal>
+
+      {/* Rename department modal */}
+      <Modal
+        open={!!renameSlug}
+        onClose={() => setRenameSlug(null)}
+        title="Rename department"
+        subtitle={`Slug stays the same (${renameSlug ?? ""}). Only the display name changes.`}
+        footer={
+          <>
+            <Button onClick={() => setRenameSlug(null)} disabled={renameBusy}>Cancel</Button>
+            <Button variant="primary" onClick={handleRename} loading={renameBusy}>Save</Button>
+          </>
+        }
+      >
+        <Field label="New name" required error={renameErr ?? undefined}>
+          <Input
+            value={renameName}
+            onChange={(e) => setRenameName(e.target.value)}
+            disabled={renameBusy}
+            autoFocus
           />
         </Field>
       </Modal>

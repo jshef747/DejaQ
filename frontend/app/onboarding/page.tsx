@@ -6,14 +6,15 @@ import OnboardingWizard from "./OnboardingWizard";
 
 export default async function OnboardingPage() {
   // Inverse guard: if workspaces already exist, skip onboarding.
+  // IMPORTANT: redirect() throws a NEXT_REDIRECT signal — it must NOT be inside a catch block.
+  let hasWorkspaces = false;
   try {
     const workspaces = await listWorkspaces();
-    if (workspaces.length > 0) {
-      redirect("/dashboard");
-    }
+    hasWorkspaces = workspaces.length > 0;
   } catch {
     // Backend unavailable — show the wizard anyway; it will surface errors during submission.
   }
+  if (hasWorkspaces) redirect("/dashboard");
 
   return (
     <div

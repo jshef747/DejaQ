@@ -25,14 +25,15 @@ export default async function DashboardLayout({
 
   // Onboarding guard: if no workspaces exist, send the user through first-run setup.
   // On backend error, fall through — the dashboard shows its own "unavailable" state.
+  // IMPORTANT: redirect() throws a NEXT_REDIRECT signal — it must NOT be inside a catch block.
+  let workspaces: Awaited<ReturnType<typeof listWorkspaces>> = [];
+  let backendOk = true;
   try {
-    const workspaces = await listWorkspaces();
-    if (workspaces.length === 0) {
-      redirect("/onboarding");
-    }
+    workspaces = await listWorkspaces();
   } catch {
-    // Backend unavailable — fall through to dashboard's error UI.
+    backendOk = false;
   }
+  if (backendOk && workspaces.length === 0) redirect("/onboarding");
 
   return (
     <div className="ds-app">
