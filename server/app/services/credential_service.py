@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 import app.config as config
 from app.db import credential_repo
-from app.db.models.org_provider_credentials import OrgProviderCredentials
+from app.db.models.workspace_provider_credentials import WorkspaceProviderCredentials
 
 SUPPORTED_PROVIDERS = {
     "google",
@@ -42,10 +42,10 @@ class CredentialService:
     def upsert(
         self,
         session: Session,
-        org_id: int,
+        workspace_id: int,
         provider: str,
         raw_key: str,
-    ) -> OrgProviderCredentials:
+    ) -> WorkspaceProviderCredentials:
         provider = provider.lower()
         if provider not in SUPPORTED_PROVIDERS:
             raise ValueError(f"Unsupported provider '{provider}'.")
@@ -53,28 +53,28 @@ class CredentialService:
         if not stripped:
             raise ValueError("API key must not be empty.")
         encrypted = self.encrypt(stripped)
-        return credential_repo.upsert_credential(session, org_id, provider, encrypted)
+        return credential_repo.upsert_credential(session, workspace_id, provider, encrypted)
 
-    def get_decrypted_key(self, session: Session, org_id: int, provider: str) -> str | None:
-        row = credential_repo.get_credential(session, org_id, provider.lower())
+    def get_decrypted_key(self, session: Session, workspace_id: int, provider: str) -> str | None:
+        row = credential_repo.get_credential(session, workspace_id, provider.lower())
         if row is None:
             return None
         return self.decrypt(row.encrypted_key)
 
-    def list_masked(self, session: Session, org_id: int) -> list[dict]:
-        rows = credential_repo.list_credentials(session, org_id)
+    def list_masked(self, session: Session, workspace_id: int) -> list[dict]:
+        rows = credential_repo.list_credentials(session, workspace_id)
         return [self._to_masked_dict(row) for row in rows]
 
-    def delete(self, session: Session, org_id: int, provider: str) -> bool:
+    def delete(self, session: Session, workspace_id: int, provider: str) -> bool:
         provider = provider.lower()
         if provider not in SUPPORTED_PROVIDERS:
             raise ValueError(f"Unsupported provider '{provider}'.")
-        return credential_repo.delete_credential(session, org_id, provider)
+        return credential_repo.delete_credential(session, workspace_id, provider)
 
-    def to_masked_response(self, row: OrgProviderCredentials) -> dict:
+    def to_masked_response(self, row: WorkspaceProviderCredentials) -> dict:
         return self._to_masked_dict(row)
 
-    def _to_masked_dict(self, row: OrgProviderCredentials) -> dict:
+    def _to_masked_dict(self, row: WorkspaceProviderCredentials) -> dict:
         key = self.decrypt(row.encrypted_key)
         return {
             "provider": row.provider,

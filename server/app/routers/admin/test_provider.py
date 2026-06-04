@@ -6,7 +6,7 @@ from starlette.concurrency import run_in_threadpool
 from app.db.session import get_session
 from app.dependencies.admin_auth import require_management_auth
 from app.dependencies.management_auth import ManagementAuthContext
-from app.routers.admin.credentials import _credential_service, _resolve_authorized_org
+from app.routers.admin.credentials import _credential_service, _resolve_authorized_workspace
 from app.schemas.chat import ExternalLLMRequest
 from app.schemas.test_provider import TestProviderRequest, TestProviderResponse
 from app.services.credential_service import SUPPORTED_PROVIDERS, CredentialService
@@ -22,23 +22,23 @@ _PROVIDER_TEST_COOLDOWN_SECONDS = 60.0
 _provider_test_last_success: dict[tuple[str, str, str], float] = {}
 
 
-def _load_org_api_key(org_slug: str, ctx: ManagementAuthContext, provider: str) -> str | None:
-    org_id = _resolve_authorized_org(org_slug, ctx)
+def _load_workspace_api_key(workspace_slug: str, ctx: ManagementAuthContext, provider: str) -> str | None:
+    workspace_id = _resolve_authorized_workspace(workspace_slug, ctx)
     service: CredentialService = _credential_service()
     with get_session() as session:
-        return service.get_decrypted_key(session, org_id, provider)
+        return service.get_decrypted_key(session, workspace_id, provider)
 
 
-def _rate_limit_key(org_slug: str, provider: str, ctx: ManagementAuthContext) -> tuple[str, str, str]:
+def _rate_limit_key(workspace_slug: str, provider: str, ctx: ManagementAuthContext) -> tuple[str, str, str]:
     if ctx.is_system:
         actor = "system"
     else:
         actor = f"user:{ctx.local_user_id or ctx.supabase_user_id or ctx.email or 'unknown'}"
-    return (org_slug, provider, actor)
+    return (workspace_slug, provider, actor)
 
 
-def _check_provider_test_cooldown(org_slug: str, provider: str, ctx: ManagementAuthContext) -> None:
-    key = _rate_limit_key(org_slug, provider, ctx)
+def _check_provider_test_cooldown(workspace_slug: str, provider: str, ctx: ManagementAuthContext) -> None:
+    key = _rate_limit_key(workspace_slug, provider, ctx)
     now = time.monotonic()
     last_success = _provider_test_last_success.get(key)
     if last_success is None:
@@ -51,13 +51,13 @@ def _check_provider_test_cooldown(org_slug: str, provider: str, ctx: ManagementA
         )
 
 
-def _record_provider_test_success(org_slug: str, provider: str, ctx: ManagementAuthContext) -> None:
-    _provider_test_last_success[_rate_limit_key(org_slug, provider, ctx)] = time.monotonic()
+def _record_provider_test_success(workspace_slug: str, provider: str, ctx: ManagementAuthContext) -> None:
+    _provider_test_last_success[_rate_limit_key(workspace_slug, provider, ctx)] = time.monotonic()
 
 
-@router.post("/orgs/{org_slug}/test-provider", response_model=TestProviderResponse)
+@router.post("/workspaces/{workspace_slug}/test-provider", response_model=TestProviderResponse)
 async def test_provider(
-    org_slug: str,
+    workspace_slug: str,
     body: TestProviderRequest,
     ctx: ManagementAuthContext = Depends(require_management_auth),
 ):
@@ -69,11 +69,11 @@ async def test_provider(
     if provider in SUPPORTED_PROVIDERS and provider not in LIVE_PROVIDERS:
         raise HTTPException(status_code=422, detail=f"Provider '{provider}' is not yet wired.")
 
-    api_key = await run_in_threadpool(_load_org_api_key, org_slug, ctx, provider)
+    api_key = await run_in_threadpool(_load_workspace_api_key, workspace_slug, ctx, provider)
     if api_key is None:
-        raise HTTPException(status_code=402, detail=f"No {provider} API key configured for this organization.")
+        raise HTTPException(status_code=402, detail=f"No {provider} API key configured for this workspace.")
 
-    _check_provider_test_cooldown(org_slug, provider, ctx)
+    _check_provider_test_cooldown(workspace_slug, provider, ctx)
 
     request = ExternalLLMRequest(
         query=_PROVIDER_TEST_PROMPT,
@@ -98,7 +98,7 @@ async def test_provider(
     if response.text.strip().upper() != "OK":
         raise HTTPException(status_code=502, detail="Provider test returned an unexpected response.")
 
-    _record_provider_test_success(org_slug, provider, ctx)
+    _record_provider_test_success(workspace_slug, provider, ctx)
 
     return TestProviderResponse(
         ok=True,

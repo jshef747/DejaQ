@@ -8,11 +8,11 @@ from app.db.base import Base
 
 class Department(Base):
     __tablename__ = "departments"
-    __table_args__ = (UniqueConstraint("org_id", "slug", name="uq_dept_org_slug"),)
+    __table_args__ = (UniqueConstraint("workspace_id", "slug", name="uq_dept_workspace_slug"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    org_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    workspace_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False
     )
     name: Mapped[str] = mapped_column(String, nullable=False)
     slug: Mapped[str] = mapped_column(String, nullable=False)
@@ -21,6 +21,6 @@ class Department(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    organization: Mapped["Organization"] = relationship(  # noqa: F821
-        "Organization", back_populates="departments"
+    workspace: Mapped["Workspace"] = relationship(  # noqa: F821
+        "Workspace", back_populates="departments"
     )

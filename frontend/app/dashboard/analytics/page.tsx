@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import Topbar from "@/components/Topbar";
-import { listOrgs } from "@/app/actions/orgs";
+import { listWorkspaces } from "@/app/actions/workspaces";
 import { listDeptStatsRange } from "@/app/actions/stats";
 import AnalyticsClient from "./AnalyticsClient";
 import type { DeptStatsReport } from "@/lib/types";
@@ -22,22 +22,22 @@ function rangeToFromTo(range: string): { from: string; to: string } {
 export default async function AnalyticsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ org?: string; range?: string }>;
+  searchParams: Promise<{ workspace?: string; range?: string }>;
 }) {
-  const { org, range: rangeParam } = await searchParams;
+  const { workspace, range: rangeParam } = await searchParams;
   const range = rangeParam && ["24h", "7d", "30d"].includes(rangeParam) ? rangeParam : "7d";
 
-  let orgs: Awaited<ReturnType<typeof listOrgs>> = [];
-  let activeSlug = org;
+  let activeSlug = workspace;
 
-  try {
-    orgs = await listOrgs();
-  } catch {
-    // Fall through — show no-orgs state below
-  }
-
-  if (!activeSlug && orgs.length > 0) {
-    redirect(`/dashboard/analytics?org=${orgs[0].slug}&range=${range}`);
+  if (!activeSlug) {
+    try {
+      const workspaces = await listWorkspaces();
+      if (workspaces.length > 0) {
+        redirect(`/dashboard/analytics?workspace=${workspaces[0].slug}&range=${range}`);
+      }
+    } catch {
+      // Fall through
+    }
   }
 
   if (!activeSlug) {
@@ -58,9 +58,9 @@ export default async function AnalyticsPage({
               padding: "20px 18px",
             }}
           >
-            No organizations found. Create one first with{" "}
+            No workspaces found. Use the onboarding flow or run{" "}
             <span style={{ fontFamily: "var(--font-mono)", color: "var(--fg)", fontSize: "11px" }}>
-              dejaq-admin org create
+              dejaq-admin workspace create
             </span>
             , then come back here.
           </div>
@@ -72,10 +72,10 @@ export default async function AnalyticsPage({
   const { from, to } = rangeToFromTo(range);
 
   let deptStats: DeptStatsReport = {
-    org: activeSlug,
+    workspace: activeSlug,
     items: [],
     total: {
-      org: activeSlug,
+      workspace: activeSlug,
       department: "",
       department_name: "",
       requests: 0,
@@ -99,9 +99,9 @@ export default async function AnalyticsPage({
 
   return (
     <>
-      <Topbar section="Analytics" orgId={activeSlug} />
+      <Topbar section="Analytics" workspaceId={activeSlug} />
       <AnalyticsClient
-        orgSlug={activeSlug}
+        workspaceSlug={activeSlug}
         range={range}
         deptStats={deptStats}
         error={error}

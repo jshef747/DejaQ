@@ -90,7 +90,7 @@ export default async function DashboardPage() {
             <div className="ds-card-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {[
                 "1. Start the backend: ./start.sh --stack=server",
-                "2. Create an org and API key (Organizations → Keys)",
+                "2. Create a workspace and API key (Workspaces → Keys)",
                 "3. Set NEXT_PUBLIC_API_BASE_URL in frontend/.env.local",
               ].map((step) => (
                 <div key={step} style={{ display: "flex", alignItems: "flex-start", gap: 10, fontSize: 13, color: "var(--fg-dim)" }}>

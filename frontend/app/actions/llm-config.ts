@@ -5,19 +5,19 @@ import { responseErrorMessage as errorMessage } from "@/app/actions/errors";
 import { apiFetch } from "@/lib/api";
 import type { LlmConfigResponse, LlmConfigUpdate } from "@/lib/types";
 
-export async function getLlmConfig(orgSlug: string): Promise<LlmConfigResponse> {
-  const res = await apiFetch(`/admin/v1/orgs/${encodeURIComponent(orgSlug)}/llm-config`);
+export async function getLlmConfig(workspaceSlug: string): Promise<LlmConfigResponse> {
+  const res = await apiFetch(`/admin/v1/workspaces/${encodeURIComponent(workspaceSlug)}/llm-config`);
   if (!res.ok) throw new Error(`Failed to load LLM configuration (${res.status})`);
   return res.json() as Promise<LlmConfigResponse>;
 }
 
 export async function updateLlmConfig(
-  orgSlug: string,
+  workspaceSlug: string,
   patch: LlmConfigUpdate,
 ): Promise<{ ok: true; data: LlmConfigResponse } | { ok: false; error: string }> {
   let res: Response;
   try {
-    res = await apiFetch(`/admin/v1/orgs/${encodeURIComponent(orgSlug)}/llm-config`, {
+    res = await apiFetch(`/admin/v1/workspaces/${encodeURIComponent(workspaceSlug)}/llm-config`, {
       method: "PUT",
       body: JSON.stringify(patch),
     });

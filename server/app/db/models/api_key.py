@@ -10,8 +10,8 @@ class ApiKey(Base):
     __tablename__ = "api_keys"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    org_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    workspace_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False
     )
     token: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -21,6 +21,6 @@ class ApiKey(Base):
         DateTime(timezone=True), nullable=True, default=None
     )
 
-    organization: Mapped["Organization"] = relationship(  # noqa: F821
-        "Organization", back_populates="api_keys"
+    workspace: Mapped["Workspace"] = relationship(  # noqa: F821
+        "Workspace", back_populates="api_keys"
     )

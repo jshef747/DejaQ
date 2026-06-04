@@ -7,14 +7,21 @@ import {
   Hash,
   GripVertical,
   Search,
-  Building2,
+  Briefcase,
   ExternalLink,
+  Plus,
+  Trash2,
 } from "lucide-react";
+import Modal from "@/components/Modal";
+import ConfirmDialog from "@/components/ConfirmDialog";
 import Button from "@/components/ui/Button";
+import Input from "@/components/ui/Input";
+import Field from "@/components/ui/Field";
 import Pill from "@/components/ui/Pill";
 import EmptyState from "@/components/ui/EmptyState";
 import SectionHeader from "@/components/ui/SectionHeader";
-import type { DepartmentItem, DeptStatsItem, OrgItem } from "@/lib/types";
+import { createWorkspace, deleteWorkspace } from "@/app/actions/workspaces";
+import type { DepartmentItem, DeptStatsItem, WorkspaceItem } from "@/lib/types";
 
 const fmtDate = new Intl.DateTimeFormat("en-US", { year: "numeric", month: "short", day: "numeric" });
 function fmtNum(n: number) { return n.toLocaleString("en-US"); }
@@ -23,50 +30,83 @@ function fmtPct(n: number) { return (n * 100).toFixed(1) + "%"; }
 const COL = "1fr 200px 160px 140px 110px";
 
 interface Props {
-  orgs: OrgItem[];
+  workspaces: WorkspaceItem[];
   allDepts: DepartmentItem[];
   statsMap: Record<string, DeptStatsItem>;
   error: string | null;
 }
 
-export default function OrganizationsClient({ orgs, allDepts, statsMap, error }: Props) {
+export default function WorkspacesClient({ workspaces, allDepts, statsMap, error }: Props) {
   const router = useRouter();
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {};
-    orgs.forEach((o, i) => { init[o.slug] = i < 2; });
+    workspaces.forEach((w, i) => { init[w.slug] = i < 2; });
     return init;
   });
-  const [drag, setDrag] = useState<{ kind: "org" | "dept"; slug: string; fromOrg?: string } | null>(null);
+  const [drag, setDrag] = useState<{ kind: "workspace" | "dept"; slug: string; fromWorkspace?: string } | null>(null);
   const [dropTarget, setDropTarget] = useState<{ slug: string; pos: "before" | "after" | "into" } | null>(null);
-  const [orgOrder, setOrgOrder] = useState(() => orgs.map((o) => o.slug));
+  const [workspaceOrder, setWorkspaceOrder] = useState(() => workspaces.map((w) => w.slug));
 
-  const deptsByOrg: Record<string, DepartmentItem[]> = {};
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createName, setCreateName] = useState("");
+  const [createBusy, setCreateBusy] = useState(false);
+  const [createErr, setCreateErr] = useState<string | null>(null);
+
+  const [confirmDeleteSlug, setConfirmDeleteSlug] = useState<string | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteErr, setDeleteErr] = useState<string | null>(null);
+
+  async function handleCreate() {
+    const trimmed = createName.trim();
+    if (!trimmed) { setCreateErr("Name is required."); return; }
+    setCreateBusy(true);
+    setCreateErr(null);
+    const res = await createWorkspace(trimmed);
+    setCreateBusy(false);
+    if (!res.ok) { setCreateErr(res.error); return; }
+    setCreateOpen(false);
+    setCreateName("");
+    router.refresh();
+  }
+
+  async function handleDelete(slug: string) {
+    setDeleteBusy(true);
+    setDeleteErr(null);
+    const res = await deleteWorkspace(slug);
+    setDeleteBusy(false);
+    if (!res.ok) { setDeleteErr(res.error); return; }
+    setConfirmDeleteSlug(null);
+    setWorkspaceOrder((o) => o.filter((s) => s !== slug));
+    router.refresh();
+  }
+
+  const deptsByWorkspace: Record<string, DepartmentItem[]> = {};
   for (const d of allDepts) {
-    (deptsByOrg[d.org_slug] ??= []).push(d);
+    (deptsByWorkspace[d.workspace_slug] ??= []).push(d);
   }
 
   const toggle = (slug: string) => setExpanded((e) => ({ ...e, [slug]: !e[slug] }));
 
   const searchLower = search.toLowerCase();
   const visibleSlugs = search.trim()
-    ? orgOrder.filter((slug) => {
-        const org = orgs.find((o) => o.slug === slug);
-        if (!org) return false;
-        if (org.name.toLowerCase().includes(searchLower) || org.slug.toLowerCase().includes(searchLower)) return true;
-        return (deptsByOrg[slug] ?? []).some((d) => d.slug.includes(searchLower));
+    ? workspaceOrder.filter((slug) => {
+        const ws = workspaces.find((w) => w.slug === slug);
+        if (!ws) return false;
+        if (ws.name.toLowerCase().includes(searchLower) || ws.slug.toLowerCase().includes(searchLower)) return true;
+        return (deptsByWorkspace[slug] ?? []).some((d) => d.slug.includes(searchLower));
       })
-    : orgOrder;
+    : workspaceOrder;
 
-  function onOrgDragStart(slug: string) { setDrag({ kind: "org", slug }); }
-  function onOrgDragOver(e: React.DragEvent, slug: string) {
-    if (!drag || drag.kind !== "org") return;
+  function onWorkspaceDragStart(slug: string) { setDrag({ kind: "workspace", slug }); }
+  function onWorkspaceDragOver(e: React.DragEvent, slug: string) {
+    if (!drag || drag.kind !== "workspace") return;
     e.preventDefault();
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const pos = e.clientY - rect.top < rect.height / 2 ? "before" : "after";
     setDropTarget({ slug, pos });
   }
-  function onDeptDragStart(deptSlug: string, fromOrg: string) { setDrag({ kind: "dept", slug: deptSlug, fromOrg }); }
+  function onDeptDragStart(deptSlug: string, fromWorkspace: string) { setDrag({ kind: "dept", slug: deptSlug, fromWorkspace }); }
   function onDeptDragOver(e: React.DragEvent, deptSlug: string) {
     if (!drag || drag.kind !== "dept") return;
     e.preventDefault();
@@ -74,21 +114,21 @@ export default function OrganizationsClient({ orgs, allDepts, statsMap, error }:
     const pos = e.clientY - rect.top < rect.height / 2 ? "before" : "after";
     setDropTarget({ slug: deptSlug, pos });
   }
-  function onOrgDropZone(e: React.DragEvent, orgSlug: string) {
+  function onWorkspaceDropZone(e: React.DragEvent, workspaceSlug: string) {
     if (!drag || drag.kind !== "dept") return;
     e.preventDefault();
-    setDropTarget({ slug: orgSlug, pos: "into" });
+    setDropTarget({ slug: workspaceSlug, pos: "into" });
   }
   function onDrop(e: React.DragEvent) {
     e.preventDefault();
     if (!drag || !dropTarget) { setDrag(null); setDropTarget(null); return; }
-    if (drag.kind === "org" && (dropTarget.pos === "before" || dropTarget.pos === "after")) {
+    if (drag.kind === "workspace" && (dropTarget.pos === "before" || dropTarget.pos === "after")) {
       if (drag.slug !== dropTarget.slug) {
-        const next = orgOrder.filter((s) => s !== drag.slug);
+        const next = workspaceOrder.filter((s) => s !== drag.slug);
         const idx = next.indexOf(dropTarget.slug);
         const at = dropTarget.pos === "after" ? idx + 1 : idx;
         next.splice(at, 0, drag.slug);
-        setOrgOrder(next);
+        setWorkspaceOrder(next);
       }
     }
     setDrag(null);
@@ -98,14 +138,17 @@ export default function OrganizationsClient({ orgs, allDepts, statsMap, error }:
   return (
     <div className="ds-page">
       <SectionHeader
-        title="Organizations"
-        subtitle="Drag to reorder. Each org owns a cache namespace; each department is a partition inside that namespace."
+        title="Workspaces"
+        subtitle="Drag to reorder. Each workspace owns API keys and provider credentials; each department is a cache partition."
         action={
           <div style={{ display: "flex", gap: 8 }}>
-            <Button size="sm" onClick={() => { const all: Record<string, boolean> = {}; orgs.forEach((o) => (all[o.slug] = true)); setExpanded(all); }}>
+            <Button size="sm" onClick={() => { const all: Record<string, boolean> = {}; workspaces.forEach((w) => (all[w.slug] = true)); setExpanded(all); }}>
               Expand all
             </Button>
             <Button size="sm" onClick={() => setExpanded({})}>Collapse all</Button>
+            <Button variant="primary" size="sm" onClick={() => { setCreateName(""); setCreateErr(null); setCreateOpen(true); }}>
+              <Plus size={13} /> New workspace
+            </Button>
           </div>
         }
       />
@@ -124,12 +167,12 @@ export default function OrganizationsClient({ orgs, allDepts, statsMap, error }:
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Filter organizations and departments…"
+              placeholder="Filter workspaces and departments…"
               style={{ background: "none", border: "none", color: "var(--fg)", flex: 1, fontFamily: "var(--font-mono)", fontSize: 11, outline: "none" }}
             />
           </label>
           <span style={{ color: "var(--fg-dimmer)", fontFamily: "var(--font-mono)", fontSize: 11, marginLeft: "auto" }}>
-            {visibleSlugs.length} org{visibleSlugs.length !== 1 ? "s" : ""} · {allDepts.length} departments
+            {visibleSlugs.length} workspace{visibleSlugs.length !== 1 ? "s" : ""} · {allDepts.length} departments
           </span>
         </div>
 
@@ -144,22 +187,23 @@ export default function OrganizationsClient({ orgs, allDepts, statsMap, error }:
 
         {visibleSlugs.length === 0 ? (
           <EmptyState
-            icon={Building2}
-            title="No organizations"
-            description={search ? `No results for "${search}"` : "Create one with dejaq-admin org create"}
+            icon={Briefcase}
+            title="No workspaces"
+            description={search ? `No results for "${search}"` : "Create your first workspace to start routing traffic."}
+            action={!search ? <Button variant="primary" onClick={() => { setCreateName(""); setCreateErr(null); setCreateOpen(true); }}><Plus size={13} /> New workspace</Button> : undefined}
           />
         ) : (
           <div onDrop={onDrop} onDragEnd={() => { setDrag(null); setDropTarget(null); }}>
-            {visibleSlugs.map((slug, oi) => {
-              const org = orgs.find((o) => o.slug === slug);
-              if (!org) return null;
-              const rows = deptsByOrg[slug] ?? [];
+            {visibleSlugs.map((slug, wi) => {
+              const ws = workspaces.find((w) => w.slug === slug);
+              if (!ws) return null;
+              const rows = deptsByWorkspace[slug] ?? [];
               const isOpen = !!expanded[slug];
-              const orgHits = rows.reduce((a, d) => a + (statsMap[`${slug}::${d.slug}`]?.hits ?? 0), 0);
-              const orgMisses = rows.reduce((a, d) => a + (statsMap[`${slug}::${d.slug}`]?.misses ?? 0), 0);
-              const orgTotal = orgHits + orgMisses;
-              const orgRate = orgTotal ? orgHits / orgTotal : 0;
-              const isDragging = drag?.kind === "org" && drag.slug === slug;
+              const wsHits = rows.reduce((a, d) => a + (statsMap[`${slug}::${d.slug}`]?.hits ?? 0), 0);
+              const wsMisses = rows.reduce((a, d) => a + (statsMap[`${slug}::${d.slug}`]?.misses ?? 0), 0);
+              const wsTotal = wsHits + wsMisses;
+              const wsRate = wsTotal ? wsHits / wsTotal : 0;
+              const isDragging = drag?.kind === "workspace" && drag.slug === slug;
               const dropBefore = dropTarget?.slug === slug && dropTarget.pos === "before";
               const dropAfter = dropTarget?.slug === slug && dropTarget.pos === "after";
               const dropInto = dropTarget?.slug === slug && dropTarget.pos === "into";
@@ -169,10 +213,10 @@ export default function OrganizationsClient({ orgs, allDepts, statsMap, error }:
                   {dropBefore && <div style={{ height: 2, background: "var(--accent)", margin: "0 12px" }} />}
                   <div
                     draggable
-                    onDragStart={() => onOrgDragStart(slug)}
+                    onDragStart={() => onWorkspaceDragStart(slug)}
                     onDragOver={(e) => {
-                      if (drag?.kind === "dept") { onOrgDropZone(e, slug); return; }
-                      onOrgDragOver(e, slug);
+                      if (drag?.kind === "dept") { onWorkspaceDropZone(e, slug); return; }
+                      onWorkspaceDragOver(e, slug);
                     }}
                     onDragLeave={() => setDropTarget(null)}
                     onClick={() => toggle(slug)}
@@ -182,7 +226,7 @@ export default function OrganizationsClient({ orgs, allDepts, statsMap, error }:
                       gap: 12,
                       padding: "10px 12px",
                       alignItems: "center",
-                      borderBottom: isOpen || oi < visibleSlugs.length - 1 ? "1px solid var(--border)" : "none",
+                      borderBottom: isOpen || wi < visibleSlugs.length - 1 ? "1px solid var(--border)" : "none",
                       background: dropInto ? "var(--accent-bg)" : isDragging ? "var(--bg-3)" : "transparent",
                       opacity: isDragging ? 0.5 : 1,
                       cursor: "grab",
@@ -191,7 +235,6 @@ export default function OrganizationsClient({ orgs, allDepts, statsMap, error }:
                       transition: "background 0.1s",
                     }}
                   >
-                    {/* Name col */}
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <GripVertical size={12} style={{ color: "var(--fg-dimmer)", flexShrink: 0 }} />
                       <ChevronRight
@@ -209,55 +252,58 @@ export default function OrganizationsClient({ orgs, allDepts, statsMap, error }:
                         borderRadius: 4, color: "var(--accent)", fontFamily: "var(--font-mono)",
                         fontSize: 10, fontWeight: 700, flexShrink: 0,
                       }}>
-                        {org.name.slice(0, 1).toUpperCase()}
+                        {ws.name.slice(0, 1).toUpperCase()}
                       </span>
-                      <span style={{ fontWeight: 500 }}>{org.name}</span>
-                      <span style={{ color: "var(--fg-dimmer)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{org.slug}</span>
+                      <span style={{ fontWeight: 500 }}>{ws.name}</span>
+                      <span style={{ color: "var(--fg-dimmer)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{ws.slug}</span>
                       <span style={{ background: "var(--bg-3)", border: "1px solid var(--border-2)", borderRadius: 3, color: "var(--fg-dim)", fontFamily: "var(--font-mono)", fontSize: 10, padding: "1px 6px" }}>
                         {rows.length} dept{rows.length !== 1 ? "s" : ""}
                       </span>
                     </div>
-                    {/* Cache stats */}
                     <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-dim)" }}>
                       {rows.length ? (
                         <>
-                          <span style={{ color: "var(--accent)" }}>{fmtNum(orgHits)}</span>
+                          <span style={{ color: "var(--accent)" }}>{fmtNum(wsHits)}</span>
                           {" / "}
-                          <span style={{ color: "var(--amber)" }}>{fmtNum(orgMisses)}</span>
+                          <span style={{ color: "var(--amber)" }}>{fmtNum(wsMisses)}</span>
                         </>
                       ) : (
                         <span style={{ color: "var(--fg-dimmer)" }}>—</span>
                       )}
                     </div>
-                    {/* Hit rate */}
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, minWidth: 48, color: orgRate >= 0.7 ? "var(--accent)" : "var(--fg)" }}>
-                        {orgTotal ? fmtPct(orgRate) : "—"}
+                      <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, minWidth: 48, color: wsRate >= 0.7 ? "var(--accent)" : "var(--fg)" }}>
+                        {wsTotal ? fmtPct(wsRate) : "—"}
                       </span>
                       <div style={{ height: 4, background: "var(--bg-3)", borderRadius: 2, overflow: "hidden", width: 70, flexShrink: 0 }}>
-                        <div style={{ height: "100%", background: "var(--accent)", width: (orgRate * 100) + "%" }} />
+                        <div style={{ height: "100%", background: "var(--accent)", width: (wsRate * 100) + "%" }} />
                       </div>
                     </div>
-                    {/* Created */}
                     <div className="ds-dim" style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>
-                      {fmtDate.format(new Date(org.created_at))}
+                      {fmtDate.format(new Date(ws.created_at))}
                     </div>
-                    {/* Actions */}
                     <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
                       <Button
                         size="sm"
-                        onClick={() => router.push(`/dashboard/departments?org=${org.slug}`)}
+                        onClick={() => router.push(`/dashboard/departments?workspace=${ws.slug}`)}
                         style={{ gap: 4 }}
                       >
                         Open <ExternalLink size={10} />
+                      </Button>
+                      <Button
+                        variant="ghost-danger"
+                        size="sm"
+                        onClick={() => { setDeleteErr(null); setConfirmDeleteSlug(ws.slug); }}
+                        aria-label={`Delete workspace ${ws.slug}`}
+                      >
+                        <Trash2 size={12} />
                       </Button>
                     </div>
                   </div>
                   {dropAfter && !isOpen && <div style={{ height: 2, background: "var(--accent)", margin: "0 12px" }} />}
 
-                  {/* Dept sub-rows */}
                   {isOpen && (
-                    <div style={{ background: "var(--bg)", borderBottom: oi < visibleSlugs.length - 1 ? "1px solid var(--border)" : "none" }}>
+                    <div style={{ background: "var(--bg)", borderBottom: wi < visibleSlugs.length - 1 ? "1px solid var(--border)" : "none" }}>
                       {rows.length === 0 && (
                         <div style={{ padding: "14px 12px 14px 58px", color: "var(--fg-dimmer)", fontSize: 12, fontFamily: "var(--font-mono)" }}>
                           no departments yet
@@ -315,7 +361,7 @@ export default function OrganizationsClient({ orgs, allDepts, statsMap, error }:
                               <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
                                 <Button
                                   size="sm"
-                                  onClick={() => router.push(`/dashboard/departments?org=${slug}`)}
+                                  onClick={() => router.push(`/dashboard/departments?workspace=${slug}`)}
                                   style={{ gap: 4 }}
                                 >
                                   Open <ExternalLink size={10} />
@@ -340,6 +386,46 @@ export default function OrganizationsClient({ orgs, allDepts, statsMap, error }:
         <span>↕ drag rows to reorder</span>
         <span>↓ click a row to expand</span>
       </div>
+
+      {/* Create workspace modal */}
+      <Modal
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        title="Create workspace"
+        subtitle="A workspace holds API keys, provider credentials, and departments."
+        footer={
+          <>
+            <Button onClick={() => setCreateOpen(false)} disabled={createBusy}>Cancel</Button>
+            <Button variant="primary" onClick={handleCreate} loading={createBusy}>Create workspace</Button>
+          </>
+        }
+      >
+        <Field label="Name" required hint="Visible in logs and the dashboard." error={createErr ?? undefined}>
+          <Input
+            value={createName}
+            onChange={(e) => setCreateName(e.target.value)}
+            placeholder="e.g. Acme Inc"
+            disabled={createBusy}
+            autoFocus
+          />
+        </Field>
+      </Modal>
+
+      <ConfirmDialog
+        open={!!confirmDeleteSlug}
+        title="Delete workspace"
+        message={`Delete workspace "${workspaces.find((w) => w.slug === confirmDeleteSlug)?.name ?? confirmDeleteSlug}"? All departments and API keys inside will be permanently removed. This cannot be undone.`}
+        confirmLabel="Delete"
+        destructive
+        busy={deleteBusy}
+        onCancel={() => setConfirmDeleteSlug(null)}
+        onConfirm={() => confirmDeleteSlug && handleDelete(confirmDeleteSlug)}
+      />
+      {deleteErr && (
+        <div className="ds-pill ds-pill-err" style={{ marginTop: 8, padding: "8px 12px", borderRadius: 5, fontSize: 12 }}>
+          {deleteErr}
+        </div>
+      )}
     </div>
   );
 }

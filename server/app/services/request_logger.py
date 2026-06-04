@@ -11,7 +11,7 @@ _CREATE_REQUESTS_TABLE = """
 CREATE TABLE IF NOT EXISTS requests (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     ts          TEXT    NOT NULL,
-    org         TEXT    NOT NULL,
+    workspace   TEXT    NOT NULL,
     department  TEXT    NOT NULL,
     latency_ms  INTEGER NOT NULL,
     cache_hit   INTEGER NOT NULL,
@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS feedback_log (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     ts          TEXT    NOT NULL,
     response_id TEXT    NOT NULL,
-    org         TEXT    NOT NULL,
+    workspace   TEXT    NOT NULL,
     department  TEXT    NOT NULL,
     rating      TEXT    NOT NULL,
     comment     TEXT,
@@ -41,9 +41,9 @@ CREATE TABLE IF NOT EXISTS feedback_log (
 
 _CREATE_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_requests_ts ON requests(ts)",
-    "CREATE INDEX IF NOT EXISTS idx_requests_org_department_ts ON requests(org, department, ts)",
+    "CREATE INDEX IF NOT EXISTS idx_requests_workspace_department_ts ON requests(workspace, department, ts)",
     "CREATE INDEX IF NOT EXISTS idx_feedback_log_ts_id ON feedback_log(ts, id)",
-    "CREATE INDEX IF NOT EXISTS idx_feedback_log_org_department ON feedback_log(org, department)",
+    "CREATE INDEX IF NOT EXISTS idx_feedback_log_workspace_department ON feedback_log(workspace, department)",
     "CREATE INDEX IF NOT EXISTS idx_feedback_log_response_id ON feedback_log(response_id)",
     "CREATE INDEX IF NOT EXISTS idx_requests_interaction_id ON requests(interaction_id)",
     "CREATE INDEX IF NOT EXISTS idx_requests_source ON requests(source)",
@@ -62,6 +62,12 @@ class RequestLogger:
         # Migrate existing tables with additive nullable/default columns.
         try:
             cols = [row[1] for row in await (await self._db.execute("PRAGMA table_info(requests)")).fetchall()]
+
+            # Rename legacy 'org' column to 'workspace' if present (one-time migration).
+            if "org" in cols and "workspace" not in cols:
+                await self._db.execute("ALTER TABLE requests RENAME COLUMN org TO workspace")
+                logger.info("Migrated requests.org → requests.workspace")
+
             request_columns = {
                 "response_id": "TEXT",
                 "source": "TEXT NOT NULL DEFAULT 'chat'",
@@ -77,6 +83,11 @@ class RequestLogger:
             feedback_cols = [
                 row[1] for row in await (await self._db.execute("PRAGMA table_info(feedback_log)")).fetchall()
             ]
+            # Rename legacy 'org' column in feedback_log too.
+            if "org" in feedback_cols and "workspace" not in feedback_cols:
+                await self._db.execute("ALTER TABLE feedback_log RENAME COLUMN org TO workspace")
+                logger.info("Migrated feedback_log.org → feedback_log.workspace")
+
             if "interaction_id" not in feedback_cols:
                 await self._db.execute("ALTER TABLE feedback_log ADD COLUMN interaction_id TEXT")
         except Exception:
@@ -88,7 +99,7 @@ class RequestLogger:
 
     async def log(
         self,
-        org: str,
+        workspace: str,
         department: str,
         latency_ms: int,
         cache_hit: bool,
@@ -110,7 +121,7 @@ class RequestLogger:
                 """
                 INSERT INTO requests (
                     ts,
-                    org,
+                    workspace,
                     department,
                     latency_ms,
                     cache_hit,
@@ -127,7 +138,7 @@ class RequestLogger:
                 """,
                 (
                     ts,
-                    org,
+                    workspace,
                     department,
                     latency_ms,
                     int(cache_hit),
@@ -148,7 +159,7 @@ class RequestLogger:
     async def log_feedback(
         self,
         response_id: str,
-        org: str,
+        workspace: str,
         department: str,
         rating: str,
         comment: str | None,
@@ -160,9 +171,9 @@ class RequestLogger:
         ts = datetime.now(timezone.utc).isoformat()
         try:
             await self._db.execute(
-                "INSERT INTO feedback_log (ts, response_id, org, department, rating, comment, interaction_id) "
+                "INSERT INTO feedback_log (ts, response_id, workspace, department, rating, comment, interaction_id) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (ts, response_id, org, department, rating, comment, interaction_id),
+                (ts, response_id, workspace, department, rating, comment, interaction_id),
             )
             await self._db.commit()
         except Exception:

@@ -2,19 +2,19 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.models.department import Department
-from app.db.models.org import Organization
+from app.db.models.workspace import Workspace
 from app.db.slug import slugify_name
 from app.schemas.department import DeptRead
 
 
-def create_dept(session: Session, org_slug: str, name: str) -> DeptRead:
-    org = session.query(Organization).filter_by(slug=org_slug).first()
-    if org is None:
-        raise ValueError(f"Organization '{org_slug}' not found.")
+def create_dept(session: Session, workspace_slug: str, name: str) -> DeptRead:
+    workspace = session.query(Workspace).filter_by(slug=workspace_slug).first()
+    if workspace is None:
+        raise ValueError(f"Workspace '{workspace_slug}' not found.")
     dept_slug = slugify_name(name)
-    cache_namespace = f"{org_slug}__{dept_slug}"
+    cache_namespace = f"{workspace_slug}__{dept_slug}"
     dept = Department(
-        org_id=org.id,
+        workspace_id=workspace.id,
         name=name,
         slug=dept_slug,
         cache_namespace=cache_namespace,
@@ -25,39 +25,39 @@ def create_dept(session: Session, org_slug: str, name: str) -> DeptRead:
     except IntegrityError:
         session.rollback()
         raise ValueError(
-            f"Department '{dept_slug}' already exists under org '{org_slug}'."
+            f"Department '{dept_slug}' already exists under workspace '{workspace_slug}'."
         )
     session.refresh(dept)
     return DeptRead.model_validate(dept)
 
 
-def list_depts(session: Session, org_slug: str | None = None) -> list[DeptRead]:
+def list_depts(session: Session, workspace_slug: str | None = None) -> list[DeptRead]:
     query = session.query(Department)
-    if org_slug:
-        org = session.query(Organization).filter_by(slug=org_slug).first()
-        if org is None:
-            raise ValueError(f"Organization '{org_slug}' not found.")
-        query = query.filter_by(org_id=org.id)
+    if workspace_slug:
+        workspace = session.query(Workspace).filter_by(slug=workspace_slug).first()
+        if workspace is None:
+            raise ValueError(f"Workspace '{workspace_slug}' not found.")
+        query = query.filter_by(workspace_id=workspace.id)
     depts = query.order_by(Department.created_at.desc()).all()
     return [DeptRead.model_validate(d) for d in depts]
 
 
-def get_dept(session: Session, org_slug: str, dept_slug: str) -> DeptRead | None:
-    org = session.query(Organization).filter_by(slug=org_slug).first()
-    if org is None:
+def get_dept(session: Session, workspace_slug: str, dept_slug: str) -> DeptRead | None:
+    workspace = session.query(Workspace).filter_by(slug=workspace_slug).first()
+    if workspace is None:
         return None
-    dept = session.query(Department).filter_by(org_id=org.id, slug=dept_slug).first()
+    dept = session.query(Department).filter_by(workspace_id=workspace.id, slug=dept_slug).first()
     return DeptRead.model_validate(dept) if dept else None
 
 
-def delete_dept(session: Session, org_slug: str, dept_slug: str) -> DeptRead:
-    org = session.query(Organization).filter_by(slug=org_slug).first()
-    if org is None:
-        raise ValueError(f"Organization '{org_slug}' not found.")
-    dept = session.query(Department).filter_by(org_id=org.id, slug=dept_slug).first()
+def delete_dept(session: Session, workspace_slug: str, dept_slug: str) -> DeptRead:
+    workspace = session.query(Workspace).filter_by(slug=workspace_slug).first()
+    if workspace is None:
+        raise ValueError(f"Workspace '{workspace_slug}' not found.")
+    dept = session.query(Department).filter_by(workspace_id=workspace.id, slug=dept_slug).first()
     if dept is None:
         raise ValueError(
-            f"Department '{dept_slug}' not found under org '{org_slug}'."
+            f"Department '{dept_slug}' not found under workspace '{workspace_slug}'."
         )
     result = DeptRead.model_validate(dept)
     session.delete(dept)

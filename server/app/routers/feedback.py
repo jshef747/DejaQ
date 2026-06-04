@@ -2,7 +2,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app.dependencies.auth import ResolvedOrg, require_org_key
+from app.dependencies.auth import ResolvedWorkspace, require_org_key
 from app.schemas.feedback import FeedbackRequest
 from app.services.feedback_service import FeedbackNotFound
 from app.services.feedback_service import submit_feedback as submit_feedback_service
@@ -16,10 +16,10 @@ router = APIRouter()
 async def submit_feedback(
     body: FeedbackRequest,
     raw_request: Request,
-    resolved_org: ResolvedOrg = Depends(require_org_key),
+    resolved_workspace: ResolvedWorkspace = Depends(require_org_key),
 ):
-    org = resolved_org.org_slug
-    org_id = resolved_org.org_id
+    workspace = resolved_workspace.workspace_slug
+    workspace_id = resolved_workspace.workspace_id
     dept = raw_request.headers.get("X-DejaQ-Department") or "default"
 
     try:
@@ -29,8 +29,8 @@ async def submit_feedback(
             messages=body.messages,
             rating=body.rating,
             comment=body.comment,
-            org=org,
-            org_id=org_id,
+            org=workspace,
+            workspace_id=workspace_id,
             department=dept,
             validate_namespace=True,
         )

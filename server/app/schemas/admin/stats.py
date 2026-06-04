@@ -13,23 +13,23 @@ class StatsMetrics(BaseModel):
     models_used: list[str]
 
 
-class OrgStats(StatsMetrics):
-    org: str
-    org_name: str
+class WorkspaceStats(StatsMetrics):
+    workspace: str
+    workspace_name: str
 
 
 class DepartmentStats(StatsMetrics):
-    org: str
+    workspace: str
     department: str
     department_name: str
 
 
-class OrgStatsReport(BaseModel):
-    items: list[OrgStats]
+class WorkspaceStatsReport(BaseModel):
+    items: list[WorkspaceStats]
     total: StatsMetrics
 
 
 class DepartmentStatsReport(BaseModel):
-    org: str
+    workspace: str
     items: list[DepartmentStats]
     total: StatsMetrics

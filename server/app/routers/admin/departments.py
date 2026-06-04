@@ -14,51 +14,51 @@ router = APIRouter()
 
 @router.get("/departments", response_model=list[DepartmentItem])
 def list_departments(
-    org: str | None = Query(default=None),
+    workspace: str | None = Query(default=None),
     ctx: ManagementAuthContext = Depends(require_management_auth),
 ):
     try:
-        return admin_service.list_departments(org_slug=org, ctx=ctx)
-    except admin_service.OrgNotFound:
+        return admin_service.list_departments(workspace_slug=workspace, ctx=ctx)
+    except admin_service.WorkspaceNotFound:
         return []
-    except admin_service.OrgForbidden as exc:
+    except admin_service.WorkspaceForbidden as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @router.post(
-    "/orgs/{org_slug}/departments",
+    "/workspaces/{workspace_slug}/departments",
     response_model=DepartmentItem,
     status_code=status.HTTP_201_CREATED,
 )
 def create_department(
-    org_slug: str,
+    workspace_slug: str,
     body: DepartmentCreate,
     ctx: ManagementAuthContext = Depends(require_management_auth),
 ):
     try:
-        return admin_service.create_department(org_slug, body.name, ctx=ctx)
-    except admin_service.OrgNotFound as exc:
+        return admin_service.create_department(workspace_slug, body.name, ctx=ctx)
+    except admin_service.WorkspaceNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except admin_service.OrgForbidden as exc:
+    except admin_service.WorkspaceForbidden as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except admin_service.DuplicateSlug as exc:
         raise HTTPException(status_code=409, detail="Department slug already exists") from exc
 
 
 @router.delete(
-    "/orgs/{org_slug}/departments/{dept_slug}",
+    "/workspaces/{workspace_slug}/departments/{dept_slug}",
     response_model=DepartmentDeleteResponse,
 )
 def delete_department(
-    org_slug: str,
+    workspace_slug: str,
     dept_slug: str,
     ctx: ManagementAuthContext = Depends(require_management_auth),
 ):
     try:
-        return admin_service.delete_department(org_slug, dept_slug, ctx=ctx)
-    except admin_service.OrgNotFound as exc:
+        return admin_service.delete_department(workspace_slug, dept_slug, ctx=ctx)
+    except admin_service.WorkspaceNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except admin_service.OrgForbidden as exc:
+    except admin_service.WorkspaceForbidden as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except admin_service.DeptNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

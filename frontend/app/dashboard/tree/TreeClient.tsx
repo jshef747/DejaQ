@@ -14,25 +14,25 @@ import Button from "@/components/ui/Button";
 import Pill from "@/components/ui/Pill";
 import EmptyState from "@/components/ui/EmptyState";
 import SectionHeader from "@/components/ui/SectionHeader";
-import type { DepartmentItem, DeptStatsItem, OrgItem } from "@/lib/types";
+import type { DepartmentItem, DeptStatsItem, WorkspaceItem } from "@/lib/types";
 
 function fmtNum(n: number) { return n.toLocaleString("en-US"); }
 function fmtPct(n: number) { return (n * 100).toFixed(1) + "%"; }
 
 interface Props {
-  orgs: OrgItem[];
+  workspaces: WorkspaceItem[];
   allDepts: DepartmentItem[];
   statsMap: Record<string, DeptStatsItem>;
   error: string | null;
 }
 
-export default function TreeClient({ orgs, allDepts, statsMap, error }: Props) {
+export default function TreeClient({ workspaces, allDepts, statsMap, error }: Props) {
   const router = useRouter();
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
-  const deptsByOrg: Record<string, DepartmentItem[]> = {};
+  const deptsByWorkspace: Record<string, DepartmentItem[]> = {};
   for (const d of allDepts) {
-    (deptsByOrg[d.org_slug] ??= []).push(d);
+    (deptsByWorkspace[d.workspace_slug] ??= []).push(d);
   }
 
   function toggle(slug: string) {
@@ -42,11 +42,11 @@ export default function TreeClient({ orgs, allDepts, statsMap, error }: Props) {
   function expandAll() { setCollapsed({}); }
   function collapseAll() {
     const all: Record<string, boolean> = {};
-    orgs.forEach((o) => { all[o.slug] = true; });
+    workspaces.forEach((w) => { all[w.slug] = true; });
     setCollapsed(all);
   }
 
-  const totalOrgs = orgs.length;
+  const totalWorkspaces = workspaces.length;
   const totalDepts = allDepts.length;
   const totalHits = allDepts.reduce((a, d) => a + (statsMap[`${d.org_slug}::${d.slug}`]?.hits ?? 0), 0);
   const totalMisses = allDepts.reduce((a, d) => a + (statsMap[`${d.org_slug}::${d.slug}`]?.misses ?? 0), 0);
@@ -69,7 +69,7 @@ export default function TreeClient({ orgs, allDepts, statsMap, error }: Props) {
       {/* Global summary strip */}
       <div className="ds-metric-grid" style={{ marginBottom: 20 }}>
         {[
-          { label: "Organizations", value: totalOrgs.toString() },
+          { label: "Workspaces", value: totalWorkspaces.toString() },
           { label: "Departments", value: totalDepts.toString() },
           { label: "Overall hit rate", value: totalReqs ? fmtPct(overallRate) : "—" },
           { label: "Total requests", value: fmtNum(totalReqs) },
@@ -87,32 +87,32 @@ export default function TreeClient({ orgs, allDepts, statsMap, error }: Props) {
         </div>
       )}
 
-      {orgs.length === 0 && !error ? (
+      {workspaces.length === 0 && !error ? (
         <div className="ds-table-wrap">
           <EmptyState
             icon={GitBranch}
-            title="No organizations"
-            description="Create one with dejaq-admin org create"
+            title="No workspaces"
+            description="Create one with dejaq-admin workspace create"
           />
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {orgs.map((org) => {
-            const depts = deptsByOrg[org.slug] ?? [];
-            const isCollapsed = !!collapsed[org.slug];
-            const orgHits = depts.reduce((a, d) => a + (statsMap[`${org.slug}::${d.slug}`]?.hits ?? 0), 0);
-            const orgMisses = depts.reduce((a, d) => a + (statsMap[`${org.slug}::${d.slug}`]?.misses ?? 0), 0);
-            const orgTotal = orgHits + orgMisses;
-            const orgRate = orgTotal ? orgHits / orgTotal : 0;
+          {workspaces.map((ws) => {
+            const depts = deptsByWorkspace[ws.slug] ?? [];
+            const isCollapsed = !!collapsed[ws.slug];
+            const wsHits = depts.reduce((a, d) => a + (statsMap[`${ws.slug}::${d.slug}`]?.hits ?? 0), 0);
+            const wsMisses = depts.reduce((a, d) => a + (statsMap[`${ws.slug}::${d.slug}`]?.misses ?? 0), 0);
+            const wsTotal = wsHits + wsMisses;
+            const wsRate = wsTotal ? wsHits / wsTotal : 0;
 
             return (
               <div
-                key={org.slug}
+                key={ws.slug}
                 style={{ background: "var(--bg-2)", border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden" }}
               >
-                {/* Org row */}
+                {/* Workspace row */}
                 <div
-                  onClick={() => toggle(org.slug)}
+                  onClick={() => toggle(ws.slug)}
                   style={{
                     display: "flex",
                     alignItems: "center",
@@ -135,22 +135,22 @@ export default function TreeClient({ orgs, allDepts, statsMap, error }: Props) {
                     borderRadius: 5, color: "var(--accent)", fontFamily: "var(--font-mono)",
                     fontSize: 11, fontWeight: 700, flexShrink: 0,
                   }}>
-                    {org.name.slice(0, 1).toUpperCase()}
+                    {ws.name.slice(0, 1).toUpperCase()}
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ fontWeight: 600, fontSize: 14 }}>{org.name}</span>
-                      <span style={{ color: "var(--fg-dimmer)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{org.slug}</span>
+                      <span style={{ fontWeight: 600, fontSize: 14 }}>{ws.name}</span>
+                      <span style={{ color: "var(--fg-dimmer)", fontFamily: "var(--font-mono)", fontSize: 11 }}>{ws.slug}</span>
                     </div>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
-                    {orgTotal > 0 && (
+                    {wsTotal > 0 && (
                       <>
-                        <Pill variant="hit">{fmtPct(orgRate)}</Pill>
+                        <Pill variant="hit">{fmtPct(wsRate)}</Pill>
                         <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-dim)" }}>
-                          <span style={{ color: "var(--accent)" }}>{fmtNum(orgHits)}</span>
+                          <span style={{ color: "var(--accent)" }}>{fmtNum(wsHits)}</span>
                           {" / "}
-                          <span style={{ color: "var(--amber)" }}>{fmtNum(orgMisses)}</span>
+                          <span style={{ color: "var(--amber)" }}>{fmtNum(wsMisses)}</span>
                         </span>
                       </>
                     )}
@@ -158,7 +158,7 @@ export default function TreeClient({ orgs, allDepts, statsMap, error }: Props) {
                       {depts.length} dept{depts.length !== 1 ? "s" : ""}
                     </span>
                     <div onClick={(e) => e.stopPropagation()}>
-                      <Button size="sm" onClick={() => router.push(`/dashboard/departments?org=${org.slug}`)} style={{ gap: 4 }}>
+                      <Button size="sm" onClick={() => router.push(`/dashboard/departments?workspace=${ws.slug}`)} style={{ gap: 4 }}>
                         Manage <ExternalLink size={10} />
                       </Button>
                     </div>
@@ -174,7 +174,7 @@ export default function TreeClient({ orgs, allDepts, statsMap, error }: Props) {
                       </div>
                     ) : (
                       depts.map((dept, di) => {
-                        const stats = statsMap[`${org.slug}::${dept.slug}`];
+                        const stats = statsMap[`${ws.slug}::${dept.slug}`];
                         const hits = stats?.hits ?? 0;
                         const misses = stats?.misses ?? 0;
                         const total = hits + misses;

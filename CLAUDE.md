@@ -58,23 +58,34 @@ uv run celery -A app.celery_app:celery_app worker --queues=background --pool=sol
 DEJAQ_USE_CELERY=false uv run uvicorn app.main:app --reload
 ```
 
+### Workspace model
+
+DejaQ is multi-**workspace**: you (the operator) are above all workspaces and can create as many as needed. Each workspace owns API keys + provider credentials + LLM routing config; departments are cache partitions within a workspace. The workspace slug is the billing/isolation boundary — departments only segment the cache.
+
+On first launch with an empty DB the dashboard routes to an **onboarding wizard**: create a workspace → department → reveal the one-time API key. The CLI `dejaq-admin workspace create --name <name>` is the headless alternative.
+
+### Control-plane vs data-plane split
+
+| Surface | Bound to | Protected by |
+|---|---|---|
+| Dashboard (`:3000`) | 127.0.0.1 | Localhost (+ optional Supabase JWT) |
+| Admin API (`/admin/v1/*`) | 127.0.0.1 | `AdminLoopbackMiddleware` (403 from LAN) |
+| Data plane (`/v1/*`) | 0.0.0.0 (LAN) | Workspace API key |
+
+Remote admin access: `ssh -L 3000:localhost:3000 -L 8000:localhost:8000 user@server-ip` — see [docs/admin-access.md](docs/admin-access.md).
+
 ### Management auth modes (`/admin/v1/*`)
 
 `config.AUTH_MODE` controls how the management API authenticates. It auto-selects
 `local` when `SUPABASE_URL` is blank, `supabase` otherwise (override with `DEJAQ_AUTH_MODE`).
 
-- **`local` (default for local dev):** `require_management_auth` returns an unauthenticated
-  dev-admin context (`ManagementAuthContext.local_dev()`); the dashboard opens with no login.
-  **Local development only — never expose `/admin/v1/*` or the CLI remotely in this mode.**
-- **`supabase` (deployment):** validates a Supabase JWT per request. Set up a free project at
-  [supabase.com](https://supabase.com), copy the Project URL + anon key into `server/.env`
-  (`SUPABASE_URL`, `SUPABASE_ANON_KEY`) and the frontend env. Users sign up through the
-  dashboard. The `users` + `user_org_memberships` tables back this mode (dormant under `local`).
+- **`local` (default — recommended for on-prem):** `require_management_auth` returns an unauthenticated dev-admin context (`ManagementAuthContext.local_dev()`); the dashboard opens with no login. Protected by localhost binding, not a password.
+- **`supabase` (optional — for hosted/multi-user deployments):** validates a Supabase JWT per request. Set up a free project at [supabase.com](https://supabase.com), copy the Project URL + anon key into `server/.env` (`SUPABASE_URL`, `SUPABASE_ANON_KEY`) and the frontend env. The `users` + `user_workspace_memberships` tables back this mode (dormant under `local`).
 
-Bootstrap an org + API key with the dashboard (Organizations → Keys) or with
-`dejaq-admin org create` then `dejaq-admin key generate --org <slug>`.
+Bootstrap a workspace + API key with the dashboard onboarding wizard or with:
+`dejaq-admin workspace create --name "Acme"` then `dejaq-admin key generate --workspace acme`.
 
-> **Note:** `/v1/chat/completions` and `/v1/feedback` always use DejaQ org API keys, never Supabase JWTs. Only `/admin/v1/*` is affected by `AUTH_MODE`.
+> **Note:** `/v1/chat/completions` and `/v1/feedback` always use DejaQ workspace API keys, never Supabase JWTs. Only `/admin/v1/*` is affected by `AUTH_MODE`.
 
 ### Environment Variables
 Generation always runs through Ollama (`DEJAQ_OLLAMA_URL`); there is no per-role backend switch.
@@ -87,14 +98,16 @@ Generation always runs through Ollama (`DEJAQ_OLLAMA_URL`); there is no per-role
 | `SUPABASE_SERVICE_ROLE_KEY` | `` | Supabase service-role key — reserved for admin Supabase operations (not used at runtime auth) |
 | `DEJAQ_REDIS_URL` | `redis://localhost:6379/0` | Redis connection URL (broker + result backend) |
 | `DEJAQ_USE_CELERY` | `true` | Set to `false` to disable Celery and run tasks in-process |
-| `DEJAQ_KEY_CACHE_TTL` | `60` | Org API-key lookup cache TTL in seconds |
+| `DEJAQ_ADMIN_LOOPBACK_ONLY` | `true` | Restrict `/admin/v1/*` to loopback peers (127.0.0.1/::1); set `false` behind a trusted reverse proxy |
+| `DEJAQ_BIND_HOST` | `0.0.0.0` (start.sh) | Uvicorn listen host; defaults `127.0.0.1` for bare `uv run uvicorn` |
+| `DEJAQ_KEY_CACHE_TTL` | `60` | Workspace API-key lookup cache TTL in seconds |
 | `DEJAQ_STATS_DB` | `dejaq_stats.db` | Path to SQLite request log (used by `dejaq-admin stats`) |
 | `DEJAQ_LOG_LEVEL` | `INFO` | App logging level |
 | `DEJAQ_LOG_SHOW_CONTENT` | `false` | Include prompt/response content in request logs when explicitly enabled |
 | `DEJAQ_EVICTION_FLOOR` | `-5.0` | Score floor for cache eviction; entries below this are deleted by the beat task |
-| `DEJAQ_CREDENTIAL_ENCRYPTION_KEY` | `` | Fernet key used to encrypt org provider credentials. Generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`; back it up because losing it makes stored credentials unrecoverable |
-| `DEJAQ_EXTERNAL_MODEL` | `gemini-2.5-flash` | Default hard-query model when org config has no override; provider is inferred from model name |
-| `DEJAQ_ROUTING_THRESHOLD` | `0.3` | Default per-org LLM routing threshold used when no org override exists |
+| `DEJAQ_CREDENTIAL_ENCRYPTION_KEY` | `` | Fernet key used to encrypt workspace provider credentials. Generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`; back it up because losing it makes stored credentials unrecoverable |
+| `DEJAQ_EXTERNAL_MODEL` | `gemini-2.5-flash` | Default hard-query model when workspace config has no override; provider is inferred from model name |
+| `DEJAQ_ROUTING_THRESHOLD` | `0.3` | Default per-workspace LLM routing threshold used when no workspace override exists |
 | `DEJAQ_CHROMA_HOST` | `127.0.0.1` | ChromaDB HTTP server host |
 | `DEJAQ_CHROMA_PORT` | `8001` | ChromaDB HTTP server port |
 | `DEJAQ_OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama HTTP endpoint for all generation roles (local or remote) |
@@ -110,20 +123,20 @@ Generation always runs through Ollama (`DEJAQ_OLLAMA_URL`); there is no per-role
 
 ### Endpoints
 - `GET /health` — health check; also reports Celery worker status
-- `POST /v1/chat/completions` — OpenAI Chat Completions-compatible chat (streaming + non-streaming); requires `Authorization: Bearer <api-key>` and optional `X-DejaQ-Department` header; response includes `X-DejaQ-Response-Id` header when cached or stored. Hard queries return HTTP 402 when the org has no credential for the configured external provider.
+- `POST /v1/chat/completions` — OpenAI Chat Completions-compatible chat (streaming + non-streaming); requires `Authorization: Bearer <workspace-api-key>` and optional `X-DejaQ-Department` header; response includes `X-DejaQ-Response-Id` header when cached or stored. Hard queries return HTTP 402 when the workspace has no credential for the configured external provider.
 - `POST /v1/responses` — OpenAI Responses API endpoint (newer recommended format). Same auth and `X-DejaQ-*` headers. Body: `{model, input: string | [{role, content}...], instructions?, stream?, temperature?, max_output_tokens?}`. Non-streaming: `{id, object:"response", output:[...], output_text, usage:{input_tokens, output_tokens, total_tokens}}`. Streaming: typed SSE events (`response.created`, `response.output_text.delta`, `response.completed`, etc.). `previous_response_id` / `conversation` rejected with HTTP 400 — DejaQ is stateless; clients send full history in `input`. The `chat/` Next.js app is the reference client.
-- `POST /v1/feedback` — thumbs-up/down feedback on a cached response; requires `Authorization: Bearer <api-key>`; body: `{"response_id": "<X-DejaQ-Response-Id value>", "rating": "positive"|"negative", "comment": "<optional>"}`; first negative deletes entry, subsequent negatives decrement score by 2.0; positive increments score by 1.0
-- `/admin/v1/*` management endpoints — auth via Supabase JWT (Bearer token validated through Supabase Auth SDK); send a Supabase access token as `Authorization: Bearer <supabase-access-token>`:
+- `POST /v1/feedback` — thumbs-up/down feedback on a cached response; requires `Authorization: Bearer <workspace-api-key>`; body: `{"response_id": "<X-DejaQ-Response-Id value>", "rating": "positive"|"negative", "comment": "<optional>"}`; first negative deletes entry, subsequent negatives decrement score by 2.0; positive increments score by 1.0
+- `/admin/v1/*` management endpoints — **loopback-only** (127.0.0.1); auth via `local` dev-admin (default) or Supabase JWT when `SUPABASE_URL` is set. In local mode no token is required:
   - `GET /admin/v1/whoami`
-  - `GET|POST|DELETE /admin/v1/orgs[/{slug}]`
-  - `GET /admin/v1/departments`, `POST|DELETE /admin/v1/orgs/{org_slug}/departments[/{dept_slug}]`
-  - `GET|POST /admin/v1/orgs/{org_slug}/keys`, `DELETE /admin/v1/keys/{key_id}`
-  - `GET /admin/v1/stats/orgs`, `GET /admin/v1/stats/orgs/{org_slug}/departments`
-  - `GET|PUT /admin/v1/orgs/{org_slug}/llm-config`
-  - `GET /admin/v1/orgs/{org_slug}/credentials`
-  - `PUT /admin/v1/orgs/{org_slug}/credentials/{provider}`
-  - `DELETE /admin/v1/orgs/{org_slug}/credentials/{provider}`
-  - `POST /admin/v1/orgs/{org_slug}/test-provider`
+  - `GET|POST|DELETE /admin/v1/workspaces[/{slug}]`
+  - `GET /admin/v1/departments`, `POST|DELETE /admin/v1/workspaces/{workspace_slug}/departments[/{dept_slug}]`
+  - `GET|POST /admin/v1/workspaces/{workspace_slug}/keys`, `DELETE /admin/v1/keys/{key_id}`
+  - `GET /admin/v1/stats/workspaces`, `GET /admin/v1/stats/workspaces/{workspace_slug}/departments`
+  - `GET|PUT /admin/v1/workspaces/{workspace_slug}/llm-config`
+  - `GET /admin/v1/workspaces/{workspace_slug}/credentials`
+  - `PUT /admin/v1/workspaces/{workspace_slug}/credentials/{provider}`
+  - `DELETE /admin/v1/workspaces/{workspace_slug}/credentials/{provider}`
+  - `POST /admin/v1/workspaces/{workspace_slug}/test-provider`
   - `GET|POST /admin/v1/feedback`
 
 ## Architecture

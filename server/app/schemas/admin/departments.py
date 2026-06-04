@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 class DepartmentItem(BaseModel):
     id: int
-    org_slug: str
+    workspace_slug: str
     name: str
     slug: str
     cache_namespace: str

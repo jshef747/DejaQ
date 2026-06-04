@@ -6,12 +6,12 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 
 
-class OrgLlmConfig(Base):
-    __tablename__ = "org_llm_config"
+class WorkspaceLlmConfig(Base):
+    __tablename__ = "workspace_llm_configs"
 
-    org_id: Mapped[int] = mapped_column(
+    workspace_id: Mapped[int] = mapped_column(
         Integer,
-        ForeignKey("organizations.id", ondelete="CASCADE"),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
         primary_key=True,
     )
     external_model: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -24,7 +24,7 @@ class OrgLlmConfig(Base):
         nullable=False,
     )
 
-    organization: Mapped["Organization"] = relationship(  # noqa: F821
-        "Organization",
+    workspace: Mapped["Workspace"] = relationship(  # noqa: F821
+        "Workspace",
         back_populates="llm_config",
     )

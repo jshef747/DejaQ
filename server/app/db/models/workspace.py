@@ -6,8 +6,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 
 
-class Organization(Base):
-    __tablename__ = "organizations"
+class Workspace(Base):
+    __tablename__ = "workspaces"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String, nullable=False)
@@ -17,22 +17,22 @@ class Organization(Base):
     )
 
     departments: Mapped[list["Department"]] = relationship(  # noqa: F821
-        "Department", back_populates="organization", cascade="all, delete-orphan"
+        "Department", back_populates="workspace", cascade="all, delete-orphan"
     )
     api_keys: Mapped[list["ApiKey"]] = relationship(  # noqa: F821
-        "ApiKey", back_populates="organization", cascade="all, delete-orphan"
+        "ApiKey", back_populates="workspace", cascade="all, delete-orphan"
     )
-    llm_config: Mapped["OrgLlmConfig | None"] = relationship(  # noqa: F821
-        "OrgLlmConfig",
-        back_populates="organization",
+    llm_config: Mapped["WorkspaceLlmConfig | None"] = relationship(  # noqa: F821
+        "WorkspaceLlmConfig",
+        back_populates="workspace",
         cascade="all, delete-orphan",
         uselist=False,
     )
-    provider_credentials: Mapped[list["OrgProviderCredentials"]] = relationship(  # noqa: F821
-        "OrgProviderCredentials",
-        back_populates="organization",
+    provider_credentials: Mapped[list["WorkspaceProviderCredentials"]] = relationship(  # noqa: F821
+        "WorkspaceProviderCredentials",
+        back_populates="workspace",
         cascade="all, delete-orphan",
     )
-    memberships: Mapped[list["UserOrgMembership"]] = relationship(  # noqa: F821
-        "UserOrgMembership", back_populates="organization", cascade="all, delete-orphan"
+    memberships: Mapped[list["UserWorkspaceMembership"]] = relationship(  # noqa: F821
+        "UserWorkspaceMembership", back_populates="workspace", cascade="all, delete-orphan"
     )

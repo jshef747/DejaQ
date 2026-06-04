@@ -123,16 +123,16 @@ def _request_routing_mode(raw_request: Request) -> str:
     return ROUTING_MODE_AUTO
 
 
-def _read_effective_llm_config(org_slug: str, org_id: int | None) -> EffectiveLlmConfig:
-    if org_id is None:
+def _read_effective_llm_config(workspace_slug: str, workspace_id: int | None) -> EffectiveLlmConfig:
+    if workspace_id is None:
         return EffectiveLlmConfig(
             external_model=EXTERNAL_MODEL_NAME,
             routing_threshold=ROUTING_THRESHOLD,
         )
     try:
-        config = llm_config_service.read_for_org(org_slug)
-    except llm_config_service.OrgNotFound:
-        logger.warning("LLM config requested for missing org slug=%s; using defaults", org_slug)
+        config = llm_config_service.read_for_workspace(workspace_slug)
+    except llm_config_service.WorkspaceNotFound:
+        logger.warning("LLM config requested for missing org slug=%s; using defaults", workspace_slug)
         return EffectiveLlmConfig(
             external_model=EXTERNAL_MODEL_NAME,
             routing_threshold=ROUTING_THRESHOLD,
@@ -296,8 +296,8 @@ async def _increment_hit_count_bg(namespace: str, doc_id: str) -> None:
 
 async def _register_answer_interaction(
     *,
-    org_id: int | None,
-    org_slug: str,
+    workspace_id: int | None,
+    workspace_slug: str,
     department: str,
     cache_namespace: str,
     served_tier: ServedTier,
@@ -306,8 +306,8 @@ async def _register_answer_interaction(
 ) -> ResponseInteraction:
     try:
         return await response_registry.register(
-            org_id=org_id,
-            org_slug=org_slug,
+            workspace_id=workspace_id,
+            workspace_slug=workspace_slug,
             department=department,
             cache_namespace=cache_namespace,
             served_tier=served_tier,
@@ -319,8 +319,8 @@ async def _register_answer_interaction(
         # in main.lifespan before requests are served.
         await response_registry.init()
         return await response_registry.register(
-            org_id=org_id,
-            org_slug=org_slug,
+            workspace_id=workspace_id,
+            workspace_slug=workspace_slug,
             department=department,
             cache_namespace=cache_namespace,
             served_tier=served_tier,
@@ -381,8 +381,8 @@ async def run_chat_pipeline(
     _t0 = time.monotonic()
     trace = PipelineTrace()
     cache_namespace: str = getattr(raw_request.state, "cache_namespace", "dejaq_default")
-    org_slug: str = getattr(raw_request.state, "org_slug", "anonymous")
-    org_id: int | None = getattr(raw_request.state, "org_id", None)
+    workspace_slug: str = getattr(raw_request.state, "workspace_slug", "anonymous")
+    workspace_id: int | None = getattr(raw_request.state, "workspace_id", None)
     dept = raw_request.headers.get("X-DejaQ-Department") or "default"
 
     # Adapt message list into a minimal OAIChatRequest-like object for extract_pipeline_inputs
@@ -397,7 +397,7 @@ async def run_chat_pipeline(
     _max_tokens = max_tokens or 1024
     model_profile = _request_model_profile(raw_request)
     routing_mode = _request_routing_mode(raw_request)
-    llm_config = await run_in_threadpool(_read_effective_llm_config, org_slug, org_id)
+    llm_config = await run_in_threadpool(_read_effective_llm_config, workspace_slug, workspace_id)
     services = _services_for_model_profile(model_profile)
 
     try:
@@ -405,12 +405,12 @@ async def run_chat_pipeline(
         if query:
             logger.info(
                 "start org=%s dept=%s namespace=%s model=%s query=%s",
-                org_slug, dept, cache_namespace, model, query,
+                workspace_slug, dept, cache_namespace, model, query,
             )
         else:
             logger.info(
                 "start org=%s dept=%s namespace=%s model=%s",
-                org_slug, dept, cache_namespace, model,
+                workspace_slug, dept, cache_namespace, model,
             )
 
         # 1. Enrich
@@ -485,8 +485,8 @@ async def run_chat_pipeline(
 
                 response_id = f"{cache_namespace}:{_entry_id}"
                 interaction = await _register_answer_interaction(
-                    org_id=org_id,
-                    org_slug=org_slug,
+                    workspace_id=workspace_id,
+                    workspace_slug=workspace_slug,
                     department=dept,
                     cache_namespace=cache_namespace,
                     served_tier="cache",
@@ -494,7 +494,7 @@ async def run_chat_pipeline(
                     request_messages=list(messages),
                 )
                 _latency = int((time.monotonic() - _t0) * 1000)
-                asyncio.create_task(request_logger.log(org_slug, dept, _latency, True, None, None, response_id))
+                asyncio.create_task(request_logger.log(workspace_slug, dept, _latency, True, None, None, response_id))
                 asyncio.create_task(_increment_hit_count_bg(cache_namespace, _entry_id))
                 logger.info(
                     "done cache=hit route=cache model=%s response_id=%s latency=%dms steps=%s%s%s",
@@ -572,10 +572,10 @@ async def run_chat_pipeline(
                         )
 
                     decrypted_key: str | None = None
-                    if org_id is not None:
+                    if workspace_id is not None:
                         try:
                             with get_session() as session:
-                                decrypted_key = CredentialService().get_decrypted_key(session, org_id, provider)
+                                decrypted_key = CredentialService().get_decrypted_key(session, workspace_id, provider)
                         except ValueError as exc:
                             raise PipelineError(500, str(exc)) from exc
                     if decrypted_key is None:
@@ -645,7 +645,7 @@ async def run_chat_pipeline(
                 if USE_CELERY:
                     try:
                         generalize_and_store_task.apply_async(
-                            args=(clean_query, answer, user_query, org_slug, cache_namespace),
+                            args=(clean_query, answer, user_query, workspace_slug, cache_namespace),
                             headers={"dejaq_model_profile": model_profile},
                             ignore_result=True,
                         )
@@ -659,7 +659,7 @@ async def run_chat_pipeline(
                             clean_query,
                             answer,
                             user_query,
-                            org_slug,
+                            workspace_slug,
                             cache_namespace,
                             model_profile,
                         )
@@ -670,7 +670,7 @@ async def run_chat_pipeline(
                         clean_query,
                         answer,
                         user_query,
-                        org_slug,
+                        workspace_slug,
                         cache_namespace,
                         model_profile,
                     )
@@ -680,8 +680,8 @@ async def run_chat_pipeline(
         _latency = int((time.monotonic() - _t0) * 1000)
         served_tier: ServedTier = "external" if route == "external" else "local"
         interaction = await _register_answer_interaction(
-            org_id=org_id,
-            org_slug=org_slug,
+            workspace_id=workspace_id,
+            workspace_slug=workspace_slug,
             department=dept,
             cache_namespace=cache_namespace,
             served_tier=served_tier,
@@ -689,7 +689,7 @@ async def run_chat_pipeline(
             request_messages=list(messages),
         )
         asyncio.create_task(
-            request_logger.log(org_slug, dept, _latency, False, complexity, model_used, miss_response_id)
+            request_logger.log(workspace_slug, dept, _latency, False, complexity, model_used, miss_response_id)
         )
         diff_score = float(classification.get("score", 0.0))
         logger.info(

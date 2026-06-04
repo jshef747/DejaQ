@@ -38,16 +38,16 @@ type TestResult =
   | null;
 
 interface Props {
-  orgSlug: string;
-  orgName: string;
+  workspaceSlug: string;
+  workspaceName: string;
   initialConfig: LlmConfigResponse;
   initialCredentials: CredentialItem[];
   loadError: string | null;
 }
 
 export default function SettingsClient({
-  orgSlug,
-  orgName,
+  workspaceSlug,
+  workspaceName,
   initialConfig,
   initialCredentials,
   loadError,
@@ -123,7 +123,7 @@ export default function SettingsClient({
     setSaveStatus({ kind: "idle", text: "" });
 
     if (trimmedKey) {
-      const credentialRes = await upsertCredential(orgSlug, provider, trimmedKey);
+      const credentialRes = await upsertCredential(workspaceSlug, provider, trimmedKey);
       if (!credentialRes.ok) {
         setSaveBusy(false);
         setSaveStatus({ kind: "error", text: credentialRes.error });
@@ -136,7 +136,7 @@ export default function SettingsClient({
     }
 
     if (Object.keys(patch).length > 0) {
-      const configRes = await updateLlmConfig(orgSlug, patch);
+      const configRes = await updateLlmConfig(workspaceSlug, patch);
       if (!configRes.ok) {
         setSaveBusy(false);
         setSaveStatus({ kind: "error", text: configRes.error });
@@ -155,7 +155,7 @@ export default function SettingsClient({
   async function handleReset() {
     setSaveBusy(true);
     setSaveStatus({ kind: "idle", text: "" });
-    const res = await updateLlmConfig(orgSlug, {
+    const res = await updateLlmConfig(workspaceSlug, {
       external_model: null,
       local_model: null,
       routing_threshold: null,
@@ -177,7 +177,7 @@ export default function SettingsClient({
   async function handleRemoveCredential() {
     setRemoveBusy(true);
     setSaveStatus({ kind: "idle", text: "" });
-    const res = await deleteCredential(orgSlug, provider);
+    const res = await deleteCredential(workspaceSlug, provider);
     setRemoveBusy(false);
     if (!res.ok) {
       setSaveStatus({ kind: "error", text: res.error });
@@ -192,7 +192,7 @@ export default function SettingsClient({
   async function handleTest() {
     setTestBusy(true);
     setTestResult(null);
-    const res = await testProvider(orgSlug, externalModel);
+    const res = await testProvider(workspaceSlug, externalModel);
     setTestBusy(false);
     if (!res.ok) {
       setTestResult({ kind: "error", status: res.status, text: testErrorText(res.status, res.error, provider) });
@@ -205,7 +205,7 @@ export default function SettingsClient({
     <div className="ds-page">
       <SectionHeader
         title="Settings"
-        subtitle={`Configure cache routing and provider credentials for ${orgSlug}.`}
+        subtitle={`Configure cache routing and provider credentials for ${workspaceSlug}.`}
       />
 
       {loadError && (
@@ -337,15 +337,15 @@ export default function SettingsClient({
             <div>
               <h4 style={{ color: "var(--fg)", fontSize: 13, margin: "0 0 4px" }}>Delete organization</h4>
               <p style={{ color: "var(--fg-dim)", fontSize: 12, lineHeight: 1.55, margin: 0 }}>
-                Permanently remove {orgName}, including all departments, API keys, cache data, and credentials.
+                Permanently remove {workspaceName}, including all departments, API keys, cache data, and credentials.
               </p>
             </div>
             <Button
               variant="danger"
               disabled
-              title={`Org deletion is currently CLI-only. Run dejaq-admin org delete ${orgSlug} from a server shell.`}
+              title={`Workspace deletion is currently CLI-only. Run dejaq-admin workspace delete --slug ${workspaceSlug} from a server shell.`}
             >
-              Delete organization
+              Delete workspace
             </Button>
           </div>
         </div>
@@ -354,7 +354,7 @@ export default function SettingsClient({
       <ConfirmDialog
         open={confirmRemove}
         title={`Remove ${PROVIDER_LABEL[provider]} key?`}
-        message={`This will remove the stored ${PROVIDER_LABEL[provider]} API key for ${orgSlug}. Hard queries using ${PROVIDER_LABEL[provider]} will fail until a new key is saved.`}
+        message={`This will remove the stored ${PROVIDER_LABEL[provider]} API key for ${workspaceSlug}. Hard queries using ${PROVIDER_LABEL[provider]} will fail until a new key is saved.`}
         confirmLabel="Remove key"
         destructive
         busy={removeBusy}

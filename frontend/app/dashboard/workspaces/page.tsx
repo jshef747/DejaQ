@@ -1,12 +1,18 @@
-export const dynamic = "force-dynamic";
-
 import Topbar from "@/components/Topbar";
 import { listAllDepartments, listWorkspaces } from "@/app/actions/workspaces";
 import { listDeptStats } from "@/app/actions/departments";
-import TreeClient from "./TreeClient";
+import WorkspacesClient from "./WorkspacesClient";
 import type { DeptStatsItem } from "@/lib/types";
 
-export default async function TreePage() {
+export const dynamic = "force-dynamic";
+
+export default async function WorkspacesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ workspace?: string }>;
+}) {
+  const { workspace: activeWorkspaceSlug } = await searchParams;
+
   let workspaces: Awaited<ReturnType<typeof listWorkspaces>> = [];
   let allDepts: Awaited<ReturnType<typeof listAllDepartments>> = [];
   let error: string | null = null;
@@ -17,6 +23,7 @@ export default async function TreePage() {
     error = (e as Error).message;
   }
 
+  // Fetch stats for each workspace in parallel; failures are non-fatal
   const statsMap: Record<string, DeptStatsItem> = {};
   if (workspaces.length > 0) {
     const results = await Promise.allSettled(workspaces.map((w) => listDeptStats(w.slug)));
@@ -32,8 +39,13 @@ export default async function TreePage() {
 
   return (
     <>
-      <Topbar section="Workspace Tree" />
-      <TreeClient workspaces={workspaces} allDepts={allDepts} statsMap={statsMap} error={error} />
+      <Topbar section="Workspaces" workspaceId={activeWorkspaceSlug} />
+      <WorkspacesClient
+        workspaces={workspaces}
+        allDepts={allDepts}
+        statsMap={statsMap}
+        error={error}
+      />
     </>
   );
 }

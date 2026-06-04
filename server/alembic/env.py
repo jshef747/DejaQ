@@ -16,13 +16,13 @@ if config.config_file_name is not None:
 
 # Import all models so autogenerate can detect them
 from app.db.base import Base  # noqa: E402
-import app.db.models.org  # noqa: E402, F401
+import app.db.models.workspace  # noqa: E402, F401
 import app.db.models.department  # noqa: E402, F401
 import app.db.models.api_key  # noqa: E402, F401
-import app.db.models.org_llm_config  # noqa: E402, F401
-import app.db.models.org_provider_credentials  # noqa: E402, F401
+import app.db.models.workspace_llm_config  # noqa: E402, F401
+import app.db.models.workspace_provider_credentials  # noqa: E402, F401
 import app.db.models.user  # noqa: E402, F401
-import app.db.models.user_org_membership  # noqa: E402, F401
+import app.db.models.user_workspace_membership  # noqa: E402, F401
 
 target_metadata = Base.metadata
 

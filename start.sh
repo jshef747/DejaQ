@@ -390,7 +390,8 @@ start_dashboard() {
   echo -e "${CYAN}[6/7] Starting dashboard frontend...${NC}"
   ensure_node_app_ready "$FRONTEND_DIR" "Dashboard"
   free_port 3000
-  (cd "$FRONTEND_DIR" && npm run dev) &>"$LOG_DIR/dashboard.log" &
+  # Bind to 127.0.0.1 only — the admin dashboard is control-plane; not LAN-exposed.
+  (cd "$FRONTEND_DIR" && npm run dev -- --hostname 127.0.0.1 --port 3000) &>"$LOG_DIR/dashboard.log" &
   DASHBOARD_PID=$!
   sleep 2
   if ! kill -0 "$DASHBOARD_PID" 2>/dev/null; then
@@ -531,9 +532,11 @@ fi
 echo -e "  ${GREEN}Celery beat running (PID $CELERY_BEAT_PID) — eviction runs every 30 min${NC}"
 
 # ── 5. FastAPI ──────────────────────────────────────────────────────────────
+# Bind to 0.0.0.0 so the data plane (/v1/*) is reachable over the LAN.
+# The AdminLoopbackMiddleware blocks non-loopback peers on /admin/v1/* in-app.
 echo -e "${CYAN}[5/5] Starting FastAPI...${NC}"
 free_port 8000
-"$UVICORN" app.main:app --reload &>"$LOG_DIR/uvicorn.log" &
+"$UVICORN" app.main:app --host "${DEJAQ_BIND_HOST:-0.0.0.0}" --reload &>"$LOG_DIR/uvicorn.log" &
 UVICORN_PID=$!
 sleep 2
 if ! kill -0 "$UVICORN_PID" 2>/dev/null; then
@@ -551,20 +554,24 @@ TAIL_LOGS=("$LOG_DIR/redis.log" "$LOG_DIR/celery.log" "$LOG_DIR/celery_beat.log"
 echo ""
 if [[ "$STACK" == "all" ]]; then
   echo -e "${GREEN}✓ Full local stack running${NC}"
-  echo -e "  API:         http://127.0.0.1:8000"
-  echo -e "  ChromaDB:    http://127.0.0.1:8001"
-  echo -e "  Dashboard:   http://localhost:3000/dashboard"
-  echo -e "  Chat:        http://localhost:4000"
-  echo -e "  Mode:        $MODE"
-  echo -e "  Logs:        $LOG_DIR/"
+  echo -e "  Data plane (/v1):       http://0.0.0.0:8000   — LAN-accessible, key-protected"
+  echo -e "  Admin API (/admin/v1):  127.0.0.1 only        — loopback-restricted"
+  echo -e "  Dashboard:              http://127.0.0.1:3000/dashboard  — loopback-only"
+  echo -e "  ChromaDB:               http://127.0.0.1:8001"
+  echo -e "  Chat:                   http://localhost:4000"
+  echo -e "  Mode:                   $MODE"
+  echo -e "  Logs:                   $LOG_DIR/"
+  echo -e ""
+  echo -e "  Remote admin? Run on your machine: ssh -L 3000:localhost:3000 -L 8000:localhost:8000 user@server"
   TAIL_LOGS+=("$LOG_DIR/dashboard.log" "$LOG_DIR/chat.log")
 else
   echo -e "${GREEN}✓ Server services running${NC}"
-  echo -e "  API:         http://127.0.0.1:8000"
-  echo -e "  ChromaDB:    http://127.0.0.1:8001"
-  echo -e "  Mode:        $MODE"
-  echo -e "  Stats:       cd server && uv run dejaq-admin stats"
-  echo -e "  Logs:        $LOG_DIR/"
+  echo -e "  Data plane (/v1):       http://0.0.0.0:8000   — LAN-accessible, key-protected"
+  echo -e "  Admin API (/admin/v1):  127.0.0.1 only        — loopback-restricted"
+  echo -e "  ChromaDB:               http://127.0.0.1:8001"
+  echo -e "  Mode:                   $MODE"
+  echo -e "  Stats:                  cd server && uv run dejaq-admin stats"
+  echo -e "  Logs:                   $LOG_DIR/"
 fi
 echo -e "\n${YELLOW}Press Ctrl+C to stop all services.${NC}\n"
 
