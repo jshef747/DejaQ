@@ -24,8 +24,8 @@ def _interaction(served_tier: str):
 
     return ResponseInteraction(
         interaction_id="int_parent",
-        org_id=7,
-        org_slug="acme",
+        workspace_id=7,
+        workspace_slug="acme",
         department="eng",
         cache_namespace="acme__eng",
         served_tier=served_tier,
@@ -53,8 +53,8 @@ def test_cache_tier_escalates_to_local_llm(monkeypatch):
             self.kwargs = kwargs
             return ResponseInteraction(
                 interaction_id="int_child",
-                org_id=kwargs["org_id"],
-                org_slug=kwargs["org_slug"],
+                workspace_id=kwargs["workspace_id"],
+                workspace_slug=kwargs["workspace_slug"],
                 department=kwargs["department"],
                 cache_namespace=kwargs["cache_namespace"],
                 served_tier=kwargs["served_tier"],
@@ -129,8 +129,8 @@ def test_escalation_log_failure_does_not_fail_answer(monkeypatch):
         async def register(self, **kwargs):
             return ResponseInteraction(
                 interaction_id="int_child",
-                org_id=kwargs["org_id"],
-                org_slug=kwargs["org_slug"],
+                workspace_id=kwargs["workspace_id"],
+                workspace_slug=kwargs["workspace_slug"],
                 department=kwargs["department"],
                 cache_namespace=kwargs["cache_namespace"],
                 served_tier=kwargs["served_tier"],
@@ -183,14 +183,14 @@ def test_local_tier_without_credential_returns_no_credential(monkeypatch):
 
     monkeypatch.setattr(
         escalation.llm_config_service,
-        "read_for_org",
-        lambda org_slug: type("Cfg", (), {"external_model": "gpt-5.4-mini"})(),
+        "read_for_workspace",
+        lambda workspace_slug: type("Cfg", (), {"external_model": "gpt-5.4-mini"})(),
     )
     monkeypatch.setattr(escalation, "provider_for_model", lambda model: "openai")
     monkeypatch.setattr(
         escalation.CredentialService,
         "get_decrypted_key",
-        lambda self, session, org_id, provider: None,
+        lambda self, session, workspace_id, provider: None,
     )
 
     result = asyncio.run(
@@ -213,8 +213,8 @@ def test_local_tier_escalates_to_external_llm(monkeypatch):
         async def register(self, **kwargs):
             return ResponseInteraction(
                 interaction_id="int_external_child",
-                org_id=kwargs["org_id"],
-                org_slug=kwargs["org_slug"],
+                workspace_id=kwargs["workspace_id"],
+                workspace_slug=kwargs["workspace_slug"],
                 department=kwargs["department"],
                 cache_namespace=kwargs["cache_namespace"],
                 served_tier=kwargs["served_tier"],
@@ -251,15 +251,15 @@ def test_local_tier_escalates_to_external_llm(monkeypatch):
     monkeypatch.setattr(escalation, "_cache_response_id_for_escalation", _cache_response_id_for_escalation)
     monkeypatch.setattr(
         escalation.llm_config_service,
-        "read_for_org",
-        lambda org_slug: type("Cfg", (), {"external_model": "gpt-5.4-mini"})(),
+        "read_for_workspace",
+        lambda workspace_slug: type("Cfg", (), {"external_model": "gpt-5.4-mini"})(),
     )
     monkeypatch.setattr(escalation, "provider_for_model", lambda model: "openai")
     monkeypatch.setattr(escalation, "get_session", fake_session)
     monkeypatch.setattr(
         escalation.CredentialService,
         "get_decrypted_key",
-        lambda self, session, org_id, provider: "sk-test",
+        lambda self, session, workspace_id, provider: "sk-test",
     )
     monkeypatch.setattr(escalation, "ExternalLLMService", lambda: external)
 
@@ -304,15 +304,15 @@ def test_local_tier_external_failures_return_status(monkeypatch, raised, expecte
 
     monkeypatch.setattr(
         escalation.llm_config_service,
-        "read_for_org",
-        lambda org_slug: type("Cfg", (), {"external_model": "gpt-5.4-mini"})(),
+        "read_for_workspace",
+        lambda workspace_slug: type("Cfg", (), {"external_model": "gpt-5.4-mini"})(),
     )
     monkeypatch.setattr(escalation, "provider_for_model", lambda model: "openai")
     monkeypatch.setattr(escalation, "get_session", fake_session)
     monkeypatch.setattr(
         escalation.CredentialService,
         "get_decrypted_key",
-        lambda self, session, org_id, provider: "sk-test",
+        lambda self, session, workspace_id, provider: "sk-test",
     )
     monkeypatch.setattr(escalation, "ExternalLLMService", lambda: External())
 

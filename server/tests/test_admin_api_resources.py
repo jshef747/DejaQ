@@ -3,33 +3,33 @@ import sqlite3
 
 def test_admin_departments_round_trip(isolated_org_db, authed_admin_client):
     client, headers = authed_admin_client
-    client.post("/admin/v1/orgs", json={"name": "Acme"}, headers=headers)
+    client.post("/admin/v1/workspaces", json={"name": "Acme"}, headers=headers)
 
     created = client.post(
-        "/admin/v1/orgs/acme/departments",
+        "/admin/v1/workspaces/acme/departments",
         json={"name": "Engineering"},
         headers=headers,
     )
     scoped = client.get("/admin/v1/departments?org=acme", headers=headers)
     unscoped = client.get("/admin/v1/departments", headers=headers)
-    deleted = client.delete("/admin/v1/orgs/acme/departments/engineering", headers=headers)
+    deleted = client.delete("/admin/v1/workspaces/acme/departments/engineering", headers=headers)
 
     assert created.status_code == 201
-    assert created.json()["org_slug"] == "acme"
+    assert created.json()["workspace_slug"] == "acme"
     assert scoped.status_code == 200
     assert [item["slug"] for item in scoped.json()] == ["engineering"]
-    assert unscoped.json()[0]["org_slug"] == "acme"
+    assert unscoped.json()[0]["workspace_slug"] == "acme"
     assert deleted.json() == {"deleted": True, "cache_namespace": "acme__engineering"}
 
 
 def test_admin_keys_mask_rotate_and_revoke(isolated_org_db, authed_admin_client):
     client, headers = authed_admin_client
-    client.post("/admin/v1/orgs", json={"name": "Acme"}, headers=headers)
+    client.post("/admin/v1/workspaces", json={"name": "Acme"}, headers=headers)
 
-    first = client.post("/admin/v1/orgs/acme/keys", headers=headers)
-    conflict = client.post("/admin/v1/orgs/acme/keys", headers=headers)
-    second = client.post("/admin/v1/orgs/acme/keys?force=true", headers=headers)
-    listed = client.get("/admin/v1/orgs/acme/keys", headers=headers)
+    first = client.post("/admin/v1/workspaces/acme/keys", headers=headers)
+    conflict = client.post("/admin/v1/workspaces/acme/keys", headers=headers)
+    second = client.post("/admin/v1/workspaces/acme/keys?force=true", headers=headers)
+    listed = client.get("/admin/v1/workspaces/acme/keys", headers=headers)
     revoked = client.delete(f"/admin/v1/keys/{second.json()['id']}", headers=headers)
     revoked_again = client.delete(f"/admin/v1/keys/{second.json()['id']}", headers=headers)
 
@@ -46,14 +46,14 @@ def test_admin_keys_mask_rotate_and_revoke(isolated_org_db, authed_admin_client)
 
 def test_admin_delete_revoked_key_removes_it_from_key_list(isolated_org_db, authed_admin_client):
     client, headers = authed_admin_client
-    client.post("/admin/v1/orgs", json={"name": "Acme"}, headers=headers)
+    client.post("/admin/v1/workspaces", json={"name": "Acme"}, headers=headers)
 
-    created = client.post("/admin/v1/orgs/acme/keys", headers=headers)
+    created = client.post("/admin/v1/workspaces/acme/keys", headers=headers)
     key_id = created.json()["id"]
     client.delete(f"/admin/v1/keys/{key_id}", headers=headers)
 
     deleted = client.delete(f"/admin/v1/keys/{key_id}/revoked", headers=headers)
-    listed = client.get("/admin/v1/orgs/acme/keys", headers=headers)
+    listed = client.get("/admin/v1/workspaces/acme/keys", headers=headers)
 
     assert deleted.status_code == 200
     assert deleted.json() == {"id": key_id, "deleted": True}
@@ -66,9 +66,9 @@ def test_admin_delete_revoked_key_rejects_active_and_missing_keys(
     authed_admin_client,
 ):
     client, headers = authed_admin_client
-    client.post("/admin/v1/orgs", json={"name": "Acme"}, headers=headers)
+    client.post("/admin/v1/workspaces", json={"name": "Acme"}, headers=headers)
 
-    created = client.post("/admin/v1/orgs/acme/keys", headers=headers)
+    created = client.post("/admin/v1/workspaces/acme/keys", headers=headers)
 
     active_delete = client.delete(f"/admin/v1/keys/{created.json()['id']}/revoked", headers=headers)
     missing_delete = client.delete("/admin/v1/keys/999999/revoked", headers=headers)
@@ -80,18 +80,18 @@ def test_admin_delete_revoked_key_rejects_active_and_missing_keys(
 
 def test_admin_stats_date_filters_and_unknown_org(isolated_org_db, isolated_stats_db, authed_admin_client):
     client, headers = authed_admin_client
-    client.post("/admin/v1/orgs", json={"name": "Acme"}, headers=headers)
+    client.post("/admin/v1/workspaces", json={"name": "Acme"}, headers=headers)
     con = sqlite3.connect(isolated_stats_db)
     con.execute(
         """CREATE TABLE requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ts TEXT NOT NULL, org TEXT NOT NULL, department TEXT NOT NULL,
+            ts TEXT NOT NULL, workspace TEXT NOT NULL, department TEXT NOT NULL,
             latency_ms INTEGER NOT NULL, cache_hit INTEGER NOT NULL,
             difficulty TEXT, model_used TEXT, response_id TEXT
         )"""
     )
     con.executemany(
-        "INSERT INTO requests (ts, org, department, latency_ms, cache_hit, difficulty, model_used, response_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO requests (ts, workspace, department, latency_ms, cache_hit, difficulty, model_used, response_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         [
             ("2026-04-01T00:00:00+00:00", "acme", "eng", 100, 1, "easy", "cache", "r1"),
             ("2026-04-15T00:00:00+00:00", "acme", "eng", 200, 0, "hard", "gemini", "r2"),
@@ -100,9 +100,9 @@ def test_admin_stats_date_filters_and_unknown_org(isolated_org_db, isolated_stat
     con.commit()
     con.close()
 
-    orgs = client.get("/admin/v1/stats/orgs?from=2026-04-01&to=2026-04-15", headers=headers)
-    reversed_range = client.get("/admin/v1/stats/orgs?from=2026-04-15&to=2026-04-01", headers=headers)
-    unknown = client.get("/admin/v1/stats/orgs/missing/departments", headers=headers)
+    orgs = client.get("/admin/v1/stats/workspaces?from=2026-04-01&to=2026-04-15", headers=headers)
+    reversed_range = client.get("/admin/v1/stats/workspaces?from=2026-04-15&to=2026-04-01", headers=headers)
+    unknown = client.get("/admin/v1/stats/workspaces/missing/departments", headers=headers)
 
     assert orgs.status_code == 200
     assert orgs.json()["total"]["requests"] == 1
@@ -112,20 +112,20 @@ def test_admin_stats_date_filters_and_unknown_org(isolated_org_db, isolated_stat
 
 def test_admin_llm_config_defaults_update_and_clear(isolated_org_db, authed_admin_client):
     client, headers = authed_admin_client
-    client.post("/admin/v1/orgs", json={"name": "Acme"}, headers=headers)
+    client.post("/admin/v1/workspaces", json={"name": "Acme"}, headers=headers)
 
-    defaulted = client.get("/admin/v1/orgs/acme/llm-config", headers=headers)
+    defaulted = client.get("/admin/v1/workspaces/acme/llm-config", headers=headers)
     updated = client.put(
-        "/admin/v1/orgs/acme/llm-config",
+        "/admin/v1/workspaces/acme/llm-config",
         json={"external_model": "gemini-2.5-pro"},
         headers=headers,
     )
     cleared = client.put(
-        "/admin/v1/orgs/acme/llm-config",
+        "/admin/v1/workspaces/acme/llm-config",
         json={"external_model": None},
         headers=headers,
     )
-    empty = client.put("/admin/v1/orgs/acme/llm-config", json={}, headers=headers)
+    empty = client.put("/admin/v1/workspaces/acme/llm-config", json={}, headers=headers)
 
     assert defaulted.status_code == 200
     assert defaulted.json()["is_default"] is True
@@ -147,18 +147,18 @@ def test_admin_credentials_round_trip_and_llm_config_presence(
     monkeypatch.setattr(config, "CREDENTIAL_ENCRYPTION_KEY", key, raising=False)
 
     client, headers = authed_admin_client
-    client.post("/admin/v1/orgs", json={"name": "Acme"}, headers=headers)
+    client.post("/admin/v1/workspaces", json={"name": "Acme"}, headers=headers)
 
-    empty = client.get("/admin/v1/orgs/acme/credentials", headers=headers)
+    empty = client.get("/admin/v1/workspaces/acme/credentials", headers=headers)
     upserted = client.put(
-        "/admin/v1/orgs/acme/credentials/google",
+        "/admin/v1/workspaces/acme/credentials/google",
         json={"api_key": "AIzaFoo123Bar"},
         headers=headers,
     )
-    listed = client.get("/admin/v1/orgs/acme/credentials", headers=headers)
-    config_resp = client.get("/admin/v1/orgs/acme/llm-config", headers=headers)
-    deleted = client.delete("/admin/v1/orgs/acme/credentials/google", headers=headers)
-    deleted_again = client.delete("/admin/v1/orgs/acme/credentials/google", headers=headers)
+    listed = client.get("/admin/v1/workspaces/acme/credentials", headers=headers)
+    config_resp = client.get("/admin/v1/workspaces/acme/llm-config", headers=headers)
+    deleted = client.delete("/admin/v1/workspaces/acme/credentials/google", headers=headers)
+    deleted_again = client.delete("/admin/v1/workspaces/acme/credentials/google", headers=headers)
 
     assert empty.status_code == 200
     assert empty.json() == []
@@ -184,15 +184,15 @@ def test_admin_credentials_invalid_provider_and_empty_key_return_422(
     monkeypatch.setattr(config, "CREDENTIAL_ENCRYPTION_KEY", key, raising=False)
 
     client, headers = authed_admin_client
-    client.post("/admin/v1/orgs", json={"name": "Acme"}, headers=headers)
+    client.post("/admin/v1/workspaces", json={"name": "Acme"}, headers=headers)
 
     empty_key = client.put(
-        "/admin/v1/orgs/acme/credentials/google",
+        "/admin/v1/workspaces/acme/credentials/google",
         json={"api_key": "   "},
         headers=headers,
     )
     invalid_provider = client.put(
-        "/admin/v1/orgs/acme/credentials/unknown_provider",
+        "/admin/v1/workspaces/acme/credentials/unknown_provider",
         json={"api_key": "AIzaFoo123Bar"},
         headers=headers,
     )
@@ -232,15 +232,15 @@ def test_admin_test_provider_uses_stored_org_credential(
     monkeypatch.setattr(test_provider, "_external_llm", StubExternalLLM())
 
     client, headers = authed_admin_client
-    client.post("/admin/v1/orgs", json={"name": "Acme"}, headers=headers)
+    client.post("/admin/v1/workspaces", json={"name": "Acme"}, headers=headers)
     client.put(
-        "/admin/v1/orgs/acme/credentials/anthropic",
+        "/admin/v1/workspaces/acme/credentials/anthropic",
         json={"api_key": "sk-ant-live"},
         headers=headers,
     )
 
     response = client.post(
-        "/admin/v1/orgs/acme/test-provider",
+        "/admin/v1/workspaces/acme/test-provider",
         json={"prompt": "ignore this user text", "model": "claude-sonnet-4-6"},
         headers=headers,
     )
@@ -292,20 +292,20 @@ def test_admin_test_provider_rate_limits_successful_checks(
     monkeypatch.setattr(test_provider, "_external_llm", StubExternalLLM())
 
     client, headers = authed_admin_client
-    client.post("/admin/v1/orgs", json={"name": "Acme"}, headers=headers)
+    client.post("/admin/v1/workspaces", json={"name": "Acme"}, headers=headers)
     client.put(
-        "/admin/v1/orgs/acme/credentials/google",
+        "/admin/v1/workspaces/acme/credentials/google",
         json={"api_key": "AIza-live"},
         headers=headers,
     )
 
     first = client.post(
-        "/admin/v1/orgs/acme/test-provider",
+        "/admin/v1/workspaces/acme/test-provider",
         json={"model": "gemini-2.5-flash"},
         headers=headers,
     )
     second = client.post(
-        "/admin/v1/orgs/acme/test-provider",
+        "/admin/v1/workspaces/acme/test-provider",
         json={"model": "gemini-2.5-flash"},
         headers=headers,
     )
@@ -328,10 +328,10 @@ def test_admin_test_provider_missing_credential_returns_402(
     monkeypatch.setattr(config, "CREDENTIAL_ENCRYPTION_KEY", key, raising=False)
 
     client, headers = authed_admin_client
-    client.post("/admin/v1/orgs", json={"name": "Acme"}, headers=headers)
+    client.post("/admin/v1/workspaces", json={"name": "Acme"}, headers=headers)
 
     response = client.post(
-        "/admin/v1/orgs/acme/test-provider",
+        "/admin/v1/workspaces/acme/test-provider",
         json={"model": "gpt-5.4-mini"},
         headers=headers,
     )
@@ -342,10 +342,10 @@ def test_admin_test_provider_missing_credential_returns_402(
 
 def test_admin_test_provider_unmapped_model_returns_422(isolated_org_db, authed_admin_client):
     client, headers = authed_admin_client
-    client.post("/admin/v1/orgs", json={"name": "Acme"}, headers=headers)
+    client.post("/admin/v1/workspaces", json={"name": "Acme"}, headers=headers)
 
     response = client.post(
-        "/admin/v1/orgs/acme/test-provider",
+        "/admin/v1/workspaces/acme/test-provider",
         json={"model": "unknown-model"},
         headers=headers,
     )
@@ -383,27 +383,27 @@ def test_admin_test_provider_maps_provider_errors(
     monkeypatch.setattr(test_provider, "_external_llm", stub)
 
     client, headers = authed_admin_client
-    client.post("/admin/v1/orgs", json={"name": "Acme"}, headers=headers)
+    client.post("/admin/v1/workspaces", json={"name": "Acme"}, headers=headers)
     client.put(
-        "/admin/v1/orgs/acme/credentials/google",
+        "/admin/v1/workspaces/acme/credentials/google",
         json={"api_key": "AIza-secret"},
         headers=headers,
     )
 
     auth = client.post(
-        "/admin/v1/orgs/acme/test-provider",
+        "/admin/v1/workspaces/acme/test-provider",
         json={"model": "gemini-2.5-flash"},
         headers=headers,
     )
     stub.mode = "timeout"
     timeout = client.post(
-        "/admin/v1/orgs/acme/test-provider",
+        "/admin/v1/workspaces/acme/test-provider",
         json={"model": "gemini-2.5-flash"},
         headers=headers,
     )
     stub.mode = "generic"
     generic = client.post(
-        "/admin/v1/orgs/acme/test-provider",
+        "/admin/v1/workspaces/acme/test-provider",
         json={"model": "gemini-2.5-flash"},
         headers=headers,
     )
@@ -420,8 +420,8 @@ def test_admin_feedback_submit_and_list(isolated_org_db, isolated_stats_db, auth
     from tests.test_feedback_service import FakeMemory
 
     client, headers = authed_admin_client
-    client.post("/admin/v1/orgs", json={"name": "Acme"}, headers=headers)
-    client.post("/admin/v1/orgs/acme/departments", json={"name": "Eng"}, headers=headers)
+    client.post("/admin/v1/workspaces", json={"name": "Acme"}, headers=headers)
+    client.post("/admin/v1/workspaces/acme/departments", json={"name": "Eng"}, headers=headers)
 
     memory = FakeMemory()
     monkeypatch.setattr(feedback_service, "get_memory_service", lambda namespace: memory)
@@ -433,14 +433,14 @@ def test_admin_feedback_submit_and_list(isolated_org_db, isolated_stats_db, auth
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ts TEXT NOT NULL,
                 response_id TEXT NOT NULL,
-                org TEXT NOT NULL,
+                workspace TEXT NOT NULL,
                 department TEXT NOT NULL,
                 rating TEXT NOT NULL,
                 comment TEXT
             )"""
         )
         con.execute(
-            "INSERT INTO feedback_log (ts, response_id, org, department, rating, comment) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO feedback_log (ts, response_id, workspace, department, rating, comment) VALUES (?, ?, ?, ?, ?, ?)",
             ("2026-04-01T00:00:00+00:00", response_id, org, department, rating, comment),
         )
         con.commit()
@@ -450,16 +450,16 @@ def test_admin_feedback_submit_and_list(isolated_org_db, isolated_stats_db, auth
 
     submit = client.post(
         "/admin/v1/feedback",
-        json={"org": "acme", "department": "eng", "response_id": "acme__eng:doc1", "rating": "positive"},
+        json={"workspace": "acme", "department": "eng", "response_id": "acme__eng:doc1", "rating": "positive"},
         headers=headers,
     )
     mismatch = client.post(
         "/admin/v1/feedback",
-        json={"org": "acme", "department": "eng", "response_id": "other__eng:doc1", "rating": "positive"},
+        json={"workspace": "acme", "department": "eng", "response_id": "other__eng:doc1", "rating": "positive"},
         headers=headers,
     )
-    filtered = client.get("/admin/v1/feedback?org=acme&department=eng", headers=headers)
-    unknown_filter = client.get("/admin/v1/feedback?org=missing", headers=headers)
+    filtered = client.get("/admin/v1/feedback?workspace=acme&department=eng", headers=headers)
+    unknown_filter = client.get("/admin/v1/feedback?workspace=missing", headers=headers)
 
     assert submit.status_code == 200
     assert submit.json() == {"status": "ok", "new_score": 1.0}
@@ -482,14 +482,14 @@ def test_admin_feedback_list_id_field_and_pagination_total(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ts TEXT NOT NULL,
             response_id TEXT NOT NULL,
-            org TEXT NOT NULL,
+            workspace TEXT NOT NULL,
             department TEXT NOT NULL,
             rating TEXT NOT NULL,
             comment TEXT
         )"""
     )
     con.executemany(
-        "INSERT INTO feedback_log (ts, response_id, org, department, rating, comment) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO feedback_log (ts, response_id, workspace, department, rating, comment) VALUES (?, ?, ?, ?, ?, ?)",
         [
             ("2026-04-01T00:00:00+00:00", "ns:doc-a", "acme", "eng", "positive", None),
             ("2026-04-02T00:00:00+00:00", "ns:doc-b", "acme", "eng", "negative", None),
@@ -499,7 +499,7 @@ def test_admin_feedback_list_id_field_and_pagination_total(
     con.commit()
     con.close()
 
-    page1 = client.get("/admin/v1/feedback?org=acme&limit=1&offset=0", headers=headers)
+    page1 = client.get("/admin/v1/feedback?workspace=acme&limit=1&offset=0", headers=headers)
 
     assert page1.status_code == 200
     body = page1.json()
@@ -521,14 +521,14 @@ def test_admin_feedback_list_ordering_ts_desc_id_desc(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ts TEXT NOT NULL,
             response_id TEXT NOT NULL,
-            org TEXT NOT NULL,
+            workspace TEXT NOT NULL,
             department TEXT NOT NULL,
             rating TEXT NOT NULL,
             comment TEXT
         )"""
     )
     con.executemany(
-        "INSERT INTO feedback_log (ts, response_id, org, department, rating, comment) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO feedback_log (ts, response_id, workspace, department, rating, comment) VALUES (?, ?, ?, ?, ?, ?)",
         [
             ("2026-04-01T00:00:00+00:00", "ns:older", "acme", "eng", "positive", None),
             ("2026-04-03T00:00:00+00:00", "ns:newest", "acme", "eng", "positive", None),
@@ -538,7 +538,7 @@ def test_admin_feedback_list_ordering_ts_desc_id_desc(
     con.commit()
     con.close()
 
-    resp = client.get("/admin/v1/feedback?org=acme", headers=headers)
+    resp = client.get("/admin/v1/feedback?workspace=acme", headers=headers)
 
     assert resp.status_code == 200
     items = resp.json()["items"]
@@ -548,34 +548,34 @@ def test_admin_feedback_list_ordering_ts_desc_id_desc(
     assert items[2]["response_id"] == "ns:older"
 
 
-def test_stats_org_name_and_department_name_return_display_name(
+def test_stats_workspace_name_and_department_name_return_display_name(
     isolated_org_db, isolated_stats_db, authed_admin_client
 ):
     client, headers = authed_admin_client
-    client.post("/admin/v1/orgs", json={"name": "Acme Corporation"}, headers=headers)
-    client.post("/admin/v1/orgs/acme-corporation/departments", json={"name": "Engineering"}, headers=headers)
+    client.post("/admin/v1/workspaces", json={"name": "Acme Corporation"}, headers=headers)
+    client.post("/admin/v1/workspaces/acme-corporation/departments", json={"name": "Engineering"}, headers=headers)
 
     con = sqlite3.connect(isolated_stats_db)
     con.execute(
         """CREATE TABLE IF NOT EXISTS requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ts TEXT NOT NULL, org TEXT NOT NULL, department TEXT NOT NULL,
+            ts TEXT NOT NULL, workspace TEXT NOT NULL, department TEXT NOT NULL,
             latency_ms INTEGER NOT NULL, cache_hit INTEGER NOT NULL,
             difficulty TEXT, model_used TEXT, response_id TEXT
         )"""
     )
     con.execute(
-        "INSERT INTO requests (ts, org, department, latency_ms, cache_hit, difficulty, model_used, response_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO requests (ts, workspace, department, latency_ms, cache_hit, difficulty, model_used, response_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         ("2026-04-01T00:00:00+00:00", "acme-corporation", "engineering", 100, 1, "easy", "cache", "r1"),
     )
     con.commit()
     con.close()
 
-    orgs = client.get("/admin/v1/stats/orgs", headers=headers)
-    depts = client.get("/admin/v1/stats/orgs/acme-corporation/departments", headers=headers)
+    orgs = client.get("/admin/v1/stats/workspaces", headers=headers)
+    depts = client.get("/admin/v1/stats/workspaces/acme-corporation/departments", headers=headers)
 
     assert orgs.status_code == 200
-    assert orgs.json()["items"][0]["org_name"] == "Acme Corporation"
+    assert orgs.json()["items"][0]["workspace_name"] == "Acme Corporation"
 
     assert depts.status_code == 200
     assert depts.json()["items"][0]["department_name"] == "Engineering"
@@ -593,7 +593,7 @@ def test_departments_list_unknown_org_filter_returns_empty_list(isolated_org_db,
 def test_stats_invalid_date_format_returns_422(isolated_org_db, isolated_stats_db, authed_admin_client):
     client, headers = authed_admin_client
 
-    resp = client.get("/admin/v1/stats/orgs?from=04/01/2026", headers=headers)
+    resp = client.get("/admin/v1/stats/workspaces?from=04/01/2026", headers=headers)
 
     assert resp.status_code == 422
 
@@ -601,6 +601,6 @@ def test_stats_invalid_date_format_returns_422(isolated_org_db, isolated_stats_d
 def test_llm_config_unknown_org_returns_404(isolated_org_db, authed_admin_client):
     client, headers = authed_admin_client
 
-    resp = client.get("/admin/v1/orgs/does-not-exist/llm-config", headers=headers)
+    resp = client.get("/admin/v1/workspaces/does-not-exist/llm-config", headers=headers)
 
     assert resp.status_code == 404

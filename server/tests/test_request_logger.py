@@ -136,9 +136,9 @@ class TestRequestLoggerInit:
         names = {row[0] for row in rows}
         assert {
             "idx_requests_ts",
-            "idx_requests_org_department_ts",
+            "idx_requests_workspace_department_ts",
             "idx_feedback_log_ts_id",
-            "idx_feedback_log_org_department",
+            "idx_feedback_log_workspace_department",
             "idx_feedback_log_response_id",
         }.issubset(names)
 
@@ -155,7 +155,7 @@ class TestRequestLoggerLog:
         asyncio.run(run())
 
         con = sqlite3.connect(db_path)
-        row = con.execute("SELECT org, department, latency_ms, cache_hit, difficulty, model_used FROM requests").fetchone()
+        row = con.execute("SELECT workspace, department, latency_ms, cache_hit, difficulty, model_used FROM requests").fetchone()
         con.close()
 
         assert row == ("acme", "engineering", 120, 1, None, None)
@@ -251,7 +251,7 @@ class TestRequestLoggerLog:
         asyncio.run(run())
 
         con = sqlite3.connect(db_path)
-        row = con.execute("SELECT org, department FROM requests").fetchone()
+        row = con.execute("SELECT workspace, department FROM requests").fetchone()
         con.close()
         assert row == ("default", "default")
 
@@ -293,11 +293,11 @@ class TestStatsCLI:
         con = sqlite3.connect(db_path)
         con.execute("""CREATE TABLE IF NOT EXISTS requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ts TEXT NOT NULL, org TEXT NOT NULL, department TEXT NOT NULL,
+            ts TEXT NOT NULL, workspace TEXT NOT NULL, department TEXT NOT NULL,
             latency_ms INTEGER NOT NULL, cache_hit INTEGER NOT NULL,
             difficulty TEXT, model_used TEXT)""")
         con.executemany(
-            "INSERT INTO requests (ts,org,department,latency_ms,cache_hit,difficulty,model_used) VALUES (?,?,?,?,?,?,?)",
+            "INSERT INTO requests (ts,workspace,department,latency_ms,cache_hit,difficulty,model_used) VALUES (?,?,?,?,?,?,?)",
             rows,
         )
         con.commit()

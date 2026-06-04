@@ -132,8 +132,8 @@ def test_interaction_feedback_without_messages_does_not_escalate(monkeypatch):
 
     interaction = ResponseInteraction(
         interaction_id="int_local",
-        org_id=7,
-        org_slug="acme",
+        workspace_id=7,
+        workspace_slug="acme",
         department="eng",
         cache_namespace="acme__eng",
         served_tier="local",
@@ -165,7 +165,7 @@ def test_interaction_feedback_without_messages_does_not_escalate(monkeypatch):
             rating="negative",
             comment=None,
             org="acme",
-            org_id=7,
+            workspace_id=7,
             department="eng",
             validate_namespace=True,
         )
@@ -182,8 +182,8 @@ def test_interaction_feedback_message_mismatch_does_not_escalate(monkeypatch):
 
     interaction = ResponseInteraction(
         interaction_id="int_local",
-        org_id=7,
-        org_slug="acme",
+        workspace_id=7,
+        workspace_slug="acme",
         department="eng",
         cache_namespace="acme__eng",
         served_tier="local",
@@ -216,7 +216,7 @@ def test_interaction_feedback_message_mismatch_does_not_escalate(monkeypatch):
             rating="negative",
             comment=None,
             org="acme",
-            org_id=7,
+            workspace_id=7,
             department="eng",
             validate_namespace=True,
         )
@@ -233,8 +233,8 @@ def test_interaction_feedback_duplicate_guard_skips_escalation(monkeypatch):
     messages = [{"role": "user", "content": "Hello"}]
     interaction = ResponseInteraction(
         interaction_id="int_local",
-        org_id=7,
-        org_slug="acme",
+        workspace_id=7,
+        workspace_slug="acme",
         department="eng",
         cache_namespace="acme__eng",
         served_tier="local",
@@ -270,7 +270,7 @@ def test_interaction_feedback_duplicate_guard_skips_escalation(monkeypatch):
             rating="negative",
             comment=None,
             org="acme",
-            org_id=7,
+            workspace_id=7,
             department="eng",
             validate_namespace=True,
         )
@@ -286,8 +286,8 @@ def test_interaction_feedback_invalid_messages_raise_before_escalation(monkeypat
 
     interaction = ResponseInteraction(
         interaction_id="int_local",
-        org_id=7,
-        org_slug="acme",
+        workspace_id=7,
+        workspace_slug="acme",
         department="eng",
         cache_namespace="acme__eng",
         served_tier="local",
@@ -321,7 +321,7 @@ def test_interaction_feedback_invalid_messages_raise_before_escalation(monkeypat
                 rating="negative",
                 comment=None,
                 org="acme",
-                org_id=7,
+                workspace_id=7,
                 department="eng",
                 validate_namespace=True,
             )
@@ -346,7 +346,7 @@ def test_interaction_feedback_wrong_owner_raises_not_found(monkeypatch):
                 rating="negative",
                 comment=None,
                 org="acme",
-                org_id=7,
+                workspace_id=7,
                 department="eng",
                 validate_namespace=True,
             )

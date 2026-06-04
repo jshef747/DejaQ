@@ -106,8 +106,8 @@ class CapturingRegistry:
 
         return ResponseInteraction(
             interaction_id=self.interaction_id,
-            org_id=kwargs["org_id"],
-            org_slug=kwargs["org_slug"],
+            workspace_id=kwargs["workspace_id"],
+            workspace_slug=kwargs["workspace_slug"],
             department=kwargs["department"],
             cache_namespace=kwargs["cache_namespace"],
             served_tier=kwargs["served_tier"],
@@ -234,7 +234,7 @@ def test_cache_miss_includes_difficulty_and_nearest_cache_headers(monkeypatch, c
     monkeypatch.setattr(
         openai_compat,
         "_read_effective_llm_config",
-        lambda org_slug, org_id: openai_compat.EffectiveLlmConfig(
+        lambda workspace_slug, workspace_id: openai_compat.EffectiveLlmConfig(
             external_model="gemini-2.5-flash",
             routing_threshold=0.9,
         ),
@@ -471,7 +471,7 @@ def test_auto_routing_uses_org_threshold_zero_to_route_external(monkeypatch):
     monkeypatch.setattr(
         openai_compat,
         "_read_effective_llm_config",
-        lambda org_slug, org_id: openai_compat.EffectiveLlmConfig(
+        lambda workspace_slug, workspace_id: openai_compat.EffectiveLlmConfig(
             external_model="gpt-5.4-mini",
             routing_threshold=0.0,
         ),
@@ -479,7 +479,7 @@ def test_auto_routing_uses_org_threshold_zero_to_route_external(monkeypatch):
     monkeypatch.setattr(
         openai_compat.CredentialService,
         "get_decrypted_key",
-        lambda self, session, org_id, provider: "sk-openai-live",
+        lambda self, session, workspace_id, provider: "sk-openai-live",
     )
 
     from app.middleware.api_key import _KEY_CACHE
@@ -542,7 +542,7 @@ def test_force_hard_external_uses_org_external_model_provider(monkeypatch):
     monkeypatch.setattr(
         openai_compat,
         "_read_effective_llm_config",
-        lambda org_slug, org_id: openai_compat.EffectiveLlmConfig(
+        lambda workspace_slug, workspace_id: openai_compat.EffectiveLlmConfig(
             external_model="claude-sonnet-4-6",
             routing_threshold=0.75,
         ),
@@ -550,7 +550,7 @@ def test_force_hard_external_uses_org_external_model_provider(monkeypatch):
     monkeypatch.setattr(
         openai_compat.CredentialService,
         "get_decrypted_key",
-        lambda self, session, org_id, provider: "sk-ant-live" if provider == "anthropic" else None,
+        lambda self, session, workspace_id, provider: "sk-ant-live" if provider == "anthropic" else None,
     )
 
     from app.middleware.api_key import _KEY_CACHE
@@ -625,7 +625,7 @@ def test_celery_store_keeps_legacy_args_and_sends_profile_header(monkeypatch):
     captured: dict[str, object] = {}
 
     class FakeTask:
-        def apply_async(self, *, args, headers):
+        def apply_async(self, *, args, headers, ignore_result=False):
             captured["args"] = args
             captured["headers"] = headers
 

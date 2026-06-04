@@ -23,7 +23,7 @@ def test_gateway_route_accepts_org_key_not_supabase_jwt(monkeypatch):
         return None
 
     monkeypatch.setattr(_KEY_CACHE, "resolve", _resolve)
-    monkeypatch.setattr(departments.dept_repo, "list_depts", lambda _session, org_slug: [])
+    monkeypatch.setattr(departments.dept_repo, "list_depts", lambda _session, workspace_slug: [])
 
     client = TestClient(app)
 
@@ -42,39 +42,49 @@ def test_gateway_route_accepts_org_key_not_supabase_jwt(monkeypatch):
     assert supabase_jwt_response.status_code == 401
 
 
-def test_admin_route_requires_supabase_jwt_not_org_key(monkeypatch):
-    """An org key cannot authorize an admin route."""
+def test_admin_route_does_not_resolve_workspace_key_as_auth(monkeypatch):
+    """Admin routes must not use the workspace API-key middleware for auth.
+    In local mode the route returns 200 regardless; the key cache must never
+    be consulted for the Bearer token on an admin path."""
     from app.main import app
     from app.middleware.api_key import _KEY_CACHE
 
-    monkeypatch.setattr(_KEY_CACHE, "resolve", lambda _token: ("acme", 1))
+    resolve_called = []
+    original_resolve = _KEY_CACHE.resolve
+
+    def _tracking_resolve(token: str):
+        resolve_called.append(token)
+        return original_resolve(token)
+
+    monkeypatch.setattr(_KEY_CACHE, "resolve", _tracking_resolve)
 
     response = TestClient(app).get(
         "/admin/v1/whoami",
         headers={"Authorization": "Bearer org-key"},
     )
 
-    assert response.status_code in (401, 503)
+    # In local mode admin succeeds; the key cache must NOT have been consulted.
+    assert response.status_code == 200
+    assert not resolve_called, "workspace key cache must not be resolved for admin routes"
 
 
 def test_admin_route_does_not_invoke_org_key_middleware(monkeypatch):
-    """Admin routes must not trigger org API-key middleware lookup."""
+    """Admin routes must not trigger the workspace API-key middleware lookup at all."""
     from app.main import app
     from app.middleware.api_key import _KEY_CACHE
 
     def _fail_resolve(_token: str):
-        raise AssertionError("admin routes must not resolve bearer tokens as org keys")
+        raise AssertionError("admin routes must not resolve bearer tokens as workspace keys")
 
     monkeypatch.setattr(_KEY_CACHE, "resolve", _fail_resolve)
 
-    # No Supabase config → will return 401 (invalid token from Supabase) or 503
-    # but must NOT raise AssertionError from key middleware
+    # Must NOT raise AssertionError from the key middleware; local mode returns 200.
     response = TestClient(app).get(
         "/admin/v1/whoami",
         headers={"Authorization": "Bearer any-token"},
     )
 
-    assert response.status_code in (401, 503)
+    assert response.status_code == 200
 
 
 def test_public_feedback_route_uses_gateway_context_and_shared_service(
@@ -140,9 +150,9 @@ def test_sync_persistence_admin_routes_are_sync_handlers():
     from app.main import app
 
     sync_route_names = {
-        "list_orgs",
-        "create_org",
-        "delete_org",
+        "list_workspaces",
+        "create_workspace",
+        "delete_workspace",
         "list_departments",
         "create_department",
         "delete_department",
@@ -150,7 +160,7 @@ def test_sync_persistence_admin_routes_are_sync_handlers():
         "generate_key",
         "revoke_key",
         "delete_revoked_key",
-        "org_stats",
+        "workspace_stats",
         "department_stats",
         "read_llm_config",
         "update_llm_config",

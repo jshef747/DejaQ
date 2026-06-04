@@ -48,20 +48,20 @@ def test_sync_persistence_admin_routes_are_sync_handlers():
     from app.main import app
 
     sync_persistence_routes = {
-        ("GET", "/admin/v1/orgs"): "list_orgs",
-        ("POST", "/admin/v1/orgs"): "create_org",
-        ("DELETE", "/admin/v1/orgs/{slug}"): "delete_org",
+        ("GET", "/admin/v1/workspaces"): "list_workspaces",
+        ("POST", "/admin/v1/workspaces"): "create_workspace",
+        ("DELETE", "/admin/v1/workspaces/{slug}"): "delete_workspace",
         ("GET", "/admin/v1/departments"): "list_departments",
-        ("POST", "/admin/v1/orgs/{org_slug}/departments"): "create_department",
-        ("DELETE", "/admin/v1/orgs/{org_slug}/departments/{dept_slug}"): "delete_department",
-        ("GET", "/admin/v1/orgs/{org_slug}/keys"): "list_keys",
-        ("POST", "/admin/v1/orgs/{org_slug}/keys"): "generate_key",
+        ("POST", "/admin/v1/workspaces/{workspace_slug}/departments"): "create_department",
+        ("DELETE", "/admin/v1/workspaces/{workspace_slug}/departments/{dept_slug}"): "delete_department",
+        ("GET", "/admin/v1/workspaces/{workspace_slug}/keys"): "list_keys",
+        ("POST", "/admin/v1/workspaces/{workspace_slug}/keys"): "generate_key",
         ("DELETE", "/admin/v1/keys/{key_id}"): "revoke_key",
         ("DELETE", "/admin/v1/keys/{key_id}/revoked"): "delete_revoked_key",
-        ("GET", "/admin/v1/stats/orgs"): "org_stats",
-        ("GET", "/admin/v1/stats/orgs/{org_slug}/departments"): "department_stats",
-        ("GET", "/admin/v1/orgs/{org_slug}/llm-config"): "read_llm_config",
-        ("PUT", "/admin/v1/orgs/{org_slug}/llm-config"): "update_llm_config",
+        ("GET", "/admin/v1/stats/workspaces"): "workspace_stats",
+        ("GET", "/admin/v1/stats/workspaces/{workspace_slug}/departments"): "department_stats",
+        ("GET", "/admin/v1/workspaces/{workspace_slug}/llm-config"): "read_llm_config",
+        ("PUT", "/admin/v1/workspaces/{workspace_slug}/llm-config"): "update_llm_config",
         ("GET", "/admin/v1/feedback"): "list_feedback",
     }
     routes = _collect_routes(app.router)
@@ -97,7 +97,7 @@ def test_admin_feedback_submit_does_not_run_sync_department_lookup_on_event_loop
 
     called_on_event_loop = False
 
-    def list_departments_spy(org_slug=None, ctx=None):
+    def list_departments_spy(workspace_slug=None, ctx=None):
         nonlocal called_on_event_loop
         try:
             asyncio.get_running_loop()
@@ -116,7 +116,7 @@ def test_admin_feedback_submit_does_not_run_sync_department_lookup_on_event_loop
     response = client.post(
         "/admin/v1/feedback",
         headers=headers,
-        json={"org": "acme", "response_id": "acme--default:doc-1", "rating": "positive"},
+        json={"workspace": "acme", "response_id": "acme--default:doc-1", "rating": "positive"},
     )
 
     assert response.status_code == 200

@@ -1,35 +1,35 @@
 import pytest
 
 
-def test_admin_service_org_department_round_trip(isolated_org_db):
+def test_admin_service_workspace_department_round_trip(isolated_org_db):
     from app.services import admin_service
 
-    org = admin_service.create_org("Acme Inc")
+    org = admin_service.create_workspace("Acme Inc")
     dept = admin_service.create_department("acme-inc", "Engineering")
 
     assert org.slug == "acme-inc"
-    assert dept.org_slug == "acme-inc"
+    assert dept.workspace_slug == "acme-inc"
     assert dept.slug == "engineering"
     assert dept.cache_namespace == "acme-inc__engineering"
 
     all_depts = admin_service.list_departments()
-    assert [(item.org_slug, item.slug) for item in all_depts] == [
+    assert [(item.workspace_slug, item.slug) for item in all_depts] == [
         ("acme-inc", "engineering")
     ]
 
-    deleted = admin_service.delete_org("acme-inc")
+    deleted = admin_service.delete_workspace("acme-inc")
     assert deleted.deleted is True
     assert deleted.departments_removed == 1
-    assert admin_service.list_orgs() == []
+    assert admin_service.list_workspaces() == []
 
 
-def test_admin_service_duplicate_org_raises(isolated_org_db):
+def test_admin_service_duplicate_workspace_raises(isolated_org_db):
     from app.services import admin_service
 
-    admin_service.create_org("Acme")
+    admin_service.create_workspace("Acme")
 
     with pytest.raises(admin_service.DuplicateSlug) as exc:
-        admin_service.create_org("Acme")
+        admin_service.create_workspace("Acme")
 
     assert exc.value.slug == "acme"
 
@@ -37,7 +37,7 @@ def test_admin_service_duplicate_org_raises(isolated_org_db):
 def test_admin_service_department_errors_and_delete_result(isolated_org_db):
     from app.services import admin_service
 
-    admin_service.create_org("Acme")
+    admin_service.create_workspace("Acme")
     admin_service.create_department("acme", "Support")
 
     with pytest.raises(admin_service.DuplicateSlug):
@@ -54,10 +54,10 @@ def test_admin_service_department_errors_and_delete_result(isolated_org_db):
 def test_admin_service_key_generate_force_and_revoke(isolated_org_db):
     from app.services import admin_service
 
-    admin_service.create_org("Acme")
+    admin_service.create_workspace("Acme")
     first = admin_service.generate_key("acme", force=False)
 
-    assert first.org_slug == "acme"
+    assert first.workspace_slug == "acme"
     assert first.token
 
     with pytest.raises(admin_service.ActiveKeyExists) as exc:
