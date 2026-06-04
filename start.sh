@@ -36,6 +36,8 @@ VALIDATOR_ARG=""
 OLLAMA_URL_ARG=""
 OLLAMA_URL_FLAG_SET=false
 DRY_RUN=false
+FRESH=false
+YES=false
 ENV_STACK="${DEJAQ_STACK:-}"
 ENV_MODE="${DEJAQ_MODE:-}"
 ENV_OLLAMA_URL="${DEJAQ_OLLAMA_URL:-}"
@@ -43,7 +45,7 @@ ENV_START_LOGS="${DEJAQ_START_LOGS:-}"
 ENV_VALIDATOR="${DEJAQ_VALIDATOR_ENABLED:-}"
 
 usage() {
-  echo "Usage: $0 [--stack=server|all] [--mode=local|remote] [--logs=requests|all] [--validator=off] [--ollama-url URL] [--dry-run]"
+  echo "Usage: $0 [--stack=server|all] [--mode=local|remote] [--logs=requests|all] [--validator=off] [--ollama-url URL] [--fresh] [--yes] [--dry-run]"
   echo ""
   echo "Stacks:"
   echo "  server   Start backend services only: ChromaDB, Redis, Celery, FastAPI"
@@ -58,6 +60,9 @@ usage() {
   echo "  all      Tail all service logs"
   echo ""
   echo "Cache-answer validator is ON by default; disable with --validator=off."
+  echo ""
+  echo "  --fresh  Delete dejaq.db, chroma_data/, and dejaq_stats.db before starting."
+  echo "           Prompts for confirmation unless --yes is also passed."
   echo ""
   echo "Environment:"
   echo "  DEJAQ_STACK             Non-interactive stack selection: server or all"
@@ -111,6 +116,12 @@ for arg in "$@"; do
       ;;
     --dry-run)
       DRY_RUN=true
+      ;;
+    --fresh)
+      FRESH=true
+      ;;
+    --yes|-y)
+      YES=true
       ;;
     --help|-h)
       usage
@@ -449,6 +460,35 @@ check_ollama "${DEJAQ_OLLAMA_URL}"
 if [[ "$DRY_RUN" == "true" ]]; then
   echo -e "${GREEN}Dry run complete. Services not started.${NC}"
   exit 0
+fi
+
+# ── Fresh start (optional) ──────────────────────────────────────────────────
+if [[ "$FRESH" == "true" ]]; then
+  FRESH_TARGETS=()
+  [[ -f "$SERVER_DIR/dejaq.db" ]]     && FRESH_TARGETS+=("dejaq.db")
+  [[ -f "$SERVER_DIR/dejaq_stats.db" ]] && FRESH_TARGETS+=("dejaq_stats.db")
+  [[ -d "$SERVER_DIR/chroma_data" ]]  && FRESH_TARGETS+=("chroma_data/")
+
+  if [[ ${#FRESH_TARGETS[@]} -eq 0 ]]; then
+    echo -e "  ${YELLOW}--fresh: nothing to delete (databases not found)${NC}"
+  else
+    echo -e "${YELLOW}--fresh: will permanently delete:${NC}"
+    for t in "${FRESH_TARGETS[@]}"; do
+      echo -e "  ${RED}  server/$t${NC}"
+    done
+
+    if [[ "$YES" != "true" ]]; then
+      read -r -p "$(echo -e "${YELLOW}This cannot be undone. Continue? [y/N]: ${NC}")" CONFIRM
+      if [[ "${CONFIRM,,}" != "y" && "${CONFIRM,,}" != "yes" ]]; then
+        echo -e "${RED}Aborted.${NC}"; exit 1
+      fi
+    fi
+
+    [[ -f "$SERVER_DIR/dejaq.db" ]]     && rm -f "$SERVER_DIR/dejaq.db"     && echo -e "  Deleted dejaq.db"
+    [[ -f "$SERVER_DIR/dejaq_stats.db" ]] && rm -f "$SERVER_DIR/dejaq_stats.db" && echo -e "  Deleted dejaq_stats.db"
+    [[ -d "$SERVER_DIR/chroma_data" ]]  && rm -rf "$SERVER_DIR/chroma_data" && echo -e "  Deleted chroma_data/"
+    echo -e "  ${GREEN}Fresh start: data cleared${NC}"
+  fi
 fi
 
 # ── 0. Database migrations ──────────────────────────────────────────────────

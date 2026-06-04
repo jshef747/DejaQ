@@ -1,12 +1,13 @@
 export const dynamic = "force-dynamic";
 
-import { redirect } from "next/navigation";
 import { listWorkspaces } from "@/app/actions/workspaces";
 import OnboardingWizard from "./OnboardingWizard";
 
 export default async function OnboardingPage() {
-  // Inverse guard: if workspaces already exist, skip onboarding.
-  // IMPORTANT: redirect() throws a NEXT_REDIRECT signal — it must NOT be inside a catch block.
+  // "Already onboarded?" is decided once, client-side, inside the wizard (see below).
+  // We must NOT redirect here: creating the workspace in step 1 runs a server action, which
+  // re-renders this Server Component — a server-side redirect would then fire mid-wizard and
+  // skip the department + API-key steps.
   let hasWorkspaces = false;
   try {
     const workspaces = await listWorkspaces();
@@ -14,7 +15,6 @@ export default async function OnboardingPage() {
   } catch {
     // Backend unavailable — show the wizard anyway; it will surface errors during submission.
   }
-  if (hasWorkspaces) redirect("/dashboard");
 
   return (
     <div
@@ -39,7 +39,7 @@ export default async function OnboardingPage() {
           <span style={{ fontWeight: 600, fontSize: 16, letterSpacing: "-0.02em" }}>DejaQ</span>
         </div>
 
-        <OnboardingWizard />
+        <OnboardingWizard alreadyOnboarded={hasWorkspaces} />
       </div>
     </div>
   );

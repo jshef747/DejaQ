@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createWorkspace } from "@/app/actions/workspaces";
 import { createDepartment } from "@/app/actions/departments";
@@ -8,9 +8,20 @@ import { generateKey } from "@/app/actions/keys";
 
 type Step = "workspace" | "dept" | "key";
 
-export default function OnboardingWizard() {
+export default function OnboardingWizard({ alreadyOnboarded }: { alreadyOnboarded: boolean }) {
   const router = useRouter();
   const [step, setStep] = useState<Step>("workspace");
+
+  // Capture the first-mount value. The server action that creates the workspace will
+  // re-render this Server Component (and update the prop), but it will NOT remount the
+  // client component, so useState keeps the original value — the redirect fires only for
+  // users who land here while already having workspaces (e.g. manual /onboarding visit).
+  const [skip] = useState(alreadyOnboarded);
+  useEffect(() => {
+    if (skip) router.replace("/dashboard");
+  }, [skip, router]);
+
+  if (skip) return null;
 
   // Step 1 state
   const [workspaceName, setWorkspaceName] = useState("");
