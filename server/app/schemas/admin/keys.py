@@ -12,7 +12,7 @@ class KeyItem(BaseModel):
 
 class KeyCreated(BaseModel):
     id: int
-    org_slug: str
+    workspace_slug: str
     token: str
     created_at: datetime
 

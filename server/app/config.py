@@ -79,6 +79,12 @@ AUTH_MODE = _get_text(
     "local" if not SUPABASE_URL.strip() else "supabase",
 ).strip().lower()
 
+# Control-plane access control:
+# DEJAQ_ADMIN_LOOPBACK_ONLY (default True) — /admin/v1/* only accepts loopback peers.
+# DEJAQ_BIND_HOST — uvicorn listen host; used by start.sh (127.0.0.1 for bare uv run).
+ADMIN_LOOPBACK_ONLY = _get_bool("DEJAQ_ADMIN_LOOPBACK_ONLY", True)
+BIND_HOST = _get_text("DEJAQ_BIND_HOST", "127.0.0.1")
+
 ENRICHER_MODEL_NAME = _get_text("DEJAQ_ENRICHER_MODEL_NAME", "qwen_1_5b")
 NORMALIZER_MODEL_NAME = _get_text("DEJAQ_NORMALIZER_MODEL_NAME", "gemma_e2b")
 LOCAL_LLM_MODEL_NAME = _get_text("DEJAQ_LOCAL_LLM_MODEL_NAME", "gemma_local")
@@ -86,3 +92,7 @@ GENERALIZER_MODEL_NAME = _get_text("DEJAQ_GENERALIZER_MODEL_NAME", "phi_generali
 CONTEXT_ADJUSTER_MODEL_NAME = _get_text("DEJAQ_CONTEXT_ADJUSTER_MODEL_NAME", "qwen_1_5b")
 VALIDATOR_MODEL_NAME = _get_text("DEJAQ_VALIDATOR_MODEL_NAME", "gemma_e2b")
 VALIDATOR_ENABLED = _get_bool("DEJAQ_VALIDATOR_ENABLED", True)
+# Cache hits at or below this cosine distance are near-identical to the stored
+# query; skip the validator and serve them directly (the embedding already
+# guarantees the cached answer covers the question).
+VALIDATOR_SKIP_DISTANCE = _get_float("DEJAQ_VALIDATOR_SKIP_DISTANCE", 0.05)

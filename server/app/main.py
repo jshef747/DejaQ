@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import openai_compat, openai_responses, departments, feedback
 from app.routers.admin import router as admin_router
+from app.middleware.admin_loopback import AdminLoopbackMiddleware
 from app.middleware.api_key import ApiKeyMiddleware
 from app.utils.logger import setup_logging
 from app.config import (
@@ -79,8 +80,10 @@ app.add_middleware(
     ],
 )
 
-# 3b. API key middleware (runs after CORS)
+# 3b. Middleware stack (add_middleware is LIFO — last registered runs first)
+# Execution order: AdminLoopbackMiddleware → ApiKeyMiddleware → CORS
 app.add_middleware(ApiKeyMiddleware)
+app.add_middleware(AdminLoopbackMiddleware)  # runs first: blocks non-loopback admin peers
 
 # 4. Include Routers
 app.include_router(openai_compat.router, prefix="/v1")

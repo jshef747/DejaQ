@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { isLocalAuth } from "@/lib/authMode";
 import Sidebar from "@/components/Sidebar";
+import { listWorkspaces } from "@/app/actions/workspaces";
 
 export default async function DashboardLayout({
   children,
@@ -21,6 +22,18 @@ export default async function DashboardLayout({
     if (!user) redirect("/login");
     email = user.email ?? "unknown";
   }
+
+  // Onboarding guard: if no workspaces exist, send the user through first-run setup.
+  // On backend error, fall through — the dashboard shows its own "unavailable" state.
+  // IMPORTANT: redirect() throws a NEXT_REDIRECT signal — it must NOT be inside a catch block.
+  let workspaces: Awaited<ReturnType<typeof listWorkspaces>> = [];
+  let backendOk = true;
+  try {
+    workspaces = await listWorkspaces();
+  } catch {
+    backendOk = false;
+  }
+  if (backendOk && workspaces.length === 0) redirect("/onboarding");
 
   return (
     <div className="ds-app">

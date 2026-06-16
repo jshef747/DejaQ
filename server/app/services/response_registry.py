@@ -20,8 +20,8 @@ _CREATE_RESPONSE_INTERACTIONS_TABLE = """
 CREATE TABLE IF NOT EXISTS response_interactions (
     interaction_id       TEXT PRIMARY KEY,
     created_at           TEXT    NOT NULL,
-    org_id               INTEGER,
-    org_slug             TEXT    NOT NULL,
+    workspace_id         INTEGER,
+    workspace_slug       TEXT    NOT NULL,
     department           TEXT    NOT NULL,
     cache_namespace      TEXT    NOT NULL,
     served_tier          TEXT    NOT NULL,
@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS response_interactions (
 """
 
 _CREATE_INDEXES = (
-    "CREATE INDEX IF NOT EXISTS idx_response_interactions_org_dept ON response_interactions(org_id, org_slug, department)",
+    "CREATE INDEX IF NOT EXISTS idx_response_interactions_workspace_dept ON response_interactions(workspace_id, workspace_slug, department)",
     "CREATE INDEX IF NOT EXISTS idx_response_interactions_response_id ON response_interactions(response_id)",
     "CREATE INDEX IF NOT EXISTS idx_response_interactions_created_at ON response_interactions(created_at)",
 )
@@ -42,8 +42,8 @@ _CREATE_INDEXES = (
 @dataclass(frozen=True)
 class ResponseInteraction:
     interaction_id: str
-    org_id: int | None
-    org_slug: str
+    workspace_id: int | None
+    workspace_slug: str
     department: str
     cache_namespace: str
     served_tier: ServedTier
@@ -89,6 +89,22 @@ class ResponseRegistry:
             return
         self._db = await aiosqlite.connect(self.db_path)
         await self._db.execute(_CREATE_RESPONSE_INTERACTIONS_TABLE)
+        # Migrate legacy org_id/org_slug columns to workspace_id/workspace_slug.
+        try:
+            cursor = await self._db.execute("PRAGMA table_info(response_interactions)")
+            cols = [row[1] for row in await cursor.fetchall()]
+            if "org_id" in cols and "workspace_id" not in cols:
+                await self._db.execute(
+                    "ALTER TABLE response_interactions RENAME COLUMN org_id TO workspace_id"
+                )
+                logger.info("Migrated response_interactions.org_id → workspace_id")
+            if "org_slug" in cols and "workspace_slug" not in cols:
+                await self._db.execute(
+                    "ALTER TABLE response_interactions RENAME COLUMN org_slug TO workspace_slug"
+                )
+                logger.info("Migrated response_interactions.org_slug → workspace_slug")
+        except Exception:
+            logger.warning("Could not migrate response_interactions columns", exc_info=True)
         for statement in _CREATE_INDEXES:
             await self._db.execute(statement)
         await self._db.commit()
@@ -101,8 +117,8 @@ class ResponseRegistry:
     async def register(
         self,
         *,
-        org_id: int | None,
-        org_slug: str,
+        workspace_id: int | None,
+        workspace_slug: str,
         department: str,
         cache_namespace: str,
         served_tier: ServedTier,
@@ -123,8 +139,8 @@ class ResponseRegistry:
             INSERT INTO response_interactions (
                 interaction_id,
                 created_at,
-                org_id,
-                org_slug,
+                workspace_id,
+                workspace_slug,
                 department,
                 cache_namespace,
                 served_tier,
@@ -138,8 +154,8 @@ class ResponseRegistry:
             (
                 record_id,
                 created_at,
-                org_id,
-                org_slug,
+                workspace_id,
+                workspace_slug,
                 department,
                 cache_namespace,
                 served_tier,
@@ -150,8 +166,8 @@ class ResponseRegistry:
         await self._db.commit()
         return ResponseInteraction(
             interaction_id=record_id,
-            org_id=org_id,
-            org_slug=org_slug,
+            workspace_id=workspace_id,
+            workspace_slug=workspace_slug,
             department=department,
             cache_namespace=cache_namespace,
             served_tier=served_tier,
@@ -169,8 +185,8 @@ class ResponseRegistry:
             """
             SELECT
                 interaction_id,
-                org_id,
-                org_slug,
+                workspace_id,
+                workspace_slug,
                 department,
                 cache_namespace,
                 served_tier,
@@ -189,8 +205,8 @@ class ResponseRegistry:
             return None
         return ResponseInteraction(
             interaction_id=row[0],
-            org_id=row[1],
-            org_slug=row[2],
+            workspace_id=row[1],
+            workspace_slug=row[2],
             department=row[3],
             cache_namespace=row[4],
             served_tier=row[5],
@@ -205,16 +221,16 @@ class ResponseRegistry:
         self,
         interaction_id: str,
         *,
-        org_id: int | None,
-        org_slug: str,
+        workspace_id: int | None,
+        workspace_slug: str,
         department: str,
     ) -> ResponseInteraction | None:
         interaction = await self.get(interaction_id)
         if interaction is None:
             return None
-        if org_id is not None and interaction.org_id != org_id:
+        if workspace_id is not None and interaction.workspace_id != workspace_id:
             return None
-        if interaction.org_slug != org_slug:
+        if interaction.workspace_slug != workspace_slug:
             return None
         if interaction.department != department:
             return None

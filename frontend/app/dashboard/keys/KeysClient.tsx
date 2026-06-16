@@ -15,12 +15,12 @@ import type { ApiKeyCreated, ApiKeyItem } from "@/lib/types";
 const fmt = new Intl.DateTimeFormat("en-US", { year: "numeric", month: "short", day: "numeric" });
 
 interface Props {
-  orgSlug: string;
+  workspaceSlug: string;
   keys: ApiKeyItem[];
   error: string | null;
 }
 
-export default function KeysClient({ orgSlug, keys, error }: Props) {
+export default function KeysClient({ workspaceSlug, keys, error }: Props) {
   const router = useRouter();
 
   const [generateOpen, setGenerateOpen] = useState(false);
@@ -43,7 +43,7 @@ export default function KeysClient({ orgSlug, keys, error }: Props) {
     setGenerateBusy(true);
     setGenerateErr(null);
     setGenerateConflict(false);
-    const res = await generateKey(orgSlug, force);
+    const res = await generateKey(workspaceSlug, force);
     setGenerateBusy(false);
     if (!res.ok) {
       setGenerateErr(res.error);
@@ -100,7 +100,7 @@ export default function KeysClient({ orgSlug, keys, error }: Props) {
     <div className="ds-page">
       <SectionHeader
         title="API Keys"
-        subtitle={`Keys for org ${orgSlug}`}
+        subtitle={`Keys for workspace ${workspaceSlug}`}
         action={<Button variant="primary" onClick={openGenerate}>+ Generate key</Button>}
       />
 
@@ -182,7 +182,7 @@ export default function KeysClient({ orgSlug, keys, error }: Props) {
         open={generateOpen}
         onClose={() => setGenerateOpen(false)}
         title="Generate API key"
-        subtitle={`New key for org ${orgSlug}`}
+        subtitle={`New key for workspace ${workspaceSlug}`}
         footer={
           <>
             <Button onClick={() => setGenerateOpen(false)} disabled={generateBusy}>Cancel</Button>

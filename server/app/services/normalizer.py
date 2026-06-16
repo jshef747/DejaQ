@@ -201,10 +201,16 @@ class NormalizerService:
         logger.debug("Normalizing query: %s", raw_query)
         start = time.time()
 
-        query = _spell_correct(raw_query)
+        # Spell-correction is only used on the opinion path. Cache matching is
+        # semantic (BGE embeddings + cosine distance), which already absorbs typos
+        # — "...segfult..." matches "...segfault..." without correction. The generic
+        # spell checker cannot tell unknown-but-correct jargon (malloc, sudo, struct)
+        # from a real typo, so running it on general queries mangles technical terms.
+        # We compute it only to gate opinion detection; passthrough stays uncorrected.
+        corrected = _spell_correct(raw_query)
 
-        if not _is_opinion(query):
-            normalized = query.strip().lower()
+        if not _is_opinion(corrected):
+            normalized = raw_query.strip().lower()
             latency = (time.time() - start) * 1000
             logger.debug(
                 "Normalization (passthrough) in %.2f ms. Raw: %r -> Normalized: %r",
@@ -212,7 +218,7 @@ class NormalizerService:
             )
             return normalized
 
-        messages = _build_opinion_messages(query)
+        messages = _build_opinion_messages(corrected)
         raw_output = await self.backend.complete(
             CompletionRequest(
                 model_name=self.model_name,

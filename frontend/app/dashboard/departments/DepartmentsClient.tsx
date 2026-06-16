@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { GripVertical, Hash, Search, Trash2, Plus, Users } from "lucide-react";
+import { GripVertical, Hash, Search, Trash2, Plus, Pencil, Users } from "lucide-react";
 import Modal from "@/components/Modal";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import Button from "@/components/ui/Button";
@@ -11,24 +11,24 @@ import Field from "@/components/ui/Field";
 import Pill from "@/components/ui/Pill";
 import EmptyState from "@/components/ui/EmptyState";
 import SectionHeader from "@/components/ui/SectionHeader";
-import { createDepartment, deleteDepartment } from "@/app/actions/departments";
-import type { DepartmentItem, DeptStatsItem, OrgItem } from "@/lib/types";
+import { createDepartment, deleteDepartment, renameDepartment } from "@/app/actions/departments";
+import type { DepartmentItem, DeptStatsItem, WorkspaceItem } from "@/lib/types";
 
 const fmtDate = new Intl.DateTimeFormat("en-US", { year: "numeric", month: "short", day: "numeric" });
 function fmtNum(n: number) { return n.toLocaleString("en-US"); }
 function fmtPct(n: number) { return (n * 100).toFixed(1) + "%"; }
 
-const COL = "1fr 220px 180px 140px 60px";
+const COL = "1fr 220px 180px 140px 90px";
 
 interface Props {
-  orgSlug: string;
-  orgs: OrgItem[];
+  workspaceSlug: string;
+  workspaces: WorkspaceItem[];
   depts: DepartmentItem[];
   statsItems: DeptStatsItem[];
   error: string | null;
 }
 
-export default function DepartmentsClient({ orgSlug, orgs, depts, statsItems, error }: Props) {
+export default function DepartmentsClient({ workspaceSlug, workspaces, depts, statsItems, error }: Props) {
   const router = useRouter();
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -39,6 +39,11 @@ export default function DepartmentsClient({ orgSlug, orgs, depts, statsItems, er
   const [confirmDeleteSlug, setConfirmDeleteSlug] = useState<string | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteErr, setDeleteErr] = useState<string | null>(null);
+
+  const [renameSlug, setRenameSlug] = useState<string | null>(null);
+  const [renameName, setRenameName] = useState("");
+  const [renameBusy, setRenameBusy] = useState(false);
+  const [renameErr, setRenameErr] = useState<string | null>(null);
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [drag, setDrag] = useState<{ slug: string } | null>(null);
@@ -55,17 +60,17 @@ export default function DepartmentsClient({ orgSlug, orgs, depts, statsItems, er
   const statsMap: Record<string, DeptStatsItem> = {};
   for (const s of statsItems) { statsMap[s.department] = s; }
 
-  const orgHits = statsItems.reduce((a, s) => a + s.hits, 0);
-  const orgMisses = statsItems.reduce((a, s) => a + s.misses, 0);
-  const orgTotal = orgHits + orgMisses;
-  const orgRate = orgTotal ? orgHits / orgTotal : 0;
+  const wsHits = statsItems.reduce((a, s) => a + s.hits, 0);
+  const wsMisses = statsItems.reduce((a, s) => a + s.misses, 0);
+  const wsTotal = wsHits + wsMisses;
+  const wsRate = wsTotal ? wsHits / wsTotal : 0;
 
   async function handleCreate() {
     const trimmed = createName.trim();
     if (!trimmed) { setCreateErr("Name is required."); return; }
     setCreateBusy(true);
     setCreateErr(null);
-    const res = await createDepartment(orgSlug, trimmed);
+    const res = await createDepartment(workspaceSlug, trimmed);
     setCreateBusy(false);
     if (!res.ok) { setCreateErr(res.error); return; }
     setCreateOpen(false);
@@ -76,11 +81,24 @@ export default function DepartmentsClient({ orgSlug, orgs, depts, statsItems, er
   async function handleDelete(deptSlug: string) {
     setDeleteBusy(true);
     setDeleteErr(null);
-    const res = await deleteDepartment(orgSlug, deptSlug);
+    const res = await deleteDepartment(workspaceSlug, deptSlug);
     setDeleteBusy(false);
     if (!res.ok) { setDeleteErr(res.error); return; }
     setConfirmDeleteSlug(null);
     setOrder((o) => o.filter((s) => s !== deptSlug));
+    router.refresh();
+  }
+
+  async function handleRename() {
+    const trimmed = renameName.trim();
+    if (!trimmed) { setRenameErr("Name is required."); return; }
+    if (!renameSlug) return;
+    setRenameBusy(true);
+    setRenameErr(null);
+    const res = await renameDepartment(workspaceSlug, renameSlug, trimmed);
+    setRenameBusy(false);
+    if (!res.ok) { setRenameErr(res.error); return; }
+    setRenameSlug(null);
     router.refresh();
   }
 
@@ -106,7 +124,7 @@ export default function DepartmentsClient({ orgSlug, orgs, depts, statsItems, er
     setDropTarget(null);
   }
 
-  const currentOrg = orgs.find((o) => o.slug === orgSlug);
+  const currentWorkspace = workspaces.find((w) => w.slug === workspaceSlug);
 
   return (
     <div className="ds-page">
@@ -124,24 +142,24 @@ export default function DepartmentsClient({ orgSlug, orgs, depts, statsItems, er
       <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", border: "1px solid var(--border)", borderRadius: 6, marginBottom: 16, background: "var(--bg-2)", overflow: "hidden" }}>
         <div style={{ padding: "14px 16px", borderRight: "1px solid var(--border)" }}>
           <div style={{ fontSize: 10.5, color: "var(--fg-dimmer)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>
-            Scoped to organization
+            Scoped to workspace
           </div>
           <select
-            value={orgSlug}
-            onChange={(e) => router.push(`/dashboard/departments?org=${e.target.value}`)}
+            value={workspaceSlug}
+            onChange={(e) => router.push(`/dashboard/departments?workspace=${e.target.value}`)}
             style={{ width: "100%", background: "var(--bg)", border: "1px solid var(--border-2)", color: "var(--fg)", padding: "7px 10px", borderRadius: 5, outline: "none", fontFamily: "var(--font-sans)", fontSize: 13, fontWeight: 500, cursor: "pointer" }}
           >
-            {orgs.map((o) => (
+            {workspaces.map((o) => (
               <option key={o.slug} value={o.slug}>{o.name}</option>
             ))}
           </select>
-          <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-dimmer)", marginTop: 6 }}>{orgSlug}</div>
+          <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-dimmer)", marginTop: 6 }}>{workspaceSlug}</div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", alignItems: "center" }}>
           {[
             { label: "Departments", value: rows.length.toString() },
-            { label: "Hit rate", value: orgTotal ? fmtPct(orgRate) : "—", accent: true },
-            { label: "Requests", value: fmtNum(orgTotal) },
+            { label: "Hit rate", value: wsTotal ? fmtPct(wsRate) : "—", accent: true },
+            { label: "Requests", value: fmtNum(wsTotal) },
           ].map((m) => (
             <div key={m.label} style={{ padding: "14px 16px", borderRight: "1px solid var(--border)" }}>
               <div style={{ fontSize: 10.5, color: "var(--fg-dimmer)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>{m.label}</div>
@@ -151,9 +169,9 @@ export default function DepartmentsClient({ orgSlug, orgs, depts, statsItems, er
           <div style={{ padding: "14px 16px" }}>
             <div style={{ fontSize: 10.5, color: "var(--fg-dimmer)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>Hits / Misses</div>
             <div style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}>
-              <span style={{ color: "var(--accent)" }}>{fmtNum(orgHits)}</span>
+              <span style={{ color: "var(--accent)" }}>{fmtNum(wsHits)}</span>
               <span style={{ color: "var(--fg-dimmer)" }}> / </span>
-              <span style={{ color: "var(--amber)" }}>{fmtNum(orgMisses)}</span>
+              <span style={{ color: "var(--amber)" }}>{fmtNum(wsMisses)}</span>
             </div>
           </div>
         </div>
@@ -171,7 +189,7 @@ export default function DepartmentsClient({ orgSlug, orgs, depts, statsItems, er
           <label style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, maxWidth: 360, minWidth: 220, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 5, padding: "4px 8px", color: "var(--fg-dim)", fontSize: 11, fontFamily: "var(--font-mono)" }}>
             <Search size={11} />
             <input
-              placeholder={`Filter departments in ${currentOrg?.name ?? orgSlug}…`}
+              placeholder={`Filter departments in ${currentWorkspace?.name ?? workspaceSlug}…`}
               style={{ background: "none", border: "none", color: "var(--fg)", flex: 1, fontFamily: "var(--font-mono)", fontSize: 11, outline: "none" }}
             />
           </label>
@@ -193,7 +211,7 @@ export default function DepartmentsClient({ orgSlug, orgs, depts, statsItems, er
           <EmptyState
             icon={Users}
             title="No departments yet"
-            description={`Create a department to start partitioning traffic in ${currentOrg?.name ?? orgSlug}.`}
+            description={`Create a department to start partitioning traffic in ${currentWorkspace?.name ?? workspaceSlug}.`}
             action={<Button variant="primary" onClick={() => { setCreateName(""); setCreateErr(null); setCreateOpen(true); }}><Plus size={13} /> New department</Button>}
           />
         ) : (
@@ -251,7 +269,15 @@ export default function DepartmentsClient({ orgSlug, orgs, depts, statsItems, er
                     <div className="ds-dim" style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>
                       {fmtDate.format(new Date(dept.created_at))}
                     </div>
-                    <div style={{ display: "flex", justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
+                    <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }} onClick={(e) => e.stopPropagation()}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => { setRenameErr(null); setRenameName(dept.name); setRenameSlug(dept.slug); }}
+                        aria-label={`Rename department ${dept.slug}`}
+                      >
+                        <Pencil size={12} />
+                      </Button>
                       <Button
                         variant="ghost-danger"
                         size="sm"
@@ -328,7 +354,7 @@ export default function DepartmentsClient({ orgSlug, orgs, depts, statsItems, er
         open={createOpen}
         onClose={() => setCreateOpen(false)}
         title="Create department"
-        subtitle={`New partition inside ${currentOrg?.name ?? orgSlug}`}
+        subtitle={`New partition inside ${currentWorkspace?.name ?? workspaceSlug}`}
         footer={
           <>
             <Button onClick={() => setCreateOpen(false)} disabled={createBusy}>Cancel</Button>
@@ -344,6 +370,29 @@ export default function DepartmentsClient({ orgSlug, orgs, depts, statsItems, er
             disabled={createBusy}
             autoFocus
             mono
+          />
+        </Field>
+      </Modal>
+
+      {/* Rename department modal */}
+      <Modal
+        open={!!renameSlug}
+        onClose={() => setRenameSlug(null)}
+        title="Rename department"
+        subtitle={`Slug stays the same (${renameSlug ?? ""}). Only the display name changes.`}
+        footer={
+          <>
+            <Button onClick={() => setRenameSlug(null)} disabled={renameBusy}>Cancel</Button>
+            <Button variant="primary" onClick={handleRename} loading={renameBusy}>Save</Button>
+          </>
+        }
+      >
+        <Field label="New name" required error={renameErr ?? undefined}>
+          <Input
+            value={renameName}
+            onChange={(e) => setRenameName(e.target.value)}
+            disabled={renameBusy}
+            autoFocus
           />
         </Field>
       </Modal>

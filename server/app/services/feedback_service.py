@@ -51,12 +51,12 @@ def list_feedback(
     response_id: str | None = None,
     limit: int = 100,
     offset: int = 0,
-    accessible_org_slugs: set[str] | None = None,
+    accessible_workspace_slugs: set[str] | None = None,
 ) -> FeedbackListResponse:
     clauses: list[str] = []
     params: list[object] = []
     if org:
-        clauses.append("org = ?")
+        clauses.append("workspace = ?")
         params.append(org)
     if department:
         clauses.append("department = ?")
@@ -64,11 +64,11 @@ def list_feedback(
     if response_id:
         clauses.append("response_id = ?")
         params.append(response_id)
-    if accessible_org_slugs is not None and not org:
-        if accessible_org_slugs:
-            placeholders = ",".join("?" * len(accessible_org_slugs))
-            clauses.append(f"org IN ({placeholders})")
-            params.extend(sorted(accessible_org_slugs))
+    if accessible_workspace_slugs is not None and not org:
+        if accessible_workspace_slugs:
+            placeholders = ",".join("?" * len(accessible_workspace_slugs))
+            clauses.append(f"workspace IN ({placeholders})")
+            params.extend(sorted(accessible_workspace_slugs))
         else:
             clauses.append("1=0")
     where = "WHERE " + " AND ".join(clauses) if clauses else ""
@@ -77,7 +77,7 @@ def list_feedback(
         total = con.execute(f"SELECT COUNT(*) FROM feedback_log {where}", params).fetchone()[0]
         rows = con.execute(
             f"""
-            SELECT id, ts, response_id, org, department, rating, comment
+            SELECT id, ts, response_id, workspace, department, rating, comment
             FROM feedback_log
             {where}
             ORDER BY ts DESC, id DESC
@@ -92,7 +92,7 @@ def list_feedback(
                 id=row[0],
                 ts=row[1],
                 response_id=row[2],
-                org=row[3],
+                workspace=row[3],
                 department=row[4],
                 rating=row[5],
                 comment=row[6],
@@ -179,7 +179,7 @@ async def submit_feedback(
     rating: Literal["positive", "negative"],
     comment: str | None,
     org: str,
-    org_id: int | None = None,
+    workspace_id: int | None = None,
     department: str,
     validate_namespace: bool,
 ) -> FeedbackResult:
@@ -191,8 +191,8 @@ async def submit_feedback(
     if interaction_id:
         interaction = await response_registry.validate_owner(
             interaction_id,
-            org_id=org_id,
-            org_slug=org,
+            workspace_id=workspace_id,
+            workspace_slug=org,
             department=department,
         )
         if interaction is None:

@@ -37,10 +37,10 @@ def run() -> None:
         Console().print(f"[red]Stats DB not found:[/red] {db_path}\nStart the server and send some requests first.")
         sys.exit(1)
 
-    org_report = stats_service.org_stats()
+    workspace_report = stats_service.workspace_stats()
     department_rows = []
-    for org in org_report.items:
-        department_rows.extend(stats_service.department_stats(org.org).items)
+    for ws in workspace_report.items:
+        department_rows.extend(stats_service.department_stats(ws.workspace).items)
 
     if not department_rows:
         Console().print("[dim]No requests recorded yet.[/dim]")
@@ -52,7 +52,7 @@ def run() -> None:
         show_footer=False,
         header_style="bold cyan",
     )
-    table.add_column("Org", style="dim")
+    table.add_column("Workspace", style="dim")
     table.add_column("Department")
     table.add_column("Requests", justify="right")
     table.add_column("Hit Rate", justify="right")
@@ -66,7 +66,7 @@ def run() -> None:
         style = _style(row.hit_rate)
         model_list = ", ".join(row.models_used) or "—"
         table.add_row(
-            row.org,
+            row.workspace,
             row.department,
             str(row.requests),
             _fmt_pct(row.hits, row.requests),
@@ -79,8 +79,8 @@ def run() -> None:
         )
 
     # Total row
-    if org_report.total.requests:
-        total = org_report.total
+    if workspace_report.total.requests:
+        total = workspace_report.total
         t_style = _style(total.hit_rate)
         t_model_list = ", ".join(total.models_used) or "—"
         table.add_section()

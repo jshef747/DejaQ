@@ -36,6 +36,8 @@ VALIDATOR_ARG=""
 OLLAMA_URL_ARG=""
 OLLAMA_URL_FLAG_SET=false
 DRY_RUN=false
+FRESH=false
+YES=false
 ENV_STACK="${DEJAQ_STACK:-}"
 ENV_MODE="${DEJAQ_MODE:-}"
 ENV_OLLAMA_URL="${DEJAQ_OLLAMA_URL:-}"
@@ -43,7 +45,7 @@ ENV_START_LOGS="${DEJAQ_START_LOGS:-}"
 ENV_VALIDATOR="${DEJAQ_VALIDATOR_ENABLED:-}"
 
 usage() {
-  echo "Usage: $0 [--stack=server|all] [--mode=local|remote] [--logs=requests|all] [--validator=off] [--ollama-url URL] [--dry-run]"
+  echo "Usage: $0 [--stack=server|all] [--mode=local|remote] [--logs=requests|all] [--validator=off] [--ollama-url URL] [--fresh] [--yes] [--dry-run]"
   echo ""
   echo "Stacks:"
   echo "  server   Start backend services only: ChromaDB, Redis, Celery, FastAPI"
@@ -58,6 +60,9 @@ usage() {
   echo "  all      Tail all service logs"
   echo ""
   echo "Cache-answer validator is ON by default; disable with --validator=off."
+  echo ""
+  echo "  --fresh  Delete dejaq.db, chroma_data/, and dejaq_stats.db before starting."
+  echo "           Prompts for confirmation unless --yes is also passed."
   echo ""
   echo "Environment:"
   echo "  DEJAQ_STACK             Non-interactive stack selection: server or all"
@@ -111,6 +116,12 @@ for arg in "$@"; do
       ;;
     --dry-run)
       DRY_RUN=true
+      ;;
+    --fresh)
+      FRESH=true
+      ;;
+    --yes|-y)
+      YES=true
       ;;
     --help|-h)
       usage
@@ -390,7 +401,8 @@ start_dashboard() {
   echo -e "${CYAN}[6/7] Starting dashboard frontend...${NC}"
   ensure_node_app_ready "$FRONTEND_DIR" "Dashboard"
   free_port 3000
-  (cd "$FRONTEND_DIR" && npm run dev) &>"$LOG_DIR/dashboard.log" &
+  # Bind to 127.0.0.1 only — the admin dashboard is control-plane; not LAN-exposed.
+  (cd "$FRONTEND_DIR" && npm run dev -- --hostname 127.0.0.1 --port 3000) &>"$LOG_DIR/dashboard.log" &
   DASHBOARD_PID=$!
   sleep 2
   if ! kill -0 "$DASHBOARD_PID" 2>/dev/null; then
@@ -448,6 +460,44 @@ check_ollama "${DEJAQ_OLLAMA_URL}"
 if [[ "$DRY_RUN" == "true" ]]; then
   echo -e "${GREEN}Dry run complete. Services not started.${NC}"
   exit 0
+fi
+
+# ── Offer a fresh start when not requested via flag (interactive only) ───────
+if [[ "$FRESH" != "true" && "$YES" != "true" && -t 0 ]]; then
+  read -r -p "$(echo -e "${YELLOW}Start fresh? Wipes databases (dejaq.db, dejaq_stats.db, chroma_data/). [y/N]: ${NC}")" FRESH_ANSWER
+  if [[ "$(echo "$FRESH_ANSWER" | tr '[:upper:]' '[:lower:]')" == "y" || "$(echo "$FRESH_ANSWER" | tr '[:upper:]' '[:lower:]')" == "yes" ]]; then
+    FRESH=true
+    YES=true
+  fi
+fi
+
+# ── Fresh start (optional) ──────────────────────────────────────────────────
+if [[ "$FRESH" == "true" ]]; then
+  FRESH_TARGETS=()
+  [[ -f "$SERVER_DIR/dejaq.db" ]]     && FRESH_TARGETS+=("dejaq.db")
+  [[ -f "$SERVER_DIR/dejaq_stats.db" ]] && FRESH_TARGETS+=("dejaq_stats.db")
+  [[ -d "$SERVER_DIR/chroma_data" ]]  && FRESH_TARGETS+=("chroma_data/")
+
+  if [[ ${#FRESH_TARGETS[@]} -eq 0 ]]; then
+    echo -e "  ${YELLOW}--fresh: nothing to delete (databases not found)${NC}"
+  else
+    echo -e "${YELLOW}--fresh: will permanently delete:${NC}"
+    for t in "${FRESH_TARGETS[@]}"; do
+      echo -e "  ${RED}  server/$t${NC}"
+    done
+
+    if [[ "$YES" != "true" ]]; then
+      read -r -p "$(echo -e "${YELLOW}This cannot be undone. Continue? [y/N]: ${NC}")" CONFIRM
+      if [[ "$(echo "$CONFIRM" | tr '[:upper:]' '[:lower:]')" != "y" && "$(echo "$CONFIRM" | tr '[:upper:]' '[:lower:]')" != "yes" ]]; then
+        echo -e "${RED}Aborted.${NC}"; exit 1
+      fi
+    fi
+
+    [[ -f "$SERVER_DIR/dejaq.db" ]]     && rm -f "$SERVER_DIR/dejaq.db"     && echo -e "  Deleted dejaq.db"
+    [[ -f "$SERVER_DIR/dejaq_stats.db" ]] && rm -f "$SERVER_DIR/dejaq_stats.db" && echo -e "  Deleted dejaq_stats.db"
+    [[ -d "$SERVER_DIR/chroma_data" ]]  && rm -rf "$SERVER_DIR/chroma_data" && echo -e "  Deleted chroma_data/"
+    echo -e "  ${GREEN}Fresh start: data cleared${NC}"
+  fi
 fi
 
 # ── 0. Database migrations ──────────────────────────────────────────────────
@@ -531,9 +581,11 @@ fi
 echo -e "  ${GREEN}Celery beat running (PID $CELERY_BEAT_PID) — eviction runs every 30 min${NC}"
 
 # ── 5. FastAPI ──────────────────────────────────────────────────────────────
+# Bind to 0.0.0.0 so the data plane (/v1/*) is reachable over the LAN.
+# The AdminLoopbackMiddleware blocks non-loopback peers on /admin/v1/* in-app.
 echo -e "${CYAN}[5/5] Starting FastAPI...${NC}"
 free_port 8000
-"$UVICORN" app.main:app --reload &>"$LOG_DIR/uvicorn.log" &
+"$UVICORN" app.main:app --host "${DEJAQ_BIND_HOST:-0.0.0.0}" --reload &>"$LOG_DIR/uvicorn.log" &
 UVICORN_PID=$!
 sleep 2
 if ! kill -0 "$UVICORN_PID" 2>/dev/null; then
@@ -551,20 +603,24 @@ TAIL_LOGS=("$LOG_DIR/redis.log" "$LOG_DIR/celery.log" "$LOG_DIR/celery_beat.log"
 echo ""
 if [[ "$STACK" == "all" ]]; then
   echo -e "${GREEN}✓ Full local stack running${NC}"
-  echo -e "  API:         http://127.0.0.1:8000"
-  echo -e "  ChromaDB:    http://127.0.0.1:8001"
-  echo -e "  Dashboard:   http://localhost:3000/dashboard"
-  echo -e "  Chat:        http://localhost:4000"
-  echo -e "  Mode:        $MODE"
-  echo -e "  Logs:        $LOG_DIR/"
+  echo -e "  Data plane (/v1):       http://0.0.0.0:8000   — LAN-accessible, key-protected"
+  echo -e "  Admin API (/admin/v1):  127.0.0.1 only        — loopback-restricted"
+  echo -e "  Dashboard:              http://127.0.0.1:3000/dashboard  — loopback-only"
+  echo -e "  ChromaDB:               http://127.0.0.1:8001"
+  echo -e "  Chat:                   http://localhost:4000"
+  echo -e "  Mode:                   $MODE"
+  echo -e "  Logs:                   $LOG_DIR/"
+  echo -e ""
+  echo -e "  Remote admin? Run on your machine: ssh -L 3000:localhost:3000 -L 8000:localhost:8000 user@server"
   TAIL_LOGS+=("$LOG_DIR/dashboard.log" "$LOG_DIR/chat.log")
 else
   echo -e "${GREEN}✓ Server services running${NC}"
-  echo -e "  API:         http://127.0.0.1:8000"
-  echo -e "  ChromaDB:    http://127.0.0.1:8001"
-  echo -e "  Mode:        $MODE"
-  echo -e "  Stats:       cd server && uv run dejaq-admin stats"
-  echo -e "  Logs:        $LOG_DIR/"
+  echo -e "  Data plane (/v1):       http://0.0.0.0:8000   — LAN-accessible, key-protected"
+  echo -e "  Admin API (/admin/v1):  127.0.0.1 only        — loopback-restricted"
+  echo -e "  ChromaDB:               http://127.0.0.1:8001"
+  echo -e "  Mode:                   $MODE"
+  echo -e "  Stats:                  cd server && uv run dejaq-admin stats"
+  echo -e "  Logs:                   $LOG_DIR/"
 fi
 echo -e "\n${YELLOW}Press Ctrl+C to stop all services.${NC}\n"
 

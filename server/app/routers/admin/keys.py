@@ -8,34 +8,34 @@ from app.services import admin_service
 router = APIRouter()
 
 
-@router.get("/orgs/{org_slug}/keys", response_model=list[KeyItem])
+@router.get("/workspaces/{workspace_slug}/keys", response_model=list[KeyItem])
 def list_keys(
-    org_slug: str,
+    workspace_slug: str,
     ctx: ManagementAuthContext = Depends(require_management_auth),
 ):
     try:
-        return admin_service.list_keys(org_slug, ctx=ctx)
-    except admin_service.OrgNotFound as exc:
+        return admin_service.list_keys(workspace_slug, ctx=ctx)
+    except admin_service.WorkspaceNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except admin_service.OrgForbidden as exc:
+    except admin_service.WorkspaceForbidden as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 @router.post(
-    "/orgs/{org_slug}/keys",
+    "/workspaces/{workspace_slug}/keys",
     response_model=KeyCreated,
     status_code=status.HTTP_201_CREATED,
 )
 def generate_key(
-    org_slug: str,
+    workspace_slug: str,
     force: bool = Query(default=False),
     ctx: ManagementAuthContext = Depends(require_management_auth),
 ):
     try:
-        return admin_service.generate_key(org_slug, force=force, ctx=ctx)
-    except admin_service.OrgNotFound as exc:
+        return admin_service.generate_key(workspace_slug, force=force, ctx=ctx)
+    except admin_service.WorkspaceNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except admin_service.OrgForbidden as exc:
+    except admin_service.WorkspaceForbidden as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except admin_service.ActiveKeyExists as exc:
         raise HTTPException(

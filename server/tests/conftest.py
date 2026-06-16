@@ -105,6 +105,18 @@ def isolated_stats_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 
+@pytest.fixture(autouse=True)
+def _disable_admin_loopback(monkeypatch):
+    """Disable the AdminLoopbackMiddleware for all tests.
+
+    TestClient uses a non-loopback transport peer ('testclient'), which the
+    middleware rejects with 403. Tests need direct admin API access, so we
+    disable the loopback gate for the duration of each test.
+    """
+    import app.middleware.admin_loopback as _alb
+    monkeypatch.setattr(_alb, "ADMIN_LOOPBACK_ONLY", False)
+
+
 @pytest.fixture
 def authed_admin_client():
     """TestClient for the main app with management auth pre-satisfied as system actor."""
@@ -122,24 +134,24 @@ def authed_admin_client():
 @pytest.fixture
 def scoped_admin_client():
     """
-    Factory fixture that yields a callable: build_client(accessible_orgs) -> (TestClient, headers).
+    Factory fixture that yields a callable: build_client(accessible_workspaces) -> (TestClient, headers).
 
-    Pass a list of OrgRef objects to build a user actor scoped to exactly those orgs.
-    Used to test that user actors are denied access to orgs they are not members of.
+    Pass a list of WorkspaceRef objects to build a user actor scoped to exactly those workspaces.
+    Used to test that user actors are denied access to workspaces they are not members of.
     """
     from app.main import app
     from app.dependencies.admin_auth import require_management_auth
-    from app.dependencies.management_auth import OrgRef
+    from app.dependencies.management_auth import WorkspaceRef
 
     _override_key = require_management_auth
 
-    def build_client(accessible_orgs: list[OrgRef]):
+    def build_client(accessible_workspaces: list[WorkspaceRef]):
         ctx = ManagementAuthContext(
             actor_type="user",
             local_user_id=1,
             supabase_user_id="test-supabase-uid",
             email="test@example.com",
-            accessible_orgs=accessible_orgs,
+            accessible_workspaces=accessible_workspaces,
         )
         app.dependency_overrides[_override_key] = lambda: ctx
         return TestClient(app), {"Authorization": "Bearer test-user-token"}

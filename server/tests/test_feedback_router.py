@@ -83,7 +83,7 @@ def test_feedback_route_returns_escalation_fields_for_interaction_feedback(monke
         "escalation_status": "answered",
     }
     assert captured["org"] == "acme"
-    assert captured["org_id"] == 7
+    assert captured["workspace_id"] == 7
     assert captured["department"] == "eng"
     assert captured["interaction_id"] == "int_parent"
     assert "tier" not in captured

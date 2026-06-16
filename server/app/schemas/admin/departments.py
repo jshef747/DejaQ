@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 class DepartmentItem(BaseModel):
     id: int
-    org_slug: str
+    workspace_slug: str
     name: str
     slug: str
     cache_namespace: str
@@ -13,6 +13,10 @@ class DepartmentItem(BaseModel):
 
 
 class DepartmentCreate(BaseModel):
+    name: str
+
+
+class DepartmentUpdate(BaseModel):
     name: str
 
 

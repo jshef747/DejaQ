@@ -6,20 +6,20 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 
 
-class OrgProviderCredentials(Base):
-    __tablename__ = "org_provider_credentials"
+class WorkspaceProviderCredentials(Base):
+    __tablename__ = "workspace_provider_credentials"
     __table_args__ = (
-        UniqueConstraint("org_id", "provider", name="uq_org_provider_credentials_org_provider"),
+        UniqueConstraint("workspace_id", "provider", name="uq_workspace_provider_credentials_workspace_provider"),
         CheckConstraint(
             "provider IN ('google', 'openai', 'anthropic', 'mistral', 'cohere', 'together', 'groq', 'fireworks')",
-            name="ck_org_provider_credentials_provider",
+            name="ck_workspace_provider_credentials_provider",
         ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    org_id: Mapped[int] = mapped_column(
+    workspace_id: Mapped[int] = mapped_column(
         Integer,
-        ForeignKey("organizations.id", ondelete="CASCADE"),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
         nullable=False,
     )
     provider: Mapped[str] = mapped_column(String, nullable=False)
@@ -36,7 +36,7 @@ class OrgProviderCredentials(Base):
         nullable=False,
     )
 
-    organization: Mapped["Organization"] = relationship(  # noqa: F821
-        "Organization",
+    workspace: Mapped["Workspace"] = relationship(  # noqa: F821
+        "Workspace",
         back_populates="provider_credentials",
     )

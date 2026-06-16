@@ -6,9 +6,9 @@ from sqlalchemy.orm import Session
 from app.db.models.api_key import ApiKey
 
 
-def create_key(session: Session, org_id: int) -> ApiKey:
+def create_key(session: Session, workspace_id: int) -> ApiKey:
     token = secrets.token_urlsafe(32)
-    key = ApiKey(org_id=org_id, token=token)
+    key = ApiKey(workspace_id=workspace_id, token=token)
     session.add(key)
     session.flush()
     session.refresh(key)
@@ -23,18 +23,18 @@ def get_active_key_by_token(session: Session, token: str) -> ApiKey | None:
     )
 
 
-def get_active_key_for_org(session: Session, org_id: int) -> ApiKey | None:
+def get_active_key_for_workspace(session: Session, workspace_id: int) -> ApiKey | None:
     return (
         session.query(ApiKey)
-        .filter(ApiKey.org_id == org_id, ApiKey.revoked_at.is_(None))
+        .filter(ApiKey.workspace_id == workspace_id, ApiKey.revoked_at.is_(None))
         .first()
     )
 
 
-def list_keys_for_org(session: Session, org_id: int) -> list[ApiKey]:
+def list_keys_for_workspace(session: Session, workspace_id: int) -> list[ApiKey]:
     return (
         session.query(ApiKey)
-        .filter(ApiKey.org_id == org_id)
+        .filter(ApiKey.workspace_id == workspace_id)
         .order_by(ApiKey.created_at.desc())
         .all()
     )

@@ -3,33 +3,33 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
-from app.db import api_key_repo, dept_repo, org_repo, user_repo
+from app.db import api_key_repo, dept_repo, user_repo, workspace_repo
 from app.db.models.api_key import ApiKey
 from app.db.models.department import Department
-from app.db.models.org import Organization
+from app.db.models.workspace import Workspace
 from app.db.session import get_session
 from app.dependencies.management_auth import ManagementAuthContext
 from app.schemas.department import DeptRead
-from app.schemas.org import OrgRead
+from app.schemas.workspace import WorkspaceRead
 
 
-class OrgNotFound(Exception):
-    def __init__(self, org_slug: str) -> None:
-        self.org_slug = org_slug
-        super().__init__(f"Organization '{org_slug}' not found.")
+class WorkspaceNotFound(Exception):
+    def __init__(self, workspace_slug: str) -> None:
+        self.workspace_slug = workspace_slug
+        super().__init__(f"Workspace '{workspace_slug}' not found.")
 
 
-class OrgForbidden(Exception):
-    def __init__(self, org_slug: str) -> None:
-        self.org_slug = org_slug
-        super().__init__(f"Access denied to organization '{org_slug}'.")
+class WorkspaceForbidden(Exception):
+    def __init__(self, workspace_slug: str) -> None:
+        self.workspace_slug = workspace_slug
+        super().__init__(f"Access denied to workspace '{workspace_slug}'.")
 
 
 class DeptNotFound(Exception):
-    def __init__(self, org_slug: str, dept_slug: str) -> None:
-        self.org_slug = org_slug
+    def __init__(self, workspace_slug: str, dept_slug: str) -> None:
+        self.workspace_slug = workspace_slug
         self.dept_slug = dept_slug
-        super().__init__(f"Department '{dept_slug}' not found under org '{org_slug}'.")
+        super().__init__(f"Department '{dept_slug}' not found under workspace '{workspace_slug}'.")
 
 
 class KeyNotFound(Exception):
@@ -57,24 +57,24 @@ class DuplicateSlug(Exception):
 
 
 class ActiveKeyExists(Exception):
-    def __init__(self, org_slug: str, key_id: int) -> None:
-        self.org_slug = org_slug
+    def __init__(self, workspace_slug: str, key_id: int) -> None:
+        self.workspace_slug = workspace_slug
         self.key_id = key_id
         super().__init__(
-            f"Organization '{org_slug}' already has an active key (id={key_id})."
+            f"Workspace '{workspace_slug}' already has an active key (id={key_id})."
         )
 
 
 class DepartmentItem(BaseModel):
     id: int
-    org_slug: str
+    workspace_slug: str
     name: str
     slug: str
     cache_namespace: str
     created_at: datetime
 
 
-class OrgDeleteResult(BaseModel):
+class WorkspaceDeleteResult(BaseModel):
     deleted: bool
     departments_removed: int
 
@@ -86,7 +86,7 @@ class DeptDeleteResult(BaseModel):
 
 class KeyCreated(BaseModel):
     id: int
-    org_slug: str
+    workspace_slug: str
     token: str
     created_at: datetime
 
@@ -113,10 +113,10 @@ class KeyDeleteResult(BaseModel):
 _SYSTEM_CTX = ManagementAuthContext.system()
 
 
-def _dept_item(dept: DeptRead, org_slug: str) -> DepartmentItem:
+def _dept_item(dept: DeptRead, workspace_slug: str) -> DepartmentItem:
     return DepartmentItem(
         id=dept.id,
-        org_slug=org_slug,
+        workspace_slug=workspace_slug,
         name=dept.name,
         slug=dept.slug,
         cache_namespace=dept.cache_namespace,
@@ -124,111 +124,138 @@ def _dept_item(dept: DeptRead, org_slug: str) -> DepartmentItem:
     )
 
 
-def _check_org_access(ctx: ManagementAuthContext, org: Organization) -> None:
-    """Raise OrgForbidden if user actor cannot access org."""
-    if not ctx.has_org_access(org.id):
-        raise OrgForbidden(org.slug)
+def _check_workspace_access(ctx: ManagementAuthContext, workspace: Workspace) -> None:
+    """Raise WorkspaceForbidden if user actor cannot access workspace."""
+    if not ctx.has_workspace_access(workspace.id):
+        raise WorkspaceForbidden(workspace.slug)
 
 
-def list_orgs(ctx: ManagementAuthContext = _SYSTEM_CTX) -> list[OrgRead]:
+def list_workspaces(ctx: ManagementAuthContext = _SYSTEM_CTX) -> list[WorkspaceRead]:
     with get_session() as session:
-        all_orgs = org_repo.list_orgs(session)
+        all_workspaces = workspace_repo.list_workspaces(session)
         if ctx.is_system:
-            return all_orgs
-        accessible_ids = {o.id for o in ctx.accessible_orgs}
-        return [o for o in all_orgs if o.id in accessible_ids]
+            return all_workspaces
+        accessible_ids = {w.id for w in ctx.accessible_workspaces}
+        return [w for w in all_workspaces if w.id in accessible_ids]
 
 
-def create_org(name: str, ctx: ManagementAuthContext = _SYSTEM_CTX) -> OrgRead:
+def create_workspace(name: str, ctx: ManagementAuthContext = _SYSTEM_CTX) -> WorkspaceRead:
     with get_session() as session:
         try:
-            new_org = org_repo.create_org(session, name)
+            new_workspace = workspace_repo.create_workspace(session, name)
         except ValueError as exc:
             message = str(exc)
             slug = message.split("'")[1] if "'" in message else name
             raise DuplicateSlug(slug) from exc
 
         if not ctx.is_system and ctx.local_user_id is not None:
-            user_repo.create_membership_idempotent(session, ctx.local_user_id, new_org.id)
+            user_repo.create_membership_idempotent(session, ctx.local_user_id, new_workspace.id)
 
-        return new_org
+        return new_workspace
 
 
-def delete_org(slug: str, ctx: ManagementAuthContext = _SYSTEM_CTX) -> OrgDeleteResult:
+def rename_workspace(slug: str, new_name: str, ctx: ManagementAuthContext = _SYSTEM_CTX) -> WorkspaceRead:
     with get_session() as session:
-        org = session.query(Organization).filter_by(slug=slug).first()
-        if org is None:
-            raise OrgNotFound(slug)
-        _check_org_access(ctx, org)
-        namespaces = [d.cache_namespace for d in org.departments]
+        workspace = session.query(Workspace).filter_by(slug=slug).first()
+        if workspace is None:
+            raise WorkspaceNotFound(slug)
+        _check_workspace_access(ctx, workspace)
+        return workspace_repo.rename_workspace(session, slug, new_name)
+
+
+def delete_workspace(slug: str, ctx: ManagementAuthContext = _SYSTEM_CTX) -> WorkspaceDeleteResult:
+    with get_session() as session:
+        workspace = session.query(Workspace).filter_by(slug=slug).first()
+        if workspace is None:
+            raise WorkspaceNotFound(slug)
+        _check_workspace_access(ctx, workspace)
+        namespaces = [d.cache_namespace for d in workspace.departments]
         departments_removed = len(namespaces)
-        session.delete(org)
+        session.delete(workspace)
         session.flush()
     for ns in namespaces:
         _delete_chroma_namespace(ns)
-    return OrgDeleteResult(deleted=True, departments_removed=departments_removed)
+    return WorkspaceDeleteResult(deleted=True, departments_removed=departments_removed)
 
 
 def list_departments(
-    org_slug: str | None = None,
+    workspace_slug: str | None = None,
     ctx: ManagementAuthContext = _SYSTEM_CTX,
 ) -> list[DepartmentItem]:
     with get_session() as session:
-        if org_slug:
-            org = session.query(Organization).filter_by(slug=org_slug).first()
-            if org is None:
-                raise OrgNotFound(org_slug)
-            _check_org_access(ctx, org)
-            depts = dept_repo.list_depts(session, org_slug=org_slug)
-            return [_dept_item(dept, org_slug) for dept in depts]
+        if workspace_slug:
+            workspace = session.query(Workspace).filter_by(slug=workspace_slug).first()
+            if workspace is None:
+                raise WorkspaceNotFound(workspace_slug)
+            _check_workspace_access(ctx, workspace)
+            depts = dept_repo.list_depts(session, workspace_slug=workspace_slug)
+            return [_dept_item(dept, workspace_slug) for dept in depts]
 
         rows = (
-            session.query(Department, Organization.slug, Organization.id)
-            .join(Organization, Department.org_id == Organization.id)
+            session.query(Department, Workspace.slug, Workspace.id)
+            .join(Workspace, Department.workspace_id == Workspace.id)
             .order_by(Department.created_at.desc())
             .all()
         )
         result = []
-        for dept, row_org_slug, org_id in rows:
-            if not ctx.is_system and not ctx.has_org_access(org_id):
+        for dept, row_workspace_slug, workspace_id in rows:
+            if not ctx.is_system and not ctx.has_workspace_access(workspace_id):
                 continue
-            result.append(_dept_item(DeptRead.model_validate(dept), row_org_slug))
+            result.append(_dept_item(DeptRead.model_validate(dept), row_workspace_slug))
         return result
 
 
 def create_department(
-    org_slug: str,
+    workspace_slug: str,
     name: str,
     ctx: ManagementAuthContext = _SYSTEM_CTX,
 ) -> DepartmentItem:
     with get_session() as session:
-        org = session.query(Organization).filter_by(slug=org_slug).first()
-        if org is None:
-            raise OrgNotFound(org_slug)
-        _check_org_access(ctx, org)
+        workspace = session.query(Workspace).filter_by(slug=workspace_slug).first()
+        if workspace is None:
+            raise WorkspaceNotFound(workspace_slug)
+        _check_workspace_access(ctx, workspace)
         try:
-            dept = dept_repo.create_dept(session, org_slug, name)
+            dept = dept_repo.create_dept(session, workspace_slug, name)
         except ValueError as exc:
             message = str(exc)
             slug = message.split("'")[1] if "'" in message else name
             raise DuplicateSlug(slug) from exc
-        return _dept_item(dept, org_slug)
+        return _dept_item(dept, workspace_slug)
+
+
+def rename_department(
+    workspace_slug: str,
+    dept_slug: str,
+    new_name: str,
+    ctx: ManagementAuthContext = _SYSTEM_CTX,
+) -> DepartmentItem:
+    with get_session() as session:
+        workspace = session.query(Workspace).filter_by(slug=workspace_slug).first()
+        if workspace is None:
+            raise WorkspaceNotFound(workspace_slug)
+        _check_workspace_access(ctx, workspace)
+        try:
+            dept = dept_repo.rename_dept(session, workspace_slug, dept_slug, new_name)
+        except ValueError as exc:
+            raise DeptNotFound(workspace_slug, dept_slug) from exc
+        return _dept_item(dept, workspace_slug)
 
 
 def delete_department(
-    org_slug: str,
+    workspace_slug: str,
     dept_slug: str,
     ctx: ManagementAuthContext = _SYSTEM_CTX,
 ) -> DeptDeleteResult:
     with get_session() as session:
-        org = session.query(Organization).filter_by(slug=org_slug).first()
-        if org is None:
-            raise OrgNotFound(org_slug)
-        _check_org_access(ctx, org)
+        workspace = session.query(Workspace).filter_by(slug=workspace_slug).first()
+        if workspace is None:
+            raise WorkspaceNotFound(workspace_slug)
+        _check_workspace_access(ctx, workspace)
         try:
-            deleted = dept_repo.delete_dept(session, org_slug, dept_slug)
+            deleted = dept_repo.delete_dept(session, workspace_slug, dept_slug)
         except ValueError as exc:
-            raise DeptNotFound(org_slug, dept_slug) from exc
+            raise DeptNotFound(workspace_slug, dept_slug) from exc
         namespace = deleted.cache_namespace
     _delete_chroma_namespace(namespace)
     return DeptDeleteResult(deleted=True, cache_namespace=namespace)
@@ -252,15 +279,15 @@ def _delete_chroma_namespace(namespace: str) -> None:
 
 
 def list_keys(
-    org_slug: str,
+    workspace_slug: str,
     ctx: ManagementAuthContext = _SYSTEM_CTX,
 ) -> list[KeyListItem]:
     with get_session() as session:
-        org = session.query(Organization).filter_by(slug=org_slug).first()
-        if org is None:
-            raise OrgNotFound(org_slug)
-        _check_org_access(ctx, org)
-        keys = api_key_repo.list_keys_for_org(session, org.id)
+        workspace = session.query(Workspace).filter_by(slug=workspace_slug).first()
+        if workspace is None:
+            raise WorkspaceNotFound(workspace_slug)
+        _check_workspace_access(ctx, workspace)
+        keys = api_key_repo.list_keys_for_workspace(session, workspace.id)
         return [
             KeyListItem(
                 id=key.id,
@@ -273,26 +300,26 @@ def list_keys(
 
 
 def generate_key(
-    org_slug: str,
+    workspace_slug: str,
     force: bool,
     ctx: ManagementAuthContext = _SYSTEM_CTX,
 ) -> KeyCreated:
     with get_session() as session:
-        org = session.query(Organization).filter_by(slug=org_slug).first()
-        if org is None:
-            raise OrgNotFound(org_slug)
-        _check_org_access(ctx, org)
+        workspace = session.query(Workspace).filter_by(slug=workspace_slug).first()
+        if workspace is None:
+            raise WorkspaceNotFound(workspace_slug)
+        _check_workspace_access(ctx, workspace)
 
-        existing = api_key_repo.get_active_key_for_org(session, org.id)
+        existing = api_key_repo.get_active_key_for_workspace(session, workspace.id)
         if existing and not force:
-            raise ActiveKeyExists(org_slug, existing.id)
+            raise ActiveKeyExists(workspace_slug, existing.id)
         if existing and force:
             api_key_repo.revoke_key(session, existing.id)
 
-        key = api_key_repo.create_key(session, org.id)
+        key = api_key_repo.create_key(session, workspace.id)
         return KeyCreated(
             id=key.id,
-            org_slug=org_slug,
+            workspace_slug=workspace_slug,
             token=key.token,
             created_at=key.created_at,
         )
@@ -306,8 +333,8 @@ def revoke_key(
         key = session.query(ApiKey).filter_by(id=key_id).first()
         if key is None:
             raise KeyNotFound(key_id)
-        org = session.query(Organization).filter_by(id=key.org_id).first()
-        if org and not ctx.has_org_access(org.id):
+        workspace = session.query(Workspace).filter_by(id=key.workspace_id).first()
+        if workspace and not ctx.has_workspace_access(workspace.id):
             raise KeyForbidden(key_id)
         already_revoked = key.revoked_at is not None
         revoked = api_key_repo.revoke_key(session, key_id)
@@ -329,8 +356,8 @@ def delete_revoked_key(
         key = session.query(ApiKey).filter_by(id=key_id).first()
         if key is None:
             raise KeyNotFound(key_id)
-        org = session.query(Organization).filter_by(id=key.org_id).first()
-        if org and not ctx.has_org_access(org.id):
+        workspace = session.query(Workspace).filter_by(id=key.workspace_id).first()
+        if workspace and not ctx.has_workspace_access(workspace.id):
             raise KeyForbidden(key_id)
         if key.revoked_at is None:
             raise ActiveKeyCannotBeDeleted(key_id)
