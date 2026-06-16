@@ -462,6 +462,15 @@ if [[ "$DRY_RUN" == "true" ]]; then
   exit 0
 fi
 
+# ── Offer a fresh start when not requested via flag (interactive only) ───────
+if [[ "$FRESH" != "true" && "$YES" != "true" && -t 0 ]]; then
+  read -r -p "$(echo -e "${YELLOW}Start fresh? Wipes databases (dejaq.db, dejaq_stats.db, chroma_data/). [y/N]: ${NC}")" FRESH_ANSWER
+  if [[ "$(echo "$FRESH_ANSWER" | tr '[:upper:]' '[:lower:]')" == "y" || "$(echo "$FRESH_ANSWER" | tr '[:upper:]' '[:lower:]')" == "yes" ]]; then
+    FRESH=true
+    YES=true
+  fi
+fi
+
 # ── Fresh start (optional) ──────────────────────────────────────────────────
 if [[ "$FRESH" == "true" ]]; then
   FRESH_TARGETS=()
@@ -479,7 +488,7 @@ if [[ "$FRESH" == "true" ]]; then
 
     if [[ "$YES" != "true" ]]; then
       read -r -p "$(echo -e "${YELLOW}This cannot be undone. Continue? [y/N]: ${NC}")" CONFIRM
-      if [[ "${CONFIRM,,}" != "y" && "${CONFIRM,,}" != "yes" ]]; then
+      if [[ "$(echo "$CONFIRM" | tr '[:upper:]' '[:lower:]')" != "y" && "$(echo "$CONFIRM" | tr '[:upper:]' '[:lower:]')" != "yes" ]]; then
         echo -e "${RED}Aborted.${NC}"; exit 1
       fi
     fi

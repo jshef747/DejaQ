@@ -3,7 +3,7 @@ import Topbar from "@/components/Topbar";
 import { listWorkspaces } from "@/app/actions/workspaces";
 import { listDeptStatsRange } from "@/app/actions/stats";
 import AnalyticsClient from "./AnalyticsClient";
-import type { DeptStatsReport } from "@/lib/types";
+import type { DeptStatsReport, WorkspaceItem } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -30,13 +30,14 @@ export default async function AnalyticsPage({
   let activeSlug = workspace;
 
   if (!activeSlug) {
+    let workspaces: WorkspaceItem[] = [];
     try {
-      const workspaces = await listWorkspaces();
-      if (workspaces.length > 0) {
-        redirect(`/dashboard/analytics?workspace=${workspaces[0].slug}&range=${range}`);
-      }
+      workspaces = await listWorkspaces();
     } catch {
-      // Fall through
+      // Fall through to empty state on fetch failure
+    }
+    if (workspaces.length > 0) {
+      redirect(`/dashboard/analytics?workspace=${workspaces[0].slug}&range=${range}`);
     }
   }
 
