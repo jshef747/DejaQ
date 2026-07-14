@@ -27,7 +27,7 @@ OpenAI-compatible request
 
 ```text
 server/              FastAPI app, gateway, management API, dejaq-admin CLI, Celery tasks
-frontend/            Next.js dashboard (/admin/v1/*; Supabase auth optional)
+dashboard/           Next.js dashboard (/admin/v1/*; Supabase auth optional)
 chat/                Standalone Next.js chat app with server-side org API key proxy
 evals/               Offline eval harnesses: enricher, normalizer, adjuster, validator
 docs/                Product/API notes + getting-started.md
@@ -82,12 +82,12 @@ DEJAQ_USE_CELERY=false uv run uvicorn app.main:app --reload
 ```
 
 > **Dashboard auth:** blank Supabase env = dev bypass (no login). Fill `SUPABASE_URL` /
-> `SUPABASE_ANON_KEY` (+ the frontend equivalents) to require real login for deployment.
+> `SUPABASE_ANON_KEY` (+ the dashboard equivalents) to require real login for deployment.
 
 ## Frontend
 
 ```bash
-cd frontend
+cd dashboard
 npm install
 cp .env.local.example .env.local
 npm run dev
@@ -115,7 +115,7 @@ Fill `DEJAQ_API_KEY` in `chat/.env.local`. The chat app runs at `http://localhos
 - `/admin/v1/*` — management API; Supabase JWT in deployment, dev-admin context in local mode
 - `dejaq-admin` — org, department, key, and stats CLI (headless/server-only bootstrap)
 
-Responses include `X-DejaQ-Interaction-Id`, `X-DejaQ-Tier` (`cache`|`local`|`external`), and (when cached) `X-DejaQ-Response-Id` headers. See [docs/getting-started.md](docs/getting-started.md), [docs/openai-compat-api.md](docs/openai-compat-api.md), [docs/cli-instructions.md](docs/cli-instructions.md), [server/README.md](server/README.md), and [frontend/README.md](frontend/README.md).
+Responses include `X-DejaQ-Interaction-Id`, `X-DejaQ-Tier` (`cache`|`local`|`external`), and (when cached) `X-DejaQ-Response-Id` headers. See [docs/getting-started.md](docs/getting-started.md), [docs/openai-compat-api.md](docs/openai-compat-api.md), [docs/cli-instructions.md](docs/cli-instructions.md), [server/README.md](server/README.md), and [dashboard/README.md](dashboard/README.md).
 
 ## Bootstrap an org + key
 
@@ -134,7 +134,7 @@ cd server
 uv run pytest --collect-only -q
 uv run pytest -q -m no_model
 
-cd ../frontend
+cd ../dashboard
 npx tsc --noEmit --pretty false
 npm run build
 

@@ -19,7 +19,7 @@
 ```bash
 cd server
 uv sync
-cd ../frontend && npm install
+cd ../dashboard && npm install
 cd ../chat && npm install
 ```
 
@@ -59,7 +59,7 @@ redis-server                                                            # termin
 cd server && uv run uvicorn app.main:app --reload                        # terminal 2
 cd server && uv run celery -A app.celery_app:celery_app worker \
   --queues=background --pool=solo --loglevel=info                        # terminal 3 (optional)
-cd frontend && npm run dev                                               # terminal 4
+cd dashboard && npm run dev                                               # terminal 4
 cd chat && npm run dev                                                   # terminal 5
 ```
 
@@ -89,6 +89,6 @@ For real login instead of the dev bypass:
 
 1. Create a free [Supabase](https://supabase.com) project; copy the Project URL + anon key.
 2. Set `SUPABASE_URL` / `SUPABASE_ANON_KEY` in `server/.env` and
-   `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` in `frontend/.env.local`
+   `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` in `dashboard/.env.local`
    (`DEJAQ_AUTH_MODE` then auto-selects `supabase`).
 3. Users sign up / log in through the dashboard.

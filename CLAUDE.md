@@ -76,7 +76,7 @@ DEJAQ_USE_CELERY=false uv run uvicorn app.main:app --reload
   **Local development only — never expose `/admin/v1/*` or the CLI remotely in this mode.**
 - **`supabase` (deployment):** validates a Supabase JWT per request. Set up a free project at
   [supabase.com](https://supabase.com), copy the Project URL + anon key into `server/.env`
-  (`SUPABASE_URL`, `SUPABASE_ANON_KEY`) and the frontend env. Users sign up through the
+  (`SUPABASE_URL`, `SUPABASE_ANON_KEY`) and the dashboard env. Users sign up through the
   dashboard. The `users` + `user_org_memberships` tables back this mode (dormant under `local`).
 
 Bootstrap an org + API key with the dashboard (Organizations → Keys) or with
@@ -336,11 +336,11 @@ Uses an LLM judge (requires `ANTHROPIC_API_KEY`) for scoring. Configs in `config
 
 - Python 3.13+ + FastAPI + Uvicorn, ChromaDB (HttpClient), redis-py (Celery dependency), Pydantic v2, Celery, aiosqlite (request log), Rich (stats CLI), SQLAlchemy + Alembic (org/dept/key/credential DB, SQLite), cryptography/Fernet, google-genai, openai, anthropic
 
-## Frontend (dashboard)
+## Dashboard
 
-The web dashboard lives in `frontend/` (Next.js 16, TypeScript, Tailwind v4, App Router). It talks to the management API at `/admin/v1/*`. Setup and env vars: see [frontend/README.md](frontend/README.md).
+The web dashboard lives in `dashboard/` (Next.js 16, TypeScript, Tailwind v4, App Router). It talks to the management API at `/admin/v1/*`. Setup and env vars: see [dashboard/README.md](dashboard/README.md).
 
-> ⚠️ Next.js 16 differs from older versions — see [frontend/AGENTS.md](frontend/AGENTS.md). Notably the middleware file convention was renamed `middleware.ts` → `proxy.ts`; the project root `proxy.ts` is the active middleware.
+> ⚠️ Next.js 16 differs from older versions — see [dashboard/AGENTS.md](dashboard/AGENTS.md). Notably the middleware file convention was renamed `middleware.ts` → `proxy.ts`; the project root `proxy.ts` is the active middleware.
 
 **Auth modes** (mirrors backend `AUTH_MODE`, gated by `lib/authMode.ts` = `!NEXT_PUBLIC_SUPABASE_URL`):
 - **Local dev (no `NEXT_PUBLIC_SUPABASE_URL`):** dashboard skips login; `lib/api.ts` sends `Authorization: Bearer dev-local` (backend ignores it in local mode). Dev only.

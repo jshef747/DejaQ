@@ -6,7 +6,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVER_DIR="$ROOT_DIR/server"
-FRONTEND_DIR="$ROOT_DIR/frontend"
+DASHBOARD_DIR="$ROOT_DIR/dashboard"
 CHAT_DIR="$ROOT_DIR/chat"
 RUN_DATE="${DEJAQ_RUN_DATE:-$(date +%Y-%m-%d_%H-%M-%S)}"
 LOG_DIR="$ROOT_DIR/logs/$RUN_DATE"
@@ -467,10 +467,10 @@ ensure_node_app_ready() {
 }
 
 start_dashboard() {
-  echo -e "${CYAN}[6/7] Starting dashboard frontend...${NC}"
-  ensure_node_app_ready "$FRONTEND_DIR" "Dashboard"
+  echo -e "${CYAN}[6/7] Starting dashboard...${NC}"
+  ensure_node_app_ready "$DASHBOARD_DIR" "Dashboard"
   free_port 3000
-  (cd "$FRONTEND_DIR" && npm run dev) &>"$LOG_DIR/dashboard.log" &
+  (cd "$DASHBOARD_DIR" && npm run dev) &>"$LOG_DIR/dashboard.log" &
   DASHBOARD_PID=$!
   sleep 2
   if ! kill -0 "$DASHBOARD_PID" 2>/dev/null; then
