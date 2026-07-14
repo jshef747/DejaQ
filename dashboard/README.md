@@ -11,7 +11,7 @@ The customer chat UI lives in the standalone `../chat` app.
 ## Setup
 
 ```bash
-cd frontend
+cd dashboard
 npm install
 cp .env.local.example .env.local
 ```

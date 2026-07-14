@@ -6,7 +6,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVER_DIR="$ROOT_DIR/server"
-FRONTEND_DIR="$ROOT_DIR/frontend"
+DASHBOARD_DIR="$ROOT_DIR/dashboard"
 CHAT_DIR="$ROOT_DIR/chat"
 RUN_DATE="${DEJAQ_RUN_DATE:-$(date +%Y-%m-%d_%H-%M-%S)}"
 LOG_DIR="$ROOT_DIR/logs/$RUN_DATE"
@@ -36,6 +36,8 @@ VALIDATOR_ARG=""
 OLLAMA_URL_ARG=""
 OLLAMA_URL_FLAG_SET=false
 DRY_RUN=false
+LAN_MODE=false
+LAN_EXPLICIT=false
 FRESH=false
 YES=false
 ENV_STACK="${DEJAQ_STACK:-}"
@@ -43,13 +45,15 @@ ENV_MODE="${DEJAQ_MODE:-}"
 ENV_OLLAMA_URL="${DEJAQ_OLLAMA_URL:-}"
 ENV_START_LOGS="${DEJAQ_START_LOGS:-}"
 ENV_VALIDATOR="${DEJAQ_VALIDATOR_ENABLED:-}"
+ENV_LAN="${DEJAQ_LAN:-}"
 
 usage() {
-  echo "Usage: $0 [--stack=server|all] [--mode=local|remote] [--logs=requests|all] [--validator=off] [--ollama-url URL] [--fresh] [--yes] [--dry-run]"
+  echo "Usage: $0 [--stack=all|server|client] [--mode=local|remote] [--logs=requests|all] [--validator=off] [--ollama-url URL] [--lan|--no-lan] [--fresh] [--yes] [--dry-run]"
   echo ""
   echo "Stacks:"
-  echo "  server   Start backend services only: ChromaDB, Redis, Celery, FastAPI"
-  echo "  all      Start server plus dashboard frontend and chat app"
+  echo "  all      Everything on this machine: backend + dashboard + chat"
+  echo "  server   Backend (ChromaDB, Redis, Celery, FastAPI) + dashboard; no chat"
+  echo "  client   Chat app only — connects to a DejaQ server elsewhere on the network"
   echo ""
   echo "Modes (generation runs through Ollama):"
   echo "  local    Ollama at http://127.0.0.1:11434 (default)"
@@ -61,15 +65,23 @@ usage() {
   echo ""
   echo "Cache-answer validator is ON by default; disable with --validator=off."
   echo ""
+  echo "Network:"
+  echo "  --lan    Expose the chat UI (4000) on 0.0.0.0 for other LAN devices. The"
+  echo "           data-plane API is already LAN-bound; admin stays loopback-only."
+  echo "  --no-lan Force chat LAN off (skip the interactive prompt)."
+  echo "           Without either flag, the script asks interactively."
+  echo ""
   echo "  --fresh  Delete dejaq.db, chroma_data/, and dejaq_stats.db before starting."
   echo "           Prompts for confirmation unless --yes is also passed."
   echo ""
   echo "Environment:"
-  echo "  DEJAQ_STACK             Non-interactive stack selection: server or all"
+  echo "  DEJAQ_STACK             Non-interactive stack selection: all, server, or client"
   echo "  DEJAQ_MODE              Non-interactive mode selection: local or remote"
   echo "  DEJAQ_START_LOGS        Non-interactive log mode selection: requests or all"
   echo "  DEJAQ_VALIDATOR_ENABLED Validator toggle: true (default) or false"
   echo "  DEJAQ_OLLAMA_URL        Ollama endpoint (required for remote mode)"
+  echo "  DEJAQ_LAN               Expose chat+API on the LAN: true or false (default)"
+  echo "  DEJAQ_LAN_IP            LAN IP to advertise; skips the prompt when set"
 }
 
 for arg in "$@"; do
@@ -113,6 +125,14 @@ for arg in "$@"; do
       ;;
     --ollama-url)
       echo -e "${RED}Use --ollama-url=<url>${NC}"; exit 1
+      ;;
+    --lan)
+      LAN_MODE=true
+      LAN_EXPLICIT=true
+      ;;
+    --no-lan)
+      LAN_MODE=false
+      LAN_EXPLICIT=true
       ;;
     --dry-run)
       DRY_RUN=true
@@ -228,11 +248,14 @@ load_env_file() {
 
 normalize_stack() {
   case "$1" in
+    all|full|everything)
+      echo "all"
+      ;;
     server|backend|api|server-only|only-server)
       echo "server"
       ;;
-    all|full|everything)
-      echo "all"
+    client|chat|chat-only|only-chat)
+      echo "client"
       ;;
     *)
       echo ""
@@ -245,7 +268,7 @@ select_stack() {
   if [[ -n "$selected" ]]; then
     selected="$(normalize_stack "$selected")"
     if [[ -z "$selected" ]]; then
-      echo -e "${RED}Invalid stack. Choose server or all.${NC}" >&2
+      echo -e "${RED}Invalid stack. Choose all, server, or client.${NC}" >&2
       exit 1
     fi
     echo "$selected"
@@ -253,12 +276,14 @@ select_stack() {
   fi
 
   echo -e "${CYAN}Select startup stack:${NC}" >&2
-  echo "  1) server  (backend services only)" >&2
-  echo "  2) all     (server + dashboard + chat)" >&2
-  read -r -p "Stack [1-2]: " selected
+  echo "  1) all     (server + dashboard + chat — everything on this machine)" >&2
+  echo "  2) client  (chat app only — connects to a DejaQ server on the network)" >&2
+  echo "  3) server  (server + dashboard — no chat)" >&2
+  read -r -p "Stack [1-3]: " selected
   case "$selected" in
-    1|server|backend) echo "server" ;;
-    2|all|full) echo "all" ;;
+    1|all|full) echo "all" ;;
+    2|client|chat) echo "client" ;;
+    3|server|backend) echo "server" ;;
     *) echo -e "${RED}Invalid stack selection.${NC}" >&2; exit 1 ;;
   esac
 }
@@ -387,6 +412,61 @@ check_ollama() {
   fi
 }
 
+# Best-effort LAN IPv4 detection for printing reachable URLs in --lan mode.
+detect_lan_ip() {
+  local ip=""
+  if [[ "$IS_WINDOWS" == "true" ]]; then
+    # Adapters with an IPv4 default gateway = real NICs (excludes WSL/vEthernet/virtual)
+    ip=$(powershell.exe -NoProfile -Command \
+      "(Get-NetIPConfiguration | Where-Object { \$_.IPv4DefaultGateway -and \$_.NetAdapter.Status -eq 'Up' } | Select-Object -First 1).IPv4Address.IPAddress" \
+      2>/dev/null | tr -d '[:space:]') || true
+  else
+    ip=$(hostname -I 2>/dev/null | awk '{print $1}') || true
+    [[ -z "$ip" ]] && ip=$(ipconfig getifaddr en0 2>/dev/null) || true
+  fi
+  echo "${ip:-<your-LAN-IP>}"
+}
+
+# Resolve the LAN IP to bind/advertise in --lan mode. Honors a preset DEJAQ_LAN_IP,
+# otherwise prompts interactively with the auto-detected address as the default.
+select_lan_ip() {
+  local preset="${DEJAQ_LAN_IP:-}"
+  if [[ -n "$preset" ]]; then
+    echo "$preset"
+    return
+  fi
+  local detected
+  detected="$(detect_lan_ip)"
+  # Non-interactive (no TTY): accept the detected value without prompting.
+  if [[ ! -t 0 ]]; then
+    echo "$detected"
+    return
+  fi
+  local answer
+  read -r -p "LAN IP to advertise [${detected}]: " answer
+  echo "${answer:-$detected}"
+}
+
+# Decide whether to expose chat+API on the LAN. A --lan/--no-lan flag or DEJAQ_LAN
+# env is honored without prompting; otherwise prompt interactively (default off).
+select_lan_mode() {
+  if [[ "$LAN_EXPLICIT" == "true" ]]; then
+    echo "$LAN_MODE"
+    return
+  fi
+  # Non-interactive (no TTY): default off, never block.
+  if [[ ! -t 0 ]]; then
+    echo "false"
+    return
+  fi
+  local answer
+  read -r -p "Expose chat + API on the LAN for other devices? [y/N]: " answer
+  case "$answer" in
+    y|Y|yes|YES) echo "true" ;;
+    *)           echo "false" ;;
+  esac
+}
+
 ensure_node_app_ready() {
   local dir=$1 name=$2
   if [[ ! -f "$dir/package.json" ]]; then
@@ -398,11 +478,11 @@ ensure_node_app_ready() {
 }
 
 start_dashboard() {
-  echo -e "${CYAN}[6/7] Starting dashboard frontend...${NC}"
-  ensure_node_app_ready "$FRONTEND_DIR" "Dashboard"
+  echo -e "${CYAN}[6/7] Starting dashboard...${NC}"
+  ensure_node_app_ready "$DASHBOARD_DIR" "Dashboard"
   free_port 3000
   # Bind to 127.0.0.1 only — the admin dashboard is control-plane; not LAN-exposed.
-  (cd "$FRONTEND_DIR" && npm run dev -- --hostname 127.0.0.1 --port 3000) &>"$LOG_DIR/dashboard.log" &
+  (cd "$DASHBOARD_DIR" && npm run dev -- --hostname 127.0.0.1 --port 3000) &>"$LOG_DIR/dashboard.log" &
   DASHBOARD_PID=$!
   sleep 2
   if ! kill -0 "$DASHBOARD_PID" 2>/dev/null; then
@@ -415,7 +495,11 @@ start_chat() {
   echo -e "${CYAN}[7/7] Starting chat app...${NC}"
   ensure_node_app_ready "$CHAT_DIR" "Chat app"
   free_port 4000
-  (cd "$CHAT_DIR" && npm run dev) &>"$LOG_DIR/chat.log" &
+  if [[ "$LAN_MODE" == "true" ]]; then
+    (cd "$CHAT_DIR" && npm run dev -- -H 0.0.0.0) &>"$LOG_DIR/chat.log" &
+  else
+    (cd "$CHAT_DIR" && npm run dev) &>"$LOG_DIR/chat.log" &
+  fi
   CHAT_PID=$!
   sleep 2
   if ! kill -0 "$CHAT_PID" 2>/dev/null; then
@@ -441,27 +525,62 @@ fi
 if [[ -n "$ENV_START_LOGS" ]]; then
   DEJAQ_START_LOGS="$ENV_START_LOGS"
 fi
+case "$ENV_LAN" in
+  true|1|yes|on)    LAN_MODE=true;  LAN_EXPLICIT=true ;;
+  false|0|no|off)   LAN_MODE=false; LAN_EXPLICIT=true ;;
+esac
 
 STACK="$(select_stack)"
-MODE="$(select_mode)"
-VALIDATOR="$(resolve_validator)"
+
+# Which components this stack runs.
+#   all    → backend + dashboard + chat
+#   server → backend + dashboard (no chat)
+#   client → chat only (connects to a DejaQ server elsewhere on the network)
+RUN_BACKEND=false; RUN_DASHBOARD=false; RUN_CHAT=false
+case "$STACK" in
+  all)    RUN_BACKEND=true;  RUN_DASHBOARD=true;  RUN_CHAT=true  ;;
+  server) RUN_BACKEND=true;  RUN_DASHBOARD=true;  RUN_CHAT=false ;;
+  client) RUN_BACKEND=false; RUN_DASHBOARD=false; RUN_CHAT=true  ;;
+esac
+
+# Ollama mode/validator only apply when a local backend runs.
+if [[ "$RUN_BACKEND" == "true" ]]; then
+  MODE="$(select_mode)"
+  VALIDATOR="$(resolve_validator)"
+else
+  MODE="n/a"; VALIDATOR="n/a"
+fi
 LOG_MODE="$(select_log_mode)"
-apply_mode "$MODE" "$VALIDATOR"
+LAN_MODE="$(select_lan_mode)"
+[[ "$RUN_BACKEND" == "true" ]] && apply_mode "$MODE" "$VALIDATOR"
+
+# Detect LAN IP and expose it to the chat Next.js config (allowedDevOrigins) when --lan is on.
+LAN_IP=""
+if [[ "$LAN_MODE" == "true" ]]; then
+  LAN_IP="$(select_lan_ip)"
+  [[ "$LAN_IP" != "<your-LAN-IP>" ]] && export DEJAQ_LAN_IP="$LAN_IP"
+fi
 
 echo -e "${CYAN}Startup stack: ${STACK}${NC}"
-echo -e "${CYAN}Ollama mode: ${MODE}${NC}"
-echo -e "${CYAN}Validator: ${VALIDATOR}${NC}"
+if [[ "$RUN_BACKEND" == "true" ]]; then
+  echo -e "${CYAN}Ollama mode: ${MODE}${NC}"
+  echo -e "${CYAN}Validator: ${VALIDATOR}${NC}"
+fi
 echo -e "${CYAN}Log mode: ${LOG_MODE}${NC}"
+echo -e "${CYAN}LAN mode: $([[ "$LAN_MODE" == "true" ]] && echo on || echo off)${NC}"
 echo -e "${CYAN}Logs: ${LOG_DIR}/${NC}"
-echo -e "  DEJAQ_OLLAMA_URL=${DEJAQ_OLLAMA_URL}"
-echo -e "  DEJAQ_VALIDATOR_ENABLED=${DEJAQ_VALIDATOR_ENABLED}"
-check_ollama "${DEJAQ_OLLAMA_URL}"
+if [[ "$RUN_BACKEND" == "true" ]]; then
+  echo -e "  DEJAQ_OLLAMA_URL=${DEJAQ_OLLAMA_URL}"
+  echo -e "  DEJAQ_VALIDATOR_ENABLED=${DEJAQ_VALIDATOR_ENABLED}"
+  check_ollama "${DEJAQ_OLLAMA_URL}"
+fi
 
 if [[ "$DRY_RUN" == "true" ]]; then
   echo -e "${GREEN}Dry run complete. Services not started.${NC}"
   exit 0
 fi
 
+if [[ "$RUN_BACKEND" == "true" ]]; then
 # ── Offer a fresh start when not requested via flag (interactive only) ───────
 if [[ "$FRESH" != "true" && "$YES" != "true" && -t 0 ]]; then
   read -r -p "$(echo -e "${YELLOW}Start fresh? Wipes databases (dejaq.db, dejaq_stats.db, chroma_data/). [y/N]: ${NC}")" FRESH_ANSWER
@@ -592,39 +711,46 @@ if ! kill -0 "$UVICORN_PID" 2>/dev/null; then
   echo -e "${RED}FastAPI failed to start. Check $LOG_DIR/uvicorn.log${NC}"; exit 1
 fi
 echo -e "  ${GREEN}FastAPI running (PID $UVICORN_PID)${NC}"
+fi  # RUN_BACKEND
 
-if [[ "$STACK" == "all" ]]; then
+if [[ "$RUN_DASHBOARD" == "true" ]]; then
   start_dashboard
+fi
+if [[ "$RUN_CHAT" == "true" ]]; then
   start_chat
 fi
 
-TAIL_LOGS=("$LOG_DIR/redis.log" "$LOG_DIR/celery.log" "$LOG_DIR/celery_beat.log" "$LOG_DIR/uvicorn.log")
+TAIL_LOGS=()
+if [[ "$RUN_BACKEND" == "true" ]]; then
+  TAIL_LOGS+=("$LOG_DIR/redis.log" "$LOG_DIR/celery.log" "$LOG_DIR/celery_beat.log" "$LOG_DIR/uvicorn.log")
+fi
+[[ "$RUN_DASHBOARD" == "true" ]] && TAIL_LOGS+=("$LOG_DIR/dashboard.log")
+[[ "$RUN_CHAT" == "true" ]] && TAIL_LOGS+=("$LOG_DIR/chat.log")
 
 echo ""
-if [[ "$STACK" == "all" ]]; then
-  echo -e "${GREEN}✓ Full local stack running${NC}"
-  echo -e "  Data plane (/v1):       http://0.0.0.0:8000   — LAN-accessible, key-protected"
-  echo -e "  Admin API (/admin/v1):  127.0.0.1 only        — loopback-restricted"
-  echo -e "  Dashboard:              http://127.0.0.1:3000/dashboard  — loopback-only"
-  echo -e "  ChromaDB:               http://127.0.0.1:8001"
-  echo -e "  Chat:                   http://localhost:4000"
-  echo -e "  Mode:                   $MODE"
-  echo -e "  Logs:                   $LOG_DIR/"
-  echo -e ""
+echo -e "${GREEN}✓ DejaQ running (${STACK})${NC}"
+[[ "$RUN_BACKEND" == "true" ]]   && echo -e "  Data plane (/v1):       http://0.0.0.0:8000   — LAN-accessible, key-protected"
+[[ "$RUN_BACKEND" == "true" ]]   && echo -e "  Admin API (/admin/v1):  127.0.0.1 only        — loopback-restricted"
+[[ "$RUN_BACKEND" == "true" ]]   && echo -e "  ChromaDB:               http://127.0.0.1:8001"
+[[ "$RUN_DASHBOARD" == "true" ]] && echo -e "  Dashboard:              http://127.0.0.1:3000/dashboard  — loopback-only"
+[[ "$RUN_CHAT" == "true" ]]      && echo -e "  Chat:                   http://localhost:4000"
+[[ "$RUN_BACKEND" == "true" ]]   && echo -e "  Mode:                   $MODE"
+[[ "$RUN_BACKEND" == "true" ]]   && echo -e "  Stats:                  cd server && uv run dejaq-admin stats"
+echo -e "  Logs:                   $LOG_DIR/"
+if [[ "$RUN_BACKEND" == "true" ]]; then
   echo -e "  Remote admin? Run on your machine: ssh -L 3000:localhost:3000 -L 8000:localhost:8000 user@server"
-  TAIL_LOGS+=("$LOG_DIR/dashboard.log" "$LOG_DIR/chat.log")
-else
-  echo -e "${GREEN}✓ Server services running${NC}"
-  echo -e "  Data plane (/v1):       http://0.0.0.0:8000   — LAN-accessible, key-protected"
-  echo -e "  Admin API (/admin/v1):  127.0.0.1 only        — loopback-restricted"
-  echo -e "  ChromaDB:               http://127.0.0.1:8001"
-  echo -e "  Mode:                   $MODE"
-  echo -e "  Stats:                  cd server && uv run dejaq-admin stats"
-  echo -e "  Logs:                   $LOG_DIR/"
+fi
+if [[ "$RUN_BACKEND" != "true" ]]; then
+  echo -e "  ${CYAN}Client mode: set the DejaQ server in chat Settings (or DEJAQ_API_BASE_URL${NC}"
+  echo -e "  ${CYAN}in chat/.env.local), plus a valid DEJAQ_API_KEY for that server.${NC}"
+fi
+if [[ "$LAN_MODE" == "true" && "$RUN_CHAT" == "true" ]]; then
+  echo -e "  ${CYAN}LAN chat:               http://$LAN_IP:4000${NC}"
+  echo -e "  ${YELLOW}Note: allow access if the Windows Defender Firewall popup appears (first run).${NC}"
 fi
 echo -e "\n${YELLOW}Press Ctrl+C to stop all services.${NC}\n"
 
-if [[ "$LOG_MODE" == "requests" ]]; then
+if [[ "$LOG_MODE" == "requests" && "$RUN_BACKEND" == "true" ]]; then
   (
     tail -n 0 -f "$LOG_DIR/uvicorn.log" \
       | grep --line-buffered -E "router\.openai_compat.*(start org=|done cache=|validator rejected)" \

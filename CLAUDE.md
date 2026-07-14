@@ -38,10 +38,18 @@ ollama pull qwen2.5:0.5b qwen2.5:1.5b gemma4:e2b gemma4:e4b phi3.5:latest
 # Preferred: start from the repo root with stack + Ollama-mode selection
 ./start.sh
 
+# Stacks: all = backend + dashboard + chat; server = backend + dashboard (no chat);
+# client = chat app only (connects to a DejaQ server elsewhere on the network).
+
 # Non-interactive examples:
-./start.sh --stack=server --mode=local
 ./start.sh --stack=all --mode=local
+./start.sh --stack=server --mode=local
+./start.sh --stack=client                    # chat only; set the server in chat Settings
 ./start.sh --stack=all --mode=remote --ollama-url=http://<host>:11434
+./start.sh --stack=all --mode=local --lan   # expose chat (4000) + API (8000) on the LAN
+# --lan binds chat + API to 0.0.0.0 so other devices on the same network can reach them;
+# dashboard (3000), ChromaDB (8001), and Redis stay localhost-only. In AUTH_MODE=local
+# the admin API is unauthenticated — only use --lan on trusted networks.
 
 # Manual (Terminal 1) Redis
 redis-server
@@ -80,7 +88,7 @@ Remote admin access: `ssh -L 3000:localhost:3000 -L 8000:localhost:8000 user@ser
 `local` when `SUPABASE_URL` is blank, `supabase` otherwise (override with `DEJAQ_AUTH_MODE`).
 
 - **`local` (default — recommended for on-prem):** `require_management_auth` returns an unauthenticated dev-admin context (`ManagementAuthContext.local_dev()`); the dashboard opens with no login. Protected by localhost binding, not a password.
-- **`supabase` (optional — for hosted/multi-user deployments):** validates a Supabase JWT per request. Set up a free project at [supabase.com](https://supabase.com), copy the Project URL + anon key into `server/.env` (`SUPABASE_URL`, `SUPABASE_ANON_KEY`) and the frontend env. The `users` + `user_workspace_memberships` tables back this mode (dormant under `local`).
+- **`supabase` (optional — for hosted/multi-user deployments):** validates a Supabase JWT per request. Set up a free project at [supabase.com](https://supabase.com), copy the Project URL + anon key into `server/.env` (`SUPABASE_URL`, `SUPABASE_ANON_KEY`) and the dashboard env. The `users` + `user_workspace_memberships` tables back this mode (dormant under `local`).
 
 Bootstrap a workspace + API key with the dashboard onboarding wizard or with:
 `dejaq-admin workspace create --name "Acme"` then `dejaq-admin key generate --workspace acme`.
@@ -342,11 +350,11 @@ Uses an LLM judge (requires `ANTHROPIC_API_KEY`) for scoring. Configs in `config
 
 - Python 3.13+ + FastAPI + Uvicorn, ChromaDB (HttpClient), redis-py (Celery dependency), Pydantic v2, Celery, aiosqlite (request log), Rich (stats CLI), SQLAlchemy + Alembic (org/dept/key/credential DB, SQLite), cryptography/Fernet, google-genai, openai, anthropic
 
-## Frontend (dashboard)
+## Dashboard
 
-The web dashboard lives in `frontend/` (Next.js 16, TypeScript, Tailwind v4, App Router). It talks to the management API at `/admin/v1/*`. Setup and env vars: see [frontend/README.md](frontend/README.md).
+The web dashboard lives in `dashboard/` (Next.js 16, TypeScript, Tailwind v4, App Router). It talks to the management API at `/admin/v1/*`. Setup and env vars: see [dashboard/README.md](dashboard/README.md).
 
-> ⚠️ Next.js 16 differs from older versions — see [frontend/AGENTS.md](frontend/AGENTS.md). Notably the middleware file convention was renamed `middleware.ts` → `proxy.ts`; the project root `proxy.ts` is the active middleware.
+> ⚠️ Next.js 16 differs from older versions — see [dashboard/AGENTS.md](dashboard/AGENTS.md). Notably the middleware file convention was renamed `middleware.ts` → `proxy.ts`; the project root `proxy.ts` is the active middleware.
 
 **Auth modes** (mirrors backend `AUTH_MODE`, gated by `lib/authMode.ts` = `!NEXT_PUBLIC_SUPABASE_URL`):
 - **Local dev (no `NEXT_PUBLIC_SUPABASE_URL`):** dashboard skips login; `lib/api.ts` sends `Authorization: Bearer dev-local` (backend ignores it in local mode). Dev only.

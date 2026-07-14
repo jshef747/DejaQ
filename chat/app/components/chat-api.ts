@@ -2,7 +2,15 @@
 // It only calls this Next.js app's /api/* routes; DejaQ credentials stay
 // server-side in chat/.env.local.
 
-import type { ModelProfile, RoutingMode } from "./chat-store";
+import { loadServerBaseUrl, type ModelProfile, type RoutingMode } from "./chat-store";
+
+// Attach the user-selected DejaQ server as a header the /api/* routes read.
+// `override` lets the Settings modal test an unsaved value; otherwise use the
+// saved setting. Empty = omit the header so routes use their server-side default.
+function serverHeader(override?: string): Record<string, string> {
+  const url = (override ?? loadServerBaseUrl()).trim();
+  return url ? { "X-DejaQ-Server": url } : {};
+}
 
 export interface ChatApiMessage {
   role: "user" | "assistant" | "system";
@@ -74,7 +82,7 @@ export async function sendChatMessage(
   try {
     response = await fetch("/api/chat", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...serverHeader() },
       body: JSON.stringify({ messages, deptSlug, modelProfile, routingMode }),
     });
   } catch {
@@ -189,7 +197,7 @@ export async function sendFeedback(
   try {
     response = await fetch("/api/feedback", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...serverHeader() },
       body: JSON.stringify({ responseId, interactionId, messages, rating, comment, deptSlug }),
     });
   } catch {
@@ -219,9 +227,12 @@ export interface Department {
 
 export type DepartmentsResult = Department[] | ApiError;
 
-export async function fetchDepartments(): Promise<DepartmentsResult> {
+export async function fetchDepartments(serverOverride?: string): Promise<DepartmentsResult> {
   try {
-    const response = await fetch("/api/departments", { signal: AbortSignal.timeout(5000) });
+    const response = await fetch("/api/departments", {
+      headers: serverHeader(serverOverride),
+      signal: AbortSignal.timeout(5000),
+    });
     if (!response.ok) {
       const detail = await parseErrorDetail(response);
       return { kind: "error", status: response.status, message: userFacingError(response.status, detail) };
@@ -232,9 +243,14 @@ export async function fetchDepartments(): Promise<DepartmentsResult> {
   }
 }
 
-export async function checkServerHealth(): Promise<{ reachable: boolean; celery: string; message?: string }> {
+export async function checkServerHealth(
+  serverOverride?: string,
+): Promise<{ reachable: boolean; celery: string; message?: string }> {
   try {
-    const response = await fetch("/api/health", { signal: AbortSignal.timeout(5000) });
+    const response = await fetch("/api/health", {
+      headers: serverHeader(serverOverride),
+      signal: AbortSignal.timeout(5000),
+    });
     if (!response.ok) {
       const detail = await parseErrorDetail(response);
       return { reachable: false, celery: "", message: userFacingError(response.status, detail) };

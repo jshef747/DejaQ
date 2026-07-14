@@ -48,8 +48,8 @@ export default function TreeClient({ workspaces, allDepts, statsMap, error }: Pr
 
   const totalWorkspaces = workspaces.length;
   const totalDepts = allDepts.length;
-  const totalHits = allDepts.reduce((a, d) => a + (statsMap[`${d.org_slug}::${d.slug}`]?.hits ?? 0), 0);
-  const totalMisses = allDepts.reduce((a, d) => a + (statsMap[`${d.org_slug}::${d.slug}`]?.misses ?? 0), 0);
+  const totalHits = allDepts.reduce((a, d) => a + (statsMap[`${d.workspace_slug}::${d.slug}`]?.hits ?? 0), 0);
+  const totalMisses = allDepts.reduce((a, d) => a + (statsMap[`${d.workspace_slug}::${d.slug}`]?.misses ?? 0), 0);
   const totalReqs = totalHits + totalMisses;
   const overallRate = totalReqs ? totalHits / totalReqs : 0;
 

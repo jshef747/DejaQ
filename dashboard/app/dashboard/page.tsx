@@ -91,7 +91,7 @@ export default async function DashboardPage() {
               {[
                 "1. Start the backend: ./start.sh --stack=server",
                 "2. Create a workspace and API key (Workspaces → Keys)",
-                "3. Set NEXT_PUBLIC_API_BASE_URL in frontend/.env.local",
+                "3. Set NEXT_PUBLIC_API_BASE_URL in dashboard/.env.local",
               ].map((step) => (
                 <div key={step} style={{ display: "flex", alignItems: "flex-start", gap: 10, fontSize: 13, color: "var(--fg-dim)" }}>
                   <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--accent)", flexShrink: 0 }}>›</span>
