@@ -26,7 +26,7 @@ const SSE_HEADERS_TO_FORWARD = [
 ];
 
 export async function POST(request: NextRequest) {
-  const config = getDejaQConfig();
+  const config = getDejaQConfig(request.headers.get("x-dejaq-server"));
   if (isNextResponse(config)) return config;
 
   const body = await request.json();

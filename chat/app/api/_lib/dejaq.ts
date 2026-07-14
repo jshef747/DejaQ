@@ -12,7 +12,27 @@ interface DejaQConfig {
   apiKey: string;
 }
 
-export function getDejaQConfig(): DejaQConfig | NextResponse {
+// Resolve the DejaQ backend URL. A client-supplied override (X-DejaQ-Server,
+// set from the chat Settings modal so users can target a server on another
+// machine) wins when it is a valid http(s) URL; otherwise fall back to the
+// server-side default. Invalid overrides are ignored rather than erroring.
+function resolveBaseUrl(override?: string | null): string {
+  const fallback = process.env.DEJAQ_API_BASE_URL ?? "http://127.0.0.1:8000";
+  const candidate = (override ?? "").trim();
+  if (candidate) {
+    try {
+      const url = new URL(candidate);
+      if (url.protocol === "http:" || url.protocol === "https:") {
+        return candidate.replace(/\/$/, "");
+      }
+    } catch {
+      // fall through to the default
+    }
+  }
+  return fallback.trim().replace(/\/$/, "");
+}
+
+export function getDejaQConfig(serverOverride?: string | null): DejaQConfig | NextResponse {
   const apiKey = process.env.DEJAQ_API_KEY?.trim();
   if (!apiKey) {
     return NextResponse.json(
@@ -24,9 +44,7 @@ export function getDejaQConfig(): DejaQConfig | NextResponse {
     );
   }
 
-  const apiBaseUrl = (process.env.DEJAQ_API_BASE_URL ?? "http://127.0.0.1:8000")
-    .trim()
-    .replace(/\/$/, "");
+  const apiBaseUrl = resolveBaseUrl(serverOverride);
 
   return { apiBaseUrl, apiKey };
 }

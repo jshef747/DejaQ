@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import {
   API_TIMEOUT_MS,
   backendUnavailableError,
@@ -10,8 +10,8 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-  const config = getDejaQConfig();
+export async function GET(request: NextRequest) {
+  const config = getDejaQConfig(request.headers.get("x-dejaq-server"));
   if (isNextResponse(config)) return config;
 
   let response: Response;

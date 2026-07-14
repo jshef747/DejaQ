@@ -15,6 +15,7 @@ type HealthStatus = "idle" | "checking" | "ok" | "error";
 type DeptLoadStatus = "idle" | "loading" | "loaded" | "error";
 
 export default function SettingsModal({ open, initialSettings, onSave, onClose }: Props) {
+  const [serverBaseUrl, setServerBaseUrl] = useState(initialSettings.serverBaseUrl);
   const [deptSlug, setDeptSlug] = useState(initialSettings.deptSlug);
   const [modelProfile, setModelProfile] = useState<ModelProfile>(initialSettings.modelProfile);
   const [routingMode, setRoutingMode] = useState<RoutingMode>(initialSettings.routingMode);
@@ -26,6 +27,7 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
 
   useEffect(() => {
     if (!open) return;
+    setServerBaseUrl(initialSettings.serverBaseUrl);
     setDeptSlug(initialSettings.deptSlug);
     setModelProfile(initialSettings.modelProfile);
     setRoutingMode(initialSettings.routingMode);
@@ -36,7 +38,7 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
     setTimeout(() => firstInputRef.current?.focus(), 50);
 
     let cancelled = false;
-    fetchDepartments().then((result) => {
+    fetchDepartments(initialSettings.serverBaseUrl).then((result) => {
       if (cancelled) return;
       if (isApiError(result)) {
         setDepartments([]);
@@ -56,6 +58,7 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
     };
   }, [
     open,
+    initialSettings.serverBaseUrl,
     initialSettings.deptSlug,
     initialSettings.modelProfile,
     initialSettings.routingMode,
@@ -73,10 +76,22 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
   async function handleTest() {
     setHealth("checking");
     setHealthText("");
-    const result = await checkServerHealth();
+    const target = serverBaseUrl.trim();
+    const result = await checkServerHealth(target);
     if (result.reachable) {
       setHealth("ok");
       setHealthText(`Connected. Celery: ${result.celery}`);
+      // Pull departments from the entered server so the dropdown matches it.
+      setDeptStatus("loading");
+      const depts = await fetchDepartments(target);
+      if (isApiError(depts)) {
+        setDepartments([]);
+        setDeptStatus("error");
+      } else {
+        setDepartments(depts);
+        setDeptStatus("loaded");
+        setDeptSlug((prev) => (depts.some((d) => d.slug === prev) ? prev : depts[0]?.slug ?? ""));
+      }
     } else {
       setHealth("error");
       setHealthText(result.message ?? "Cannot reach the DejaQ server.");
@@ -85,6 +100,7 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
 
   function handleSave() {
     onSave({
+      serverBaseUrl: serverBaseUrl.trim(),
       deptSlug: deptSlug.trim(),
       modelProfile,
       routingMode,
@@ -160,6 +176,21 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: "16px", padding: "20px" }}>
+          <Field
+            label="DejaQ server"
+            hint="Leave blank to use this machine (http://127.0.0.1:8000). Set to http://<other-host>:8000 to use a server running on another computer on the network."
+          >
+            <input
+              type="text"
+              value={serverBaseUrl}
+              onChange={(e) => setServerBaseUrl(e.target.value)}
+              placeholder="http://127.0.0.1:8000"
+              spellCheck={false}
+              autoComplete="off"
+              style={inputStyle}
+            />
+          </Field>
+
           <Field
             label={
               <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
@@ -259,7 +290,7 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
             <div style={{ flex: 1 }}>
               {health === "idle" && (
                 <span style={{ color: "var(--fg-dimmer)", fontSize: "12px" }}>
-                  Test the chat app&apos;s server-side DejaQ connection.
+                  Test the DejaQ server above and load its departments.
                 </span>
               )}
               {health === "checking" && (

@@ -12,7 +12,7 @@ import {
 export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest) {
-  const config = getDejaQConfig();
+  const config = getDejaQConfig(request.headers.get("x-dejaq-server"));
   if (isNextResponse(config)) return config;
 
   const body = await request.json();
