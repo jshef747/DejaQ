@@ -72,6 +72,7 @@ usage() {
   echo "  DEJAQ_VALIDATOR_ENABLED Validator toggle: true (default) or false"
   echo "  DEJAQ_OLLAMA_URL        Ollama endpoint (required for remote mode)"
   echo "  DEJAQ_LAN               Expose chat+API on the LAN: true or false (default)"
+  echo "  DEJAQ_LAN_IP            LAN IP to advertise; skips the prompt when set"
 }
 
 for arg in "$@"; do
@@ -401,6 +402,26 @@ detect_lan_ip() {
   echo "${ip:-<your-LAN-IP>}"
 }
 
+# Resolve the LAN IP to bind/advertise in --lan mode. Honors a preset DEJAQ_LAN_IP,
+# otherwise prompts interactively with the auto-detected address as the default.
+select_lan_ip() {
+  local preset="${DEJAQ_LAN_IP:-}"
+  if [[ -n "$preset" ]]; then
+    echo "$preset"
+    return
+  fi
+  local detected
+  detected="$(detect_lan_ip)"
+  # Non-interactive (no TTY): accept the detected value without prompting.
+  if [[ ! -t 0 ]]; then
+    echo "$detected"
+    return
+  fi
+  local answer
+  read -r -p "LAN IP to advertise [${detected}]: " answer
+  echo "${answer:-$detected}"
+}
+
 ensure_node_app_ready() {
   local dir=$1 name=$2
   if [[ ! -f "$dir/package.json" ]]; then
@@ -471,7 +492,7 @@ apply_mode "$MODE" "$VALIDATOR"
 # Detect LAN IP and expose it to the chat Next.js config (allowedDevOrigins) when --lan is on.
 LAN_IP=""
 if [[ "$LAN_MODE" == "true" ]]; then
-  LAN_IP="$(detect_lan_ip)"
+  LAN_IP="$(select_lan_ip)"
   [[ "$LAN_IP" != "<your-LAN-IP>" ]] && export DEJAQ_LAN_IP="$LAN_IP"
 fi
 
