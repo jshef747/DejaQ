@@ -53,7 +53,13 @@ uv run alembic upgrade head
 cd ..
 ./start.sh --stack=all --mode=local         # cross-platform (macOS/Linux/Windows git-bash)
 # remote Ollama: ./start.sh --stack=all --mode=remote --ollama-url=http://<host>:11434
+# LAN access:    ./start.sh --stack=all --mode=local --lan
 ```
+
+Add `--lan` to expose the chat UI (port 4000) and API (port 8000) on `0.0.0.0` so other
+devices on the same network can reach them (the script prints the LAN URLs). The dashboard
+(3000), ChromaDB (8001), and Redis stay localhost-only. Under the default `AUTH_MODE=local`
+the admin API is unauthenticated, so only use `--lan` on trusted networks.
 
 Then open the dashboard at `http://localhost:3000/dashboard`, create an organization
 and generate an API key, and use it as `Authorization: Bearer <key>` against the gateway

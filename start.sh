@@ -36,14 +36,16 @@ VALIDATOR_ARG=""
 OLLAMA_URL_ARG=""
 OLLAMA_URL_FLAG_SET=false
 DRY_RUN=false
+LAN_MODE=false
 ENV_STACK="${DEJAQ_STACK:-}"
 ENV_MODE="${DEJAQ_MODE:-}"
 ENV_OLLAMA_URL="${DEJAQ_OLLAMA_URL:-}"
 ENV_START_LOGS="${DEJAQ_START_LOGS:-}"
 ENV_VALIDATOR="${DEJAQ_VALIDATOR_ENABLED:-}"
+ENV_LAN="${DEJAQ_LAN:-}"
 
 usage() {
-  echo "Usage: $0 [--stack=server|all] [--mode=local|remote] [--logs=requests|all] [--validator=off] [--ollama-url URL] [--dry-run]"
+  echo "Usage: $0 [--stack=server|all] [--mode=local|remote] [--logs=requests|all] [--validator=off] [--ollama-url URL] [--lan] [--dry-run]"
   echo ""
   echo "Stacks:"
   echo "  server   Start backend services only: ChromaDB, Redis, Celery, FastAPI"
@@ -59,12 +61,17 @@ usage() {
   echo ""
   echo "Cache-answer validator is ON by default; disable with --validator=off."
   echo ""
+  echo "Network:"
+  echo "  --lan    Expose chat UI (4000) and API (8000) on 0.0.0.0 for other LAN"
+  echo "           devices. Dashboard, ChromaDB, and Redis stay localhost-only."
+  echo ""
   echo "Environment:"
   echo "  DEJAQ_STACK             Non-interactive stack selection: server or all"
   echo "  DEJAQ_MODE              Non-interactive mode selection: local or remote"
   echo "  DEJAQ_START_LOGS        Non-interactive log mode selection: requests or all"
   echo "  DEJAQ_VALIDATOR_ENABLED Validator toggle: true (default) or false"
   echo "  DEJAQ_OLLAMA_URL        Ollama endpoint (required for remote mode)"
+  echo "  DEJAQ_LAN               Expose chat+API on the LAN: true or false (default)"
 }
 
 for arg in "$@"; do
@@ -108,6 +115,9 @@ for arg in "$@"; do
       ;;
     --ollama-url)
       echo -e "${RED}Use --ollama-url=<url>${NC}"; exit 1
+      ;;
+    --lan)
+      LAN_MODE=true
       ;;
     --dry-run)
       DRY_RUN=true
@@ -376,6 +386,21 @@ check_ollama() {
   fi
 }
 
+# Best-effort LAN IPv4 detection for printing reachable URLs in --lan mode.
+detect_lan_ip() {
+  local ip=""
+  if [[ "$IS_WINDOWS" == "true" ]]; then
+    # Adapters with an IPv4 default gateway = real NICs (excludes WSL/vEthernet/virtual)
+    ip=$(powershell.exe -NoProfile -Command \
+      "(Get-NetIPConfiguration | Where-Object { \$_.IPv4DefaultGateway -and \$_.NetAdapter.Status -eq 'Up' } | Select-Object -First 1).IPv4Address.IPAddress" \
+      2>/dev/null | tr -d '[:space:]') || true
+  else
+    ip=$(hostname -I 2>/dev/null | awk '{print $1}') || true
+    [[ -z "$ip" ]] && ip=$(ipconfig getifaddr en0 2>/dev/null) || true
+  fi
+  echo "${ip:-<your-LAN-IP>}"
+}
+
 ensure_node_app_ready() {
   local dir=$1 name=$2
   if [[ ! -f "$dir/package.json" ]]; then
@@ -403,7 +428,11 @@ start_chat() {
   echo -e "${CYAN}[7/7] Starting chat app...${NC}"
   ensure_node_app_ready "$CHAT_DIR" "Chat app"
   free_port 4000
-  (cd "$CHAT_DIR" && npm run dev) &>"$LOG_DIR/chat.log" &
+  if [[ "$LAN_MODE" == "true" ]]; then
+    (cd "$CHAT_DIR" && npm run dev -- -H 0.0.0.0) &>"$LOG_DIR/chat.log" &
+  else
+    (cd "$CHAT_DIR" && npm run dev) &>"$LOG_DIR/chat.log" &
+  fi
   CHAT_PID=$!
   sleep 2
   if ! kill -0 "$CHAT_PID" 2>/dev/null; then
@@ -429,6 +458,9 @@ fi
 if [[ -n "$ENV_START_LOGS" ]]; then
   DEJAQ_START_LOGS="$ENV_START_LOGS"
 fi
+case "$ENV_LAN" in
+  true|1|yes|on) LAN_MODE=true ;;
+esac
 
 STACK="$(select_stack)"
 MODE="$(select_mode)"
@@ -436,10 +468,18 @@ VALIDATOR="$(resolve_validator)"
 LOG_MODE="$(select_log_mode)"
 apply_mode "$MODE" "$VALIDATOR"
 
+# Detect LAN IP and expose it to the chat Next.js config (allowedDevOrigins) when --lan is on.
+LAN_IP=""
+if [[ "$LAN_MODE" == "true" ]]; then
+  LAN_IP="$(detect_lan_ip)"
+  [[ "$LAN_IP" != "<your-LAN-IP>" ]] && export DEJAQ_LAN_IP="$LAN_IP"
+fi
+
 echo -e "${CYAN}Startup stack: ${STACK}${NC}"
 echo -e "${CYAN}Ollama mode: ${MODE}${NC}"
 echo -e "${CYAN}Validator: ${VALIDATOR}${NC}"
 echo -e "${CYAN}Log mode: ${LOG_MODE}${NC}"
+echo -e "${CYAN}LAN mode: $([[ "$LAN_MODE" == "true" ]] && echo on || echo off)${NC}"
 echo -e "${CYAN}Logs: ${LOG_DIR}/${NC}"
 echo -e "  DEJAQ_OLLAMA_URL=${DEJAQ_OLLAMA_URL}"
 echo -e "  DEJAQ_VALIDATOR_ENABLED=${DEJAQ_VALIDATOR_ENABLED}"
@@ -533,7 +573,9 @@ echo -e "  ${GREEN}Celery beat running (PID $CELERY_BEAT_PID) — eviction runs 
 # ── 5. FastAPI ──────────────────────────────────────────────────────────────
 echo -e "${CYAN}[5/5] Starting FastAPI...${NC}"
 free_port 8000
-"$UVICORN" app.main:app --reload &>"$LOG_DIR/uvicorn.log" &
+UVICORN_HOST="127.0.0.1"
+[[ "$LAN_MODE" == "true" ]] && UVICORN_HOST="0.0.0.0"
+"$UVICORN" app.main:app --reload --host "$UVICORN_HOST" &>"$LOG_DIR/uvicorn.log" &
 UVICORN_PID=$!
 sleep 2
 if ! kill -0 "$UVICORN_PID" 2>/dev/null; then
@@ -558,6 +600,15 @@ if [[ "$STACK" == "all" ]]; then
   echo -e "  Mode:        $MODE"
   echo -e "  Logs:        $LOG_DIR/"
   TAIL_LOGS+=("$LOG_DIR/dashboard.log" "$LOG_DIR/chat.log")
+  if [[ "$LAN_MODE" == "true" ]]; then
+    echo -e "  ${CYAN}LAN access:${NC}"
+    echo -e "    Chat:      http://$LAN_IP:4000"
+    echo -e "    API:       http://$LAN_IP:8000"
+    echo -e "  ${YELLOW}Note: allow access if the Windows Defender Firewall popup appears (first run).${NC}"
+    echo -e "  ${YELLOW}Warning: AUTH_MODE=local leaves /admin/v1/* unauthenticated — anyone on this${NC}"
+    echo -e "  ${YELLOW}network can hit the admin API on port 8000. Use --lan only on trusted networks.${NC}"
+    echo -e "  ${YELLOW}(Dashboard link inside chat works only on this machine.)${NC}"
+  fi
 else
   echo -e "${GREEN}✓ Server services running${NC}"
   echo -e "  API:         http://127.0.0.1:8000"
@@ -565,6 +616,13 @@ else
   echo -e "  Mode:        $MODE"
   echo -e "  Stats:       cd server && uv run dejaq-admin stats"
   echo -e "  Logs:        $LOG_DIR/"
+  if [[ "$LAN_MODE" == "true" ]]; then
+    echo -e "  ${CYAN}LAN access:${NC}"
+    echo -e "    API:       http://$LAN_IP:8000"
+    echo -e "  ${YELLOW}Note: allow access if the Windows Defender Firewall popup appears (first run).${NC}"
+    echo -e "  ${YELLOW}Warning: AUTH_MODE=local leaves /admin/v1/* unauthenticated — anyone on this${NC}"
+    echo -e "  ${YELLOW}network can hit the admin API on port 8000. Use --lan only on trusted networks.${NC}"
+  fi
 fi
 echo -e "\n${YELLOW}Press Ctrl+C to stop all services.${NC}\n"
 
