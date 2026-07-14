@@ -37,6 +37,7 @@ OLLAMA_URL_ARG=""
 OLLAMA_URL_FLAG_SET=false
 DRY_RUN=false
 LAN_MODE=false
+LAN_EXPLICIT=false
 ENV_STACK="${DEJAQ_STACK:-}"
 ENV_MODE="${DEJAQ_MODE:-}"
 ENV_OLLAMA_URL="${DEJAQ_OLLAMA_URL:-}"
@@ -45,7 +46,7 @@ ENV_VALIDATOR="${DEJAQ_VALIDATOR_ENABLED:-}"
 ENV_LAN="${DEJAQ_LAN:-}"
 
 usage() {
-  echo "Usage: $0 [--stack=server|all] [--mode=local|remote] [--logs=requests|all] [--validator=off] [--ollama-url URL] [--lan] [--dry-run]"
+  echo "Usage: $0 [--stack=server|all] [--mode=local|remote] [--logs=requests|all] [--validator=off] [--ollama-url URL] [--lan|--no-lan] [--dry-run]"
   echo ""
   echo "Stacks:"
   echo "  server   Start backend services only: ChromaDB, Redis, Celery, FastAPI"
@@ -64,6 +65,8 @@ usage() {
   echo "Network:"
   echo "  --lan    Expose chat UI (4000) and API (8000) on 0.0.0.0 for other LAN"
   echo "           devices. Dashboard, ChromaDB, and Redis stay localhost-only."
+  echo "  --no-lan Force LAN off (skip the interactive prompt)."
+  echo "           Without either flag, the script asks interactively."
   echo ""
   echo "Environment:"
   echo "  DEJAQ_STACK             Non-interactive stack selection: server or all"
@@ -119,6 +122,11 @@ for arg in "$@"; do
       ;;
     --lan)
       LAN_MODE=true
+      LAN_EXPLICIT=true
+      ;;
+    --no-lan)
+      LAN_MODE=false
+      LAN_EXPLICIT=true
       ;;
     --dry-run)
       DRY_RUN=true
@@ -422,6 +430,26 @@ select_lan_ip() {
   echo "${answer:-$detected}"
 }
 
+# Decide whether to expose chat+API on the LAN. A --lan/--no-lan flag or DEJAQ_LAN
+# env is honored without prompting; otherwise prompt interactively (default off).
+select_lan_mode() {
+  if [[ "$LAN_EXPLICIT" == "true" ]]; then
+    echo "$LAN_MODE"
+    return
+  fi
+  # Non-interactive (no TTY): default off, never block.
+  if [[ ! -t 0 ]]; then
+    echo "false"
+    return
+  fi
+  local answer
+  read -r -p "Expose chat + API on the LAN for other devices? [y/N]: " answer
+  case "$answer" in
+    y|Y|yes|YES) echo "true" ;;
+    *)           echo "false" ;;
+  esac
+}
+
 ensure_node_app_ready() {
   local dir=$1 name=$2
   if [[ ! -f "$dir/package.json" ]]; then
@@ -480,13 +508,15 @@ if [[ -n "$ENV_START_LOGS" ]]; then
   DEJAQ_START_LOGS="$ENV_START_LOGS"
 fi
 case "$ENV_LAN" in
-  true|1|yes|on) LAN_MODE=true ;;
+  true|1|yes|on)    LAN_MODE=true;  LAN_EXPLICIT=true ;;
+  false|0|no|off)   LAN_MODE=false; LAN_EXPLICIT=true ;;
 esac
 
 STACK="$(select_stack)"
 MODE="$(select_mode)"
 VALIDATOR="$(resolve_validator)"
 LOG_MODE="$(select_log_mode)"
+LAN_MODE="$(select_lan_mode)"
 apply_mode "$MODE" "$VALIDATOR"
 
 # Detect LAN IP and expose it to the chat Next.js config (allowedDevOrigins) when --lan is on.
