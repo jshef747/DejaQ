@@ -5,14 +5,14 @@ from pydantic import BaseModel
 
 from app.config import EXTERNAL_MODEL_NAME, LOCAL_LLM_MODEL_NAME, ROUTING_THRESHOLD
 from app.db import credential_repo, llm_config_repo
-from app.db.models.org import Organization
+from app.db.models.workspace import Workspace
 from app.db.session import get_session
 
 
-class OrgNotFound(Exception):
-    def __init__(self, org_slug: str) -> None:
-        self.org_slug = org_slug
-        super().__init__(f"Organization '{org_slug}' not found.")
+class WorkspaceNotFound(Exception):
+    def __init__(self, workspace_slug: str) -> None:
+        self.workspace_slug = workspace_slug
+        super().__init__(f"Workspace '{workspace_slug}' not found.")
 
 
 class InvalidLlmConfigUpdate(Exception):
@@ -55,23 +55,23 @@ def _effective(row, credentials_configured: list[str] | None = None) -> LlmConfi
     )
 
 
-def _get_org(session, org_slug: str) -> Organization:
-    org = session.query(Organization).filter_by(slug=org_slug).first()
-    if org is None:
-        raise OrgNotFound(org_slug)
-    return org
+def _get_workspace(session, workspace_slug: str) -> Workspace:
+    workspace = session.query(Workspace).filter_by(slug=workspace_slug).first()
+    if workspace is None:
+        raise WorkspaceNotFound(workspace_slug)
+    return workspace
 
 
-def read_for_org(org_slug: str) -> LlmConfigResult:
+def read_for_workspace(workspace_slug: str) -> LlmConfigResult:
     with get_session() as session:
-        org = _get_org(session, org_slug)
-        row = llm_config_repo.get_for_org(session, org.id)
-        credentials = [item.provider for item in credential_repo.list_credentials(session, org.id)]
+        workspace = _get_workspace(session, workspace_slug)
+        row = llm_config_repo.get_for_workspace(session, workspace.id)
+        credentials = [item.provider for item in credential_repo.list_credentials(session, workspace.id)]
         return _effective(row, credentials)
 
 
-def update_for_org(
-    org_slug: str,
+def update_for_workspace(
+    workspace_slug: str,
     payload: dict[str, Any],
     fields_set: set[str],
 ) -> LlmConfigResult:
@@ -79,7 +79,7 @@ def update_for_org(
         raise InvalidLlmConfigUpdate("At least one config field is required.")
 
     with get_session() as session:
-        org = _get_org(session, org_slug)
-        row = llm_config_repo.upsert_for_org(session, org.id, payload, fields_set)
-        credentials = [item.provider for item in credential_repo.list_credentials(session, org.id)]
+        workspace = _get_workspace(session, workspace_slug)
+        row = llm_config_repo.upsert_for_workspace(session, workspace.id, payload, fields_set)
+        credentials = [item.provider for item in credential_repo.list_credentials(session, workspace.id)]
         return _effective(row, credentials)

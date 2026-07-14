@@ -10,7 +10,7 @@ def _seed_requests(db_path, rows):
         """CREATE TABLE IF NOT EXISTS requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ts TEXT NOT NULL,
-            org TEXT NOT NULL,
+            workspace TEXT NOT NULL,
             department TEXT NOT NULL,
             latency_ms INTEGER NOT NULL,
             cache_hit INTEGER NOT NULL,
@@ -20,7 +20,7 @@ def _seed_requests(db_path, rows):
         )"""
     )
     con.executemany(
-        "INSERT INTO requests (ts, org, department, latency_ms, cache_hit, difficulty, model_used, response_id) "
+        "INSERT INTO requests (ts, workspace, department, latency_ms, cache_hit, difficulty, model_used, response_id) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
@@ -28,7 +28,7 @@ def _seed_requests(db_path, rows):
     con.close()
 
 
-def test_org_stats_aggregates_identity_rows_and_total(isolated_stats_db):
+def test_workspace_stats_aggregates_identity_rows_and_total(isolated_stats_db):
     from app.services import stats_service
 
     _seed_requests(
@@ -40,9 +40,9 @@ def test_org_stats_aggregates_identity_rows_and_total(isolated_stats_db):
         ],
     )
 
-    report = stats_service.org_stats()
+    report = stats_service.workspace_stats()
 
-    assert [(item.org, item.requests, item.hits, item.misses) for item in report.items] == [
+    assert [(item.workspace, item.requests, item.hits, item.misses) for item in report.items] == [
         ("acme", 2, 1, 1),
         ("beta", 1, 1, 0),
     ]
@@ -71,7 +71,7 @@ def test_department_stats_honors_exact_date_boundaries(isolated_stats_db):
         to_date=date(2026, 4, 15),
     )
 
-    assert report.org == "acme"
+    assert report.workspace == "acme"
     assert len(report.items) == 1
     row = report.items[0]
     assert row.department == "eng"
@@ -85,4 +85,4 @@ def test_stats_service_rejects_reversed_date_range(isolated_stats_db):
     from app.services import stats_service
 
     with pytest.raises(stats_service.InvalidDateRange):
-        stats_service.org_stats(from_date=date(2026, 4, 15), to_date=date(2026, 4, 1))
+        stats_service.workspace_stats(from_date=date(2026, 4, 15), to_date=date(2026, 4, 1))

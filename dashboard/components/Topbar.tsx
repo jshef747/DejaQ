@@ -1,16 +1,16 @@
 interface TopbarProps {
   section: string;
-  orgId?: string;
+  workspaceId?: string;
   extra?: React.ReactNode;
 }
 
-export default function Topbar({ section, orgId, extra }: TopbarProps) {
+export default function Topbar({ section, workspaceId, extra }: TopbarProps) {
   return (
     <div className="ds-topbar">
       <div className="ds-breadcrumbs">
-        {orgId && (
+        {workspaceId && (
           <>
-            <span className="ds-dimmer" style={{ fontFamily: "var(--font-mono)", fontSize: "11px" }}>{orgId}</span>
+            <span className="ds-dimmer" style={{ fontFamily: "var(--font-mono)", fontSize: "11px" }}>{workspaceId}</span>
             <span className="sep">/</span>
           </>
         )}

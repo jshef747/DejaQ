@@ -1,9 +1,9 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
-from app.db.models.org import Organization
 from app.db.models.user import ManagementUser
-from app.db.models.user_org_membership import UserOrgMembership
+from app.db.models.user_workspace_membership import UserWorkspaceMembership
+from app.db.models.workspace import Workspace
 
 
 def upsert_user(session: Session, supabase_user_id: str, email: str) -> ManagementUser:
@@ -19,45 +19,45 @@ def upsert_user(session: Session, supabase_user_id: str, email: str) -> Manageme
     return user
 
 
-def list_memberships(session: Session, user_id: int) -> list[UserOrgMembership]:
+def list_memberships(session: Session, user_id: int) -> list[UserWorkspaceMembership]:
     return (
-        session.query(UserOrgMembership)
+        session.query(UserWorkspaceMembership)
         .filter_by(user_id=user_id)
         .all()
     )
 
 
-def create_membership_idempotent(session: Session, user_id: int, org_id: int) -> UserOrgMembership:
-    """Create user-org membership; silently ignore duplicate."""
+def create_membership_idempotent(session: Session, user_id: int, workspace_id: int) -> UserWorkspaceMembership:
+    """Create user-workspace membership; silently ignore duplicate."""
     existing = (
-        session.query(UserOrgMembership)
-        .filter_by(user_id=user_id, org_id=org_id)
+        session.query(UserWorkspaceMembership)
+        .filter_by(user_id=user_id, workspace_id=workspace_id)
         .first()
     )
     if existing:
         return existing
-    membership = UserOrgMembership(user_id=user_id, org_id=org_id)
+    membership = UserWorkspaceMembership(user_id=user_id, workspace_id=workspace_id)
     session.add(membership)
     try:
         session.flush()
     except IntegrityError:
         session.rollback()
         existing = (
-            session.query(UserOrgMembership)
-            .filter_by(user_id=user_id, org_id=org_id)
+            session.query(UserWorkspaceMembership)
+            .filter_by(user_id=user_id, workspace_id=workspace_id)
             .first()
         )
         return existing  # type: ignore[return-value]
     return membership
 
 
-def get_accessible_org_ids(session: Session, user_id: int) -> list[int]:
-    rows = session.query(UserOrgMembership.org_id).filter_by(user_id=user_id).all()
+def get_accessible_workspace_ids(session: Session, user_id: int) -> list[int]:
+    rows = session.query(UserWorkspaceMembership.workspace_id).filter_by(user_id=user_id).all()
     return [r[0] for r in rows]
 
 
-def get_accessible_orgs(session: Session, user_id: int) -> list[Organization]:
-    org_ids = get_accessible_org_ids(session, user_id)
-    if not org_ids:
+def get_accessible_workspaces(session: Session, user_id: int) -> list[Workspace]:
+    workspace_ids = get_accessible_workspace_ids(session, user_id)
+    if not workspace_ids:
         return []
-    return session.query(Organization).filter(Organization.id.in_(org_ids)).all()
+    return session.query(Workspace).filter(Workspace.id.in_(workspace_ids)).all()

@@ -38,6 +38,8 @@ OLLAMA_URL_FLAG_SET=false
 DRY_RUN=false
 LAN_MODE=false
 LAN_EXPLICIT=false
+FRESH=false
+YES=false
 ENV_STACK="${DEJAQ_STACK:-}"
 ENV_MODE="${DEJAQ_MODE:-}"
 ENV_OLLAMA_URL="${DEJAQ_OLLAMA_URL:-}"
@@ -46,7 +48,7 @@ ENV_VALIDATOR="${DEJAQ_VALIDATOR_ENABLED:-}"
 ENV_LAN="${DEJAQ_LAN:-}"
 
 usage() {
-  echo "Usage: $0 [--stack=all|server|client] [--mode=local|remote] [--logs=requests|all] [--validator=off] [--ollama-url URL] [--lan|--no-lan] [--dry-run]"
+  echo "Usage: $0 [--stack=all|server|client] [--mode=local|remote] [--logs=requests|all] [--validator=off] [--ollama-url URL] [--lan|--no-lan] [--fresh] [--yes] [--dry-run]"
   echo ""
   echo "Stacks:"
   echo "  all      Everything on this machine: backend + dashboard + chat"
@@ -64,10 +66,13 @@ usage() {
   echo "Cache-answer validator is ON by default; disable with --validator=off."
   echo ""
   echo "Network:"
-  echo "  --lan    Expose chat UI (4000) and API (8000) on 0.0.0.0 for other LAN"
-  echo "           devices. Dashboard, ChromaDB, and Redis stay localhost-only."
-  echo "  --no-lan Force LAN off (skip the interactive prompt)."
+  echo "  --lan    Expose the chat UI (4000) on 0.0.0.0 for other LAN devices. The"
+  echo "           data-plane API is already LAN-bound; admin stays loopback-only."
+  echo "  --no-lan Force chat LAN off (skip the interactive prompt)."
   echo "           Without either flag, the script asks interactively."
+  echo ""
+  echo "  --fresh  Delete dejaq.db, chroma_data/, and dejaq_stats.db before starting."
+  echo "           Prompts for confirmation unless --yes is also passed."
   echo ""
   echo "Environment:"
   echo "  DEJAQ_STACK             Non-interactive stack selection: all, server, or client"
@@ -131,6 +136,12 @@ for arg in "$@"; do
       ;;
     --dry-run)
       DRY_RUN=true
+      ;;
+    --fresh)
+      FRESH=true
+      ;;
+    --yes|-y)
+      YES=true
       ;;
     --help|-h)
       usage
@@ -470,7 +481,8 @@ start_dashboard() {
   echo -e "${CYAN}[6/7] Starting dashboard...${NC}"
   ensure_node_app_ready "$DASHBOARD_DIR" "Dashboard"
   free_port 3000
-  (cd "$DASHBOARD_DIR" && npm run dev) &>"$LOG_DIR/dashboard.log" &
+  # Bind to 127.0.0.1 only — the admin dashboard is control-plane; not LAN-exposed.
+  (cd "$DASHBOARD_DIR" && npm run dev -- --hostname 127.0.0.1 --port 3000) &>"$LOG_DIR/dashboard.log" &
   DASHBOARD_PID=$!
   sleep 2
   if ! kill -0 "$DASHBOARD_PID" 2>/dev/null; then
@@ -569,6 +581,44 @@ if [[ "$DRY_RUN" == "true" ]]; then
 fi
 
 if [[ "$RUN_BACKEND" == "true" ]]; then
+# ── Offer a fresh start when not requested via flag (interactive only) ───────
+if [[ "$FRESH" != "true" && "$YES" != "true" && -t 0 ]]; then
+  read -r -p "$(echo -e "${YELLOW}Start fresh? Wipes databases (dejaq.db, dejaq_stats.db, chroma_data/). [y/N]: ${NC}")" FRESH_ANSWER
+  if [[ "$(echo "$FRESH_ANSWER" | tr '[:upper:]' '[:lower:]')" == "y" || "$(echo "$FRESH_ANSWER" | tr '[:upper:]' '[:lower:]')" == "yes" ]]; then
+    FRESH=true
+    YES=true
+  fi
+fi
+
+# ── Fresh start (optional) ──────────────────────────────────────────────────
+if [[ "$FRESH" == "true" ]]; then
+  FRESH_TARGETS=()
+  [[ -f "$SERVER_DIR/dejaq.db" ]]     && FRESH_TARGETS+=("dejaq.db")
+  [[ -f "$SERVER_DIR/dejaq_stats.db" ]] && FRESH_TARGETS+=("dejaq_stats.db")
+  [[ -d "$SERVER_DIR/chroma_data" ]]  && FRESH_TARGETS+=("chroma_data/")
+
+  if [[ ${#FRESH_TARGETS[@]} -eq 0 ]]; then
+    echo -e "  ${YELLOW}--fresh: nothing to delete (databases not found)${NC}"
+  else
+    echo -e "${YELLOW}--fresh: will permanently delete:${NC}"
+    for t in "${FRESH_TARGETS[@]}"; do
+      echo -e "  ${RED}  server/$t${NC}"
+    done
+
+    if [[ "$YES" != "true" ]]; then
+      read -r -p "$(echo -e "${YELLOW}This cannot be undone. Continue? [y/N]: ${NC}")" CONFIRM
+      if [[ "$(echo "$CONFIRM" | tr '[:upper:]' '[:lower:]')" != "y" && "$(echo "$CONFIRM" | tr '[:upper:]' '[:lower:]')" != "yes" ]]; then
+        echo -e "${RED}Aborted.${NC}"; exit 1
+      fi
+    fi
+
+    [[ -f "$SERVER_DIR/dejaq.db" ]]     && rm -f "$SERVER_DIR/dejaq.db"     && echo -e "  Deleted dejaq.db"
+    [[ -f "$SERVER_DIR/dejaq_stats.db" ]] && rm -f "$SERVER_DIR/dejaq_stats.db" && echo -e "  Deleted dejaq_stats.db"
+    [[ -d "$SERVER_DIR/chroma_data" ]]  && rm -rf "$SERVER_DIR/chroma_data" && echo -e "  Deleted chroma_data/"
+    echo -e "  ${GREEN}Fresh start: data cleared${NC}"
+  fi
+fi
+
 # ── 0. Database migrations ──────────────────────────────────────────────────
 echo -e "${CYAN}[0/5] Applying database migrations...${NC}"
 "$ALEMBIC" upgrade head &>"$LOG_DIR/alembic.log"
@@ -650,11 +700,11 @@ fi
 echo -e "  ${GREEN}Celery beat running (PID $CELERY_BEAT_PID) — eviction runs every 30 min${NC}"
 
 # ── 5. FastAPI ──────────────────────────────────────────────────────────────
+# Bind to 0.0.0.0 so the data plane (/v1/*) is reachable over the LAN.
+# The AdminLoopbackMiddleware blocks non-loopback peers on /admin/v1/* in-app.
 echo -e "${CYAN}[5/5] Starting FastAPI...${NC}"
 free_port 8000
-UVICORN_HOST="127.0.0.1"
-[[ "$LAN_MODE" == "true" ]] && UVICORN_HOST="0.0.0.0"
-"$UVICORN" app.main:app --reload --host "$UVICORN_HOST" &>"$LOG_DIR/uvicorn.log" &
+"$UVICORN" app.main:app --host "${DEJAQ_BIND_HOST:-0.0.0.0}" --reload &>"$LOG_DIR/uvicorn.log" &
 UVICORN_PID=$!
 sleep 2
 if ! kill -0 "$UVICORN_PID" 2>/dev/null; then
@@ -679,26 +729,24 @@ fi
 
 echo ""
 echo -e "${GREEN}✓ DejaQ running (${STACK})${NC}"
-[[ "$RUN_BACKEND" == "true" ]]   && echo -e "  API:         http://127.0.0.1:8000"
-[[ "$RUN_BACKEND" == "true" ]]   && echo -e "  ChromaDB:    http://127.0.0.1:8001"
-[[ "$RUN_DASHBOARD" == "true" ]] && echo -e "  Dashboard:   http://localhost:3000/dashboard"
-[[ "$RUN_CHAT" == "true" ]]      && echo -e "  Chat:        http://localhost:4000"
-[[ "$RUN_BACKEND" == "true" ]]   && echo -e "  Mode:        $MODE"
-[[ "$RUN_BACKEND" == "true" ]]   && echo -e "  Stats:       cd server && uv run dejaq-admin stats"
-echo -e "  Logs:        $LOG_DIR/"
+[[ "$RUN_BACKEND" == "true" ]]   && echo -e "  Data plane (/v1):       http://0.0.0.0:8000   — LAN-accessible, key-protected"
+[[ "$RUN_BACKEND" == "true" ]]   && echo -e "  Admin API (/admin/v1):  127.0.0.1 only        — loopback-restricted"
+[[ "$RUN_BACKEND" == "true" ]]   && echo -e "  ChromaDB:               http://127.0.0.1:8001"
+[[ "$RUN_DASHBOARD" == "true" ]] && echo -e "  Dashboard:              http://127.0.0.1:3000/dashboard  — loopback-only"
+[[ "$RUN_CHAT" == "true" ]]      && echo -e "  Chat:                   http://localhost:4000"
+[[ "$RUN_BACKEND" == "true" ]]   && echo -e "  Mode:                   $MODE"
+[[ "$RUN_BACKEND" == "true" ]]   && echo -e "  Stats:                  cd server && uv run dejaq-admin stats"
+echo -e "  Logs:                   $LOG_DIR/"
+if [[ "$RUN_BACKEND" == "true" ]]; then
+  echo -e "  Remote admin? Run on your machine: ssh -L 3000:localhost:3000 -L 8000:localhost:8000 user@server"
+fi
 if [[ "$RUN_BACKEND" != "true" ]]; then
   echo -e "  ${CYAN}Client mode: set the DejaQ server in chat Settings (or DEJAQ_API_BASE_URL${NC}"
   echo -e "  ${CYAN}in chat/.env.local), plus a valid DEJAQ_API_KEY for that server.${NC}"
 fi
-if [[ "$LAN_MODE" == "true" ]]; then
-  echo -e "  ${CYAN}LAN access:${NC}"
-  [[ "$RUN_CHAT" == "true" ]]    && echo -e "    Chat:      http://$LAN_IP:4000"
-  [[ "$RUN_BACKEND" == "true" ]] && echo -e "    API:       http://$LAN_IP:8000"
+if [[ "$LAN_MODE" == "true" && "$RUN_CHAT" == "true" ]]; then
+  echo -e "  ${CYAN}LAN chat:               http://$LAN_IP:4000${NC}"
   echo -e "  ${YELLOW}Note: allow access if the Windows Defender Firewall popup appears (first run).${NC}"
-  if [[ "$RUN_BACKEND" == "true" ]]; then
-    echo -e "  ${YELLOW}Warning: AUTH_MODE=local leaves /admin/v1/* unauthenticated — anyone on this${NC}"
-    echo -e "  ${YELLOW}network can hit the admin API on port 8000. Use --lan only on trusted networks.${NC}"
-  fi
 fi
 echo -e "\n${YELLOW}Press Ctrl+C to stop all services.${NC}\n"
 

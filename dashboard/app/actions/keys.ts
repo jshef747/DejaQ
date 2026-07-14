@@ -5,19 +5,19 @@ import { apiFetch } from "@/lib/api";
 import type { ApiKeyCreated, ApiKeyDeleted, ApiKeyItem } from "@/lib/types";
 import { responseErrorMessage } from "./errors";
 
-export async function listKeys(orgSlug: string): Promise<ApiKeyItem[]> {
-  const res = await apiFetch(`/admin/v1/orgs/${encodeURIComponent(orgSlug)}/keys`);
+export async function listKeys(workspaceSlug: string): Promise<ApiKeyItem[]> {
+  const res = await apiFetch(`/admin/v1/workspaces/${encodeURIComponent(workspaceSlug)}/keys`);
   if (!res.ok) throw new Error(`Failed to load API keys (${res.status})`);
   return res.json() as Promise<ApiKeyItem[]>;
 }
 
 export async function generateKey(
-  orgSlug: string,
+  workspaceSlug: string,
   force = false,
 ): Promise<{ ok: true; key: ApiKeyCreated } | { ok: false; error: string; conflict?: true }> {
   let res: Response;
   try {
-    const url = `/admin/v1/orgs/${encodeURIComponent(orgSlug)}/keys${force ? "?force=true" : ""}`;
+    const url = `/admin/v1/workspaces/${encodeURIComponent(workspaceSlug)}/keys${force ? "?force=true" : ""}`;
     res = await apiFetch(url, { method: "POST" });
   } catch (e) {
     return { ok: false, error: (e as Error).message };

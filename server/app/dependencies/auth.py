@@ -11,17 +11,17 @@ logger = logging.getLogger("dejaq.dependencies.auth")
 _bearer = HTTPBearer(auto_error=False)
 
 
-class ResolvedOrg(NamedTuple):
-    org_slug: str
-    org_id: int
+class ResolvedWorkspace(NamedTuple):
+    workspace_slug: str
+    workspace_id: int
 
 
 def require_org_key(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
-) -> ResolvedOrg:
-    """FastAPI dependency: resolve Bearer token to an org via the key cache.
+) -> ResolvedWorkspace:
+    """FastAPI dependency: resolve Bearer token to a workspace via the key cache.
 
-    Returns ResolvedOrg(org_slug, org_id) on success.
+    Returns ResolvedWorkspace(workspace_slug, workspace_id) on success.
     Raises 401 if the token is missing, unrecognized, or revoked.
     """
     if credentials is None:
@@ -41,5 +41,5 @@ def require_org_key(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    org_slug, org_id = resolved
-    return ResolvedOrg(org_slug=org_slug, org_id=org_id)
+    workspace_slug, workspace_id = resolved
+    return ResolvedWorkspace(workspace_slug=workspace_slug, workspace_id=workspace_id)

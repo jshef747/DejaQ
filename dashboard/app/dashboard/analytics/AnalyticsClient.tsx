@@ -9,7 +9,7 @@ import EmptyState from "@/components/ui/EmptyState";
 import type { DeptStatsReport, DeptStatsItem } from "@/lib/types";
 
 interface AnalyticsClientProps {
-  orgSlug: string;
+  workspaceSlug: string;
   range: string;
   deptStats: DeptStatsReport;
   error: string | null;
@@ -136,7 +136,7 @@ function hitRateColor(rate: number) {
   return "var(--amber)";
 }
 
-export default function AnalyticsClient({ orgSlug, range, deptStats, error }: AnalyticsClientProps) {
+export default function AnalyticsClient({ workspaceSlug, range, deptStats, error }: AnalyticsClientProps) {
   const router = useRouter();
   const [sortCol, setSortCol] = useState<SortCol>("requests");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
@@ -187,7 +187,7 @@ export default function AnalyticsClient({ orgSlug, range, deptStats, error }: An
     const csv = rows.map((r) => r.join(",")).join("\n");
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
-    a.download = `dejaq-analytics-${orgSlug}-${range}.csv`;
+    a.download = `dejaq-analytics-${workspaceSlug}-${range}.csv`;
     a.click();
   }
 
@@ -195,19 +195,19 @@ export default function AnalyticsClient({ orgSlug, range, deptStats, error }: An
     <div className="ds-page" style={{ overflowY: "auto" }}>
       <SectionHeader
         title="Analytics"
-        subtitle={`Cache performance for ${orgSlug} · ${rangeLabel}`}
+        subtitle={`Cache performance for ${workspaceSlug} · ${rangeLabel}`}
         action={
           <>
             <div style={{ display: "flex", gap: 4 }}>
               {RANGES.map((r) => (
                 <Button key={r} size="sm"
                   style={{ background: range === r ? "var(--bg-3)" : "var(--bg-2)", color: range === r ? "var(--fg)" : "var(--fg-dim)", borderColor: range === r ? "var(--border-2)" : "var(--border)" }}
-                  onClick={() => router.push(`/dashboard/analytics?org=${orgSlug}&range=${r}`)}>
+                  onClick={() => router.push(`/dashboard/analytics?workspace=${workspaceSlug}&range=${r}`)}>
                   {r}
                 </Button>
               ))}
             </div>
-            <Button onClick={() => router.push(`/dashboard/analytics?org=${orgSlug}&range=${range}`)}>
+            <Button onClick={() => router.push(`/dashboard/analytics?workspace=${workspaceSlug}&range=${range}`)}>
               <RefreshCw size={11} />Refresh
             </Button>
             <Button onClick={exportCSV}>

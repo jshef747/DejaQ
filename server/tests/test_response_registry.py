@@ -45,8 +45,8 @@ def test_response_registry_registers_and_validates_interaction(tmp_path):
     async def run():
         await registry.init()
         interaction = await registry.register(
-            org_id=42,
-            org_slug="acme",
+            workspace_id=42,
+            workspace_slug="acme",
             department="support",
             cache_namespace="acme__support",
             served_tier="local",
@@ -61,8 +61,8 @@ def test_response_registry_registers_and_validates_interaction(tmp_path):
 
     assert interaction.interaction_id
     assert found is not None
-    assert found.org_id == 42
-    assert found.org_slug == "acme"
+    assert found.workspace_id == 42
+    assert found.workspace_slug == "acme"
     assert found.department == "support"
     assert found.cache_namespace == "acme__support"
     assert found.served_tier == "local"
@@ -78,8 +78,8 @@ def test_response_registry_ownership_validation(tmp_path):
     async def run():
         await registry.init()
         interaction = await registry.register(
-            org_id=7,
-            org_slug="acme",
+            workspace_id=7,
+            workspace_slug="acme",
             department="support",
             cache_namespace="acme__support",
             served_tier="cache",
@@ -88,29 +88,29 @@ def test_response_registry_ownership_validation(tmp_path):
         )
         same_owner = await registry.validate_owner(
             interaction.interaction_id,
-            org_id=7,
-            org_slug="acme",
+            workspace_id=7,
+            workspace_slug="acme",
             department="support",
         )
-        wrong_org = await registry.validate_owner(
+        wrong_workspace = await registry.validate_owner(
             interaction.interaction_id,
-            org_id=8,
-            org_slug="globex",
+            workspace_id=8,
+            workspace_slug="globex",
             department="support",
         )
         wrong_department = await registry.validate_owner(
             interaction.interaction_id,
-            org_id=7,
-            org_slug="acme",
+            workspace_id=7,
+            workspace_slug="acme",
             department="sales",
         )
         await registry.close()
-        return same_owner, wrong_org, wrong_department
+        return same_owner, wrong_workspace, wrong_department
 
-    same_owner, wrong_org, wrong_department = asyncio.run(run())
+    same_owner, wrong_workspace, wrong_department = asyncio.run(run())
 
     assert same_owner is not None
-    assert wrong_org is None
+    assert wrong_workspace is None
     assert wrong_department is None
 
 
@@ -122,8 +122,8 @@ def test_response_registry_duplicate_escalation_guard(tmp_path):
     async def run():
         await registry.init()
         interaction = await registry.register(
-            org_id=7,
-            org_slug="acme",
+            workspace_id=7,
+            workspace_slug="acme",
             department="support",
             cache_namespace="acme__support",
             served_tier="local",

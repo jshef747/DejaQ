@@ -18,8 +18,8 @@ class _KeyCache:
 
     Loaded from SQLite on first request; refreshed every KEY_CACHE_TTL seconds.
     Structure:
-        _keys:  token → (org_slug, org_id)
-        _depts: (org_id, dept_slug) → cache_namespace
+        _keys:  token → (workspace_slug, workspace_id)
+        _depts: (workspace_id, dept_slug) → cache_namespace
     """
 
     def __init__(self, ttl: int) -> None:
@@ -27,7 +27,7 @@ class _KeyCache:
         self._loaded_at: float = 0.0
         self._keys: dict[str, tuple[str, int]] = {}
         self._depts: dict[tuple[int, str], str] = {}
-        self._org_slugs: dict[int, str] = {}
+        self._workspace_slugs: dict[int, str] = {}
 
     def _is_stale(self) -> bool:
         return (time.monotonic() - self._loaded_at) >= self._ttl
@@ -35,36 +35,36 @@ class _KeyCache:
     def _refresh(self) -> None:
         from app.db.models.api_key import ApiKey
         from app.db.models.department import Department
-        from app.db.models.org import Organization
+        from app.db.models.workspace import Workspace
         from app.db.session import get_session
 
         new_keys: dict[str, tuple[str, int]] = {}
         new_depts: dict[tuple[int, str], str] = {}
-        new_org_slugs: dict[int, str] = {}
+        new_workspace_slugs: dict[int, str] = {}
 
         try:
             with get_session() as session:
                 rows = (
-                    session.query(ApiKey, Organization)
-                    .join(Organization, ApiKey.org_id == Organization.id)
+                    session.query(ApiKey, Workspace)
+                    .join(Workspace, ApiKey.workspace_id == Workspace.id)
                     .filter(ApiKey.revoked_at.is_(None))
                     .all()
                 )
-                for api_key, org in rows:
-                    new_keys[api_key.token] = (org.slug, org.id)
-                    new_org_slugs[org.id] = org.slug
+                for api_key, workspace in rows:
+                    new_keys[api_key.token] = (workspace.slug, workspace.id)
+                    new_workspace_slugs[workspace.id] = workspace.slug
 
                 depts = session.query(Department).all()
                 for dept in depts:
-                    new_depts[(dept.org_id, dept.slug)] = dept.cache_namespace
-                    if dept.org_id not in new_org_slugs:
-                        org_row = session.query(Organization).filter_by(id=dept.org_id).first()
-                        if org_row:
-                            new_org_slugs[dept.org_id] = org_row.slug
+                    new_depts[(dept.workspace_id, dept.slug)] = dept.cache_namespace
+                    if dept.workspace_id not in new_workspace_slugs:
+                        ws_row = session.query(Workspace).filter_by(id=dept.workspace_id).first()
+                        if ws_row:
+                            new_workspace_slugs[dept.workspace_id] = ws_row.slug
 
             self._keys = new_keys
             self._depts = new_depts
-            self._org_slugs = new_org_slugs
+            self._workspace_slugs = new_workspace_slugs
             self._loaded_at = time.monotonic()
             logger.debug(
                 "Key cache refreshed: %d active keys, %d departments",
@@ -79,33 +79,33 @@ class _KeyCache:
             self._refresh()
 
     def resolve(self, token: str) -> tuple[str, int] | None:
-        """Return (org_slug, org_id) for an active token, or None if unknown."""
+        """Return (workspace_slug, workspace_id) for an active token, or None if unknown."""
         self._ensure_fresh()
         return self._keys.get(token)
 
-    def namespace(self, org_id: int, org_slug: str, dept_slug: str | None) -> str:
-        """Return cache_namespace for the given org+dept, or the org default."""
+    def namespace(self, workspace_id: int, workspace_slug: str, dept_slug: str | None) -> str:
+        """Return cache_namespace for the given workspace+dept, or the workspace default."""
         if dept_slug:
-            ns = self._depts.get((org_id, dept_slug))
+            ns = self._depts.get((workspace_id, dept_slug))
             if ns:
                 return ns
             logger.warning(
-                "Department slug '%s' not found under org '%s'; falling back to default namespace",
+                "Department slug '%s' not found under workspace '%s'; falling back to default namespace",
                 dept_slug,
-                org_slug,
+                workspace_slug,
             )
-        return f"{org_slug}--default"
+        return f"{workspace_slug}--default"
 
 
 _KEY_CACHE = _KeyCache(ttl=KEY_CACHE_TTL)
 
 
 class ApiKeyMiddleware(BaseHTTPMiddleware):
-    """Resolve org and cache namespace from Bearer token + X-DejaQ-Department header.
+    """Resolve workspace and cache namespace from Bearer token + X-DejaQ-Department header.
 
     Sets on request.state:
         api_key (str | None): raw token
-        org_slug (str): org slug, or "anonymous"
+        workspace_slug (str): workspace slug, or "anonymous"
         cache_namespace (str): ChromaDB collection name to use
     """
 
@@ -114,8 +114,8 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         api_key: str | None = None
-        org_slug = "anonymous"
-        org_id: int | None = None
+        workspace_slug = "anonymous"
+        workspace_id: int | None = None
         cache_namespace = _ANONYMOUS_NAMESPACE
 
         auth_header = request.headers.get("Authorization", "")
@@ -125,9 +125,9 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
                 api_key = parts[1]
                 resolved = _KEY_CACHE.resolve(api_key)
                 if resolved:
-                    org_slug, org_id = resolved
+                    workspace_slug, workspace_id = resolved
                     dept_slug = request.headers.get("X-DejaQ-Department") or None
-                    cache_namespace = _KEY_CACHE.namespace(org_id, org_slug, dept_slug)
+                    cache_namespace = _KEY_CACHE.namespace(workspace_id, workspace_slug, dept_slug)
                 else:
                     redacted = api_key[:8] + "..." if len(api_key) > 8 else api_key
                     logger.warning("Unrecognized API key: %s — serving as anonymous", redacted)
@@ -138,7 +138,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
                 )
 
         request.state.api_key = api_key
-        request.state.org_slug = org_slug
-        request.state.org_id = org_id
+        request.state.workspace_slug = workspace_slug
+        request.state.workspace_id = workspace_id
         request.state.cache_namespace = cache_namespace
         return await call_next(request)

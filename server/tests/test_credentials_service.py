@@ -26,20 +26,20 @@ def test_credential_service_encrypts_masks_and_round_trips(
     isolated_org_db,
     credential_key,
 ):
-    from app.db.models.org import Organization
+    from app.db.models.workspace import Workspace
     from app.db.session import get_session
     from app.services.credential_service import CredentialService
 
     service = CredentialService()
     with get_session() as session:
-        org = Organization(name="Acme", slug="acme")
-        session.add(org)
+        ws = Workspace(name="Acme", slug="acme")
+        session.add(ws)
         session.flush()
-        row = service.upsert(session, org.id, "google", "AIzaFoo123Bar")
+        row = service.upsert(session, ws.id, "google", "AIzaFoo123Bar")
 
         assert row.encrypted_key != "AIzaFoo123Bar"
-        assert service.get_decrypted_key(session, org.id, "google") == "AIzaFoo123Bar"
-        assert service.list_masked(session, org.id)[0]["key_preview"] == "AIza****3Bar"
+        assert service.get_decrypted_key(session, ws.id, "google") == "AIzaFoo123Bar"
+        assert service.list_masked(session, ws.id)[0]["key_preview"] == "AIza****3Bar"
 
 
 def test_credential_service_fully_masks_short_keys(credential_key):
@@ -52,21 +52,21 @@ def test_credential_provider_check_constraint_rejects_invalid_provider(isolated_
     from sqlalchemy import text
     from sqlalchemy.exc import IntegrityError
 
-    from app.db.models.org import Organization
+    from app.db.models.workspace import Workspace
     from app.db.session import get_session
 
     with get_session() as session:
-        org = Organization(name="Acme", slug="acme")
-        session.add(org)
+        ws = Workspace(name="Acme", slug="acme")
+        session.add(ws)
         session.flush()
-        org_id = org.id
+        workspace_id = ws.id
 
     with pytest.raises(IntegrityError):
         with get_session() as session:
             session.execute(
                 text(
-                    "INSERT INTO org_provider_credentials "
-                    "(org_id, provider, encrypted_key) VALUES (:org_id, :provider, :encrypted_key)"
+                    "INSERT INTO workspace_provider_credentials "
+                    "(workspace_id, provider, encrypted_key) VALUES (:workspace_id, :provider, :encrypted_key)"
                 ),
-                {"org_id": org_id, "provider": "invalid_provider", "encrypted_key": "ciphertext"},
+                {"workspace_id": workspace_id, "provider": "invalid_provider", "encrypted_key": "ciphertext"},
             )

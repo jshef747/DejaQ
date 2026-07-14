@@ -2,24 +2,24 @@ from collections.abc import Mapping, Set
 
 from sqlalchemy.orm import Session
 
-from app.db.models.org_llm_config import OrgLlmConfig
+from app.db.models.workspace_llm_config import WorkspaceLlmConfig
 
 _CONFIG_FIELDS = {"external_model", "local_model", "routing_threshold"}
 
 
-def get_for_org(session: Session, org_id: int) -> OrgLlmConfig | None:
-    return session.query(OrgLlmConfig).filter_by(org_id=org_id).first()
+def get_for_workspace(session: Session, workspace_id: int) -> WorkspaceLlmConfig | None:
+    return session.query(WorkspaceLlmConfig).filter_by(workspace_id=workspace_id).first()
 
 
-def upsert_for_org(
+def upsert_for_workspace(
     session: Session,
-    org_id: int,
+    workspace_id: int,
     payload: Mapping[str, object],
     fields_set: Set[str],
-) -> OrgLlmConfig:
-    row = get_for_org(session, org_id)
+) -> WorkspaceLlmConfig:
+    row = get_for_workspace(session, workspace_id)
     if row is None:
-        row = OrgLlmConfig(org_id=org_id)
+        row = WorkspaceLlmConfig(workspace_id=workspace_id)
         session.add(row)
 
     for field in fields_set:

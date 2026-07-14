@@ -4,7 +4,7 @@ import { apiFetch } from "@/lib/api";
 import type { DeptStatsReport } from "@/lib/types";
 
 export async function listDeptStatsRange(
-  orgSlug: string,
+  workspaceSlug: string,
   from?: string,
   to?: string,
 ): Promise<DeptStatsReport> {
@@ -13,7 +13,7 @@ export async function listDeptStatsRange(
   if (to) params.set("to", to);
   const qs = params.size ? `?${params}` : "";
   const res = await apiFetch(
-    `/admin/v1/stats/orgs/${encodeURIComponent(orgSlug)}/departments${qs}`,
+    `/admin/v1/stats/workspaces/${encodeURIComponent(workspaceSlug)}/departments${qs}`,
   );
   if (!res.ok) throw new Error(`Failed to load stats (${res.status})`);
   return res.json() as Promise<DeptStatsReport>;

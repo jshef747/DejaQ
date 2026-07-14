@@ -128,7 +128,7 @@ async def _cache_response_id_for_escalation(
         clean_query=clean_query,
         answer=answer,
         original_query=query,
-        tenant_id=interaction.org_slug,
+        tenant_id=interaction.workspace_slug,
         cache_namespace=interaction.cache_namespace,
     )
     return f"{interaction.cache_namespace}:{_doc_id(clean_query)}"
@@ -145,7 +145,7 @@ async def _log_escalation_usage(
 ) -> None:
     try:
         await request_logger.log(
-            interaction.org_slug,
+            interaction.workspace_slug,
             interaction.department,
             latency_ms,
             False,
@@ -221,8 +221,8 @@ async def _escalate_to_local(
             history=history,
             answer=answer,
         ),
-        org_id=interaction.org_id,
-        org_slug=interaction.org_slug,
+        workspace_id=interaction.workspace_id,
+        workspace_slug=interaction.workspace_slug,
         department=interaction.department,
         cache_namespace=interaction.cache_namespace,
         served_tier="local",
@@ -255,14 +255,14 @@ async def _escalate_to_external(
     history: list[dict],
     system_prompt: str | None,
 ) -> EscalationResult:
-    if interaction.org_id is None:
+    if interaction.workspace_id is None:
         return EscalationResult(escalation_status="no_credential")
 
     try:
-        config = llm_config_service.read_for_org(interaction.org_slug)
+        config = llm_config_service.read_for_workspace(interaction.workspace_slug)
         provider = provider_for_model(config.external_model)
         with get_session() as session:
-            api_key = CredentialService().get_decrypted_key(session, interaction.org_id, provider)
+            api_key = CredentialService().get_decrypted_key(session, interaction.workspace_id, provider)
     except ValueError:
         logger.warning("External escalation credential/config unavailable interaction_id=%s", interaction.interaction_id)
         return EscalationResult(escalation_status="no_credential")
@@ -304,8 +304,8 @@ async def _escalate_to_external(
             history=history,
             answer=response.text,
         ),
-        org_id=interaction.org_id,
-        org_slug=interaction.org_slug,
+        workspace_id=interaction.workspace_id,
+        workspace_slug=interaction.workspace_slug,
         department=interaction.department,
         cache_namespace=interaction.cache_namespace,
         served_tier="external",

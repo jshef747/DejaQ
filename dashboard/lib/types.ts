@@ -1,4 +1,4 @@
-export type OrgItem = {
+export type WorkspaceItem = {
   id: number;
   name: string;
   slug: string;
@@ -7,7 +7,7 @@ export type OrgItem = {
 
 export type DepartmentItem = {
   id: number;
-  org_slug: string;
+  workspace_slug: string;
   name: string;
   slug: string;
   cache_namespace: string;
@@ -27,7 +27,7 @@ export type StatsMetrics = {
 };
 
 export type DeptStatsItem = {
-  org: string;
+  workspace: string;
   department: string;
   department_name: string;
   requests: number;
@@ -42,7 +42,7 @@ export type DeptStatsItem = {
 };
 
 export type DeptStatsReport = {
-  org: string;
+  workspace: string;
   items: DeptStatsItem[];
   total: DeptStatsItem;
 };
@@ -56,7 +56,7 @@ export type ApiKeyItem = {
 
 export type ApiKeyCreated = {
   id: number;
-  org_slug: string;
+  workspace_slug: string;
   token: string;
   created_at: string;
 };

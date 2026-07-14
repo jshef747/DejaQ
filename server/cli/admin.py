@@ -20,26 +20,32 @@ _SYSTEM_CTX = ManagementAuthContext.system()
 @click.group()
 @click.pass_context
 def cli(ctx: click.Context) -> None:
-    """DejaQ Admin — manage orgs, departments, and cache namespaces."""
+    """DejaQ Admin — manage workspaces, departments, and cache namespaces."""
     print_header()
 
 
 # ---------------------------------------------------------------------------
-# org commands
+# workspace commands
 # ---------------------------------------------------------------------------
 
 @cli.group()
+def workspace() -> None:
+    """Manage workspaces."""
+
+
+# Keep legacy 'org' alias for one release to avoid breaking existing operator scripts.
+@cli.group(hidden=True)
 def org() -> None:
-    """Manage organizations."""
+    """[Deprecated] Use 'workspace' instead."""
 
 
-@org.command("create")
-@click.option("--name", required=True, help="Display name for the organization.")
-def org_create(name: str) -> None:
-    """Create a new organization."""
-    with console.status("[cyan]Creating organization…[/cyan]", spinner="dots"):
+@workspace.command("create")
+@click.option("--name", required=True, help="Display name for the workspace.")
+def workspace_create(name: str) -> None:
+    """Create a new workspace."""
+    with console.status("[cyan]Creating workspace…[/cyan]", spinner="dots"):
         try:
-            result = admin_service.create_org(name, ctx=_SYSTEM_CTX)
+            result = admin_service.create_workspace(name, ctx=_SYSTEM_CTX)
         except admin_service.DuplicateSlug as e:
             print_error(str(e))
             sys.exit(1)
@@ -52,40 +58,40 @@ def org_create(name: str) -> None:
     content.append(f"  slug  ", style="dim")
     content.append(f"{result.slug}", style="bright_cyan")
 
-    console.print(Panel(content, title="[green]Organization created[/green]", border_style="green", padding=(0, 2)))
+    console.print(Panel(content, title="[green]Workspace created[/green]", border_style="green", padding=(0, 2)))
 
 
-@org.command("list")
-def org_list() -> None:
-    """List all organizations."""
-    orgs = admin_service.list_orgs(ctx=_SYSTEM_CTX)
+@workspace.command("list")
+def workspace_list() -> None:
+    """List all workspaces."""
+    workspaces = admin_service.list_workspaces(ctx=_SYSTEM_CTX)
 
     print_table(
-        "Organizations",
+        "Workspaces",
         ["ID", "Name", "Slug", "Created"],
         [
-            [str(o.id), o.name, o.slug, o.created_at.strftime("%Y-%m-%d %H:%M")]
-            for o in orgs
+            [str(w.id), w.name, w.slug, w.created_at.strftime("%Y-%m-%d %H:%M")]
+            for w in workspaces
         ],
     )
 
 
-@org.command("delete")
-@click.option("--slug", required=True, help="Slug of the organization to delete.")
-def org_delete(slug: str) -> None:
-    """Delete an organization and all its departments."""
+@workspace.command("delete")
+@click.option("--slug", required=True, help="Slug of the workspace to delete.")
+def workspace_delete(slug: str) -> None:
+    """Delete a workspace and all its departments."""
     # Preview cascade
     try:
-        depts = admin_service.list_departments(org_slug=slug, ctx=_SYSTEM_CTX)
-    except admin_service.OrgNotFound:
-        print_error(f"Organization '{slug}' not found.")
+        depts = admin_service.list_departments(workspace_slug=slug, ctx=_SYSTEM_CTX)
+    except admin_service.WorkspaceNotFound:
+        print_error(f"Workspace '{slug}' not found.")
         sys.exit(1)
 
     if depts:
         dept_list = "\n".join(f"  • [dim cyan]{d.slug}[/dim cyan]" for d in depts)
         console.print(
             Panel(
-                f"[yellow]Deleting org [bold]{slug}[/bold] will also remove {len(depts)} department(s):[/yellow]\n{dept_list}",
+                f"[yellow]Deleting workspace [bold]{slug}[/bold] will also remove {len(depts)} department(s):[/yellow]\n{dept_list}",
                 title="[yellow]Cascade warning[/yellow]",
                 border_style="yellow",
                 padding=(0, 2),
@@ -96,12 +102,36 @@ def org_delete(slug: str) -> None:
             sys.exit(0)
 
     with console.status("[cyan]Deleting…[/cyan]", spinner="dots"):
-        result = admin_service.delete_org(slug, ctx=_SYSTEM_CTX)
+        result = admin_service.delete_workspace(slug, ctx=_SYSTEM_CTX)
 
     print_success(
-        f"Organization [bold]{slug}[/bold] deleted"
+        f"Workspace [bold]{slug}[/bold] deleted"
         + (f" (and {result.departments_removed} department(s) removed)." if result.departments_removed else ".")
     )
+
+
+# Legacy aliases (hidden)
+@org.command("create")
+@click.option("--name", required=True, help="Display name for the workspace.")
+def org_create(name: str) -> None:
+    """[Deprecated] Use 'workspace create' instead."""
+    console.print("[yellow]Warning: 'org create' is deprecated. Use 'workspace create'.[/yellow]")
+    workspace_create.callback(name=name)
+
+
+@org.command("list")
+def org_list() -> None:
+    """[Deprecated] Use 'workspace list' instead."""
+    console.print("[yellow]Warning: 'org list' is deprecated. Use 'workspace list'.[/yellow]")
+    workspace_list.callback()
+
+
+@org.command("delete")
+@click.option("--slug", required=True, help="Slug of the workspace to delete.")
+def org_delete(slug: str) -> None:
+    """[Deprecated] Use 'workspace delete' instead."""
+    console.print("[yellow]Warning: 'org delete' is deprecated. Use 'workspace delete'.[/yellow]")
+    workspace_delete.callback(slug=slug)
 
 
 # ---------------------------------------------------------------------------
@@ -114,14 +144,14 @@ def dept() -> None:
 
 
 @dept.command("create")
-@click.option("--org", "org_slug", required=True, help="Parent org slug.")
+@click.option("--workspace", "workspace_slug", required=True, help="Parent workspace slug.")
 @click.option("--name", required=True, help="Display name for the department.")
-def dept_create(org_slug: str, name: str) -> None:
-    """Create a new department under an org."""
+def dept_create(workspace_slug: str, name: str) -> None:
+    """Create a new department under a workspace."""
     with console.status("[cyan]Creating department…[/cyan]", spinner="dots"):
         try:
-            result = admin_service.create_department(org_slug, name, ctx=_SYSTEM_CTX)
-        except (admin_service.OrgNotFound, admin_service.DuplicateSlug) as e:
+            result = admin_service.create_department(workspace_slug, name, ctx=_SYSTEM_CTX)
+        except (admin_service.WorkspaceNotFound, admin_service.DuplicateSlug) as e:
             print_error(str(e))
             sys.exit(1)
 
@@ -139,18 +169,18 @@ def dept_create(org_slug: str, name: str) -> None:
 
 
 @dept.command("list")
-@click.option("--org", "org_slug", default=None, help="Filter by org slug.")
-def dept_list(org_slug: str | None) -> None:
-    """List departments, optionally filtered by org."""
+@click.option("--workspace", "workspace_slug", default=None, help="Filter by workspace slug.")
+def dept_list(workspace_slug: str | None) -> None:
+    """List departments, optionally filtered by workspace."""
     try:
-        depts = admin_service.list_departments(org_slug=org_slug, ctx=_SYSTEM_CTX)
-    except admin_service.OrgNotFound as e:
+        depts = admin_service.list_departments(workspace_slug=workspace_slug, ctx=_SYSTEM_CTX)
+    except admin_service.WorkspaceNotFound as e:
         print_error(str(e))
         sys.exit(1)
 
-    if org_slug:
+    if workspace_slug:
         print_table(
-            f"Departments — {org_slug}",
+            f"Departments — {workspace_slug}",
             ["ID", "Name", "Slug", "Cache Namespace", "Created"],
             [
                 [
@@ -166,11 +196,11 @@ def dept_list(org_slug: str | None) -> None:
     else:
         print_table(
             "All Departments",
-            ["ID", "Org", "Name", "Slug", "Cache Namespace", "Created"],
+            ["ID", "Workspace", "Name", "Slug", "Cache Namespace", "Created"],
             [
                 [
                     str(d.id),
-                    d.org_slug,
+                    d.workspace_slug,
                     d.name,
                     d.slug,
                     d.cache_namespace,
@@ -182,19 +212,19 @@ def dept_list(org_slug: str | None) -> None:
 
 
 @dept.command("delete")
-@click.option("--org", "org_slug", required=True, help="Parent org slug.")
+@click.option("--workspace", "workspace_slug", required=True, help="Parent workspace slug.")
 @click.option("--slug", required=True, help="Department slug to delete.")
-def dept_delete(org_slug: str, slug: str) -> None:
+def dept_delete(workspace_slug: str, slug: str) -> None:
     """Delete a department."""
     try:
         dept_data = next(
-            (dept for dept in admin_service.list_departments(org_slug=org_slug, ctx=_SYSTEM_CTX) if dept.slug == slug),
+            (dept for dept in admin_service.list_departments(workspace_slug=workspace_slug, ctx=_SYSTEM_CTX) if dept.slug == slug),
             None,
         )
-    except admin_service.OrgNotFound:
+    except admin_service.WorkspaceNotFound:
         dept_data = None
     if dept_data is None:
-        print_error(f"Department '{slug}' not found under org '{org_slug}'.")
+        print_error(f"Department '{slug}' not found under workspace '{workspace_slug}'.")
         sys.exit(1)
 
     if not Confirm.ask(f"[yellow]Delete department [bold]{slug}[/bold] (namespace: [cyan]{dept_data.cache_namespace}[/cyan])?[/yellow]"):
@@ -202,7 +232,7 @@ def dept_delete(org_slug: str, slug: str) -> None:
         sys.exit(0)
 
     with console.status("[cyan]Deleting…[/cyan]", spinner="dots"):
-        deleted = admin_service.delete_department(org_slug, slug, ctx=_SYSTEM_CTX)
+        deleted = admin_service.delete_department(workspace_slug, slug, ctx=_SYSTEM_CTX)
 
     print_success(
         f"Department [bold]{slug}[/bold] deleted. "
@@ -216,22 +246,22 @@ def dept_delete(org_slug: str, slug: str) -> None:
 
 @cli.group()
 def key() -> None:
-    """Manage org API keys."""
+    """Manage workspace API keys."""
 
 
 @key.command("generate")
-@click.option("--org", "org_slug", required=True, help="Org slug to generate a key for.")
+@click.option("--workspace", "workspace_slug", required=True, help="Workspace slug to generate a key for.")
 @click.option("--force", is_flag=True, default=False, help="Revoke existing active key and generate a new one.")
-def key_generate(org_slug: str, force: bool) -> None:
-    """Generate an API key for an org."""
+def key_generate(workspace_slug: str, force: bool) -> None:
+    """Generate an API key for a workspace."""
     try:
-        new_key = admin_service.generate_key(org_slug, force=force, ctx=_SYSTEM_CTX)
-    except admin_service.OrgNotFound:
-        print_error(f"Organization '{org_slug}' not found.")
+        new_key = admin_service.generate_key(workspace_slug, force=force, ctx=_SYSTEM_CTX)
+    except admin_service.WorkspaceNotFound:
+        print_error(f"Workspace '{workspace_slug}' not found.")
         sys.exit(1)
     except admin_service.ActiveKeyExists as e:
         print_error(
-            f"Organization '{org_slug}' already has an active key (id={e.key_id}). "
+            f"Workspace '{workspace_slug}' already has an active key (id={e.key_id}). "
             "Use --force to revoke it and generate a new one."
         )
         sys.exit(1)
@@ -239,8 +269,8 @@ def key_generate(org_slug: str, force: bool) -> None:
     content = Text()
     content.append("  id           ", style="dim")
     content.append(f"{new_key.id}\n", style="bright_white")
-    content.append("  org          ", style="dim")
-    content.append(f"{org_slug}\n", style="bright_white")
+    content.append("  workspace    ", style="dim")
+    content.append(f"{workspace_slug}\n", style="bright_white")
     content.append("  token        ", style="dim")
     content.append(f"{new_key.token}\n", style="bold bright_cyan")
     content.append("  created_at   ", style="dim")
@@ -250,21 +280,21 @@ def key_generate(org_slug: str, force: bool) -> None:
 
 
 @key.command("list")
-@click.option("--org", "org_slug", required=True, help="Org slug to list keys for.")
-def key_list(org_slug: str) -> None:
-    """List all API keys for an org."""
+@click.option("--workspace", "workspace_slug", required=True, help="Workspace slug to list keys for.")
+def key_list(workspace_slug: str) -> None:
+    """List all API keys for a workspace."""
     try:
-        keys = admin_service.list_keys(org_slug, ctx=_SYSTEM_CTX)
-    except admin_service.OrgNotFound:
-        print_error(f"Organization '{org_slug}' not found.")
+        keys = admin_service.list_keys(workspace_slug, ctx=_SYSTEM_CTX)
+    except admin_service.WorkspaceNotFound:
+        print_error(f"Workspace '{workspace_slug}' not found.")
         sys.exit(1)
 
     if not keys:
-        console.print(f"[dim]No API keys found for org '{org_slug}'.[/dim]")
+        console.print(f"[dim]No API keys found for workspace '{workspace_slug}'.[/dim]")
         return
 
     print_table(
-        f"API Keys — {org_slug}",
+        f"API Keys — {workspace_slug}",
         ["ID", "Token", "Created", "Revoked"],
         [
             [

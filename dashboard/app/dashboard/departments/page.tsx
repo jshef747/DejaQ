@@ -1,30 +1,38 @@
 import { redirect } from "next/navigation";
 import Topbar from "@/components/Topbar";
-import { listOrgs } from "@/app/actions/orgs";
+import { listWorkspaces } from "@/app/actions/workspaces";
 import { listDepartments, listDeptStats } from "@/app/actions/departments";
 import DepartmentsClient from "./DepartmentsClient";
-import type { DepartmentItem, DeptStatsItem } from "@/lib/types";
+import type { DepartmentItem, DeptStatsItem, WorkspaceItem } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
 export default async function DepartmentsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ org?: string }>;
+  searchParams: Promise<{ workspace?: string }>;
 }) {
-  const { org } = await searchParams;
+  const { workspace } = await searchParams;
 
-  let orgs: Awaited<ReturnType<typeof listOrgs>> = [];
-  let activeSlug = org;
+  let workspaces: WorkspaceItem[] = [];
+  let activeSlug = workspace;
+  let backendOk = true;
 
   try {
-    orgs = await listOrgs();
+    workspaces = await listWorkspaces();
   } catch {
-    // Fall through — show no-orgs state below
+    backendOk = false;
   }
 
-  if (!activeSlug && orgs.length > 0) {
-    redirect(`/dashboard/departments?org=${orgs[0].slug}`);
+  // If the slug from the URL no longer exists (e.g. workspace was deleted), treat as absent.
+  if (activeSlug && !workspaces.some((w) => w.slug === activeSlug)) {
+    activeSlug = undefined;
+  }
+
+  // Redirect to the first valid workspace when none is selected.
+  // IMPORTANT: redirect() throws NEXT_REDIRECT — must NOT be inside a catch block.
+  if (backendOk && !activeSlug && workspaces.length > 0) {
+    redirect(`/dashboard/departments?workspace=${workspaces[0].slug}`);
   }
 
   if (!activeSlug) {
@@ -34,8 +42,8 @@ export default async function DepartmentsPage({
         <div style={{ padding: "24px 28px", flex: 1 }}>
           <h1 style={{ fontSize: "22px", fontWeight: 600, letterSpacing: "-0.02em", margin: "0 0 20px" }}>Departments</h1>
           <div style={{ background: "var(--bg-2)", border: "1px solid var(--border)", borderRadius: "6px", color: "var(--fg-dim)", fontSize: "12px", padding: "20px 18px" }}>
-            No organizations found. Create one first with{" "}
-            <span style={{ fontFamily: "var(--font-mono)", color: "var(--fg)", fontSize: "11px" }}>dejaq-admin org create</span>
+            No workspaces found. Use the onboarding flow or run{" "}
+            <span style={{ fontFamily: "var(--font-mono)", color: "var(--fg)", fontSize: "11px" }}>dejaq-admin workspace create --name &quot;My Workspace&quot;</span>
             , then come back here.
           </div>
         </div>
@@ -63,10 +71,10 @@ export default async function DepartmentsPage({
 
   return (
     <>
-      <Topbar section="Departments" orgId={activeSlug} />
+      <Topbar section="Departments" workspaceId={activeSlug} />
       <DepartmentsClient
-        orgSlug={activeSlug}
-        orgs={orgs}
+        workspaceSlug={activeSlug}
+        workspaces={workspaces}
         depts={depts}
         statsItems={statsItems}
         error={error}

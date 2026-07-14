@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   BarChart2,
-  Building2,
+  Briefcase,
   Users,
   Key,
   Settings,
@@ -16,23 +16,23 @@ import {
   LogOut,
 } from "lucide-react";
 import { signOut } from "@/app/actions/auth";
-import { listOrgs } from "@/app/actions/orgs";
-import type { OrgItem } from "@/lib/types";
+import { listWorkspaces } from "@/app/actions/workspaces";
+import type { WorkspaceItem } from "@/lib/types";
 
 const CHAT_URL = process.env.NEXT_PUBLIC_CHAT_URL ?? "http://localhost:4000";
 
 const NAV_ITEMS = [
-  { href: "/dashboard/analytics",     label: "Analytics",     Icon: BarChart2 },
-  { href: "/dashboard/organizations", label: "Organizations", Icon: Building2 },
-  { href: "/dashboard/departments",   label: "Departments",   Icon: Users },
-  { href: "/dashboard/tree",          label: "Org Tree",      Icon: GitBranch },
-  { href: "/dashboard/keys",          label: "API Keys",      Icon: Key },
+  { href: "/dashboard/analytics",   label: "Analytics",   Icon: BarChart2 },
+  { href: "/dashboard/workspaces",  label: "Workspaces",  Icon: Briefcase },
+  { href: "/dashboard/departments", label: "Departments", Icon: Users },
+  { href: "/dashboard/tree",        label: "Workspace Tree", Icon: GitBranch },
+  { href: "/dashboard/keys",        label: "API Keys",    Icon: Key },
 ];
 
-const ORG_SCOPED_PATHS = [
+const WORKSPACE_SCOPED_PATHS = [
   "/dashboard/departments",
   "/dashboard/keys",
-  "/dashboard/organizations",
+  "/dashboard/workspaces",
   "/dashboard/settings",
   "/dashboard/tree",
 ];
@@ -45,22 +45,26 @@ export default function Sidebar({ email }: SidebarProps) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const activeOrg = searchParams.get("org") ?? "";
+  const activeWorkspace = searchParams.get("workspace") ?? "";
 
-  const [orgs, setOrgs] = useState<OrgItem[]>([]);
+  const [workspaces, setWorkspaces] = useState<WorkspaceItem[]>([]);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    listOrgs().then(setOrgs).catch(() => {});
+    listWorkspaces().then(setWorkspaces).catch(() => {});
   }, []);
 
   useEffect(() => {
-    if (!activeOrg && orgs.length > 0) {
-      const isScoped = ORG_SCOPED_PATHS.some((p) => pathname.startsWith(p));
-      if (isScoped) router.replace(`${pathname}?org=${orgs[0].slug}`);
+    if (workspaces.length === 0) return;
+    const isScoped = WORKSPACE_SCOPED_PATHS.some((p) => pathname.startsWith(p));
+    if (!isScoped) return;
+    const slugValid = workspaces.some((w) => w.slug === activeWorkspace);
+    // Redirect when there is no workspace selected, or when the selected slug no longer exists.
+    if (!activeWorkspace || !slugValid) {
+      router.replace(`${pathname}?workspace=${workspaces[0].slug}`);
     }
-  }, [activeOrg, orgs, pathname, router]);
+  }, [activeWorkspace, workspaces, pathname, router]);
 
   useEffect(() => {
     if (!dropdownOpen) return;
@@ -74,18 +78,18 @@ export default function Sidebar({ email }: SidebarProps) {
   }, [dropdownOpen]);
 
   function buildHref(base: string) {
-    const isScoped = ORG_SCOPED_PATHS.some((p) => base.startsWith(p));
-    return isScoped && activeOrg ? `${base}?org=${activeOrg}` : base;
+    const isScoped = WORKSPACE_SCOPED_PATHS.some((p) => base.startsWith(p));
+    return isScoped && activeWorkspace ? `${base}?workspace=${activeWorkspace}` : base;
   }
 
-  function switchOrg(slug: string) {
+  function switchWorkspace(slug: string) {
     setDropdownOpen(false);
-    const isScoped = ORG_SCOPED_PATHS.some((p) => pathname.startsWith(p));
-    const target = isScoped ? `${pathname}?org=${slug}` : `/dashboard/departments?org=${slug}`;
+    const isScoped = WORKSPACE_SCOPED_PATHS.some((p) => pathname.startsWith(p));
+    const target = isScoped ? `${pathname}?workspace=${slug}` : `/dashboard/departments?workspace=${slug}`;
     router.push(target);
   }
 
-  const displayOrg = orgs.find((o) => o.slug === activeOrg) ?? orgs[0];
+  const displayWorkspace = workspaces.find((w) => w.slug === activeWorkspace) ?? workspaces[0];
   const initials = email.slice(0, 2).toUpperCase();
 
   return (
@@ -97,40 +101,40 @@ export default function Sidebar({ email }: SidebarProps) {
         <span className="ds-logo-badge">v0</span>
       </div>
 
-      {/* Org switcher */}
+      {/* Workspace switcher */}
       <div ref={dropdownRef} style={{ position: "relative", marginBottom: "10px" }}>
         <button
           className="ds-org-switcher"
-          onClick={() => orgs.length > 1 && setDropdownOpen((v) => !v)}
-          style={{ cursor: orgs.length > 1 ? "pointer" : "default" }}
+          onClick={() => workspaces.length > 1 && setDropdownOpen((v) => !v)}
+          style={{ cursor: workspaces.length > 1 ? "pointer" : "default" }}
         >
           <span className="ds-org-initials">
-            {displayOrg?.name?.[0]?.toUpperCase() ?? "?"}
+            {displayWorkspace?.name?.[0]?.toUpperCase() ?? "?"}
           </span>
-          <span className="ds-org-name">{displayOrg?.name ?? "Select org"}</span>
-          {orgs.length > 1 && <ChevronDown size={12} style={{ color: "var(--fg-dimmer)", flexShrink: 0 }} />}
+          <span className="ds-org-name">{displayWorkspace?.name ?? "Select workspace"}</span>
+          {workspaces.length > 1 && <ChevronDown size={12} style={{ color: "var(--fg-dimmer)", flexShrink: 0 }} />}
         </button>
 
         {dropdownOpen && (
           <div className="ds-org-dropdown">
-            {orgs.map((org) => (
+            {workspaces.map((ws) => (
               <button
-                key={org.slug}
-                onClick={() => switchOrg(org.slug)}
-                className={`ds-nav-item${org.slug === activeOrg ? " active" : ""}`}
+                key={ws.slug}
+                onClick={() => switchWorkspace(ws.slug)}
+                className={`ds-nav-item${ws.slug === activeWorkspace ? " active" : ""}`}
               >
-                <span className="ds-org-initials">{org.name[0].toUpperCase()}</span>
+                <span className="ds-org-initials">{ws.name[0].toUpperCase()}</span>
                 <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {org.name}
+                  {ws.name}
                 </span>
-                {org.slug === activeOrg && <Check size={11} style={{ color: "var(--accent)", flexShrink: 0 }} />}
+                {ws.slug === activeWorkspace && <Check size={11} style={{ color: "var(--accent)", flexShrink: 0 }} />}
               </button>
             ))}
           </div>
         )}
       </div>
 
-      {/* Workspace nav */}
+      {/* Nav */}
       <div className="ds-nav-section">Workspace</div>
       {NAV_ITEMS.map(({ href, label, Icon }) => {
         const isActive = pathname === href || (href !== "/dashboard" && pathname.startsWith(href));

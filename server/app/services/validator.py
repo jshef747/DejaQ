@@ -8,64 +8,86 @@ logger = logging.getLogger("dejaq.services.validator")
 _SYSTEM_PROMPT = (
     "You decide if a CACHED ANSWER can correctly answer a NEW QUESTION.\n"
     "Reply with exactly one word: VALID or INVALID.\n"
-    "VALID = the cached answer already contains EVERY specific fact the new question asks for.\n"
-    "INVALID = the cached answer is missing any requested fact, is about a different entity, or is off-topic.\n"
-    "Two rules:\n"
-    "- MULTIPLE FACTS: If the new question asks for two or more facts (e.g. 'A and B'), "
-    "the answer must contain ALL of them. A partial answer is INVALID.\n"
+    "VALID = the cached answer covers what the new question is asking — same topic, same "
+    "scope, addresses the information need. It does not have to use the exact same words.\n"
+    "INVALID = the cached answer is about a different entity, a clearly different topic, "
+    "or the new question asks for an additional specific fact the answer does not contain.\n"
+    "Three rules:\n"
+    "- PARAPHRASE: A different phrasing of the same question is VALID if the answer "
+    "covers it. Do not penalise word-order or synonym differences.\n"
+    "- MULTIPLE FACTS: If the new question asks for two or more distinct facts (e.g. 'A "
+    "and B'), the answer must contain ALL of them. A partial answer is INVALID.\n"
     "- TONE: Ignore tone, formality, and language style. Casual or slang phrasing that "
     "asks for the same information is VALID if the answer contains it.\n"
-    "When in doubt, choose INVALID."
+    "When in doubt, choose VALID. A wrong INVALID only costs a cache miss; the LLM "
+    "will answer correctly. A wrong INVALID is always recoverable — a wrong VALID is not."
 )
 
 _FEW_SHOTS = [
+    # --- Factoid: same question, rephrased ---
     (
         "CACHED QUESTION: What is the capital of France?\n"
         "CACHED ANSWER: The capital of France is Paris.\n"
         "NEW QUESTION: What is France's capital city?",
         "VALID",
     ),
+    # --- Tone/slang: same information need ---
     (
         "CACHED QUESTION: What is gravity?\n"
         "CACHED ANSWER: Gravity is a fundamental force that attracts objects with mass toward each other.\n"
         "NEW QUESTION: bro what even is gravity and why do things fall",
         "VALID",
     ),
+    # --- CS conceptual: paraphrase → VALID ---
     (
-        "CACHED QUESTION: What is the capital of New Zealand?\n"
-        "CACHED ANSWER: Wellington is the capital city of New Zealand.\n"
-        "NEW QUESTION: How many people live in the capital of New Zealand?",
-        "INVALID",
+        "CACHED QUESTION: why does writing past the end of a malloc'd array not always crash immediately?\n"
+        "CACHED ANSWER: Writing past the end of a malloc'd array is undefined behaviour. It doesn't always "
+        "crash immediately because malloc reserves memory in aligned blocks, so the bytes just past your "
+        "array may belong to the heap's internal bookkeeping or another allocation. The crash is "
+        "non-deterministic and depends on what occupies that memory.\n"
+        "NEW QUESTION: I used malloc for an array and wrote one element past the end but it didn't segfault — why?",
+        "VALID",
     ),
+    # --- CS conceptual: rephrased question, same topic, answer covers it → VALID ---
+    (
+        "CACHED QUESTION: what is the difference between heapify-up and heapify-down in a min-heap?\n"
+        "CACHED ANSWER: heapify-up (also called sift-up or bubble-up) is used after inserting a new element: "
+        "you place the element at the end and swap it upward until the heap property is restored. "
+        "heapify-down (sift-down) is used after removing the root: you replace the root with the last "
+        "element and push it down by swapping with the smaller child until the property is restored.\n"
+        "NEW QUESTION: when do I call heapify-up vs heapify-down in a heap?",
+        "VALID",
+    ),
+    # --- Different entity → INVALID ---
     (
         "CACHED QUESTION: What is the capital of France?\n"
         "CACHED ANSWER: The capital of France is Paris.\n"
         "NEW QUESTION: What is the capital of Germany?",
         "INVALID",
     ),
-    (
-        "CACHED QUESTION: What is the capital of New Zealand?\n"
-        "CACHED ANSWER: Wellington is the capital of New Zealand.\n"
-        "NEW QUESTION: What is the capital and largest city of New Zealand?",
-        "INVALID",
-    ),
+    # --- Missing additional fact → INVALID ---
     (
         "CACHED QUESTION: Who wrote Hamlet?\n"
         "CACHED ANSWER: Hamlet was written by William Shakespeare.\n"
         "NEW QUESTION: Who wrote Hamlet and when was it written?",
         "INVALID",
     ),
+    # --- Related but different topic → INVALID ---
     (
         "CACHED QUESTION: What is machine learning?\n"
-        "CACHED ANSWER: Machine learning is a branch of AI where systems learn from data.\n"
+        "CACHED ANSWER: Machine learning is a branch of AI where systems learn from data to make predictions.\n"
         "NEW QUESTION: What is deep learning?",
         "INVALID",
     ),
+    # --- CS: different topic even though related area → INVALID ---
     (
-        "CACHED QUESTION: What is photosynthesis?\n"
-        "CACHED ANSWER: Photosynthesis is the process by which plants convert sunlight, water, and CO2 into glucose and oxygen.\n"
-        "NEW QUESTION: yo eli5 photosynthesis",
-        "VALID",
+        "CACHED QUESTION: what is the difference between an AVL tree and a Red-Black tree?\n"
+        "CACHED ANSWER: Both are self-balancing BSTs with O(log n) operations. AVL trees are more strictly "
+        "balanced (height difference ≤ 1) so lookups are faster, but insertions require more rotations. "
+        "Red-Black trees allow a height ratio up to 2:1 so insertions are cheaper, which is why std::map "
+        "uses them.\n"
+        "NEW QUESTION: how does a B-tree differ from a binary search tree?",
+        "INVALID",
     ),
 ]
 

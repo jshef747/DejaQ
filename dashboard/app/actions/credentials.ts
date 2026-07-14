@@ -5,21 +5,21 @@ import { responseErrorMessage as errorMessage } from "@/app/actions/errors";
 import { apiFetch } from "@/lib/api";
 import type { CredentialItem, Provider } from "@/lib/types";
 
-export async function listCredentials(orgSlug: string): Promise<CredentialItem[]> {
-  const res = await apiFetch(`/admin/v1/orgs/${encodeURIComponent(orgSlug)}/credentials`);
+export async function listCredentials(workspaceSlug: string): Promise<CredentialItem[]> {
+  const res = await apiFetch(`/admin/v1/workspaces/${encodeURIComponent(workspaceSlug)}/credentials`);
   if (!res.ok) throw new Error(`Failed to load credentials (${res.status})`);
   return res.json() as Promise<CredentialItem[]>;
 }
 
 export async function upsertCredential(
-  orgSlug: string,
+  workspaceSlug: string,
   provider: Provider,
   apiKey: string,
 ): Promise<{ ok: true; data: CredentialItem } | { ok: false; error: string }> {
   let res: Response;
   try {
     res = await apiFetch(
-      `/admin/v1/orgs/${encodeURIComponent(orgSlug)}/credentials/${encodeURIComponent(provider)}`,
+      `/admin/v1/workspaces/${encodeURIComponent(workspaceSlug)}/credentials/${encodeURIComponent(provider)}`,
       {
         method: "PUT",
         body: JSON.stringify({ api_key: apiKey }),
@@ -39,13 +39,13 @@ export async function upsertCredential(
 }
 
 export async function deleteCredential(
-  orgSlug: string,
+  workspaceSlug: string,
   provider: Provider,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   let res: Response;
   try {
     res = await apiFetch(
-      `/admin/v1/orgs/${encodeURIComponent(orgSlug)}/credentials/${encodeURIComponent(provider)}`,
+      `/admin/v1/workspaces/${encodeURIComponent(workspaceSlug)}/credentials/${encodeURIComponent(provider)}`,
       { method: "DELETE" },
     );
   } catch (e) {

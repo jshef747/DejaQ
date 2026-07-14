@@ -3,7 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel
 
 
-class OrgRead(BaseModel):
+class WorkspaceRead(BaseModel):
     id: int
     name: str
     slug: str

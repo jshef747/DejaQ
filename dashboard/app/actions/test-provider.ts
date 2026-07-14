@@ -5,12 +5,12 @@ import { apiFetch } from "@/lib/api";
 import type { TestProviderResponse } from "@/lib/types";
 
 export async function testProvider(
-  orgSlug: string,
+  workspaceSlug: string,
   model: string,
 ): Promise<{ ok: true; data: TestProviderResponse } | { ok: false; error: string; status?: number }> {
   let res: Response;
   try {
-    res = await apiFetch(`/admin/v1/orgs/${encodeURIComponent(orgSlug)}/test-provider`, {
+    res = await apiFetch(`/admin/v1/workspaces/${encodeURIComponent(workspaceSlug)}/test-provider`, {
       method: "POST",
       body: JSON.stringify({ model }),
     });

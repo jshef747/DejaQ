@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 
 class AdminFeedbackRequest(BaseModel):
-    org: str
+    workspace: str
     department: str = "default"
     response_id: str
     rating: Literal["positive", "negative"]
@@ -16,7 +16,7 @@ class FeedbackItem(BaseModel):
     id: int
     ts: datetime | str
     response_id: str
-    org: str
+    workspace: str
     department: str
     rating: Literal["positive", "negative"]
     comment: str | None

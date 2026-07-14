@@ -19,6 +19,6 @@ class ManagementUser(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
-    memberships: Mapped[list["UserOrgMembership"]] = relationship(  # noqa: F821
-        "UserOrgMembership", back_populates="user", cascade="all, delete-orphan"
+    memberships: Mapped[list["UserWorkspaceMembership"]] = relationship(  # noqa: F821
+        "UserWorkspaceMembership", back_populates="user", cascade="all, delete-orphan"
     )

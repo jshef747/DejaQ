@@ -19,7 +19,7 @@ def test_admin_feedback_request_defaults_department():
     from app.schemas.admin.feedback import AdminFeedbackRequest
 
     body = AdminFeedbackRequest(
-        org="acme",
+        workspace="acme",
         response_id="acme--default:doc1",
         rating="positive",
     )

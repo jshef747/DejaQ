@@ -1,14 +1,14 @@
 import { redirect } from "next/navigation";
 import Topbar from "@/components/Topbar";
-import { listOrgs } from "@/app/actions/orgs";
+import { listWorkspaces } from "@/app/actions/workspaces";
 import { getLlmConfig } from "@/app/actions/llm-config";
 import { listCredentials } from "@/app/actions/credentials";
 import SettingsClient from "./SettingsClient";
-import type { CredentialItem, LlmConfigResponse, OrgItem } from "@/lib/types";
+import type { CredentialItem, LlmConfigResponse, WorkspaceItem } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-function NoOrgsState() {
+function NoWorkspacesState() {
   return (
     <>
       <Topbar section="Settings" />
@@ -26,9 +26,9 @@ function NoOrgsState() {
             padding: "20px 18px",
           }}
         >
-          No organizations found. Create one first with{" "}
+          No workspaces found. Use the onboarding flow or run{" "}
           <span style={{ color: "var(--fg)", fontFamily: "var(--font-mono)", fontSize: "11px" }}>
-            dejaq-admin org create
+            dejaq-admin workspace create
           </span>
           , then come back here.
         </div>
@@ -40,27 +40,27 @@ function NoOrgsState() {
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ org?: string }>;
+  searchParams: Promise<{ workspace?: string }>;
 }) {
-  const { org } = await searchParams;
-  let orgs: OrgItem[] = [];
+  const { workspace } = await searchParams;
+  let workspaces: WorkspaceItem[] = [];
 
   try {
-    orgs = await listOrgs();
+    workspaces = await listWorkspaces();
   } catch {
-    orgs = [];
+    workspaces = [];
   }
 
-  let activeSlug = org;
-  if (!activeSlug && orgs.length > 0) {
-    redirect(`/dashboard/settings?org=${orgs[0].slug}`);
+  let activeSlug = workspace;
+  if (!activeSlug && workspaces.length > 0) {
+    redirect(`/dashboard/settings?workspace=${workspaces[0].slug}`);
   }
 
   if (!activeSlug) {
-    return <NoOrgsState />;
+    return <NoWorkspacesState />;
   }
 
-  const activeOrg = orgs.find((item) => item.slug === activeSlug);
+  const activeWorkspace = workspaces.find((item) => item.slug === activeSlug);
   let config: LlmConfigResponse | null = null;
   let credentials: CredentialItem[] = [];
   let error: string | null = null;
@@ -76,11 +76,11 @@ export default async function SettingsPage({
 
   return (
     <>
-      <Topbar section="Settings" orgId={activeSlug} />
+      <Topbar section="Settings" workspaceId={activeSlug} />
       {config ? (
         <SettingsClient
-          orgSlug={activeSlug}
-          orgName={activeOrg?.name ?? activeSlug}
+          workspaceSlug={activeSlug}
+          workspaceName={activeWorkspace?.name ?? activeSlug}
           initialConfig={config}
           initialCredentials={credentials}
           loadError={error}

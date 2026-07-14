@@ -20,4 +20,4 @@ class Base(DeclarativeBase):
     pass
 
 
-import app.db.models.org_provider_credentials  # noqa: E402, F401
+import app.db.models  # noqa: E402, F401  # register all ORM models with Base

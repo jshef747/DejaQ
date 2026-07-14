@@ -7,13 +7,13 @@ from fastapi.testclient import TestClient
 
 
 PARITY_ROWS = [
-    ("org list", ("org", "list"), ["admin_service.list_orgs"], ("GET", "/admin/v1/orgs")),
-    ("org create", ("org", "create"), ["admin_service.create_org"], ("POST", "/admin/v1/orgs")),
+    ("workspace list", ("workspace", "list"), ["admin_service.list_workspaces"], ("GET", "/admin/v1/workspaces")),
+    ("workspace create", ("workspace", "create"), ["admin_service.create_workspace"], ("POST", "/admin/v1/workspaces")),
     (
-        "org delete",
-        ("org", "delete"),
-        ["admin_service.list_departments", "admin_service.delete_org"],
-        ("DELETE", "/admin/v1/orgs/{slug}"),
+        "workspace delete",
+        ("workspace", "delete"),
+        ["admin_service.list_departments", "admin_service.delete_workspace"],
+        ("DELETE", "/admin/v1/workspaces/{slug}"),
     ),
     (
         "dept list",
@@ -25,25 +25,25 @@ PARITY_ROWS = [
         "dept create",
         ("dept", "create"),
         ["admin_service.create_department"],
-        ("POST", "/admin/v1/orgs/{org_slug}/departments"),
+        ("POST", "/admin/v1/workspaces/{workspace_slug}/departments"),
     ),
     (
         "dept delete",
         ("dept", "delete"),
         ["admin_service.list_departments", "admin_service.delete_department"],
-        ("DELETE", "/admin/v1/orgs/{org_slug}/departments/{dept_slug}"),
+        ("DELETE", "/admin/v1/workspaces/{workspace_slug}/departments/{dept_slug}"),
     ),
     (
         "key list",
         ("key", "list"),
         ["admin_service.list_keys"],
-        ("GET", "/admin/v1/orgs/{org_slug}/keys"),
+        ("GET", "/admin/v1/workspaces/{workspace_slug}/keys"),
     ),
     (
         "key generate",
         ("key", "generate"),
         ["admin_service.generate_key"],
-        ("POST", "/admin/v1/orgs/{org_slug}/keys"),
+        ("POST", "/admin/v1/workspaces/{workspace_slug}/keys"),
     ),
     (
         "key revoke",
@@ -54,23 +54,25 @@ PARITY_ROWS = [
     (
         "stats",
         ("stats",),
-        ["stats_service.org_stats", "stats_service.department_stats"],
-        ("GET", "/admin/v1/stats/orgs"),
+        ["stats_service.workspace_stats", "stats_service.department_stats"],
+        ("GET", "/admin/v1/stats/workspaces"),
     ),
     (
         "stats departments",
         ("stats",),
-        ["stats_service.org_stats", "stats_service.department_stats"],
-        ("GET", "/admin/v1/stats/orgs/{org_slug}/departments"),
+        ["stats_service.workspace_stats", "stats_service.department_stats"],
+        ("GET", "/admin/v1/stats/workspaces/{workspace_slug}/departments"),
     ),
 ]
 
 
 API_ONLY_ROWS = [
-    ("llm config read", "llm_config_service.read_for_org", ("GET", "/admin/v1/orgs/{org_slug}/llm-config")),
-    ("llm config update", "llm_config_service.update_for_org", ("PUT", "/admin/v1/orgs/{org_slug}/llm-config")),
+    ("llm config read", "llm_config_service.read_for_workspace", ("GET", "/admin/v1/workspaces/{workspace_slug}/llm-config")),
+    ("llm config update", "llm_config_service.update_for_workspace", ("PUT", "/admin/v1/workspaces/{workspace_slug}/llm-config")),
     ("feedback list", "feedback_service.list_feedback", ("GET", "/admin/v1/feedback")),
     ("feedback submit", "feedback_service.submit_feedback", ("POST", "/admin/v1/feedback")),
+    ("workspace rename", "admin_service.rename_workspace", ("PATCH", "/admin/v1/workspaces/{slug}")),
+    ("dept rename", "admin_service.rename_department", ("PATCH", "/admin/v1/workspaces/{workspace_slug}/departments/{dept_slug}")),
 ]
 
 
@@ -107,7 +109,7 @@ def _seed_requests(db_path, rows):
         """CREATE TABLE IF NOT EXISTS requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ts TEXT NOT NULL,
-            org TEXT NOT NULL,
+            workspace TEXT NOT NULL,
             department TEXT NOT NULL,
             latency_ms INTEGER NOT NULL,
             cache_hit INTEGER NOT NULL,
@@ -117,7 +119,7 @@ def _seed_requests(db_path, rows):
         )"""
     )
     con.executemany(
-        "INSERT INTO requests (ts, org, department, latency_ms, cache_hit, difficulty, model_used, response_id) "
+        "INSERT INTO requests (ts, workspace, department, latency_ms, cache_hit, difficulty, model_used, response_id) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
@@ -164,13 +166,13 @@ def test_org_department_duplicate_and_delete_behaviors_match_service_and_api(
     client, headers = authed_admin_client
     _SYSTEM_CTX = ManagementAuthContext.system()
 
-    admin_service.create_org("Service Org", ctx=_SYSTEM_CTX)
+    admin_service.create_workspace("Service Org", ctx=_SYSTEM_CTX)
     with pytest.raises(admin_service.DuplicateSlug) as org_exc:
-        admin_service.create_org("Service Org", ctx=_SYSTEM_CTX)
+        admin_service.create_workspace("Service Org", ctx=_SYSTEM_CTX)
     assert org_exc.value.slug == "service-org"
 
-    api_org = client.post("/admin/v1/orgs", json={"name": "API Org"}, headers=headers)
-    api_org_duplicate = client.post("/admin/v1/orgs", json={"name": "API Org"}, headers=headers)
+    api_org = client.post("/admin/v1/workspaces", json={"name": "API Org"}, headers=headers)
+    api_org_duplicate = client.post("/admin/v1/workspaces", json={"name": "API Org"}, headers=headers)
     assert api_org.status_code == 201
     assert api_org_duplicate.status_code == 409
 
@@ -180,12 +182,12 @@ def test_org_department_duplicate_and_delete_behaviors_match_service_and_api(
     assert dept_exc.value.slug == "support"
 
     api_dept = client.post(
-        "/admin/v1/orgs/api-org/departments",
+        "/admin/v1/workspaces/api-org/departments",
         json={"name": "Support"},
         headers=headers,
     )
     api_dept_duplicate = client.post(
-        "/admin/v1/orgs/api-org/departments",
+        "/admin/v1/workspaces/api-org/departments",
         json={"name": "Support"},
         headers=headers,
     )
@@ -199,7 +201,7 @@ def test_org_department_duplicate_and_delete_behaviors_match_service_and_api(
     }
 
     api_dept_deleted = client.delete(
-        "/admin/v1/orgs/api-org/departments/support",
+        "/admin/v1/workspaces/api-org/departments/support",
         headers=headers,
     )
     assert api_dept_deleted.json() == {
@@ -208,15 +210,15 @@ def test_org_department_duplicate_and_delete_behaviors_match_service_and_api(
     }
 
     admin_service.create_department("service-org", "Eng", ctx=_SYSTEM_CTX)
-    service_org_deleted = admin_service.delete_org("service-org", ctx=_SYSTEM_CTX)
+    service_org_deleted = admin_service.delete_workspace("service-org", ctx=_SYSTEM_CTX)
     assert service_org_deleted.model_dump() == {
         "deleted": True,
         "departments_removed": 1,
     }
 
-    client.post("/admin/v1/orgs", json={"name": "API Delete"}, headers=headers)
-    client.post("/admin/v1/orgs/api-delete/departments", json={"name": "Eng"}, headers=headers)
-    api_org_deleted = client.delete("/admin/v1/orgs/api-delete", headers=headers)
+    client.post("/admin/v1/workspaces", json={"name": "API Delete"}, headers=headers)
+    client.post("/admin/v1/workspaces/api-delete/departments", json={"name": "Eng"}, headers=headers)
+    api_org_deleted = client.delete("/admin/v1/workspaces/api-delete", headers=headers)
     assert api_org_deleted.json() == {
         "deleted": True,
         "departments_removed": 1,
@@ -233,7 +235,7 @@ def test_key_generate_force_revoke_and_token_visibility_match_service_and_api(
     client, headers = authed_admin_client
     _SYSTEM_CTX = ManagementAuthContext.system()
 
-    admin_service.create_org("Service Keys", ctx=_SYSTEM_CTX)
+    admin_service.create_workspace("Service Keys", ctx=_SYSTEM_CTX)
     first = admin_service.generate_key("service-keys", force=False, ctx=_SYSTEM_CTX)
     with pytest.raises(admin_service.ActiveKeyExists) as active_exc:
         admin_service.generate_key("service-keys", force=False, ctx=_SYSTEM_CTX)
@@ -252,11 +254,11 @@ def test_key_generate_force_revoke_and_token_visibility_match_service_and_api(
     assert revoked.already_revoked is False
     assert revoked_again.already_revoked is True
 
-    client.post("/admin/v1/orgs", json={"name": "API Keys"}, headers=headers)
-    api_first = client.post("/admin/v1/orgs/api-keys/keys", headers=headers)
-    api_conflict = client.post("/admin/v1/orgs/api-keys/keys", headers=headers)
-    api_second = client.post("/admin/v1/orgs/api-keys/keys?force=true", headers=headers)
-    api_listed = client.get("/admin/v1/orgs/api-keys/keys", headers=headers)
+    client.post("/admin/v1/workspaces", json={"name": "API Keys"}, headers=headers)
+    api_first = client.post("/admin/v1/workspaces/api-keys/keys", headers=headers)
+    api_conflict = client.post("/admin/v1/workspaces/api-keys/keys", headers=headers)
+    api_second = client.post("/admin/v1/workspaces/api-keys/keys?force=true", headers=headers)
+    api_listed = client.get("/admin/v1/workspaces/api-keys/keys", headers=headers)
     api_revoked = client.delete(f"/admin/v1/keys/{api_second.json()['id']}", headers=headers)
     api_revoked_again = client.delete(f"/admin/v1/keys/{api_second.json()['id']}", headers=headers)
 
@@ -283,7 +285,7 @@ def test_stats_windows_match_service_and_api(
     client, headers = authed_admin_client
     _SYSTEM_CTX = ManagementAuthContext.system()
 
-    admin_service.create_org("Acme", ctx=_SYSTEM_CTX)
+    admin_service.create_workspace("Acme", ctx=_SYSTEM_CTX)
     admin_service.create_department("acme", "Eng", ctx=_SYSTEM_CTX)
     _seed_requests(
         isolated_stats_db,
@@ -295,7 +297,7 @@ def test_stats_windows_match_service_and_api(
         ],
     )
 
-    service_orgs = stats_service.org_stats(
+    service_orgs = stats_service.workspace_stats(
         from_date=date(2026, 4, 1),
         to_date=date(2026, 4, 15),
     )
@@ -305,15 +307,15 @@ def test_stats_windows_match_service_and_api(
         to_date=date(2026, 4, 15),
     )
     api_orgs = client.get(
-        "/admin/v1/stats/orgs?from=2026-04-01&to=2026-04-15",
+        "/admin/v1/stats/workspaces?from=2026-04-01&to=2026-04-15",
         headers=headers,
     )
     api_depts = client.get(
-        "/admin/v1/stats/orgs/acme/departments?from=2026-04-01&to=2026-04-15",
+        "/admin/v1/stats/workspaces/acme/departments?from=2026-04-01&to=2026-04-15",
         headers=headers,
     )
     reversed_range = client.get(
-        "/admin/v1/stats/orgs?from=2026-04-15&to=2026-04-01",
+        "/admin/v1/stats/workspaces?from=2026-04-15&to=2026-04-01",
         headers=headers,
     )
 

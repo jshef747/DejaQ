@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import Topbar from "@/components/Topbar";
-import { listOrgs } from "@/app/actions/orgs";
+import { listWorkspaces } from "@/app/actions/workspaces";
 import { listKeys } from "@/app/actions/keys";
 import KeysClient from "./KeysClient";
 import type { ApiKeyItem } from "@/lib/types";
@@ -10,20 +10,28 @@ export const dynamic = "force-dynamic";
 export default async function ApiKeysPage({
   searchParams,
 }: {
-  searchParams: Promise<{ org?: string }>;
+  searchParams: Promise<{ workspace?: string }>;
 }) {
-  const { org } = await searchParams;
+  const { workspace } = await searchParams;
 
-  let activeSlug = org;
-  if (!activeSlug) {
-    try {
-      const orgs = await listOrgs();
-      if (orgs.length > 0) {
-        redirect(`/dashboard/keys?org=${orgs[0].slug}`);
-      }
-    } catch {
-      // Fall through — show no-orgs state below
-    }
+  let activeSlug = workspace;
+  let workspaceList: Awaited<ReturnType<typeof listWorkspaces>> = [];
+  let backendOk = true;
+  try {
+    workspaceList = await listWorkspaces();
+  } catch {
+    backendOk = false;
+  }
+
+  // If the slug from the URL no longer exists (e.g. workspace was deleted), treat as absent.
+  if (activeSlug && !workspaceList.some((w) => w.slug === activeSlug)) {
+    activeSlug = undefined;
+  }
+
+  // Redirect to the first valid workspace when none is selected.
+  // IMPORTANT: redirect() throws NEXT_REDIRECT — must NOT be inside a catch block.
+  if (backendOk && !activeSlug && workspaceList.length > 0) {
+    redirect(`/dashboard/keys?workspace=${workspaceList[0].slug}`);
   }
 
   if (!activeSlug) {
@@ -53,11 +61,11 @@ export default async function ApiKeysPage({
               padding: "20px 18px",
             }}
           >
-            No organizations found. Create one first with{" "}
+            No workspaces found. Use the onboarding flow or run{" "}
             <span
               style={{ fontFamily: "var(--font-mono)", color: "var(--fg)", fontSize: "11px" }}
             >
-              dejaq-admin org create
+              dejaq-admin workspace create
             </span>
             , then come back here.
           </div>
@@ -77,8 +85,8 @@ export default async function ApiKeysPage({
 
   return (
     <>
-      <Topbar section="API Keys" orgId={activeSlug} />
-      <KeysClient orgSlug={activeSlug} keys={keys} error={error} />
+      <Topbar section="API Keys" workspaceId={activeSlug} />
+      <KeysClient workspaceSlug={activeSlug} keys={keys} error={error} />
     </>
   );
 }

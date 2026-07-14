@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 class DeptRead(BaseModel):
     id: int
-    org_id: int
+    workspace_id: int
     name: str
     slug: str
     cache_namespace: str

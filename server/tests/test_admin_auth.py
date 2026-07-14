@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.dependencies.admin_auth import require_management_auth
-from app.dependencies.management_auth import ManagementAuthContext, OrgRef
+from app.dependencies.management_auth import ManagementAuthContext, WorkspaceRef
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -52,7 +52,7 @@ def _mock_upsert_and_orgs(monkeypatch, local_user_id=1, orgs=None):
         lambda session, supabase_user_id, email: local_user,
     )
     monkeypatch.setattr(
-        "app.services.management_auth_service.user_repo.get_accessible_orgs",
+        "app.services.management_auth_service.user_repo.get_accessible_workspaces",
         lambda session, uid: orgs,
     )
 
@@ -64,35 +64,35 @@ class TestManagementAuthContextStructure:
         ctx = ManagementAuthContext.system()
         assert ctx.actor_type == "system"
         assert ctx.is_system
-        assert ctx.has_org_access(999)
-        assert ctx.has_org_access_by_slug("any-slug")
+        assert ctx.has_workspace_access(999)
+        assert ctx.has_workspace_access_by_slug("any-slug")
 
     def test_user_actor_limited_to_memberships(self):
         from datetime import datetime, timezone
-        org = OrgRef(id=1, name="Acme", slug="acme", created_at=datetime.now(timezone.utc))
+        ws = WorkspaceRef(id=1, name="Acme", slug="acme", created_at=datetime.now(timezone.utc))
         ctx = ManagementAuthContext(
             actor_type="user",
             local_user_id=1,
             supabase_user_id="u1",
             email="a@b.com",
-            accessible_orgs=[org],
+            accessible_workspaces=[ws],
         )
         assert not ctx.is_system
-        assert ctx.has_org_access(1)
-        assert ctx.has_org_access_by_slug("acme")
-        assert not ctx.has_org_access(2)
-        assert not ctx.has_org_access_by_slug("globex")
+        assert ctx.has_workspace_access(1)
+        assert ctx.has_workspace_access_by_slug("acme")
+        assert not ctx.has_workspace_access(2)
+        assert not ctx.has_workspace_access_by_slug("globex")
 
-    def test_user_with_no_memberships_has_empty_org_access(self):
+    def test_user_with_no_memberships_has_empty_workspace_access(self):
         ctx = ManagementAuthContext(
             actor_type="user",
             local_user_id=1,
             supabase_user_id="u1",
             email="a@b.com",
-            accessible_orgs=[],
+            accessible_workspaces=[],
         )
-        assert not ctx.has_org_access(1)
-        assert not ctx.has_org_access_by_slug("any")
+        assert not ctx.has_workspace_access(1)
+        assert not ctx.has_workspace_access_by_slug("any")
 
 
 class TestLocalAuthMode:
@@ -100,8 +100,8 @@ class TestLocalAuthMode:
         ctx = ManagementAuthContext.local_dev()
         assert ctx.is_system
         assert ctx.email == "dev@localhost"
-        assert ctx.has_org_access(123)
-        assert ctx.has_org_access_by_slug("anything")
+        assert ctx.has_workspace_access(123)
+        assert ctx.has_workspace_access_by_slug("anything")
 
     def test_dependency_bypasses_token_in_local_mode(self, monkeypatch):
         monkeypatch.setattr("app.config.AUTH_MODE", "local")
@@ -282,7 +282,7 @@ class TestSupabaseAuthValidation:
             from app.services.management_auth_service import validate_token_and_build_context
             ctx = validate_token_and_build_context("valid-token")
 
-        assert ctx.accessible_orgs == []
+        assert ctx.accessible_workspaces == []
 
     def test_no_get_session_or_manual_jwt_in_auth_service(self):
         """Verify no local JWT decoding, JWKS, or get_session in management_auth_service."""

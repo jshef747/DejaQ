@@ -7,7 +7,7 @@ from supabase_auth.errors import AuthApiError
 import app.config as config
 from app.db import user_repo
 from app.db.session import get_session
-from app.dependencies.management_auth import ManagementAuthContext, OrgRef
+from app.dependencies.management_auth import ManagementAuthContext, WorkspaceRef
 
 logger = logging.getLogger("dejaq.services.management_auth")
 
@@ -70,10 +70,10 @@ def validate_token_and_build_context(access_token: str) -> ManagementAuthContext
 
     with get_session() as session:
         local_user = user_repo.upsert_user(session, supabase_user_id, email)
-        orgs = user_repo.get_accessible_orgs(session, local_user.id)
-        org_refs = [
-            OrgRef(id=org.id, name=org.name, slug=org.slug, created_at=org.created_at)
-            for org in orgs
+        workspaces = user_repo.get_accessible_workspaces(session, local_user.id)
+        workspace_refs = [
+            WorkspaceRef(id=ws.id, name=ws.name, slug=ws.slug, created_at=ws.created_at)
+            for ws in workspaces
         ]
         local_user_id = local_user.id
 
@@ -82,7 +82,7 @@ def validate_token_and_build_context(access_token: str) -> ManagementAuthContext
         local_user_id=local_user_id,
         supabase_user_id=supabase_user_id,
         email=email,
-        accessible_orgs=org_refs,
+        accessible_workspaces=workspace_refs,
     )
 
 
