@@ -65,7 +65,11 @@ Then open the dashboard at `http://localhost:3000/dashboard`, create an organiza
 and generate an API key, and use it as `Authorization: Bearer <key>` against the gateway
 (or paste it into the chat app at `http://localhost:4000`).
 
-Backend only, or manual launch:
+Stacks: `all` (backend + dashboard + chat), `server` (backend + dashboard, no chat),
+`client` (chat app only — connects to a DejaQ server elsewhere on the network; set the
+server address in the chat Settings modal, plus a valid `DEJAQ_API_KEY` in `chat/.env.local`).
+
+Backend + dashboard (no chat), or manual launch:
 
 ```bash
 ./start.sh --stack=server --mode=local

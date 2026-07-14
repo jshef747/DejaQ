@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "env -u DEBUG next dev --webpack",
-    "dev:turbo": "env -u DEBUG next dev --turbopack",
-    "build": "env -u DEBUG next build --webpack",
+    "dev": "cross-env DEBUG= next dev --webpack",
+    "dev:turbo": "cross-env DEBUG= next dev --turbopack",
+    "build": "cross-env DEBUG= next build --webpack",
     "start": "next start"
   },
   "dependencies": {
@@ -22,6 +22,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "cross-env": "^10.1.0",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
