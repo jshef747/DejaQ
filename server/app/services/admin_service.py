@@ -139,6 +139,16 @@ def list_workspaces(ctx: ManagementAuthContext = _SYSTEM_CTX) -> list[WorkspaceR
         return [w for w in all_workspaces if w.id in accessible_ids]
 
 
+def _invalidate_key_cache() -> None:
+    """Bust the API-key middleware cache so admin mutations take effect immediately."""
+    try:
+        from app.middleware.api_key import _KEY_CACHE
+
+        _KEY_CACHE.invalidate()
+    except Exception:
+        logging.getLogger("dejaq.admin_service").warning("Key-cache invalidation failed", exc_info=True)
+
+
 def create_workspace(name: str, ctx: ManagementAuthContext = _SYSTEM_CTX) -> WorkspaceRead:
     with get_session() as session:
         try:
@@ -151,6 +161,7 @@ def create_workspace(name: str, ctx: ManagementAuthContext = _SYSTEM_CTX) -> Wor
         if not ctx.is_system and ctx.local_user_id is not None:
             user_repo.create_membership_idempotent(session, ctx.local_user_id, new_workspace.id)
 
+        _invalidate_key_cache()
         return new_workspace
 
 
@@ -175,6 +186,7 @@ def delete_workspace(slug: str, ctx: ManagementAuthContext = _SYSTEM_CTX) -> Wor
         session.flush()
     for ns in namespaces:
         _delete_chroma_namespace(ns)
+    _invalidate_key_cache()
     return WorkspaceDeleteResult(deleted=True, departments_removed=departments_removed)
 
 
@@ -221,6 +233,7 @@ def create_department(
             message = str(exc)
             slug = message.split("'")[1] if "'" in message else name
             raise DuplicateSlug(slug) from exc
+        _invalidate_key_cache()
         return _dept_item(dept, workspace_slug)
 
 
@@ -258,6 +271,7 @@ def delete_department(
             raise DeptNotFound(workspace_slug, dept_slug) from exc
         namespace = deleted.cache_namespace
     _delete_chroma_namespace(namespace)
+    _invalidate_key_cache()
     return DeptDeleteResult(deleted=True, cache_namespace=namespace)
 
 
@@ -317,6 +331,7 @@ def generate_key(
             api_key_repo.revoke_key(session, existing.id)
 
         key = api_key_repo.create_key(session, workspace.id)
+        _invalidate_key_cache()
         return KeyCreated(
             id=key.id,
             workspace_slug=workspace_slug,
@@ -340,6 +355,7 @@ def revoke_key(
         revoked = api_key_repo.revoke_key(session, key_id)
         if revoked is None:
             raise KeyNotFound(key_id)
+        _invalidate_key_cache()
         return KeyRevokeResult(
             id=revoked.id,
             revoked=True,
