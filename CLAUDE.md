@@ -10,6 +10,10 @@ DejaQ is an LLM cost-optimization platform that reduces API costs through semant
 
 **Cache hit pipeline:** User Query → Context Enricher → Normalizer → ChromaDB returns tone-neutral response (cosine ≤ 0.15) → **Cache Validator** (Gemma E2B checks cached answer covers the new query; INVALID → treat as miss) → Context Adjuster adds tone → Response to user
 
+## Branching
+
+`staging` is the integration branch: feature branches merge into `staging` first for review and end-to-end testing, and only `staging` merges into `master`. Do not merge feature branches directly into `master`.
+
 ## Commands
 
 ### Setup
