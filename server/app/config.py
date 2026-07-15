@@ -118,7 +118,6 @@ LOCAL_LLM_MODEL_NAME = _get_text("DEJAQ_LOCAL_LLM_MODEL_NAME", "gemma_local")
 GENERALIZER_MODEL_NAME = _get_text("DEJAQ_GENERALIZER_MODEL_NAME", "phi_generalizer")
 CONTEXT_ADJUSTER_MODEL_NAME = _get_text("DEJAQ_CONTEXT_ADJUSTER_MODEL_NAME", "qwen_1_5b")
 VALIDATOR_MODEL_NAME = _get_text("DEJAQ_VALIDATOR_MODEL_NAME", "gemma_e2b")
-VALIDATOR_ENABLED = _get_bool("DEJAQ_VALIDATOR_ENABLED", True)
 # Cache hits at or below this cosine distance are near-identical to the stored
 # query; skip the validator and serve them directly (the embedding already
 # guarantees the cached answer covers the question).

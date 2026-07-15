@@ -44,7 +44,6 @@ from app.config import (
     EXTERNAL_MODEL_NAME,
     ROUTING_THRESHOLD,
     USE_CELERY,
-    VALIDATOR_ENABLED,
     VALIDATOR_SKIP_DISTANCE,
 )
 from app.db.session import get_session
@@ -472,7 +471,7 @@ async def run_chat_pipeline(
             # an over-rejection on a clearly correct hit. Band hits (requires_validation)
             # never skip: they are only trustworthy once the validator accepts them.
             _skip_validation = (not _requires_validation) and _cache_distance <= VALIDATOR_SKIP_DISTANCE
-            if VALIDATOR_ENABLED and not _skip_validation:
+            if not _skip_validation:
                 # Word-swap hint from the lexical gate ("'list' vs 'string'") —
                 # sharpens the validator on near-identical sibling questions.
                 _mismatches = getattr(cache_lookup, "mismatches", None)
@@ -499,13 +498,6 @@ async def run_chat_pipeline(
                 except Exception:
                     logger.exception("Validator failed; treating as cache miss (fail-safe)")
                     _validator_accepted = False
-            elif _requires_validation and not VALIDATOR_ENABLED:
-                # Band hit but the validator is disabled — cannot vouch for it. Miss.
-                logger.info(
-                    "band hit dropped (validator disabled) distance=%.4f matched_query=%r",
-                    _cache_distance, _cache_matched_query,
-                )
-                _validator_accepted = False
 
             if not _validator_accepted:
                 cache_lookup = CacheLookupResult(

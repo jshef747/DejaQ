@@ -940,7 +940,6 @@ def test_band_hit_served_when_validator_valid(monkeypatch):
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubBandMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
     monkeypatch.setattr(openai_compat, "response_registry", registry, raising=False)
-    monkeypatch.setattr(openai_compat, "VALIDATOR_ENABLED", True)
 
     client = TestClient(app, headers=_AUTH)
     response = client.post(
@@ -973,7 +972,6 @@ def test_band_hit_falls_through_to_miss_when_validator_invalid(monkeypatch):
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
     monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
-    monkeypatch.setattr(openai_compat, "VALIDATOR_ENABLED", True)
 
     client = TestClient(app, headers=_AUTH)
     response = client.post(
@@ -989,38 +987,6 @@ def test_band_hit_falls_through_to_miss_when_validator_invalid(monkeypatch):
     assert response.json()["choices"][0]["message"]["content"] == "Paris is the capital of France."
     assert response.headers["x-dejaq-tier"] == "local"
     assert response.headers["x-dejaq-validator-verdict"] == "invalid"
-
-
-def test_band_hit_misses_when_validator_disabled(monkeypatch):
-    async def _noop_log(*args, **kwargs):
-        return None
-
-    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
-    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
-    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
-    monkeypatch.setattr(openai_compat, "_llm_router", StubRouter())
-    monkeypatch.setattr(openai_compat, "_classifier", StubClassifier())
-    monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
-    monkeypatch.setattr(openai_compat, "_validator", ExplodingValidator())
-    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubBandMemory())
-    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
-    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
-    monkeypatch.setattr(openai_compat, "USE_CELERY", False)
-    monkeypatch.setattr(openai_compat, "VALIDATOR_ENABLED", False)
-
-    client = TestClient(app, headers=_AUTH)
-    response = client.post(
-        "/v1/chat/completions",
-        json={
-            "model": "gpt-4o-mini",
-            "messages": [{"role": "user", "content": "What is the capital of France?"}],
-            "stream": False,
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.json()["choices"][0]["message"]["content"] == "Paris is the capital of France."
-    assert response.headers["x-dejaq-tier"] == "local"
 
 
 def test_missing_api_key_returns_401():
@@ -1080,7 +1046,6 @@ def test_rescued_hit_served_when_validator_valid(monkeypatch):
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubRescueMemory())
     monkeypatch.setattr(openai_compat, "_store_alias_bg", _noop_alias)
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
-    monkeypatch.setattr(openai_compat, "VALIDATOR_ENABLED", True)
     monkeypatch.setattr(openai_compat, "CACHE_ALIAS_ENABLED", True)
 
     client = TestClient(app, headers=_AUTH)
@@ -1116,7 +1081,6 @@ def test_rescued_hit_misses_when_validator_invalid(monkeypatch):
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
     monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
-    monkeypatch.setattr(openai_compat, "VALIDATOR_ENABLED", True)
 
     client = TestClient(app, headers=_AUTH)
     response = client.post(
@@ -1144,7 +1108,6 @@ def test_mismatch_hint_reaches_validator(monkeypatch):
     monkeypatch.setattr(openai_compat, "_validator", validator)
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMismatchBandMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
-    monkeypatch.setattr(openai_compat, "VALIDATOR_ENABLED", True)
 
     client = TestClient(app, headers=_AUTH)
     response = client.post(
