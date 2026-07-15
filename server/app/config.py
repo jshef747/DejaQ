@@ -61,6 +61,33 @@ LOG_SHOW_CONTENT = _get_bool("DEJAQ_LOG_SHOW_CONTENT", False)
 # Cache eviction
 EVICTION_FLOOR = _get_float("DEJAQ_EVICTION_FLOOR", -5.0)
 
+# Cache lookup distance bands (cosine).
+# Hits at or below CACHE_TRUST_DISTANCE are served directly (subject to the
+# existing validator-skip / validation rules). Hits in the band
+# (CACHE_TRUST_DISTANCE, CACHE_BAND_MAX_DISTANCE] are candidates only — they are
+# served ONLY if the cache validator accepts them. Set CACHE_BAND_MAX_DISTANCE
+# at or below CACHE_TRUST_DISTANCE to disable the band entirely.
+CACHE_TRUST_DISTANCE = _get_float("DEJAQ_CACHE_TRUST_DISTANCE", 0.15)
+# 0.20 is the empirically safe band ceiling: an offline sweep (typo vs
+# different-question pairs, real validator verdicts) found the validator's first
+# false-accept at distance ~0.21 ("freezing point" served the boiling answer).
+# Sibling questions (freezing/boiling, hamlet/macbeth, list/string) cluster at
+# 0.21–0.27 — the same range as heavier typos — so a wider band buys ~1 wrong
+# answer per extra typo caught. Raise only alongside a stronger validator.
+CACHE_BAND_MAX_DISTANCE = _get_float("DEJAQ_CACHE_BAND_MAX_DISTANCE", 0.20)
+
+# Lexical rescue: candidates past the band but within this distance are still
+# eligible when word-level alignment confirms the query is a typo'd variant of
+# the stored one (see services/lexical_match.py). Heaviest real typo observed
+# live sits at 0.52. Rescued hits are always validator-gated.
+CACHE_RESCUE_ENABLED = _get_bool("DEJAQ_CACHE_RESCUE_ENABLED", True)
+CACHE_RESCUE_MAX_DISTANCE = _get_float("DEJAQ_CACHE_RESCUE_MAX_DISTANCE", 0.60)
+
+# Alias learning: after the validator accepts a band/rescue hit, store the
+# typo'd phrasing as an alias entry pointing at the same answer, so the same
+# typo becomes an instant trusted hit next time.
+CACHE_ALIAS_ENABLED = _get_bool("DEJAQ_CACHE_ALIAS_ENABLED", True)
+
 # Model backend: generation runs through Ollama (local or remote per this URL).
 OLLAMA_URL = _get_text("DEJAQ_OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_TIMEOUT_SECONDS = _get_float("DEJAQ_OLLAMA_TIMEOUT_SECONDS", 60.0)
@@ -91,7 +118,6 @@ LOCAL_LLM_MODEL_NAME = _get_text("DEJAQ_LOCAL_LLM_MODEL_NAME", "gemma_local")
 GENERALIZER_MODEL_NAME = _get_text("DEJAQ_GENERALIZER_MODEL_NAME", "phi_generalizer")
 CONTEXT_ADJUSTER_MODEL_NAME = _get_text("DEJAQ_CONTEXT_ADJUSTER_MODEL_NAME", "qwen_1_5b")
 VALIDATOR_MODEL_NAME = _get_text("DEJAQ_VALIDATOR_MODEL_NAME", "gemma_e2b")
-VALIDATOR_ENABLED = _get_bool("DEJAQ_VALIDATOR_ENABLED", True)
 # Cache hits at or below this cosine distance are near-identical to the stored
 # query; skip the validator and serve them directly (the embedding already
 # guarantees the cached answer covers the question).

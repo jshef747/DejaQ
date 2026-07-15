@@ -3,8 +3,10 @@ import time
 import uuid
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, BackgroundTasks, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+
+from app.dependencies.auth import ResolvedWorkspace, require_org_key
 
 from app.schemas.openai_compat import OAIMessage
 from app.schemas.openai_responses import (
@@ -146,6 +148,7 @@ async def responses(
     oai_request: OAIResponsesRequest,
     raw_request: Request,
     background_tasks: BackgroundTasks,
+    resolved_workspace: ResolvedWorkspace = Depends(require_org_key),
 ):
     messages = _responses_request_to_messages(oai_request)
 

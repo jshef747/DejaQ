@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, BackgroundTasks, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -27,6 +27,7 @@ from app.services.external_llm import ExternalLLMService
 from app.services.credential_service import CredentialService, SUPPORTED_PROVIDERS
 from app.services.llm_providers import LIVE_PROVIDERS
 from app.services.memory_chromaDB import CacheLookupResult, get_memory_service
+from app.dependencies.auth import ResolvedWorkspace, require_org_key
 from app.services.provider_inference import provider_for_model
 from app.services import cache_filter, llm_config_service
 from app.services.classifier import ClassifierService
@@ -38,7 +39,13 @@ from app.services.service_factory import (
     get_validator_service,
 )
 from app.tasks.cache_tasks import generalize_and_store_task
-from app.config import USE_CELERY, EXTERNAL_MODEL_NAME, ROUTING_THRESHOLD, VALIDATOR_ENABLED, VALIDATOR_SKIP_DISTANCE
+from app.config import (
+    CACHE_ALIAS_ENABLED,
+    EXTERNAL_MODEL_NAME,
+    ROUTING_THRESHOLD,
+    USE_CELERY,
+    VALIDATOR_SKIP_DISTANCE,
+)
 from app.db.session import get_session
 from app.utils.exceptions import ExternalLLMError
 from app.utils.logger import clear_request_id, content_snippet, set_request_id
@@ -294,6 +301,16 @@ async def _increment_hit_count_bg(namespace: str, doc_id: str) -> None:
         logger.warning("Failed to increment hit_count for %s:%s", namespace, doc_id)
 
 
+async def _store_alias_bg(namespace: str, alias_query: str, source_entry_id: str) -> None:
+    try:
+        memory = get_memory_service(namespace)
+        store_alias = getattr(memory, "store_alias", None)
+        if callable(store_alias):
+            await asyncio.to_thread(store_alias, alias_query, source_entry_id)
+    except Exception:
+        logger.warning("Failed to store alias for %s:%s", namespace, source_entry_id)
+
+
 async def _register_answer_interaction(
     *,
     workspace_id: int | None,
@@ -446,20 +463,38 @@ async def run_chat_pipeline(
             _cache_distance = float(cache_lookup.distance or 0.0)
             _cache_matched_query = _diagnostic_prompt(cache_lookup.matched_query) or ""
 
+            _requires_validation = bool(getattr(cache_lookup, "requires_validation", False))
             _validator_accepted = True
             # Near-identical matches (cosine distance ≤ VALIDATOR_SKIP_DISTANCE) don't
             # need validation — the embedding already guarantees the cached answer covers
             # the question. Calling the validator here would only burn latency and risk
-            # an over-rejection on a clearly correct hit.
-            _skip_validation = _cache_distance <= VALIDATOR_SKIP_DISTANCE
-            if VALIDATOR_ENABLED and not _skip_validation:
+            # an over-rejection on a clearly correct hit. Band hits (requires_validation)
+            # never skip: they are only trustworthy once the validator accepts them.
+            _skip_validation = (not _requires_validation) and _cache_distance <= VALIDATOR_SKIP_DISTANCE
+            if not _skip_validation:
+                # Word-swap hint from the lexical gate ("'list' vs 'string'") —
+                # sharpens the validator on near-identical sibling questions.
+                _mismatches = getattr(cache_lookup, "mismatches", None)
+                _hint = (
+                    ", ".join(f"'{a}' vs '{b}'" for a, b in _mismatches)
+                    if _mismatches else None
+                )
                 try:
                     with trace.step("validate"):
-                        _validator_accepted, _validator_verdict = await services.validator.validate(
-                            user_query,
-                            cache_lookup.matched_query or "",
-                            cached_answer,
-                        )
+                        try:
+                            _validator_accepted, _validator_verdict = await services.validator.validate(
+                                user_query,
+                                cache_lookup.matched_query or "",
+                                cached_answer,
+                                mismatch_hint=_hint,
+                            )
+                        except TypeError:
+                            # Stub/legacy validator without the mismatch_hint kwarg
+                            _validator_accepted, _validator_verdict = await services.validator.validate(
+                                user_query,
+                                cache_lookup.matched_query or "",
+                                cached_answer,
+                            )
                 except Exception:
                     logger.exception("Validator failed; treating as cache miss (fail-safe)")
                     _validator_accepted = False
@@ -496,9 +531,15 @@ async def run_chat_pipeline(
                 _latency = int((time.monotonic() - _t0) * 1000)
                 asyncio.create_task(request_logger.log(workspace_slug, dept, _latency, True, None, None, response_id))
                 asyncio.create_task(_increment_hit_count_bg(cache_namespace, _entry_id))
+                # Alias learning: the validator vouched for this band/rescue hit,
+                # so remember the typo'd phrasing — next time it's a trusted hit.
+                if _requires_validation and CACHE_ALIAS_ENABLED:
+                    asyncio.create_task(_store_alias_bg(cache_namespace, clean_query, _entry_id))
                 logger.info(
-                    "done cache=hit route=cache model=%s response_id=%s latency=%dms steps=%s%s%s",
-                    model_used, response_id, _latency, trace.summary(),
+                    "done cache=hit route=cache model=%s response_id=%s latency=%dms band=%s rescued=%s steps=%s%s%s",
+                    model_used, response_id, _latency,
+                    _requires_validation, bool(getattr(cache_lookup, "rescued", False)),
+                    trace.summary(),
                     _enriched_log_suffix(enriched, enrich_succeeded),
                     _nearest_log_suffix(cache_lookup),
                 )
@@ -738,6 +779,7 @@ async def chat_completions(
     oai_request: OAIChatRequest,
     raw_request: Request,
     background_tasks: BackgroundTasks,
+    resolved_workspace: ResolvedWorkspace = Depends(require_org_key),
 ):
     try:
         result = await run_chat_pipeline(
