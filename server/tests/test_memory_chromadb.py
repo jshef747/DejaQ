@@ -214,7 +214,6 @@ class TestBand:
             result = svc.lookup_cache("capital of france")
         assert result.hit is True
         assert result.requires_validation is False
-        assert result.probe == "raw"
 
     def test_band_hit_requires_validation(self):
         svc = _make_svc("band_hit")
@@ -248,14 +247,3 @@ class TestBand:
         svc.store_interaction("capital of france", "Paris is the capital.", "orig", "u1")
         with _force_distances(svc, [0.18]):
             assert svc.check_cache("capital of france") is None
-
-    def test_two_probe_takes_min_distance(self):
-        # Raw probe misses (0.30), corrected probe hits (0.10) → min wins, probe=corrected.
-        svc = _make_svc("band_two_probe")
-        svc.store_interaction("kubernetes basics", "Kubernetes orchestrates containers.", "orig", "u1")
-        with _force_distances(svc, [0.30, 0.10]):
-            result = svc.lookup_cache("kubernetis basics", alt_query="kubernetes basics")
-        assert result.hit is True
-        assert result.requires_validation is False
-        assert result.distance == 0.10
-        assert result.probe == "corrected"

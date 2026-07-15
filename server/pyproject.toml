@@ -21,7 +21,6 @@ dependencies = [
     "google-genai>=1.0.0",
     "python-dotenv>=1.2.1",
     "sentence-transformers>=3.0.0",
-    "pyspellchecker>=0.9.0",
     "openai>=2.31.0",
     "sqlalchemy>=2.0.49",
     "alembic>=1.18.4",

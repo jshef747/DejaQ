@@ -10,68 +10,10 @@ from __future__ import annotations
 import logging
 import re
 import time
-from dataclasses import dataclass
-
-from spellchecker import SpellChecker
 
 from app.services.model_backends import CompletionRequest, ModelBackend
 
-_spell = SpellChecker()
-# Common proper nouns the base dictionary lacks.
-# Load at high frequency so they're preferred over phonetically similar common words
-# (e.g., "ukrine" → "ukraine" not "urine").
-_PROPER_NOUNS = [
-    # Geopolitics
-    "ukraine", "ukrainian", "russia", "russian", "israel", "israeli", "palestine",
-    "palestinian", "iran", "iranian", "china", "chinese", "taiwan", "taiwanese",
-    "korean", "korea", "japan", "japanese", "nato", "biden", "putin", "zelensky",
-    # Cities / places
-    "aviv", "tel", "beijing", "shanghai", "tokyo", "seoul", "dubai", "cairo",
-    "paris", "berlin", "london", "rome", "madrid", "lisbon", "amsterdam",
-    "stockholm", "oslo", "helsinki", "warsaw", "prague", "budapest", "vienna",
-    "zurich", "geneva", "brussels", "athens", "istanbul", "moscow", "kyiv",
-    "riyadh", "doha", "tehran", "kabul", "nairobi", "lagos", "accra", "dakar",
-    "mumbai", "delhi", "bangalore", "karachi", "dhaka", "colombo", "kathmandu",
-    "singapore", "jakarta", "manila", "hanoi", "bangkok", "kuala",
-    "sydney", "melbourne", "auckland", "toronto", "montreal", "vancouver",
-    "chicago", "houston", "phoenix", "dallas", "seattle", "boston", "miami",
-    "denver", "atlanta", "detroit", "portland", "nashville", "austin",
-    # Tech / AI
-    "elon", "musk", "openai", "chatgpt", "llm", "api", "gpu", "cpu",
-    "golang", "kotlin", "rust", "typescript", "javascript", "python",
-    "nodejs", "django", "fastapi", "flask", "react", "nextjs", "vuejs",
-    "angular", "svelte", "tailwind", "webpack", "vite", "docker", "kubernetes",
-    "postgres", "postgresql", "mongodb", "redis", "sqlite", "mysql",
-    "graphql", "grpc", "kafka", "rabbitmq", "nginx", "apache",
-    "github", "gitlab", "bitbucket", "jira", "confluence", "slack",
-    "linux", "ubuntu", "debian", "fedora", "macos", "windows",
-    "tensorflow", "pytorch", "numpy", "pandas", "sklearn", "scipy",
-    "gemini", "claude", "anthropic", "mistral", "llama", "gemma",
-    "huggingface", "langchain", "chromadb", "pinecone", "weaviate",
-    "celery", "uvicorn", "pydantic", "sqlalchemy",
-    # People / companies
-    "google", "microsoft", "amazon", "netflix", "nvidia", "intel", "apple",
-    "meta", "bytedance", "alibaba", "tencent", "baidu", "samsung",
-    "zuckerberg", "bezos", "altman", "pichai", "nadella", "huang",
-]
-_spell.word_frequency.load_words(_PROPER_NOUNS * 10_000)
-_WORD_RE = re.compile(r"([a-zA-Z'-]+|[^a-zA-Z'-]+)")
-
 logger = logging.getLogger("dejaq.services.normalizer")
-
-
-@dataclass(frozen=True)
-class NormalizedQuery:
-    """Result of normalization.
-
-    cache_key is the primary cache key (current normalize() output, unchanged).
-    corrected_key is a spell-corrected variant used as a *second* cache probe to
-    absorb typos, or None when no correction applied (or on the opinion path,
-    where the canonical "best <noun>" form already absorbs spelling).
-    """
-
-    cache_key: str
-    corrected_key: str | None = None
 
 # ---------------------------------------------------------------------------
 # Regex gates (ported verbatim from evals/normalizer/configs/v22_opinion_llm_rewrite_bge_small.py)
@@ -148,41 +90,6 @@ _FEW_SHOTS: list[tuple[str, str]] = [
 ]
 
 
-def _spell_correct(query: str) -> str:
-    """Correct misspelled words in the query.
-
-    Tokenizes on word/non-word boundaries so punctuation isn't swallowed into
-    tokens. Only fixes unknown alphabetic tokens ≥ 4 chars; leaves proper nouns
-    in the custom word list, short tokens, and non-alpha tokens unchanged.
-    """
-    tokens = _WORD_RE.findall(query)
-    # Collect alphabetic tokens to batch-check
-    alpha_tokens = [t for t in tokens if t.isalpha() and len(t) >= 4]
-    unknown = _spell.unknown(alpha_tokens)
-    if not unknown:
-        return query
-
-    changed = []
-    result = []
-    for token in tokens:
-        low = token.lower()
-        # Skip capitalized tokens — proper nouns (cities, names, brands) are
-        # capitalized in natural input and must not be "corrected".
-        if token.isalpha() and len(token) >= 4 and low in unknown and not token[0].isupper():
-            fix = _spell.correction(low)
-            if fix and fix != low:
-                result.append(fix)
-                changed.append(f"{token!r}→{fix!r}")
-            else:
-                result.append(token)
-        else:
-            result.append(token)
-
-    if changed:
-        logger.debug("Spell corrections: %s", ", ".join(changed))
-    return "".join(result)
-
-
 def _is_opinion(query: str) -> bool:
     return bool(_OPINION_GATE.search(query) and not _HOWTO_ADVERBIAL.search(query))
 
@@ -213,40 +120,27 @@ class NormalizerService:
         self.model_name = model_name
 
     async def normalize(self, raw_query: str) -> str:
-        """Return the primary cache key. Kept for callers that only need the key."""
-        return (await self.normalize_ex(raw_query)).cache_key
+        """Return the cache key for a query.
 
-    async def normalize_ex(self, raw_query: str) -> NormalizedQuery:
-        """Return the primary cache key plus an optional spell-corrected probe.
-
-        Cache matching is semantic (BGE embeddings + cosine distance), which absorbs
-        many typos on its own, but a typo can still push distance past the tight cache
-        threshold. The generic spell checker cannot tell unknown-but-correct jargon
-        (malloc, sudo, struct) from a real typo, so we never *replace* the cache key
-        with the corrected form — a wrong correction would poison lookups. Instead the
-        corrected form is exposed as a *secondary* probe: the caller looks up both, and
-        a bad correction simply never matches while the raw key still works.
+        No spell correction anywhere: a dictionary checker mangles jargon and
+        proper nouns ("frnce"→"fence", "itly"→"idly"), poisoning cache keys.
+        Typo tolerance is handled downstream by the semantic cache — BGE
+        embeddings absorb most single typos, and the validator-guarded distance
+        band (CACHE_TRUST_DISTANCE..CACHE_BAND_MAX_DISTANCE) catches the rest.
         """
         logger.debug("Normalizing query: %s", raw_query)
         start = time.time()
 
-        # Computed once here: gates opinion detection AND, on the passthrough path,
-        # supplies the secondary corrected probe.
-        corrected = _spell_correct(raw_query)
-
-        if not _is_opinion(corrected):
+        if not _is_opinion(raw_query):
             normalized = raw_query.strip().lower()
-            corrected_key = corrected.strip().lower()
-            # Only expose a second probe when correction actually changed the key.
-            alt = corrected_key if corrected_key != normalized else None
             latency = (time.time() - start) * 1000
             logger.debug(
-                "Normalization (passthrough) in %.2f ms. Raw: %r -> Normalized: %r (corrected=%r)",
-                latency, raw_query, normalized, alt,
+                "Normalization (passthrough) in %.2f ms. Raw: %r -> Normalized: %r",
+                latency, raw_query, normalized,
             )
-            return NormalizedQuery(cache_key=normalized, corrected_key=alt)
+            return normalized
 
-        messages = _build_opinion_messages(corrected)
+        messages = _build_opinion_messages(raw_query)
         raw_output = await self.backend.complete(
             CompletionRequest(
                 model_name=self.model_name,
@@ -262,5 +156,4 @@ class NormalizerService:
             "Normalization (opinion rewrite) in %.2f ms. Raw: %r -> Normalized: %r",
             latency, raw_query, normalized,
         )
-        # Opinion rewrite already collapses spelling into the canonical form; no probe.
-        return NormalizedQuery(cache_key=normalized, corrected_key=None)
+        return normalized

@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, BackgroundTasks, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -27,7 +27,7 @@ from app.services.external_llm import ExternalLLMService
 from app.services.credential_service import CredentialService, SUPPORTED_PROVIDERS
 from app.services.llm_providers import LIVE_PROVIDERS
 from app.services.memory_chromaDB import CacheLookupResult, get_memory_service
-from app.services.normalizer import NormalizedQuery
+from app.dependencies.auth import ResolvedWorkspace, require_org_key
 from app.services.provider_inference import provider_for_model
 from app.services import cache_filter, llm_config_service
 from app.services.classifier import ClassifierService
@@ -245,32 +245,12 @@ def _legacy_cache_lookup(cache_result: tuple[str, ...] | None) -> CacheLookupRes
     )
 
 
-def _cache_lookup(
-    memory: object,
-    clean_query: str,
-    alt_query: str | None = None,
-) -> CacheLookupResult:
+def _cache_lookup(memory: object, clean_query: str) -> CacheLookupResult:
     lookup = getattr(memory, "lookup_cache", None)
     if callable(lookup):
-        try:
-            return lookup(clean_query, alt_query)
-        except TypeError:
-            # Stub / legacy single-arg lookup_cache — retry without the alt probe.
-            return lookup(clean_query)
+        return lookup(clean_query)
     check_cache = getattr(memory, "check_cache")
     return _legacy_cache_lookup(check_cache(clean_query))
-
-
-async def _normalize_query(normalizer: object, enriched: str) -> NormalizedQuery:
-    """Normalize, preferring normalize_ex (returns cache_key + corrected probe).
-
-    Falls back to plain normalize() for stubs/services that only implement it.
-    """
-    normalize_ex = getattr(normalizer, "normalize_ex", None)
-    if callable(normalize_ex):
-        return await normalize_ex(enriched)
-    clean = await normalizer.normalize(enriched)
-    return NormalizedQuery(cache_key=clean, corrected_key=None)
 
 
 def _bg_generalize_and_store(
@@ -444,23 +424,19 @@ async def run_chat_pipeline(
             logger.exception("Enricher failed")
             enriched = user_query
 
-        # 2. Normalize (cache_key + optional spell-corrected probe)
+        # 2. Normalize
         try:
             with trace.step("normalize"):
-                nq = await _normalize_query(services.normalizer, enriched)
+                clean_query = await services.normalizer.normalize(enriched)
         except Exception:
             logger.exception("Normalizer failed")
-            nq = NormalizedQuery(cache_key=enriched, corrected_key=None)
-        clean_query = nq.cache_key
-        alt_query = nq.corrected_key
+            clean_query = enriched
 
-        # 3. Cache lookup (two-probe: raw + corrected)
+        # 3. Cache lookup
         cache_lookup = CacheLookupResult(hit=False)
         try:
             with trace.step("cache"):
-                cache_lookup = _cache_lookup(
-                    get_memory_service(cache_namespace), clean_query, alt_query
-                )
+                cache_lookup = _cache_lookup(get_memory_service(cache_namespace), clean_query)
         except Exception:
             logger.exception("Cache check failed")
 
@@ -531,9 +507,9 @@ async def run_chat_pipeline(
                 asyncio.create_task(request_logger.log(workspace_slug, dept, _latency, True, None, None, response_id))
                 asyncio.create_task(_increment_hit_count_bg(cache_namespace, _entry_id))
                 logger.info(
-                    "done cache=hit route=cache model=%s response_id=%s latency=%dms band=%s probe=%s steps=%s%s%s",
+                    "done cache=hit route=cache model=%s response_id=%s latency=%dms band=%s steps=%s%s%s",
                     model_used, response_id, _latency,
-                    _requires_validation, cache_lookup.probe or "raw", trace.summary(),
+                    _requires_validation, trace.summary(),
                     _enriched_log_suffix(enriched, enrich_succeeded),
                     _nearest_log_suffix(cache_lookup),
                 )
@@ -663,29 +639,24 @@ async def run_chat_pipeline(
             model_used = "error"
             route = "error"
 
-        # 5. Cache filter + background store.
-        # Store under the corrected key when normalization produced one: a typo'd
-        # query and its clean twin then collapse to the same cache entry instead of
-        # polluting the cache with divergent entries. Deterministic — the same typo
-        # always corrects to the same key, so future typo'd queries still hit.
-        store_key = alt_query or clean_query
+        # 5. Cache filter + background store
         will_cache = False
         try:
             with trace.step("filter"):
-                will_cache, _ = cache_filter.should_cache(enriched, store_key)
+                will_cache, _ = cache_filter.should_cache(enriched, clean_query)
         except Exception:
             logger.exception("Cache filter failed")
 
         store_status = "skipped"
         miss_response_id: str | None = None
         if will_cache:
-            miss_doc_id = _doc_id(store_key)
+            miss_doc_id = _doc_id(clean_query)
             miss_response_id = f"{cache_namespace}:{miss_doc_id}"
             with trace.step("store"):
                 if USE_CELERY:
                     try:
                         generalize_and_store_task.apply_async(
-                            args=(store_key, answer, user_query, workspace_slug, cache_namespace),
+                            args=(clean_query, answer, user_query, workspace_slug, cache_namespace),
                             headers={"dejaq_model_profile": model_profile},
                             ignore_result=True,
                         )
@@ -696,7 +667,7 @@ async def run_chat_pipeline(
                         logger.warning("Celery dispatch failed (%s); storing in-process", type(exc).__name__)
                         background_tasks.add_task(
                             _bg_generalize_and_store,
-                            store_key,
+                            clean_query,
                             answer,
                             user_query,
                             workspace_slug,
@@ -707,7 +678,7 @@ async def run_chat_pipeline(
                 else:
                     background_tasks.add_task(
                         _bg_generalize_and_store,
-                        store_key,
+                        clean_query,
                         answer,
                         user_query,
                         workspace_slug,
@@ -778,6 +749,7 @@ async def chat_completions(
     oai_request: OAIChatRequest,
     raw_request: Request,
     background_tasks: BackgroundTasks,
+    resolved_workspace: ResolvedWorkspace = Depends(require_org_key),
 ):
     try:
         result = await run_chat_pipeline(
