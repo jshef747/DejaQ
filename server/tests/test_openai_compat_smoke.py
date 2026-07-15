@@ -132,6 +132,61 @@ class StubBandMemory:
         return None
 
 
+class StubRescueMemory:
+    """Cache hit from the lexical-rescue tier (past band, word-aligned)."""
+
+    def lookup_cache(self, clean_query: str):
+        return CacheLookupResult(
+            hit=True,
+            generalized_answer="Cached Moscow answer.",
+            entry_id="docrescue",
+            distance=0.40,
+            matched_query="what is the capital of russia?",
+            nearest_distance=0.40,
+            nearest_prompt="what is the capital of russia?",
+            requires_validation=True,
+            rescued=True,
+        )
+
+    def check_cache(self, clean_query: str):
+        return None
+
+    def increment_hit_count(self, doc_id: str):
+        return None
+
+
+class StubMismatchBandMemory:
+    """Band hit whose stored query differs by one word (list vs string)."""
+
+    def lookup_cache(self, clean_query: str):
+        return CacheLookupResult(
+            hit=True,
+            generalized_answer="Use s[::-1].",
+            entry_id="docswap",
+            distance=0.11,
+            matched_query="how do i reverse a string in python?",
+            nearest_distance=0.11,
+            nearest_prompt="how do i reverse a string in python?",
+            requires_validation=False,
+            mismatches=(("list", "string"),),
+        )
+
+    def check_cache(self, clean_query: str):
+        return None
+
+    def increment_hit_count(self, doc_id: str):
+        return None
+
+
+class HintCapturingValidator:
+    def __init__(self) -> None:
+        self.hint = "UNSET"
+
+    async def validate(self, new_query, cached_query, cached_answer, mismatch_hint=None):
+        self.hint = mismatch_hint
+        return True, "VALID"
+
+
 class StubValidatorValid:
     async def validate(self, new_query, cached_query, cached_answer):
         return True, "VALID"
@@ -1001,6 +1056,146 @@ def test_responses_endpoint_requires_api_key():
         json={"model": "gpt-4o-mini", "input": "What is the capital of France?"},
     )
     assert response.status_code == 401
+
+
+def test_rescued_hit_served_when_validator_valid(monkeypatch):
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    alias_calls: list[tuple] = []
+
+    def _noop_alias(namespace, alias_query, source_entry_id):
+        # record synchronously at call time; return a no-op coroutine for create_task
+        alias_calls.append((namespace, alias_query, source_entry_id))
+
+        async def _done():
+            return None
+
+        return _done()
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "_validator", StubValidatorValid())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubRescueMemory())
+    monkeypatch.setattr(openai_compat, "_store_alias_bg", _noop_alias)
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+    monkeypatch.setattr(openai_compat, "VALIDATOR_ENABLED", True)
+    monkeypatch.setattr(openai_compat, "CACHE_ALIAS_ENABLED", True)
+
+    client = TestClient(app, headers=_AUTH)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "what is teh captial of rusia?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == "Cached Moscow answer."
+    assert response.headers["x-dejaq-tier"] == "cache"
+    assert response.headers["x-dejaq-validator-verdict"] == "valid"
+    # Alias learning fired for the validated rescue hit
+    assert alias_calls and alias_calls[0][2] == "docrescue"
+
+
+def test_rescued_hit_misses_when_validator_invalid(monkeypatch):
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "_llm_router", StubRouter())
+    monkeypatch.setattr(openai_compat, "_classifier", StubClassifier())
+    monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
+    monkeypatch.setattr(openai_compat, "_validator", StubValidatorInvalid())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubRescueMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat, "USE_CELERY", False)
+    monkeypatch.setattr(openai_compat, "VALIDATOR_ENABLED", True)
+
+    client = TestClient(app, headers=_AUTH)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "what is teh captial of rusia?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-dejaq-tier"] == "local"
+    assert response.headers["x-dejaq-validator-verdict"] == "invalid"
+
+
+def test_mismatch_hint_reaches_validator(monkeypatch):
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    validator = HintCapturingValidator()
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "_validator", validator)
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMismatchBandMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+    monkeypatch.setattr(openai_compat, "VALIDATOR_ENABLED", True)
+
+    client = TestClient(app, headers=_AUTH)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "how do i reverse a list in python?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert validator.hint == "'list' vs 'string'"
+
+
+def test_no_alias_stored_for_trusted_hit(monkeypatch):
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    alias_calls: list[tuple] = []
+
+    def _noop_alias(namespace, alias_query, source_entry_id):
+        # record synchronously at call time; return a no-op coroutine for create_task
+        alias_calls.append((namespace, alias_query, source_entry_id))
+
+        async def _done():
+            return None
+
+        return _done()
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubHitMemory())
+    monkeypatch.setattr(openai_compat, "_store_alias_bg", _noop_alias)
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+    monkeypatch.setattr(openai_compat, "CACHE_ALIAS_ENABLED", True)
+
+    client = TestClient(app, headers=_AUTH)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-dejaq-tier"] == "cache"
+    assert not alias_calls  # trusted hits don't need aliases
 
 
 def test_hard_query_unmapped_external_model_returns_422(monkeypatch):

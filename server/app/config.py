@@ -68,7 +68,25 @@ EVICTION_FLOOR = _get_float("DEJAQ_EVICTION_FLOOR", -5.0)
 # served ONLY if the cache validator accepts them. Set CACHE_BAND_MAX_DISTANCE
 # at or below CACHE_TRUST_DISTANCE to disable the band entirely.
 CACHE_TRUST_DISTANCE = _get_float("DEJAQ_CACHE_TRUST_DISTANCE", 0.15)
-CACHE_BAND_MAX_DISTANCE = _get_float("DEJAQ_CACHE_BAND_MAX_DISTANCE", 0.25)
+# 0.20 is the empirically safe band ceiling: an offline sweep (typo vs
+# different-question pairs, real validator verdicts) found the validator's first
+# false-accept at distance ~0.21 ("freezing point" served the boiling answer).
+# Sibling questions (freezing/boiling, hamlet/macbeth, list/string) cluster at
+# 0.21–0.27 — the same range as heavier typos — so a wider band buys ~1 wrong
+# answer per extra typo caught. Raise only alongside a stronger validator.
+CACHE_BAND_MAX_DISTANCE = _get_float("DEJAQ_CACHE_BAND_MAX_DISTANCE", 0.20)
+
+# Lexical rescue: candidates past the band but within this distance are still
+# eligible when word-level alignment confirms the query is a typo'd variant of
+# the stored one (see services/lexical_match.py). Heaviest real typo observed
+# live sits at 0.52. Rescued hits are always validator-gated.
+CACHE_RESCUE_ENABLED = _get_bool("DEJAQ_CACHE_RESCUE_ENABLED", True)
+CACHE_RESCUE_MAX_DISTANCE = _get_float("DEJAQ_CACHE_RESCUE_MAX_DISTANCE", 0.60)
+
+# Alias learning: after the validator accepts a band/rescue hit, store the
+# typo'd phrasing as an alias entry pointing at the same answer, so the same
+# typo becomes an instant trusted hit next time.
+CACHE_ALIAS_ENABLED = _get_bool("DEJAQ_CACHE_ALIAS_ENABLED", True)
 
 # Model backend: generation runs through Ollama (local or remote per this URL).
 OLLAMA_URL = _get_text("DEJAQ_OLLAMA_URL", "http://127.0.0.1:11434")

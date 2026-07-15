@@ -89,6 +89,35 @@ _FEW_SHOTS = [
         "NEW QUESTION: how does a B-tree differ from a binary search tree?",
         "INVALID",
     ),
+    # --- Single-word swap, same template: the answer is about a DIFFERENT thing → INVALID ---
+    (
+        "CACHED QUESTION: what is the boiling point of water?\n"
+        "CACHED ANSWER: Water boils at 100 degrees Celsius at sea level.\n"
+        "NEW QUESTION: what is the freezing point of water?",
+        "INVALID",
+    ),
+    # --- Single-word swap in a coding question → INVALID ---
+    (
+        "CACHED QUESTION: how do i reverse a string in python?\n"
+        "CACHED ANSWER: Use slicing: s[::-1] reverses a string in Python.\n"
+        "NEW QUESTION: how do i reverse a list in python?",
+        "INVALID",
+    ),
+    # --- Long question, one swapped term changes the subject → INVALID ---
+    (
+        "CACHED QUESTION: when should i use multiprocessing instead of multithreading in python?\n"
+        "CACHED ANSWER: Use multiprocessing for CPU-bound work: each process has its own interpreter "
+        "and memory space, bypassing the GIL. Threads share memory and suit I/O-bound work.\n"
+        "NEW QUESTION: when should i use asyncio instead of multithreading in python?",
+        "INVALID",
+    ),
+    # --- Heavy typos, same question → VALID (typos never change the ask) ---
+    (
+        "CACHED QUESTION: what is the capital of russia?\n"
+        "CACHED ANSWER: The capital of Russia is Moscow.\n"
+        "NEW QUESTION: what is teh captial of rusia?",
+        "VALID",
+    ),
 ]
 
 # Word-count cap on cached_answer before validator call.
@@ -107,24 +136,36 @@ class ValidatorService:
         new_query: str,
         cached_query: str,
         cached_answer: str,
+        mismatch_hint: str | None = None,
     ) -> tuple[bool, str]:
-        """Return (is_valid, raw_verdict). Fail-safe: unparseable output → False (INVALID)."""
+        """Return (is_valid, raw_verdict). Fail-safe: unparseable output → False (INVALID).
+
+        mismatch_hint: optional note naming the word pairs where the two
+        questions differ (e.g. "'list' vs 'string'") — computed by the lexical
+        alignment gate. Sharpens the verdict on single-word-swap traps, where
+        near-identical wording otherwise invites a false VALID.
+        """
         words = cached_answer.split()
         if len(words) > _MAX_ANSWER_WORDS:
             cached_answer = " ".join(words[:_MAX_ANSWER_WORDS])
+
+        final = (
+            f"CACHED QUESTION: {cached_query}\n"
+            f"CACHED ANSWER: {cached_answer}\n"
+            f"NEW QUESTION: {new_query}"
+        )
+        if mismatch_hint:
+            final += (
+                f"\nNOTE: the new question differs from the cached question at these words: "
+                f"{mismatch_hint}. If any of these word differences change what is being "
+                f"asked, reply INVALID."
+            )
 
         messages: list[dict] = [{"role": "system", "content": _SYSTEM_PROMPT}]
         for user_msg, assistant_msg in _FEW_SHOTS:
             messages.append({"role": "user", "content": user_msg})
             messages.append({"role": "assistant", "content": assistant_msg})
-        messages.append({
-            "role": "user",
-            "content": (
-                f"CACHED QUESTION: {cached_query}\n"
-                f"CACHED ANSWER: {cached_answer}\n"
-                f"NEW QUESTION: {new_query}"
-            ),
-        })
+        messages.append({"role": "user", "content": final})
 
         was_truncated = len(cached_answer.split()) >= _MAX_ANSWER_WORDS
 

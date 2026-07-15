@@ -47,3 +47,29 @@ def test_unparseable_fails_safe_to_invalid():
 def test_empty_fails_safe_to_invalid():
     accepted, _ = _validate("")
     assert accepted is False
+
+
+class _CapturingBackend:
+    def __init__(self, reply: str = "VALID") -> None:
+        self.reply = reply
+        self.messages = None
+
+    async def complete(self, request) -> str:
+        self.messages = request.messages
+        return self.reply
+
+
+def test_mismatch_hint_appended_to_prompt():
+    backend = _CapturingBackend()
+    svc = ValidatorService(backend=backend, model_name="fake")
+    asyncio.run(svc.validate("q new", "q cached", "answer", mismatch_hint="'list' vs 'string'"))
+    final = backend.messages[-1]["content"]
+    assert "NOTE:" in final
+    assert "'list' vs 'string'" in final
+
+
+def test_no_hint_no_note():
+    backend = _CapturingBackend()
+    svc = ValidatorService(backend=backend, model_name="fake")
+    asyncio.run(svc.validate("q new", "q cached", "answer"))
+    assert "NOTE:" not in backend.messages[-1]["content"]

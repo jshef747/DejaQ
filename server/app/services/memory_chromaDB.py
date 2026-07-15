@@ -9,10 +9,13 @@ from sentence_transformers import SentenceTransformer
 
 from app.config import (
     CACHE_BAND_MAX_DISTANCE,
+    CACHE_RESCUE_ENABLED,
+    CACHE_RESCUE_MAX_DISTANCE,
     CACHE_TRUST_DISTANCE,
     CHROMA_HOST,
     CHROMA_PORT,
 )
+from app.services.lexical_match import align
 
 logger = logging.getLogger("dejaq.services.memory_chromaDB")
 
@@ -20,8 +23,10 @@ logger = logging.getLogger("dejaq.services.memory_chromaDB")
 # served directly; the (trust, band_max] range is the validator-guarded band.
 SIMILARITY_THRESHOLD = CACHE_TRUST_DISTANCE
 
-# Candidates returned per probe from ChromaDB.
-_LOOKUP_N_RESULTS = 5
+# Candidates returned per lookup from ChromaDB. 10 (not 5) because the lexical
+# rescue tier needs the clean twin of a heavily typo'd query inside top-K even
+# when the embedding ranks it low.
+_LOOKUP_N_RESULTS = 10
 
 _embedder: SentenceTransformer | None = None
 
@@ -50,6 +55,13 @@ class CacheLookupResult:
     # True when the hit came from the validator-guarded band (trust, band_max].
     # The caller must run the cache validator before serving it.
     requires_validation: bool = False
+    # True when the hit came from the lexical-rescue tier (past the band, but
+    # word-aligned with the stored query). Always requires validation.
+    rescued: bool = False
+    # Word pairs where the query and the matched stored query differ
+    # semantically (e.g. (("list", "string"),)) — a hint for the validator.
+    # None when the words aligned or alignment wasn't informative.
+    mismatches: tuple[tuple[str, str], ...] | None = None
 
 
 class MemoryService:
@@ -70,10 +82,12 @@ class MemoryService:
     def lookup_cache(self, normalized_query: str) -> CacheLookupResult:
         """Return cache hit details plus nearest Chroma prompt/distance.
 
-        Trusted-zone candidates (distance ≤ CACHE_TRUST_DISTANCE) are preferred
-        and served directly; if none exist, the best band candidate
-        (≤ CACHE_BAND_MAX_DISTANCE) is returned with requires_validation=True
-        for the caller to validate before serving.
+        Three tiers, in priority order:
+        - trusted (distance ≤ CACHE_TRUST_DISTANCE): served directly,
+        - band (≤ CACHE_BAND_MAX_DISTANCE): served only if the validator accepts,
+        - lexical rescue (≤ CACHE_RESCUE_MAX_DISTANCE and word-aligned with the
+          stored query — a heavily typo'd variant): validator-gated as well.
+        Within a tier, highest score wins (absent score treated as 0.0).
         """
         start = time.time()
         query_embedding = _embed(normalized_query)
@@ -85,7 +99,7 @@ class MemoryService:
         )
 
         latency_ms = (time.time() - start) * 1000
-        ceiling = max(CACHE_TRUST_DISTANCE, CACHE_BAND_MAX_DISTANCE)
+        band_ceiling = max(CACHE_TRUST_DISTANCE, CACHE_BAND_MAX_DISTANCE)
 
         if not (results["distances"] and results["distances"][0] and results["ids"] and results["ids"][0]):
             logger.debug("Cache MISS empty_collection latency=%.1fms", latency_ms)
@@ -96,14 +110,11 @@ class MemoryService:
         if results["documents"] and results["documents"][0]:
             nearest_prompt = results["documents"][0][0] or None
 
-        # Split candidates into trusted zone and band; prefer trusted. Within a
-        # pool, highest score wins (absent score treated as 0.0).
         trusted: list[tuple] = []
         band: list[tuple] = []
+        rescue: list[tuple] = []
         for i, (dist, entry_id) in enumerate(zip(results["distances"][0], results["ids"][0])):
             dist = float(dist)
-            if dist > ceiling:
-                continue
             meta = results["metadatas"][0][i] if results["metadatas"] and results["metadatas"][0] else {}
             score = float(meta.get("score", 0.0))
             matched_query = ""
@@ -112,10 +123,17 @@ class MemoryService:
             row = (score, dist, entry_id, meta, matched_query)
             if dist <= CACHE_TRUST_DISTANCE:
                 trusted.append(row)
-            else:
+            elif dist <= band_ceiling:
                 band.append(row)
+            elif (
+                CACHE_RESCUE_ENABLED
+                and dist <= CACHE_RESCUE_MAX_DISTANCE
+                and matched_query
+                and align(normalized_query, matched_query).aligned
+            ):
+                rescue.append(row)
 
-        if not trusted and not band:
+        if not trusted and not band and not rescue:
             logger.debug("Cache MISS distance=%.4f latency=%.1fms", nearest_dist, latency_ms)
             return CacheLookupResult(
                 hit=False,
@@ -123,19 +141,31 @@ class MemoryService:
                 nearest_prompt=nearest_prompt,
             )
 
-        pool = trusted if trusted else band
+        pool = trusted or band or rescue
         requires_validation = not trusted
+        rescued = not trusted and not band
         pool.sort(key=lambda r: r[0], reverse=True)
         best_score, best_dist, best_id, best_meta, matched_query = pool[0]
         answer = best_meta["generalized_answer"]
+
+        # Word-level mismatches vs the chosen entry — validator hint for the
+        # single-word-swap trap (list/string). Only informative when the words
+        # DIDN'T align; rescued hits aligned by construction.
+        mismatches: tuple[tuple[str, str], ...] | None = None
+        if not rescued and matched_query:
+            align_result = align(normalized_query, matched_query)
+            if not align_result.aligned and align_result.mismatches:
+                mismatches = align_result.mismatches
+
         logger.debug(
             "Cache HIT distance=%.4f score=%.1f trust=%.2f band_max=%.2f "
-            "requires_validation=%s latency=%.1fms entry_id=%s",
+            "requires_validation=%s rescued=%s latency=%.1fms entry_id=%s",
             best_dist,
             best_score,
             CACHE_TRUST_DISTANCE,
             CACHE_BAND_MAX_DISTANCE,
             requires_validation,
+            rescued,
             latency_ms,
             best_id,
         )
@@ -148,6 +178,8 @@ class MemoryService:
             nearest_distance=nearest_dist,
             nearest_prompt=nearest_prompt,
             requires_validation=requires_validation,
+            rescued=rescued,
+            mismatches=mismatches,
         )
 
     def check_cache(self, normalized_query: str) -> Optional[tuple[str, str, float, str]]:
@@ -190,6 +222,42 @@ class MemoryService:
             }],
         )
         logger.info("Stored in cache (id=%s, total=%d)", doc_id, self._collection.count())
+        return doc_id
+
+    def store_alias(self, alias_query: str, source_entry_id: str) -> str | None:
+        """Store a typo'd phrasing as an alias entry pointing at an existing answer.
+
+        Called after the validator accepts a band/rescue hit: the alias makes the
+        same typo an instant trusted hit next time. Chains are flattened — an
+        alias of an alias points at the root entry.
+        Returns the alias doc id, or None when there is nothing to store.
+        """
+        parent_meta = self.get_entry_metadata(source_entry_id)
+        if parent_meta is None:
+            logger.warning("store_alias: source entry %s not found", source_entry_id)
+            return None
+        root_id = parent_meta.get("alias_of") or source_entry_id
+
+        doc_id = hashlib.sha256(alias_query.encode()).hexdigest()[:16]
+        if doc_id == source_entry_id or doc_id == root_id:
+            return None  # alias text identical to the stored query
+
+        self._collection.upsert(
+            ids=[doc_id],
+            embeddings=[_embed(alias_query)],
+            documents=[alias_query],
+            metadatas=[{
+                "generalized_answer": parent_meta.get("generalized_answer", ""),
+                "original_query": parent_meta.get("original_query", ""),
+                "user_id": parent_meta.get("user_id", ""),
+                "stored_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "score": 0.0,
+                "hit_count": 0,
+                "negative_count": 0,
+                "alias_of": root_id,
+            }],
+        )
+        logger.info("Stored alias %s -> %s (query=%r)", doc_id, root_id, alias_query[:60])
         return doc_id
 
     def get_all_entries(self, limit: int = 50, offset: int = 0) -> list[dict]:
@@ -250,12 +318,20 @@ class MemoryService:
         return new_score
 
     def delete_entry(self, entry_id: str) -> bool:
-        """Delete a single cache entry by ID. Returns True if it existed."""
+        """Delete a cache entry by ID, cascading to its aliases. Returns True if it existed."""
         try:
             existing = self._collection.get(ids=[entry_id])
             if not existing["ids"]:
                 return False
             self._collection.delete(ids=[entry_id])
+            # Cascade: aliases point at a deleted answer — remove them too.
+            try:
+                dependents = self._collection.get(where={"alias_of": entry_id}, include=[])
+                if dependents["ids"]:
+                    self._collection.delete(ids=dependents["ids"])
+                    logger.info("Deleted %d alias(es) of %s", len(dependents["ids"]), entry_id)
+            except Exception:
+                logger.warning("Alias cascade failed for %s", entry_id, exc_info=True)
             logger.info("Deleted cache entry %s (total=%d)", entry_id, self._collection.count())
             return True
         except Exception:
