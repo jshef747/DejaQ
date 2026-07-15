@@ -174,10 +174,88 @@ class TestThreshold:
         def patched_query(**kwargs):
             result = original_query(**kwargs)
             if result["distances"] and result["distances"][0]:
-                result["distances"][0][0] = 0.18  # above 0.15 threshold
+                result["distances"][0][0] = 0.18  # in the validator band — not a trusted hit
             return result
 
         with patch.object(svc._collection, "query", side_effect=patched_query):
             result = svc.check_cache("capital of france")
 
-        assert result is None, "Entry at distance 0.18 should miss (above 0.15 threshold)"
+        assert result is None, "check_cache must exclude band hits (0.18 > trust 0.15)"
+
+
+def _force_distances(svc, per_probe):
+    """Patch svc._collection.query to overwrite distances[probe_idx][0] with given values.
+
+    per_probe: list of distances, one per query embedding (probe). Missing probes
+    keep their real distance.
+    """
+    from unittest.mock import patch
+
+    original_query = svc._collection.query
+
+    def patched_query(**kwargs):
+        result = original_query(**kwargs)
+        for p_idx, dist in enumerate(per_probe):
+            if dist is None:
+                continue
+            if result["distances"] and len(result["distances"]) > p_idx and result["distances"][p_idx]:
+                result["distances"][p_idx][0] = dist
+        return result
+
+    return patch.object(svc._collection, "query", side_effect=patched_query)
+
+
+@chroma_required
+class TestBand:
+    def test_trusted_hit_no_validation(self):
+        svc = _make_svc("band_trusted")
+        svc.store_interaction("capital of france", "Paris is the capital.", "orig", "u1")
+        with _force_distances(svc, [0.10]):
+            result = svc.lookup_cache("capital of france")
+        assert result.hit is True
+        assert result.requires_validation is False
+        assert result.probe == "raw"
+
+    def test_band_hit_requires_validation(self):
+        svc = _make_svc("band_hit")
+        svc.store_interaction("capital of france", "Paris is the capital.", "orig", "u1")
+        with _force_distances(svc, [0.18]):
+            result = svc.lookup_cache("capital of france")
+        assert result.hit is True
+        assert result.requires_validation is True
+        assert result.distance == 0.18
+
+    def test_above_band_misses(self):
+        svc = _make_svc("band_above")
+        svc.store_interaction("capital of france", "Paris is the capital.", "orig", "u1")
+        with _force_distances(svc, [0.30]):
+            result = svc.lookup_cache("capital of france")
+        assert result.hit is False
+        assert result.nearest_distance == 0.30
+
+    def test_band_disabled_via_config(self, monkeypatch):
+        import app.services.memory_chromaDB as mem
+
+        monkeypatch.setattr(mem, "CACHE_BAND_MAX_DISTANCE", 0.15)  # ≤ trust → band off
+        svc = _make_svc("band_disabled")
+        svc.store_interaction("capital of france", "Paris is the capital.", "orig", "u1")
+        with _force_distances(svc, [0.18]):
+            result = svc.lookup_cache("capital of france")
+        assert result.hit is False, "0.18 must miss when the band is disabled"
+
+    def test_check_cache_excludes_band(self):
+        svc = _make_svc("band_check_cache")
+        svc.store_interaction("capital of france", "Paris is the capital.", "orig", "u1")
+        with _force_distances(svc, [0.18]):
+            assert svc.check_cache("capital of france") is None
+
+    def test_two_probe_takes_min_distance(self):
+        # Raw probe misses (0.30), corrected probe hits (0.10) → min wins, probe=corrected.
+        svc = _make_svc("band_two_probe")
+        svc.store_interaction("kubernetes basics", "Kubernetes orchestrates containers.", "orig", "u1")
+        with _force_distances(svc, [0.30, 0.10]):
+            result = svc.lookup_cache("kubernetis basics", alt_query="kubernetes basics")
+        assert result.hit is True
+        assert result.requires_validation is False
+        assert result.distance == 0.10
+        assert result.probe == "corrected"

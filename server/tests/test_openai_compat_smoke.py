@@ -95,6 +95,56 @@ class StubHitMemory:
         return None
 
 
+class StubBandMemory:
+    """Cache hit in the validator-guarded band (requires_validation=True)."""
+
+    def lookup_cache(self, clean_query: str, alt_query: str | None = None):
+        return CacheLookupResult(
+            hit=True,
+            generalized_answer="Cached Paris answer.",
+            entry_id="docband",
+            distance=0.18,
+            matched_query="capital of france",
+            nearest_distance=0.18,
+            nearest_prompt="capital of france",
+            requires_validation=True,
+            probe="raw",
+        )
+
+    def check_cache(self, clean_query: str):
+        return None
+
+    def increment_hit_count(self, doc_id: str):
+        return None
+
+
+class StubValidatorValid:
+    async def validate(self, new_query, cached_query, cached_answer):
+        return True, "VALID"
+
+
+class StubValidatorInvalid:
+    async def validate(self, new_query, cached_query, cached_answer):
+        return False, "INVALID"
+
+
+class ExplodingValidator:
+    async def validate(self, *args, **kwargs):
+        raise AssertionError("validator should not be called")
+
+
+class CorrectingNormalizer:
+    """normalize_ex exposes a corrected probe distinct from the raw cache key."""
+
+    async def normalize(self, raw_query: str) -> str:
+        return raw_query.lower()
+
+    async def normalize_ex(self, raw_query: str):
+        from app.services.normalizer import NormalizedQuery
+
+        return NormalizedQuery(cache_key="kubernetis basics", corrected_key="kubernetes basics")
+
+
 class CapturingRegistry:
     def __init__(self, interaction_id: str = "int_test") -> None:
         self.interaction_id = interaction_id
@@ -802,6 +852,139 @@ def test_hard_query_without_org_credential_returns_402_without_env_fallback(monk
 
     assert response.status_code == 402
     assert response.json()["detail"].startswith("No google API key configured")
+
+
+def test_band_hit_served_when_validator_valid(monkeypatch):
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    registry = CapturingRegistry("int_band")
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "_validator", StubValidatorValid())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubBandMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+    monkeypatch.setattr(openai_compat, "response_registry", registry, raising=False)
+    monkeypatch.setattr(openai_compat, "VALIDATOR_ENABLED", True)
+
+    client = TestClient(app)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == "Cached Paris answer."
+    assert response.headers["x-dejaq-tier"] == "cache"
+    assert response.headers["x-dejaq-validator-verdict"] == "valid"
+
+
+def test_band_hit_falls_through_to_miss_when_validator_invalid(monkeypatch):
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "_llm_router", StubRouter())
+    monkeypatch.setattr(openai_compat, "_classifier", StubClassifier())
+    monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
+    monkeypatch.setattr(openai_compat, "_validator", StubValidatorInvalid())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubBandMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat, "USE_CELERY", False)
+    monkeypatch.setattr(openai_compat, "VALIDATOR_ENABLED", True)
+
+    client = TestClient(app)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == "Paris is the capital of France."
+    assert response.headers["x-dejaq-tier"] == "local"
+    assert response.headers["x-dejaq-validator-verdict"] == "invalid"
+
+
+def test_band_hit_misses_when_validator_disabled(monkeypatch):
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "_llm_router", StubRouter())
+    monkeypatch.setattr(openai_compat, "_classifier", StubClassifier())
+    monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
+    monkeypatch.setattr(openai_compat, "_validator", ExplodingValidator())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubBandMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat, "USE_CELERY", False)
+    monkeypatch.setattr(openai_compat, "VALIDATOR_ENABLED", False)
+
+    client = TestClient(app)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == "Paris is the capital of France."
+    assert response.headers["x-dejaq-tier"] == "local"
+
+
+def test_miss_stores_under_corrected_key(monkeypatch):
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    captured: dict[str, object] = {}
+
+    class FakeTask:
+        def apply_async(self, *, args, headers, ignore_result=False):
+            captured["args"] = args
+            captured["headers"] = headers
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", CorrectingNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "_llm_router", StubRouter())
+    monkeypatch.setattr(openai_compat, "_classifier", StubClassifier())
+    monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
+    monkeypatch.setattr(openai_compat, "generalize_and_store_task", FakeTask())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (True, "test"))
+    monkeypatch.setattr(openai_compat, "USE_CELERY", True)
+
+    client = TestClient(app)
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"X-DejaQ-Routing-Mode": "easy_local"},
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "kubernetis basics"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["args"][0] == "kubernetes basics"  # stored under corrected key
 
 
 def test_hard_query_unmapped_external_model_returns_422(monkeypatch):

@@ -7,11 +7,21 @@ from typing import Optional
 import chromadb
 from sentence_transformers import SentenceTransformer
 
-from app.config import CHROMA_HOST, CHROMA_PORT
+from app.config import (
+    CACHE_BAND_MAX_DISTANCE,
+    CACHE_TRUST_DISTANCE,
+    CHROMA_HOST,
+    CHROMA_PORT,
+)
 
 logger = logging.getLogger("dejaq.services.memory_chromaDB")
 
-SIMILARITY_THRESHOLD = 0.15
+# Back-compat alias — the trusted-zone ceiling. Distances at or below this are
+# served directly; the (trust, band_max] range is the validator-guarded band.
+SIMILARITY_THRESHOLD = CACHE_TRUST_DISTANCE
+
+# Candidates returned per probe from ChromaDB.
+_LOOKUP_N_RESULTS = 5
 
 _embedder: SentenceTransformer | None = None
 
@@ -37,6 +47,11 @@ class CacheLookupResult:
     matched_query: str | None = None
     nearest_distance: float | None = None
     nearest_prompt: str | None = None
+    # True when the hit came from the validator-guarded band (trust, band_max].
+    # The caller must run the cache validator before serving it.
+    requires_validation: bool = False
+    # Which probe produced the winning distance ("raw" or "corrected"), for logs.
+    probe: str | None = None
 
 
 class MemoryService:
@@ -54,43 +69,72 @@ class MemoryService:
         )
         logger.info("ChromaDB ready — %d documents in collection '%s'", self._collection.count(), collection_name)
 
-    def lookup_cache(self, normalized_query: str) -> CacheLookupResult:
+    def lookup_cache(
+        self,
+        normalized_query: str,
+        alt_query: str | None = None,
+    ) -> CacheLookupResult:
         """Return cache hit details plus nearest Chroma prompt/distance.
 
-        Fetches top-5 candidates, filters to those within SIMILARITY_THRESHOLD,
-        then returns the one with the highest score (absent score treated as 0.0).
+        Probes with the normalized query and, when supplied and different, a
+        spell-corrected variant (two-probe typo tolerance). Candidates are merged
+        by entry id keeping the smallest distance. Trusted-zone candidates
+        (distance ≤ CACHE_TRUST_DISTANCE) are preferred and served directly; if
+        none exist, the best band candidate (≤ CACHE_BAND_MAX_DISTANCE) is
+        returned with requires_validation=True for the caller to validate.
         """
         start = time.time()
-        query_embedding = _embed(normalized_query)
-        n = min(5, self._collection.count() or 1)
+
+        probes: list[tuple[str, str]] = [("raw", normalized_query)]
+        if alt_query and alt_query != normalized_query:
+            probes.append(("corrected", alt_query))
+
+        n = min(_LOOKUP_N_RESULTS, self._collection.count() or 1)
         results = self._collection.query(
-            query_embeddings=[query_embedding],
+            query_embeddings=[_embed(q) for _, q in probes],
             n_results=n,
             include=["documents", "metadatas", "distances"],
         )
 
         latency_ms = (time.time() - start) * 1000
+        ceiling = max(CACHE_TRUST_DISTANCE, CACHE_BAND_MAX_DISTANCE)
 
-        if not (results["distances"] and results["distances"][0] and results["ids"] and results["ids"][0]):
-            logger.debug("Cache MISS empty_collection latency=%.1fms", latency_ms)
-            return CacheLookupResult(hit=False)
+        # Merge candidates across probes by entry id, keeping the min distance.
+        best_by_id: dict[str, dict] = {}
+        nearest_dist: float | None = None
+        nearest_prompt: str | None = None
 
-        nearest_dist = float(results["distances"][0][0])
-        nearest_prompt = None
-        if results["documents"] and results["documents"][0]:
-            nearest_prompt = results["documents"][0][0] or None
+        ids = results.get("ids") or []
+        dists = results.get("distances") or []
+        docs = results.get("documents") or []
+        metas = results.get("metadatas") or []
 
-        candidates = []
-        for i, (dist, entry_id) in enumerate(zip(results["distances"][0], results["ids"][0])):
-            if dist <= SIMILARITY_THRESHOLD:
-                meta = results["metadatas"][0][i] if results["metadatas"] and results["metadatas"][0] else {}
-                score = float(meta.get("score", 0.0))
-                matched_query = ""
-                if results["documents"] and results["documents"][0]:
-                    matched_query = results["documents"][0][i] or ""
-                candidates.append((score, float(dist), entry_id, meta, matched_query))
+        for p_idx, (probe_label, _q) in enumerate(probes):
+            ids_p = ids[p_idx] if p_idx < len(ids) else []
+            dists_p = dists[p_idx] if p_idx < len(dists) else []
+            docs_p = docs[p_idx] if p_idx < len(docs) else []
+            metas_p = metas[p_idx] if p_idx < len(metas) else []
+            for i, entry_id in enumerate(ids_p):
+                dist = float(dists_p[i])
+                doc = (docs_p[i] if i < len(docs_p) else "") or ""
+                if nearest_dist is None or dist < nearest_dist:
+                    nearest_dist = dist
+                    nearest_prompt = doc or None
+                if dist > ceiling:
+                    continue
+                prev = best_by_id.get(entry_id)
+                if prev is None or dist < prev["dist"]:
+                    best_by_id[entry_id] = {
+                        "dist": dist,
+                        "probe": probe_label,
+                        "meta": (metas_p[i] if i < len(metas_p) else {}) or {},
+                        "matched_query": doc,
+                    }
 
-        if not candidates:
+        if not best_by_id:
+            if nearest_dist is None:
+                logger.debug("Cache MISS empty_collection latency=%.1fms", latency_ms)
+                return CacheLookupResult(hit=False)
             logger.debug("Cache MISS distance=%.4f latency=%.1fms", nearest_dist, latency_ms)
             return CacheLookupResult(
                 hit=False,
@@ -98,15 +142,32 @@ class MemoryService:
                 nearest_prompt=nearest_prompt,
             )
 
-        # Sort by score descending, pick best
-        candidates.sort(key=lambda c: c[0], reverse=True)
-        best_score, best_dist, best_id, best_meta, matched_query = candidates[0]
+        # Split into trusted zone and band; prefer trusted. Within a pool, highest
+        # score wins (absent score treated as 0.0).
+        trusted: list[tuple] = []
+        band: list[tuple] = []
+        for entry_id, c in best_by_id.items():
+            score = float(c["meta"].get("score", 0.0))
+            row = (score, c["dist"], entry_id, c["meta"], c["matched_query"], c["probe"])
+            if c["dist"] <= CACHE_TRUST_DISTANCE:
+                trusted.append(row)
+            else:
+                band.append(row)
+
+        pool = trusted if trusted else band
+        requires_validation = not trusted
+        pool.sort(key=lambda r: r[0], reverse=True)
+        best_score, best_dist, best_id, best_meta, matched_query, best_probe = pool[0]
         answer = best_meta["generalized_answer"]
         logger.debug(
-            "Cache HIT distance=%.4f score=%.1f threshold=%.2f latency=%.1fms entry_id=%s",
+            "Cache HIT distance=%.4f score=%.1f trust=%.2f band_max=%.2f probe=%s "
+            "requires_validation=%s latency=%.1fms entry_id=%s",
             best_dist,
             best_score,
-            SIMILARITY_THRESHOLD,
+            CACHE_TRUST_DISTANCE,
+            CACHE_BAND_MAX_DISTANCE,
+            best_probe,
+            requires_validation,
             latency_ms,
             best_id,
         )
@@ -118,12 +179,18 @@ class MemoryService:
             matched_query=matched_query,
             nearest_distance=nearest_dist,
             nearest_prompt=nearest_prompt,
+            requires_validation=requires_validation,
+            probe=best_probe,
         )
 
     def check_cache(self, normalized_query: str) -> Optional[tuple[str, str, float, str]]:
-        """Return (generalized_answer, entry_id, distance, matched_query) on cache hit, None on miss."""
+        """Return (generalized_answer, entry_id, distance, matched_query) on cache hit, None on miss.
+
+        Legacy helper — only returns trusted-zone hits. Band hits (which need
+        validation) are reported as a miss so old callers keep their prior semantics.
+        """
         result = self.lookup_cache(normalized_query)
-        if not result.hit:
+        if not result.hit or result.requires_validation:
             return None
         return (
             result.generalized_answer or "",

@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from dataclasses import dataclass
 
 from spellchecker import SpellChecker
 
@@ -57,6 +58,20 @@ _spell.word_frequency.load_words(_PROPER_NOUNS * 10_000)
 _WORD_RE = re.compile(r"([a-zA-Z'-]+|[^a-zA-Z'-]+)")
 
 logger = logging.getLogger("dejaq.services.normalizer")
+
+
+@dataclass(frozen=True)
+class NormalizedQuery:
+    """Result of normalization.
+
+    cache_key is the primary cache key (current normalize() output, unchanged).
+    corrected_key is a spell-corrected variant used as a *second* cache probe to
+    absorb typos, or None when no correction applied (or on the opinion path,
+    where the canonical "best <noun>" form already absorbs spelling).
+    """
+
+    cache_key: str
+    corrected_key: str | None = None
 
 # ---------------------------------------------------------------------------
 # Regex gates (ported verbatim from evals/normalizer/configs/v22_opinion_llm_rewrite_bge_small.py)
@@ -198,25 +213,38 @@ class NormalizerService:
         self.model_name = model_name
 
     async def normalize(self, raw_query: str) -> str:
+        """Return the primary cache key. Kept for callers that only need the key."""
+        return (await self.normalize_ex(raw_query)).cache_key
+
+    async def normalize_ex(self, raw_query: str) -> NormalizedQuery:
+        """Return the primary cache key plus an optional spell-corrected probe.
+
+        Cache matching is semantic (BGE embeddings + cosine distance), which absorbs
+        many typos on its own, but a typo can still push distance past the tight cache
+        threshold. The generic spell checker cannot tell unknown-but-correct jargon
+        (malloc, sudo, struct) from a real typo, so we never *replace* the cache key
+        with the corrected form — a wrong correction would poison lookups. Instead the
+        corrected form is exposed as a *secondary* probe: the caller looks up both, and
+        a bad correction simply never matches while the raw key still works.
+        """
         logger.debug("Normalizing query: %s", raw_query)
         start = time.time()
 
-        # Spell-correction is only used on the opinion path. Cache matching is
-        # semantic (BGE embeddings + cosine distance), which already absorbs typos
-        # — "...segfult..." matches "...segfault..." without correction. The generic
-        # spell checker cannot tell unknown-but-correct jargon (malloc, sudo, struct)
-        # from a real typo, so running it on general queries mangles technical terms.
-        # We compute it only to gate opinion detection; passthrough stays uncorrected.
+        # Computed once here: gates opinion detection AND, on the passthrough path,
+        # supplies the secondary corrected probe.
         corrected = _spell_correct(raw_query)
 
         if not _is_opinion(corrected):
             normalized = raw_query.strip().lower()
+            corrected_key = corrected.strip().lower()
+            # Only expose a second probe when correction actually changed the key.
+            alt = corrected_key if corrected_key != normalized else None
             latency = (time.time() - start) * 1000
             logger.debug(
-                "Normalization (passthrough) in %.2f ms. Raw: %r -> Normalized: %r",
-                latency, raw_query, normalized,
+                "Normalization (passthrough) in %.2f ms. Raw: %r -> Normalized: %r (corrected=%r)",
+                latency, raw_query, normalized, alt,
             )
-            return normalized
+            return NormalizedQuery(cache_key=normalized, corrected_key=alt)
 
         messages = _build_opinion_messages(corrected)
         raw_output = await self.backend.complete(
@@ -234,4 +262,5 @@ class NormalizerService:
             "Normalization (opinion rewrite) in %.2f ms. Raw: %r -> Normalized: %r",
             latency, raw_query, normalized,
         )
-        return normalized
+        # Opinion rewrite already collapses spelling into the canonical form; no probe.
+        return NormalizedQuery(cache_key=normalized, corrected_key=None)

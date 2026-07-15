@@ -61,6 +61,15 @@ LOG_SHOW_CONTENT = _get_bool("DEJAQ_LOG_SHOW_CONTENT", False)
 # Cache eviction
 EVICTION_FLOOR = _get_float("DEJAQ_EVICTION_FLOOR", -5.0)
 
+# Cache lookup distance bands (cosine).
+# Hits at or below CACHE_TRUST_DISTANCE are served directly (subject to the
+# existing validator-skip / validation rules). Hits in the band
+# (CACHE_TRUST_DISTANCE, CACHE_BAND_MAX_DISTANCE] are candidates only — they are
+# served ONLY if the cache validator accepts them. Set CACHE_BAND_MAX_DISTANCE
+# at or below CACHE_TRUST_DISTANCE to disable the band entirely.
+CACHE_TRUST_DISTANCE = _get_float("DEJAQ_CACHE_TRUST_DISTANCE", 0.15)
+CACHE_BAND_MAX_DISTANCE = _get_float("DEJAQ_CACHE_BAND_MAX_DISTANCE", 0.25)
+
 # Model backend: generation runs through Ollama (local or remote per this URL).
 OLLAMA_URL = _get_text("DEJAQ_OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_TIMEOUT_SECONDS = _get_float("DEJAQ_OLLAMA_TIMEOUT_SECONDS", 60.0)

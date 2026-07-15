@@ -6,9 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 DejaQ is an LLM cost-optimization platform that reduces API costs through semantic caching, query classification, and hybrid model routing.
 
-**Cache miss pipeline:** User Query → Context Enricher (Qwen 1.5B + regex gate, makes query standalone) → Normalizer (Qwen 2.5, produces cache key) → Cache Filter (heuristics) → LLM gets **original query + history** (preserves tone) → Response to user → Background: Generalize response (Phi-3.5 Mini) → Store in ChromaDB (if filter passes)
+**Cache miss pipeline:** User Query → Context Enricher (Qwen 1.5B + regex gate, makes query standalone) → Normalizer (Qwen 2.5, produces cache key **+ optional spell-corrected probe**) → Cache Filter (heuristics) → LLM gets **original query + history** (preserves tone) → Response to user → Background: Generalize response (Phi-3.5 Mini) → Store in ChromaDB under the **corrected key when present** (if filter passes) so typo'd queries don't create divergent entries
 
-**Cache hit pipeline:** User Query → Context Enricher → Normalizer → ChromaDB returns tone-neutral response (cosine ≤ 0.15) → **Cache Validator** (Gemma E2B checks cached answer covers the new query; INVALID → treat as miss) → Context Adjuster adds tone → Response to user
+**Cache hit pipeline:** User Query → Context Enricher → Normalizer → **two-probe** ChromaDB lookup (raw + spell-corrected key, min distance per entry) → trusted hit (cosine ≤ `DEJAQ_CACHE_TRUST_DISTANCE`, 0.15) served directly, or **band hit** (0.15–`DEJAQ_CACHE_BAND_MAX_DISTANCE`, 0.25) served only if the **Cache Validator** (Gemma E2B checks cached answer covers the new query) accepts → INVALID / validator-disabled band hit → treat as miss → Context Adjuster adds tone → Response to user
+
+> **Typo handling:** the Normalizer never *replaces* the cache key with a spell-corrected form (a dictionary checker mangles jargon like `malloc`, `sudo`). Instead it exposes the corrected form as a **second probe** — a bad correction simply never matches while the raw key still works. Typos that push cosine distance past the trusted 0.15 ceiling land in the validator-guarded 0.15–0.25 band.
 
 ## Commands
 
@@ -128,6 +130,8 @@ Generation always runs through Ollama (`DEJAQ_OLLAMA_URL`); there is no per-role
 | `DEJAQ_VALIDATOR_MODEL_NAME` | `gemma_e2b` | Logical model label for cache-answer validator (→ Ollama tag) |
 | `DEJAQ_VALIDATOR_ENABLED` | `true` | Validator is on by default; set `false` to disable (kill switch) |
 | `DEJAQ_VALIDATOR_SKIP_DISTANCE` | `0.05` | Cache hits at or below this cosine distance skip the validator (near-identical match; embedding already guarantees correctness) |
+| `DEJAQ_CACHE_TRUST_DISTANCE` | `0.15` | Trusted-zone cosine ceiling; hits at or below are served directly (subject to validator-skip/validation rules) |
+| `DEJAQ_CACHE_BAND_MAX_DISTANCE` | `0.25` | Upper cosine bound of the validator-guarded band; hits in `(trust, band_max]` are served only if the cache validator accepts. Set at or below `DEJAQ_CACHE_TRUST_DISTANCE` to disable the band |
 
 ### Endpoints
 - `GET /health` — health check; also reports Celery worker status

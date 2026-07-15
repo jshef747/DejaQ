@@ -27,6 +27,7 @@ from app.services.external_llm import ExternalLLMService
 from app.services.credential_service import CredentialService, SUPPORTED_PROVIDERS
 from app.services.llm_providers import LIVE_PROVIDERS
 from app.services.memory_chromaDB import CacheLookupResult, get_memory_service
+from app.services.normalizer import NormalizedQuery
 from app.services.provider_inference import provider_for_model
 from app.services import cache_filter, llm_config_service
 from app.services.classifier import ClassifierService
@@ -244,12 +245,32 @@ def _legacy_cache_lookup(cache_result: tuple[str, ...] | None) -> CacheLookupRes
     )
 
 
-def _cache_lookup(memory: object, clean_query: str) -> CacheLookupResult:
+def _cache_lookup(
+    memory: object,
+    clean_query: str,
+    alt_query: str | None = None,
+) -> CacheLookupResult:
     lookup = getattr(memory, "lookup_cache", None)
     if callable(lookup):
-        return lookup(clean_query)
+        try:
+            return lookup(clean_query, alt_query)
+        except TypeError:
+            # Stub / legacy single-arg lookup_cache — retry without the alt probe.
+            return lookup(clean_query)
     check_cache = getattr(memory, "check_cache")
     return _legacy_cache_lookup(check_cache(clean_query))
+
+
+async def _normalize_query(normalizer: object, enriched: str) -> NormalizedQuery:
+    """Normalize, preferring normalize_ex (returns cache_key + corrected probe).
+
+    Falls back to plain normalize() for stubs/services that only implement it.
+    """
+    normalize_ex = getattr(normalizer, "normalize_ex", None)
+    if callable(normalize_ex):
+        return await normalize_ex(enriched)
+    clean = await normalizer.normalize(enriched)
+    return NormalizedQuery(cache_key=clean, corrected_key=None)
 
 
 def _bg_generalize_and_store(
@@ -423,19 +444,23 @@ async def run_chat_pipeline(
             logger.exception("Enricher failed")
             enriched = user_query
 
-        # 2. Normalize
+        # 2. Normalize (cache_key + optional spell-corrected probe)
         try:
             with trace.step("normalize"):
-                clean_query = await services.normalizer.normalize(enriched)
+                nq = await _normalize_query(services.normalizer, enriched)
         except Exception:
             logger.exception("Normalizer failed")
-            clean_query = enriched
+            nq = NormalizedQuery(cache_key=enriched, corrected_key=None)
+        clean_query = nq.cache_key
+        alt_query = nq.corrected_key
 
-        # 3. Cache lookup
+        # 3. Cache lookup (two-probe: raw + corrected)
         cache_lookup = CacheLookupResult(hit=False)
         try:
             with trace.step("cache"):
-                cache_lookup = _cache_lookup(get_memory_service(cache_namespace), clean_query)
+                cache_lookup = _cache_lookup(
+                    get_memory_service(cache_namespace), clean_query, alt_query
+                )
         except Exception:
             logger.exception("Cache check failed")
 
@@ -446,12 +471,14 @@ async def run_chat_pipeline(
             _cache_distance = float(cache_lookup.distance or 0.0)
             _cache_matched_query = _diagnostic_prompt(cache_lookup.matched_query) or ""
 
+            _requires_validation = bool(getattr(cache_lookup, "requires_validation", False))
             _validator_accepted = True
             # Near-identical matches (cosine distance ≤ VALIDATOR_SKIP_DISTANCE) don't
             # need validation — the embedding already guarantees the cached answer covers
             # the question. Calling the validator here would only burn latency and risk
-            # an over-rejection on a clearly correct hit.
-            _skip_validation = _cache_distance <= VALIDATOR_SKIP_DISTANCE
+            # an over-rejection on a clearly correct hit. Band hits (requires_validation)
+            # never skip: they are only trustworthy once the validator accepts them.
+            _skip_validation = (not _requires_validation) and _cache_distance <= VALIDATOR_SKIP_DISTANCE
             if VALIDATOR_ENABLED and not _skip_validation:
                 try:
                     with trace.step("validate"):
@@ -463,6 +490,13 @@ async def run_chat_pipeline(
                 except Exception:
                     logger.exception("Validator failed; treating as cache miss (fail-safe)")
                     _validator_accepted = False
+            elif _requires_validation and not VALIDATOR_ENABLED:
+                # Band hit but the validator is disabled — cannot vouch for it. Miss.
+                logger.info(
+                    "band hit dropped (validator disabled) distance=%.4f matched_query=%r",
+                    _cache_distance, _cache_matched_query,
+                )
+                _validator_accepted = False
 
             if not _validator_accepted:
                 cache_lookup = CacheLookupResult(
@@ -497,8 +531,9 @@ async def run_chat_pipeline(
                 asyncio.create_task(request_logger.log(workspace_slug, dept, _latency, True, None, None, response_id))
                 asyncio.create_task(_increment_hit_count_bg(cache_namespace, _entry_id))
                 logger.info(
-                    "done cache=hit route=cache model=%s response_id=%s latency=%dms steps=%s%s%s",
-                    model_used, response_id, _latency, trace.summary(),
+                    "done cache=hit route=cache model=%s response_id=%s latency=%dms band=%s probe=%s steps=%s%s%s",
+                    model_used, response_id, _latency,
+                    _requires_validation, cache_lookup.probe or "raw", trace.summary(),
                     _enriched_log_suffix(enriched, enrich_succeeded),
                     _nearest_log_suffix(cache_lookup),
                 )
@@ -628,24 +663,29 @@ async def run_chat_pipeline(
             model_used = "error"
             route = "error"
 
-        # 5. Cache filter + background store
+        # 5. Cache filter + background store.
+        # Store under the corrected key when normalization produced one: a typo'd
+        # query and its clean twin then collapse to the same cache entry instead of
+        # polluting the cache with divergent entries. Deterministic — the same typo
+        # always corrects to the same key, so future typo'd queries still hit.
+        store_key = alt_query or clean_query
         will_cache = False
         try:
             with trace.step("filter"):
-                will_cache, _ = cache_filter.should_cache(enriched, clean_query)
+                will_cache, _ = cache_filter.should_cache(enriched, store_key)
         except Exception:
             logger.exception("Cache filter failed")
 
         store_status = "skipped"
         miss_response_id: str | None = None
         if will_cache:
-            miss_doc_id = _doc_id(clean_query)
+            miss_doc_id = _doc_id(store_key)
             miss_response_id = f"{cache_namespace}:{miss_doc_id}"
             with trace.step("store"):
                 if USE_CELERY:
                     try:
                         generalize_and_store_task.apply_async(
-                            args=(clean_query, answer, user_query, workspace_slug, cache_namespace),
+                            args=(store_key, answer, user_query, workspace_slug, cache_namespace),
                             headers={"dejaq_model_profile": model_profile},
                             ignore_result=True,
                         )
@@ -656,7 +696,7 @@ async def run_chat_pipeline(
                         logger.warning("Celery dispatch failed (%s); storing in-process", type(exc).__name__)
                         background_tasks.add_task(
                             _bg_generalize_and_store,
-                            clean_query,
+                            store_key,
                             answer,
                             user_query,
                             workspace_slug,
@@ -667,7 +707,7 @@ async def run_chat_pipeline(
                 else:
                     background_tasks.add_task(
                         _bg_generalize_and_store,
-                        clean_query,
+                        store_key,
                         answer,
                         user_query,
                         workspace_slug,
