@@ -15,6 +15,7 @@ server/celerybeat-schedule*
 docs/dejaq-presentation-brief.md
 docs/*.docx
 docs/*.pdf
+presentation/
 
 # Generated eval / load-test output
 evals/**/reports/
