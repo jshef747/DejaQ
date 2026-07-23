@@ -20,6 +20,7 @@ presentation/
 # Generated eval / load-test output
 evals/**/reports/
 evals/load-test-reports/
+evals/image_similarity/dataset/
 
 # Python defaults
 __pycache__/
