@@ -21,7 +21,10 @@ def _get_model() -> SentenceTransformer:
 
 def embed_images(images: list[Image.Image]) -> np.ndarray:
     """Embed a batch of PIL images, L2-normalized (cosine distance = 1 - dot)."""
-    return _get_model().encode(images, normalize_embeddings=True, convert_to_numpy=True)
+    return _get_model().encode(
+        images, normalize_embeddings=True, convert_to_numpy=True,
+        show_progress_bar=len(images) > 50,
+    )
 
 
 def cosine_distance(a: np.ndarray, b: np.ndarray) -> float:

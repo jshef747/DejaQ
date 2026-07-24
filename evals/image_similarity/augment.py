@@ -13,16 +13,38 @@ from __future__ import annotations
 
 import argparse
 import random
+import subprocess
+import tempfile
 from pathlib import Path
 
 from PIL import Image, ImageEnhance
 
 DEFAULT_LIBRARY = Path.home() / "Pictures" / "Photos Library.photoslibrary" / "originals"
-READABLE_EXTS = {".jpg", ".jpeg", ".png"}
+DIRECT_EXTS = {".jpg", ".jpeg", ".png"}
+HEIC_EXTS = {".heic"}
+READABLE_EXTS = DIRECT_EXTS | HEIC_EXTS
 
 
 def find_source_photos(library: Path) -> list[Path]:
     return [p for p in library.rglob("*") if p.is_file() and p.suffix.lower() in READABLE_EXTS]
+
+
+def open_photo(path: Path) -> Image.Image:
+    """Open jpg/png directly; convert HEIC to JPEG via macOS's built-in `sips` first
+    (no new dependency needed for HEIC support)."""
+    if path.suffix.lower() not in HEIC_EXTS:
+        return Image.open(path).convert("RGB")
+
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        subprocess.run(
+            ["sips", "-s", "format", "jpeg", str(path), "--out", str(tmp_path)],
+            check=True, capture_output=True,
+        )
+        return Image.open(tmp_path).convert("RGB")
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def make_variants(img: Image.Image) -> dict[str, tuple[Image.Image, int]]:
@@ -55,7 +77,7 @@ def run(library: Path, n_sources: int, out_dir: Path, seed: int | None) -> None:
     total = 0
     for i, src_path in enumerate(chosen, start=1):
         try:
-            img = Image.open(src_path).convert("RGB")
+            img = open_photo(src_path)
         except Exception as e:
             print(f"skip {src_path.name}: {e}")
             continue

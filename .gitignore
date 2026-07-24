@@ -21,6 +21,7 @@ presentation/
 evals/**/reports/
 evals/load-test-reports/
 evals/image_similarity/dataset/
+evals/image_similarity/dataset_copydays/
 
 # Python defaults
 __pycache__/
