@@ -34,10 +34,21 @@ export function loadConversations(): StoredConversation[] {
 
 export function saveConversation(conv: StoredConversation): void {
   if (typeof window === "undefined") return;
+  // Strip attached-image data URLs before persisting: base64 images blow through
+  // the ~5 MB localStorage quota fast. Thumbnails survive for the live session
+  // only; a reloaded conversation shows the text without the image.
+  const lean: StoredConversation = {
+    ...conv,
+    messages: conv.messages.map(({ imageUrl, ...m }) => m),
+  };
   // Replace any existing entry for this ID, then cap the list size.
   const rest = readFromStorage().filter((c) => c.id !== conv.id);
-  const updated = [conv, ...rest].slice(0, MAX_CONVERSATIONS);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+  const updated = [lean, ...rest].slice(0, MAX_CONVERSATIONS);
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+  } catch {
+    // Quota exceeded or storage disabled — history is best-effort, so drop it.
+  }
 }
 
 export function deleteConversation(id: string): void {
