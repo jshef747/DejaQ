@@ -66,11 +66,15 @@ def generalize_and_store_task(
     user_id: str,
     cache_namespace: str = "dejaq_default",
     model_profile: str = "default",
+    image_dhash: str | None = None,
+    image_clip: str | None = None,
 ) -> dict:
     """Generalize an LLM answer (via Phi-3.5) and store in ChromaDB cache.
 
     All arguments are plain strings — no model objects or unpickleable data.
     cache_namespace selects the ChromaDB collection (department isolation).
+    image_dhash/image_clip are the scalar image fingerprints for image requests
+    (both None for text requests).
     """
     start = time.perf_counter()
     doc_id = hashlib.sha256(clean_query.encode()).hexdigest()[:16]
@@ -84,7 +88,10 @@ def generalize_and_store_task(
         context_adjuster = _get_adjuster(resolved_model_profile)
         memory = get_memory_service(cache_namespace)
         generalized = _run_async_in_worker(context_adjuster.generalize(answer))
-        doc_id = memory.store_interaction(clean_query, generalized, original_query, user_id)
+        doc_id = memory.store_interaction(
+            clean_query, generalized, original_query, user_id,
+            image_dhash=image_dhash, image_clip=image_clip,
+        )
         latency_ms = int((time.perf_counter() - start) * 1000)
         logger.info(
             "cache_store status=stored namespace=%s doc_id=%s latency=%dms",

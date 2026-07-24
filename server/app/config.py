@@ -88,6 +88,16 @@ CACHE_RESCUE_MAX_DISTANCE = _get_float("DEJAQ_CACHE_RESCUE_MAX_DISTANCE", 0.60)
 # typo becomes an instant trusted hit next time.
 CACHE_ALIAS_ENABLED = _get_bool("DEJAQ_CACHE_ALIAS_ENABLED", True)
 
+# Image fingerprint gate: a cached entry that carries an image is served to an
+# image request ONLY if BOTH the CLIP cosine distance and the perceptual-hash
+# (dHash) hamming distance are within bounds. Offline validation across two
+# datasets (own photos + INRIA Copydays) showed the closest genuinely-different
+# photo pair at CLIP ~0.048, inside any plausible "trusted" zone — so unlike the
+# text path, image hits get NO unguarded fast tier: dHash (~0.24ms) gates every
+# one. hamming<=15 held cross-group rejection at 89.5% (own) / 99.3% (Copydays).
+CACHE_IMAGE_MAX_DISTANCE = _get_float("DEJAQ_CACHE_IMAGE_MAX_DISTANCE", 0.10)
+CACHE_IMAGE_MAX_HAMMING = int(_get_float("DEJAQ_CACHE_IMAGE_MAX_HAMMING", 15))
+
 # Model backend: generation runs through Ollama (local or remote per this URL).
 OLLAMA_URL = _get_text("DEJAQ_OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_TIMEOUT_SECONDS = _get_float("DEJAQ_OLLAMA_TIMEOUT_SECONDS", 60.0)

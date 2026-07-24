@@ -11,6 +11,8 @@ class ExternalLLMRequest(BaseModel):
     model: str = Field("gemini-2.5-flash", description="External model name to use")
     max_tokens: int = Field(1024, description="Maximum tokens to generate")
     temperature: float = Field(0.7, description="Sampling temperature")
+    image_b64: str | None = Field(None, description="Base64 image bytes attached to the query, if any")
+    image_mime: str | None = Field(None, description="MIME type of the attached image, e.g. image/jpeg")
 
 
 class ExternalLLMResponse(BaseModel):

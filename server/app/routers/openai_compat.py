@@ -1,5 +1,6 @@
 # server/app/routers/openai_compat.py
 import asyncio
+import base64
 import hashlib
 import logging
 import time
@@ -27,6 +28,12 @@ from app.services.external_llm import ExternalLLMService
 from app.services.credential_service import CredentialService, SUPPORTED_PROVIDERS
 from app.services.llm_providers import LIVE_PROVIDERS
 from app.services.memory_chromaDB import CacheLookupResult, get_memory_service
+from app.services.image_fingerprint import (
+    GateResult,
+    ImageFingerprint,
+    fingerprint as compute_image_fingerprint,
+    gate_result as image_gate_result,
+)
 from app.dependencies.auth import ResolvedWorkspace, require_org_key
 from app.services.provider_inference import provider_for_model
 from app.services import cache_filter, llm_config_service
@@ -41,6 +48,8 @@ from app.services.service_factory import (
 from app.tasks.cache_tasks import generalize_and_store_task
 from app.config import (
     CACHE_ALIAS_ENABLED,
+    CACHE_IMAGE_MAX_DISTANCE,
+    CACHE_IMAGE_MAX_HAMMING,
     EXTERNAL_MODEL_NAME,
     ROUTING_THRESHOLD,
     USE_CELERY,
@@ -48,7 +57,7 @@ from app.config import (
 )
 from app.db.session import get_session
 from app.utils.exceptions import ExternalLLMError
-from app.utils.logger import clear_request_id, content_snippet, set_request_id
+from app.utils.logger import clear_request_id, content_snippet, hide_content, set_request_id
 from app.utils.pipeline_trace import PipelineTrace
 from app.schemas.chat import ExternalLLMRequest
 from app.services.chat_messages import extract_pipeline_inputs
@@ -232,6 +241,19 @@ def _enriched_log_suffix(enriched: str, enrich_succeeded: bool) -> str:
     return f" enriched_prompt={prompt}"
 
 
+def _image_log_suffix(has_image: bool, clip_distance: float | None, hamming: int | None) -> str:
+    """Trailing image metrics for the per-request `done` summary line.
+
+    Empty for text-only requests. For image requests, reports the CLIP + hamming
+    distance to the compared cached image (n/a when there was no cached image to
+    compare against — e.g. a plain cache miss)."""
+    if not has_image:
+        return ""
+    cd = f"{clip_distance:.4f}" if clip_distance is not None else "n/a"
+    hm = str(hamming) if hamming is not None else "n/a"
+    return f" image=true image_clip_distance={cd} image_hamming={hm}"
+
+
 def _legacy_cache_lookup(cache_result: tuple[str, ...] | None) -> CacheLookupResult:
     if cache_result is None:
         return CacheLookupResult(hit=False)
@@ -266,13 +288,18 @@ def _bg_generalize_and_store(
     tenant_id: str,
     cache_namespace: str = "dejaq_default",
     model_profile: str = MODEL_PROFILE_DEFAULT,
+    image_dhash: str | None = None,
+    image_clip: str | None = None,
 ) -> None:
     start = time.perf_counter()
     doc_id = _doc_id(clean_query)
     try:
         generalized = asyncio.run(_services_for_model_profile(model_profile).adjuster.generalize(answer))
         memory = get_memory_service(cache_namespace)
-        doc_id = memory.store_interaction(clean_query, generalized, original_query, tenant_id)
+        doc_id = memory.store_interaction(
+            clean_query, generalized, original_query, tenant_id,
+            image_dhash=image_dhash, image_clip=image_clip,
+        )
         latency_ms = int((time.perf_counter() - start) * 1000)
         query = content_snippet(clean_query)
         if query:
@@ -390,11 +417,19 @@ async def run_chat_pipeline(
     max_tokens: int | None,
     raw_request: Request,
     background_tasks: BackgroundTasks,
+    image: tuple[bytes, str] | None = None,
 ) -> ChatPipelineResult:
     """Core DejaQ pipeline: enrich → normalize → cache → validate → adjust/generate → store.
 
-    Raises PipelineError for HTTP-level failures (402, 422, 500).
+    `image` is (bytes, mime) for an image request; None for text. Image requests
+    are gated on BOTH CLIP distance and dHash before a cache hit is served, and
+    always routed to the (vision-capable) external provider on a miss.
+
+    Raises PipelineError for HTTP-level failures (400, 402, 422, 500).
     """
+    image_bytes, image_mime = image if image else (None, None)
+    _request_has_image = image_bytes is not None
+    image_fp: ImageFingerprint | None = None
     _t0 = time.monotonic()
     trace = PipelineTrace()
     cache_namespace: str = getattr(raw_request.state, "cache_namespace", "dejaq_default")
@@ -455,6 +490,72 @@ async def run_chat_pipeline(
                 cache_lookup = _cache_lookup(get_memory_service(cache_namespace), clean_query)
         except Exception:
             logger.exception("Cache check failed")
+
+        # Image fingerprint (once): needed both to gate a hit and to store on a miss.
+        # A fingerprint failure leaves image_fp=None but keeps _request_has_image True,
+        # so we neither serve a cache hit nor cache the answer — the image still goes
+        # to the model for a fresh answer.
+        _image_clip_distance: float | None = None
+        _image_hamming: int | None = None
+        _image_gate_logged = False
+        if _request_has_image:
+            try:
+                with trace.step("image_fp"):
+                    image_fp = await run_in_threadpool(compute_image_fingerprint, image_bytes)
+            except Exception:
+                logger.exception("Image fingerprint failed; request treated as un-cacheable image")
+            logger.info(
+                "image_request attached=true bytes=%d mime=%s dhash=%s query=%s",
+                len(image_bytes),
+                image_mime or "?",
+                image_fp.dhash_hex if image_fp else "none",
+                hide_content(user_query),
+            )
+
+        # Image gate: an image request must match the entry's stored image on BOTH
+        # CLIP distance and dHash; a text request must never be served an image entry.
+        if cache_lookup.hit:
+            _entry_has_image = bool(cache_lookup.image_dhash and cache_lookup.image_clip)
+            if _request_has_image or _entry_has_image:
+                if not _request_has_image:
+                    # Text request landed on an image entry — never serve it.
+                    _gate = GateResult(False, None, None, "text_request_vs_image_entry")
+                elif image_fp is None:
+                    _gate = GateResult(False, None, None, "fingerprint_failed")
+                else:
+                    _gate = image_gate_result(
+                        image_fp, cache_lookup.image_dhash, cache_lookup.image_clip
+                    )
+                _image_clip_distance = _gate.clip_distance
+                _image_hamming = _gate.hamming
+                _image_gate_logged = True
+                logger.info(
+                    "image_gate verdict=%s clip_distance=%s hamming=%s reason=%s "
+                    "matched_entry=%s matched_query=%s thresholds=clip<=%.2f,hamming<=%d",
+                    "accept" if _gate.passed else "reject",
+                    f"{_gate.clip_distance:.4f}" if _gate.clip_distance is not None else "n/a",
+                    _gate.hamming if _gate.hamming is not None else "n/a",
+                    _gate.reason,
+                    cache_lookup.entry_id or "?",
+                    _diagnostic_prompt(cache_lookup.matched_query) or "",
+                    CACHE_IMAGE_MAX_DISTANCE,
+                    CACHE_IMAGE_MAX_HAMMING,
+                )
+                if not _gate.passed:
+                    cache_lookup = CacheLookupResult(
+                        hit=False,
+                        nearest_distance=cache_lookup.distance,
+                        nearest_prompt=cache_lookup.matched_query,
+                    )
+
+        # Image request that never reached a cache hit to gate against — record
+        # how close the text landed so the log still shows the image outcome.
+        if _request_has_image and not _image_gate_logged:
+            logger.info(
+                "image_gate verdict=miss reason=no_cached_image nearest_text_distance=%s query=%s",
+                f"{cache_lookup.nearest_distance:.4f}" if cache_lookup.nearest_distance is not None else "n/a",
+                hide_content(user_query),
+            )
 
         _validator_verdict: str | None = None
         if cache_lookup.hit:
@@ -536,12 +637,13 @@ async def run_chat_pipeline(
                 if _requires_validation and CACHE_ALIAS_ENABLED:
                     asyncio.create_task(_store_alias_bg(cache_namespace, clean_query, _entry_id))
                 logger.info(
-                    "done cache=hit route=cache model=%s response_id=%s latency=%dms band=%s rescued=%s steps=%s%s%s",
+                    "done cache=hit route=cache model=%s response_id=%s latency=%dms band=%s rescued=%s steps=%s%s%s%s",
                     model_used, response_id, _latency,
                     _requires_validation, bool(getattr(cache_lookup, "rescued", False)),
                     trace.summary(),
                     _enriched_log_suffix(enriched, enrich_succeeded),
                     _nearest_log_suffix(cache_lookup),
+                    _image_log_suffix(_request_has_image, _image_clip_distance, _image_hamming),
                 )
 
                 prompt_tokens = int(len(clean_query.split()) * 1.3)
@@ -570,7 +672,11 @@ async def run_chat_pipeline(
                 )
 
         # 4. Cache miss — classify then route
-        if routing_mode == ROUTING_MODE_EASY_LOCAL:
+        if _request_has_image:
+            # The local model is text-only; image queries must go to a vision-capable
+            # external provider regardless of difficulty or routing mode.
+            classification = {"complexity": "hard", "score": 1.0, "task_type": "image_external"}
+        elif routing_mode == ROUTING_MODE_EASY_LOCAL:
             classification = {"complexity": "easy", "score": 0.0, "task_type": "forced_local"}
         elif routing_mode == ROUTING_MODE_HARD_EXTERNAL:
             classification = {"complexity": "hard", "score": 1.0, "task_type": "forced_external"}
@@ -634,6 +740,8 @@ async def run_chat_pipeline(
                         system_prompt=system_prompt
                         or "You are a helpful assistant. Answer the user's query concisely and accurately.",
                         temperature=temperature or 0.7,
+                        image_b64=base64.b64encode(image_bytes).decode("ascii") if _request_has_image else None,
+                        image_mime=image_mime,
                     )
                     ext_response = await _external_llm.generate_response(
                         ext_request,
@@ -677,6 +785,14 @@ async def run_chat_pipeline(
         except Exception:
             logger.exception("Cache filter failed")
 
+        # An image request with no fingerprint (decode/embed failed) can't be gated
+        # on future hits, so don't cache it — the query text alone would wrongly match
+        # a plain text ask later.
+        if _request_has_image and image_fp is None:
+            will_cache = False
+        _img_dhash = image_fp.dhash_hex if image_fp else None
+        _img_clip = image_fp.clip_b64 if image_fp else None
+
         store_status = "skipped"
         miss_response_id: str | None = None
         if will_cache:
@@ -685,10 +801,17 @@ async def run_chat_pipeline(
             with trace.step("store"):
                 if USE_CELERY:
                     try:
+                        # Text requests keep the legacy positional-args call; image
+                        # fingerprints ride as kwargs only when present.
+                        _apply_kwargs: dict = {
+                            "headers": {"dejaq_model_profile": model_profile},
+                            "ignore_result": True,
+                        }
+                        if image_fp:
+                            _apply_kwargs["kwargs"] = {"image_dhash": _img_dhash, "image_clip": _img_clip}
                         generalize_and_store_task.apply_async(
                             args=(clean_query, answer, user_query, workspace_slug, cache_namespace),
-                            headers={"dejaq_model_profile": model_profile},
-                            ignore_result=True,
+                            **_apply_kwargs,
                         )
                         store_status = "queued"
                     except Exception as exc:
@@ -703,6 +826,8 @@ async def run_chat_pipeline(
                             workspace_slug,
                             cache_namespace,
                             model_profile,
+                            _img_dhash,
+                            _img_clip,
                         )
                         store_status = "background-fallback"
                 else:
@@ -714,6 +839,8 @@ async def run_chat_pipeline(
                         workspace_slug,
                         cache_namespace,
                         model_profile,
+                        _img_dhash,
+                        _img_clip,
                     )
                     store_status = "background"
 
@@ -734,11 +861,12 @@ async def run_chat_pipeline(
         )
         diff_score = float(classification.get("score", 0.0))
         logger.info(
-            "done cache=miss route=%s model=%s store=%s response_id=%s latency=%dms difficulty_score=%.4f steps=%s%s%s",
+            "done cache=miss route=%s model=%s store=%s response_id=%s latency=%dms difficulty_score=%.4f steps=%s%s%s%s",
             route, model_used, store_status, miss_response_id or "none", _latency, diff_score,
             trace.summary(),
             _enriched_log_suffix(enriched, enrich_succeeded),
             _nearest_log_suffix(cache_lookup),
+            _image_log_suffix(_request_has_image, _image_clip_distance, _image_hamming),
         )
 
         prompt_tokens = int(len(clean_query.split()) * 1.3)

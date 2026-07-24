@@ -62,6 +62,11 @@ class CacheLookupResult:
     # semantically (e.g. (("list", "string"),)) — a hint for the validator.
     # None when the words aligned or alignment wasn't informative.
     mismatches: tuple[tuple[str, str], ...] | None = None
+    # Image fingerprints of the matched entry (present only for image entries).
+    # Carried here from the entry metadata read during lookup so the router's
+    # image gate needs no extra Chroma round-trip.
+    image_dhash: str | None = None
+    image_clip: str | None = None
 
 
 class MemoryService:
@@ -180,6 +185,8 @@ class MemoryService:
             requires_validation=requires_validation,
             rescued=rescued,
             mismatches=mismatches,
+            image_dhash=best_meta.get("image_dhash"),
+            image_clip=best_meta.get("image_clip"),
         )
 
     def check_cache(self, normalized_query: str) -> Optional[tuple[str, str, float, str]]:
@@ -204,22 +211,30 @@ class MemoryService:
         generalized_answer: str,
         original_query: str,
         user_id: str,
+        image_dhash: str | None = None,
+        image_clip: str | None = None,
     ) -> str:
         doc_id = hashlib.sha256(normalized_query.encode()).hexdigest()[:16]
         embedding = _embed(normalized_query)
+        metadata = {
+            "generalized_answer": generalized_answer,
+            "original_query": original_query,
+            "user_id": user_id,
+            "stored_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "score": 0.0,
+            "hit_count": 0,
+            "negative_count": 0,
+        }
+        # Image fingerprints only present for image requests; Chroma metadata is
+        # per-entry, so text entries simply omit these keys (no schema change).
+        if image_dhash and image_clip:
+            metadata["image_dhash"] = image_dhash
+            metadata["image_clip"] = image_clip
         self._collection.upsert(
             ids=[doc_id],
             embeddings=[embedding],
             documents=[normalized_query],
-            metadatas=[{
-                "generalized_answer": generalized_answer,
-                "original_query": original_query,
-                "user_id": user_id,
-                "stored_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "score": 0.0,
-                "hit_count": 0,
-                "negative_count": 0,
-            }],
+            metadatas=[metadata],
         )
         logger.info("Stored in cache (id=%s, total=%d)", doc_id, self._collection.count())
         return doc_id

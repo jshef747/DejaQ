@@ -10,11 +10,20 @@ DejaQ is an LLM cost-optimization platform that reduces API costs through semant
 
 **Cache hit pipeline:** User Query → Context Enricher → Normalizer → ChromaDB lookup → **trusted hit** (cosine ≤ `DEJAQ_CACHE_TRUST_DISTANCE`, 0.15) served directly, or **band hit** (0.15–`DEJAQ_CACHE_BAND_MAX_DISTANCE`, 0.20), or **lexical rescue** (≤ `DEJAQ_CACHE_RESCUE_MAX_DISTANCE`, 0.60, when word-level alignment confirms a typo'd variant) — band/rescue hits served only if the **Cache Validator** (Gemma E2B checks cached answer covers the new query, aided by a word-mismatch hint) accepts → INVALID → treat as miss → Context Adjuster adds tone → Response to user. Validated band/rescue hits store the typo'd phrasing as an **alias** entry (`alias_of` metadata) so the same typo becomes an instant trusted hit next time; deleting an entry cascades to its aliases.
 
+> **Image gate (`/v1/responses` only):** when a request carries an image, the text pipeline runs as usual, but a cache hit is served only if the **image fingerprint gate** also passes: `CLIP cosine distance ≤ DEJAQ_CACHE_IMAGE_MAX_DISTANCE (0.10)` **AND** `dHash hamming ≤ DEJAQ_CACHE_IMAGE_MAX_HAMMING (15)`, both compared against the fingerprints stored in the entry's Chroma metadata (`image_dhash`, `image_clip`; raw image bytes are never stored). There is **no unguarded trusted tier** for images — validated offline (own photos + INRIA Copydays) the closest genuinely-different photo pair sits at CLIP ~0.048, so dHash gates every image hit (~0.24ms, deterministic; a slow VLM-caption validator was rejected as too slow/unreliable). A text request never matches an image entry and vice-versa. On a miss, image requests bypass the difficulty classifier and route straight to the workspace's external (vision-capable) provider; heavy edits (print/scan, paint, blur, rotation) fail the gate by design and become a normal miss. See [evals/image_similarity/](evals/image_similarity/) for the validation harness. `services/image_fingerprint.py` holds `fingerprint()`/`gate()` (in-process CLIP + Pillow dHash, zero new deps).
+
 > **Typo handling:** there is deliberately **no spell correction** anywhere in the pipeline — a dictionary checker mangles jargon and proper nouns ("frnce"→"fence", "itly"→"idly") and poisons cache keys. Instead: *typos change letters, different questions change words*. `services/lexical_match.py::align()` does word-level fuzzy alignment (exact words cancel, leftovers must fuzzy-match, question words never satisfy each other) — evaluated at 99.1% typo recall / 99.9% sibling rejection on 1500 generated pairs ([docs/lexical-match-report.md](docs/lexical-match-report.md)). BGE embeddings absorb single typos in the trusted zone; heavier typos land in the band or the align-gated rescue tier (up to 0.60), always behind the validator. The validator prompt carries word-swap few-shots plus the gate's mismatch hint ("'list' vs 'string'"), which eliminated the trusted-zone sibling false-accepts in eval (0 wrong serves / 26 cases). Phonetic spellings ("duz"→"does") intentionally miss — LLM answers.
 
 ## Branching
 
 `staging` is the integration branch: feature branches merge into `staging` first for review and end-to-end testing, and only `staging` merges into `master`. Do not merge feature branches directly into `master`.
+
+**Feature branch workflow:**
+1. Create feature branch from `staging` (e.g., `git checkout -b feat/my-feature staging`)
+2. Work on the feature and push to the feature branch
+3. When ready, request approval (code review, testing, etc.)
+4. After approval, merge the feature branch into `staging` and delete the branch
+5. Later, `staging` merges into `master` when ready for release
 
 ## Commands
 
@@ -138,11 +147,13 @@ Generation always runs through Ollama (`DEJAQ_OLLAMA_URL`); there is no per-role
 | `DEJAQ_CACHE_RESCUE_ENABLED` | `true` | Lexical-rescue tier: candidates past the band but within rescue max are eligible when word-level alignment (`lexical_match.align`) confirms a typo'd variant; always validator-gated |
 | `DEJAQ_CACHE_RESCUE_MAX_DISTANCE` | `0.60` | Distance ceiling for the rescue tier (heaviest real typo observed live: 0.52) |
 | `DEJAQ_CACHE_ALIAS_ENABLED` | `true` | Alias learning: validated band/rescue hits store the typo'd phrasing as an alias entry pointing at the same answer — repeat typos become instant trusted hits |
+| `DEJAQ_CACHE_IMAGE_MAX_DISTANCE` | `0.10` | Image gate CLIP cosine ceiling. An image request is served a cached image entry only if the new image's CLIP distance to the stored one is at or below this |
+| `DEJAQ_CACHE_IMAGE_MAX_HAMMING` | `15` | Image gate dHash hamming ceiling. Both this AND the CLIP distance must pass. Unlike the text path there is NO unguarded trusted tier for images — the closest genuinely-different photo pair sits at CLIP ~0.048 (validated on own photos + INRIA Copydays), so dHash (~0.24ms) gates every image hit |
 
 ### Endpoints
 - `GET /health` — health check; also reports Celery worker status
 - `POST /v1/chat/completions` — OpenAI Chat Completions-compatible chat (streaming + non-streaming); **requires** `Authorization: Bearer <workspace-api-key>` (401 when missing/invalid — no anonymous fallback) and optional `X-DejaQ-Department` header; response includes `X-DejaQ-Response-Id` header when cached or stored. Hard queries return HTTP 402 when the workspace has no credential for the configured external provider.
-- `POST /v1/responses` — OpenAI Responses API endpoint (newer recommended format). Same auth (401 without a valid workspace API key) and `X-DejaQ-*` headers. Body: `{model, input: string | [{role, content}...], instructions?, stream?, temperature?, max_output_tokens?}`. Non-streaming: `{id, object:"response", output:[...], output_text, usage:{input_tokens, output_tokens, total_tokens}}`. Streaming: typed SSE events (`response.created`, `response.output_text.delta`, `response.completed`, etc.). `previous_response_id` / `conversation` rejected with HTTP 400 — DejaQ is stateless; clients send full history in `input`. The `chat/` Next.js app is the reference client.
+- `POST /v1/responses` — OpenAI Responses API endpoint (newer recommended format). Same auth (401 without a valid workspace API key) and `X-DejaQ-*` headers. Body: `{model, input: string | [{role, content}...], instructions?, stream?, temperature?, max_output_tokens?}`. Non-streaming: `{id, object:"response", output:[...], output_text, usage:{input_tokens, output_tokens, total_tokens}}`. Streaming: typed SSE events (`response.created`, `response.output_text.delta`, `response.completed`, etc.). `previous_response_id` / `conversation` rejected with HTTP 400 — DejaQ is stateless; clients send full history in `input`. The `chat/` Next.js app is the reference client. **Images:** an `input_image` content part (data URL only; remote URLs rejected 400) attaches one image (>1 image → 400). Image requests bypass the difficulty classifier and always route to the workspace's external (vision-capable) provider on a miss; the cache serves an image hit only when the text pipeline hits AND the image fingerprint gate passes (see below). Only `/v1/responses` accepts images — `/v1/chat/completions` stays text-only.
 - `POST /v1/feedback` — thumbs-up/down feedback on a cached response; requires `Authorization: Bearer <workspace-api-key>`; body: `{"response_id": "<X-DejaQ-Response-Id value>", "rating": "positive"|"negative", "comment": "<optional>"}`; first negative deletes entry, subsequent negatives decrement score by 2.0; positive increments score by 1.0
 - `/admin/v1/*` management endpoints — **loopback-only** (127.0.0.1); auth via `local` dev-admin (default) or Supabase JWT when `SUPABASE_URL` is set. In local mode no token is required:
   - `GET /admin/v1/whoami`
@@ -207,7 +218,8 @@ app/
 │   ├── validator.py     # Cache-answer validator (Gemma E2B): VALID/INVALID judge on cache hits; INVALID → treat as miss
 │   ├── cache_filter.py  # Smart heuristic filter: skips non-cacheable prompts (too short, filler, vague)
 │   ├── classifier.py    # NVIDIA DeBERTa-based prompt complexity classifier (easy/hard routing)
-│   ├── memory_chromaDB.py # ChromaDB semantic cache (HttpClient, cosine ≤ 0.15); score-based eviction
+│   ├── memory_chromaDB.py # ChromaDB semantic cache (HttpClient, cosine ≤ 0.15); score-based eviction; image fingerprints in entry metadata
+│   ├── image_fingerprint.py # Image gate: in-process CLIP embed + Pillow dHash; fingerprint()/gate() (both CLIP-distance and hamming must pass)
 │   └── request_logger.py  # Async SQLite request log (org, dept, latency, cache hit/miss, model, feedback)
 ├── schemas/
 │   ├── chat.py          # ExternalLLMRequest/Response only
@@ -266,6 +278,7 @@ The org API-key middleware skips `/admin/v1/*` before parsing or logging `Author
 | Local LLM (generation) | Gemma 4 E4B-Instruct | `gemma4:e4b` |
 | Difficulty Classifier | NVIDIA DeBERTa-v3-base | in-process torch (not Ollama) |
 | Cache embeddings | BAAI/bge-small-en-v1.5 | in-process torch (not Ollama) |
+| Image fingerprint (CLIP) | clip-ViT-B-32 | in-process torch (not Ollama) |
 
 ## Deployment Modes (Ollama local / remote)
 
@@ -353,8 +366,8 @@ Uses an LLM judge (requires `ANTHROPIC_API_KEY`) for scoring. Configs in `config
 
 ## Current Status
 
-**Working:** FastAPI HTTP, Normalizer (Qwen 0.5B, v22), LLM Router (Gemma 4 E4B local → provider-backed external LLMs), Context Adjuster (generalize via Phi-3.5 + adjust via Qwen 1.5B), Semantic cache (ChromaDB, cosine ≤ 0.15), Background generalize+store on cache miss, Context Enricher v5 (Qwen 1.5B + regex gate, 88.7% @0.15 across 5 datasets), Smart Cache Filter (skip non-cacheable prompts), Difficulty Classifier (NVIDIA DeBERTa — routes easy→local, hard→org credential backed provider), Celery + Redis task queue (non-blocking generalize+store), OpenAI-compatible endpoint with API-key auth + per-department cache namespacing, Org/department/API-key/credential management (SQLAlchemy + Alembic SQLite + `dejaq-admin` CLI), Stats tracking (SQLite + Rich CLI — `dejaq-admin stats`), Score-based cache eviction (Celery beat), Feedback API (score adjustments + delete on first negative), Web dashboard (Next.js) with local dev-bypass auth (Supabase JWT in deployment), Ollama-only generation (local or remote via `OllamaBackend`/service_factory — decouples inference from FastAPI for multi-user parallelism). DeBERTa classifier + BGE cache embeddings run in-process (torch). Hard-query runtime credentials come from encrypted `org_provider_credentials`.
-**Planned:** File & image support (multimodal input pipeline), RAG within organizations (per-org document retrieval), PostgreSQL migration, Subject-extraction preprocessing for bare comparative failures ("Which is cheaper?" — 1.5B model not sufficient)
+**Working:** FastAPI HTTP, Normalizer (Qwen 0.5B, v22), LLM Router (Gemma 4 E4B local → provider-backed external LLMs), Context Adjuster (generalize via Phi-3.5 + adjust via Qwen 1.5B), Semantic cache (ChromaDB, cosine ≤ 0.15), Background generalize+store on cache miss, Context Enricher v5 (Qwen 1.5B + regex gate, 88.7% @0.15 across 5 datasets), Smart Cache Filter (skip non-cacheable prompts), Difficulty Classifier (NVIDIA DeBERTa — routes easy→local, hard→org credential backed provider), Celery + Redis task queue (non-blocking generalize+store), OpenAI-compatible endpoint with API-key auth + per-department cache namespacing, Org/department/API-key/credential management (SQLAlchemy + Alembic SQLite + `dejaq-admin` CLI), Stats tracking (SQLite + Rich CLI — `dejaq-admin stats`), Score-based cache eviction (Celery beat), Feedback API (score adjustments + delete on first negative), Web dashboard (Next.js) with local dev-bypass auth (Supabase JWT in deployment), Ollama-only generation (local or remote via `OllamaBackend`/service_factory — decouples inference from FastAPI for multi-user parallelism). DeBERTa classifier + BGE cache embeddings run in-process (torch). Hard-query runtime credentials come from encrypted `org_provider_credentials`. Image caching on `/v1/responses` (one image per request, CLIP+dHash fingerprint gate, external vision provider on miss) — CLIP embedder runs in-process (torch).
+**Planned:** Local vision-model generation + per-workspace image routing config (customizable local-vs-external for images — needs a local VLM answer-quality eval first), multi-image / PDF / file support, image alias learning, RAG within organizations (per-org document retrieval), PostgreSQL migration, Subject-extraction preprocessing for bare comparative failures ("Which is cheaper?" — 1.5B model not sufficient)
 
 ## Active Technologies
 

@@ -33,7 +33,17 @@ class AnthropicProviderClient:
         _clear_client_cache_if_factory_changed()
         client = _get_client(api_key)
         messages = [msg for msg in request.history if msg["role"] in {"user", "assistant"}]
-        messages.append({"role": "user", "content": request.query})
+        if request.image_b64:
+            messages.append({"role": "user", "content": [
+                {"type": "image", "source": {
+                    "type": "base64",
+                    "media_type": request.image_mime or "image/jpeg",
+                    "data": request.image_b64,
+                }},
+                {"type": "text", "text": request.query},
+            ]})
+        else:
+            messages.append({"role": "user", "content": request.query})
 
         logger.debug("Sending hard query to Anthropic model=%s history_turns=%d", request.model, len(request.history))
         start = time.perf_counter()

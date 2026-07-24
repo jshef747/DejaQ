@@ -1,3 +1,5 @@
+import base64
+import binascii
 import logging
 import time
 import uuid
@@ -45,9 +47,32 @@ def _new_item_id() -> str:
     return "msg-" + uuid.uuid4().hex[:16]
 
 
-def _responses_request_to_messages(req: OAIResponsesRequest) -> list[OAIMessage]:
-    """Convert Responses API input + instructions into a flat OAIMessage list."""
+def _parse_data_url(url: str) -> tuple[bytes, str]:
+    """Decode a `data:<mime>;base64,<payload>` URL into (bytes, mime).
+
+    v1 supports data URLs only (the common upload path). Remote http(s) image
+    URLs are rejected — fetching them server-side is an SSRF risk not worth it here.
+    """
+    if not url.startswith("data:"):
+        raise PipelineError(400, "Only data: image URLs are supported (base64-encode the image).")
+    try:
+        header, payload = url[len("data:"):].split(",", 1)
+        mime = header.split(";", 1)[0] or "image/jpeg"
+        return base64.b64decode(payload), mime
+    except (ValueError, binascii.Error) as exc:
+        raise PipelineError(400, f"Malformed data image URL: {exc}") from exc
+
+
+def _responses_request_to_messages(
+    req: OAIResponsesRequest,
+) -> tuple[list[OAIMessage], tuple[bytes, str] | None]:
+    """Convert Responses API input + instructions into a flat OAIMessage list,
+    plus the single attached image as (bytes, mime) if present.
+
+    v1 accepts at most one image across the whole request; more raises HTTP 400.
+    """
     msgs: list[OAIMessage] = []
+    image: tuple[bytes, str] | None = None
 
     if req.instructions:
         msgs.append(OAIMessage(role="system", content=req.instructions))
@@ -64,10 +89,14 @@ def _responses_request_to_messages(req: OAIResponsesRequest) -> list[OAIMessage]
                     for p in item.content
                     if p.type in ("input_text", "output_text") and p.text
                 ]
-                content = " ".join(text_parts)
-                msgs.append(OAIMessage(role=item.role, content=content))
+                for p in item.content:
+                    if p.type == "input_image" and p.image_url:
+                        if image is not None:
+                            raise PipelineError(400, "At most one image per request is supported.")
+                        image = _parse_data_url(p.image_url)
+                msgs.append(OAIMessage(role=item.role, content=" ".join(text_parts)))
 
-    return msgs
+    return msgs, image
 
 
 def _build_response_body(
@@ -150,9 +179,8 @@ async def responses(
     background_tasks: BackgroundTasks,
     resolved_workspace: ResolvedWorkspace = Depends(require_org_key),
 ):
-    messages = _responses_request_to_messages(oai_request)
-
     try:
+        messages, image = _responses_request_to_messages(oai_request)
         result = await run_chat_pipeline(
             messages=messages,
             model=oai_request.model,
@@ -160,6 +188,7 @@ async def responses(
             max_tokens=oai_request.max_output_tokens,
             raw_request=raw_request,
             background_tasks=background_tasks,
+            image=image,
         )
     except PipelineError as exc:
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
