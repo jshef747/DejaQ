@@ -47,6 +47,15 @@ def open_photo(path: Path) -> Image.Image:
         tmp_path.unlink(missing_ok=True)
 
 
+def add_logo(img: Image.Image, frac: float = 0.08) -> Image.Image:
+    """Same content with a small solid block pasted in a corner (a logo/watermark)."""
+    out = img.copy()
+    w, h = out.size
+    size = max(4, int(w * frac))
+    out.paste((200, 30, 40), (w - size - 4, 4, w - 4, min(h, 4 + size)))
+    return out
+
+
 def make_variants(img: Image.Image) -> dict[str, tuple[Image.Image, int]]:
     """Return {variant_name: (image, jpeg_quality)}."""
     w, h = img.size
@@ -57,6 +66,11 @@ def make_variants(img: Image.Image) -> dict[str, tuple[Image.Image, int]]:
         "crop95": (img.crop((int(w * 0.05), int(h * 0.05), int(w * 0.95), int(h * 0.95))), 85),
         "rot3": (img.rotate(3, expand=True, fillcolor=(255, 255, 255)), 85),
         "bright": (ImageEnhance.Brightness(img).enhance(1.25), 85),
+        # ponytail: a synthetic "pad" (blank border) variant was removed — it
+        # measured a problem we invented rather than one photos exhibit, and it
+        # was the sole justification for a border-trim step that hurt real
+        # variants. Re-framed documents are handled by the OCR path now.
+        "logo": (add_logo(img), 85),
     }
 
 
