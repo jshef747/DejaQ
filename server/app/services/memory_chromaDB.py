@@ -65,8 +65,12 @@ class CacheLookupResult:
     # Image fingerprints of the matched entry (present only for image entries).
     # Carried here from the entry metadata read during lookup so the router's
     # image gate needs no extra Chroma round-trip.
+    # "photo" entries carry image_dhash/image_clip; "document" entries carry
+    # image_text (OCR tokens). image_kind says which gate applies.
     image_dhash: str | None = None
     image_clip: str | None = None
+    image_kind: str | None = None
+    image_text: str | None = None
 
 
 class MemoryService:
@@ -187,6 +191,8 @@ class MemoryService:
             mismatches=mismatches,
             image_dhash=best_meta.get("image_dhash"),
             image_clip=best_meta.get("image_clip"),
+            image_kind=best_meta.get("image_kind"),
+            image_text=best_meta.get("image_text"),
         )
 
     def check_cache(self, normalized_query: str) -> Optional[tuple[str, str, float, str]]:
@@ -213,6 +219,8 @@ class MemoryService:
         user_id: str,
         image_dhash: str | None = None,
         image_clip: str | None = None,
+        image_kind: str | None = None,
+        image_text: str | None = None,
     ) -> str:
         doc_id = hashlib.sha256(normalized_query.encode()).hexdigest()[:16]
         embedding = _embed(normalized_query)
@@ -227,9 +235,14 @@ class MemoryService:
         }
         # Image fingerprints only present for image requests; Chroma metadata is
         # per-entry, so text entries simply omit these keys (no schema change).
+        # A photo entry carries dhash+clip; a document entry carries OCR tokens.
+        if image_kind:
+            metadata["image_kind"] = image_kind
         if image_dhash and image_clip:
             metadata["image_dhash"] = image_dhash
             metadata["image_clip"] = image_clip
+        if image_text:
+            metadata["image_text"] = image_text
         self._collection.upsert(
             ids=[doc_id],
             embeddings=[embedding],
@@ -352,6 +365,38 @@ class MemoryService:
         except Exception:
             logger.error("Failed to delete cache entry %s", entry_id)
             return False
+
+    IMAGE_METADATA_KEYS = ("image_kind", "image_text", "image_dhash", "image_clip")
+
+    def image_entry_ids(self) -> list[str]:
+        """IDs of entries anchored to an image, by any of the fingerprint fields.
+
+        Matched in Python rather than with a Chroma `where` filter because entries
+        written before `image_kind` existed carry only `image_dhash`/`image_clip`,
+        and presence filtering is not portable across Chroma versions.
+        """
+        try:
+            results = self._collection.get(include=["metadatas"])
+        except Exception:
+            logger.error("Failed to list entries for image purge", exc_info=True)
+            return []
+        ids = []
+        for entry_id, meta in zip(results["ids"], results["metadatas"] or []):
+            if any((meta or {}).get(k) for k in self.IMAGE_METADATA_KEYS):
+                ids.append(entry_id)
+        return ids
+
+    def purge_image_entries(self) -> int:
+        """Delete every image-anchored entry. Returns the number removed.
+
+        Used after a gate rule change: entries stored under the previous rules
+        may have been written with fingerprints that the current rules would
+        never have accepted. Each purged entry costs one regeneration.
+        """
+        ids = self.image_entry_ids()
+        deleted = sum(1 for entry_id in ids if self.delete_entry(entry_id))
+        logger.info("Purged %d image entries from %s", deleted, self._collection.name)
+        return deleted
 
     def evict_below_floor(self, floor: float) -> int:
         """Delete all entries with score < floor. Returns count of deleted entries."""

@@ -68,13 +68,15 @@ def generalize_and_store_task(
     model_profile: str = "default",
     image_dhash: str | None = None,
     image_clip: str | None = None,
+    image_kind: str | None = None,
+    image_text: str | None = None,
 ) -> dict:
     """Generalize an LLM answer (via Phi-3.5) and store in ChromaDB cache.
 
     All arguments are plain strings — no model objects or unpickleable data.
     cache_namespace selects the ChromaDB collection (department isolation).
-    image_dhash/image_clip are the scalar image fingerprints for image requests
-    (both None for text requests).
+    The image_* args are the scalar fingerprints for image requests (all None
+    for text): photos carry dhash+clip, documents carry OCR tokens in image_text.
     """
     start = time.perf_counter()
     doc_id = hashlib.sha256(clean_query.encode()).hexdigest()[:16]
@@ -85,12 +87,22 @@ def generalize_and_store_task(
     try:
         headers = getattr(self.request, "headers", None) or {}
         resolved_model_profile = headers.get("dejaq_model_profile") or model_profile
-        context_adjuster = _get_adjuster(resolved_model_profile)
         memory = get_memory_service(cache_namespace)
-        generalized = _run_async_in_worker(context_adjuster.generalize(answer))
+        # Image-anchored answers are stored verbatim. Generalization strips tone so a
+        # TEXT answer survives rephrasing, but it only sees the answer — never the
+        # image — so on image answers it invents specifics instead (observed live: a
+        # Complex Analysis syllabus was stored as "Statistics or Data Analysis
+        # Course"). The image gate already guarantees the same image, so there is
+        # nothing to generalize across and the rewrite is pure risk.
+        if image_kind:
+            generalized = answer
+        else:
+            context_adjuster = _get_adjuster(resolved_model_profile)
+            generalized = _run_async_in_worker(context_adjuster.generalize(answer))
         doc_id = memory.store_interaction(
             clean_query, generalized, original_query, user_id,
             image_dhash=image_dhash, image_clip=image_clip,
+            image_kind=image_kind, image_text=image_text,
         )
         latency_ms = int((time.perf_counter() - start) * 1000)
         logger.info(

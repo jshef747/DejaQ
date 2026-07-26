@@ -347,7 +347,7 @@ def test_cache_helper_returns_response_id_and_schedules_store_when_cacheable(mon
 
     monkeypatch.setattr(escalation, "get_context_enricher_service", lambda: enricher)
     monkeypatch.setattr(escalation, "get_normalizer_service", lambda: normalizer)
-    monkeypatch.setattr(escalation.cache_filter, "should_cache", lambda enriched, clean: (True, "passed"))
+    monkeypatch.setattr(escalation.cache_filter, "should_cache", lambda enriched, clean, **kw: (True, "passed"))
     monkeypatch.setattr(escalation, "_schedule_escalation_cache_store", lambda **kwargs: scheduled.append(kwargs))
 
     response_id = asyncio.run(
@@ -389,7 +389,7 @@ def test_cache_helper_returns_none_when_not_cacheable(monkeypatch):
     scheduled = []
     monkeypatch.setattr(escalation, "get_context_enricher_service", lambda: Enricher())
     monkeypatch.setattr(escalation, "get_normalizer_service", lambda: Normalizer())
-    monkeypatch.setattr(escalation.cache_filter, "should_cache", lambda enriched, clean: (False, "query too short"))
+    monkeypatch.setattr(escalation.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "query too short"))
     monkeypatch.setattr(escalation, "_schedule_escalation_cache_store", lambda **kwargs: scheduled.append(kwargs))
 
     response_id = asyncio.run(

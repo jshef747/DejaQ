@@ -245,7 +245,7 @@ def test_chat_completions_smoke_preserves_response_shape(monkeypatch):
     monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
-    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
 
     client = TestClient(app, headers=_AUTH)
@@ -278,7 +278,7 @@ def test_local_answer_registers_interaction_and_emits_tier_headers(monkeypatch):
     monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
-    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
     monkeypatch.setattr(openai_compat, "response_registry", registry, raising=False)
 
@@ -354,7 +354,7 @@ def test_cache_miss_includes_difficulty_and_nearest_cache_headers(monkeypatch, c
         ),
     )
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
-    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
 
     client = TestClient(app, headers=_AUTH)
@@ -396,7 +396,7 @@ def test_cache_miss_logs_enriched_prompt_when_enricher_succeeds(monkeypatch, cap
     monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
-    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
 
     client = TestClient(app, headers=_AUTH)
@@ -432,7 +432,7 @@ def test_cache_miss_omits_nearest_cache_headers_when_collection_empty(monkeypatc
     monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
-    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
 
     client = TestClient(app, headers=_AUTH)
@@ -505,7 +505,7 @@ def test_force_easy_local_header_skips_classifier(monkeypatch):
     monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
-    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
 
     client = TestClient(app, headers=_AUTH)
@@ -581,7 +581,7 @@ def test_auto_routing_uses_org_threshold_zero_to_route_external(monkeypatch):
     monkeypatch.setattr(openai_compat, "_external_llm", external)
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
-    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
     monkeypatch.setattr(
         openai_compat,
@@ -655,7 +655,7 @@ def test_force_hard_external_uses_org_external_model_provider(monkeypatch):
     monkeypatch.setattr(openai_compat, "_external_llm", external)
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
-    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
     monkeypatch.setattr(
         openai_compat,
@@ -717,7 +717,7 @@ def test_weak_cpu_profile_uses_weak_local_services(monkeypatch):
     monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
-    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
 
     client = TestClient(app, headers=_AUTH)
@@ -757,7 +757,7 @@ def test_celery_store_keeps_legacy_args_and_sends_profile_header(monkeypatch):
     monkeypatch.setattr(openai_compat, "generalize_and_store_task", FakeTask())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
-    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (True, "test"))
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (True, "test"))
     monkeypatch.setattr(openai_compat, "USE_CELERY", True)
 
     client = TestClient(app, headers=_AUTH)
@@ -793,7 +793,7 @@ def test_chat_completions_logs_compact_miss_summary(monkeypatch, caplog):
     monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
-    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
 
     client = TestClient(app, headers=_AUTH)
@@ -872,7 +872,7 @@ def test_chat_completions_logs_summary_when_enricher_fails(monkeypatch, caplog):
     monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
-    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
 
     client = TestClient(app, headers=_AUTH)
@@ -970,7 +970,7 @@ def test_band_hit_falls_through_to_miss_when_validator_invalid(monkeypatch):
     monkeypatch.setattr(openai_compat, "_validator", StubValidatorInvalid())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubBandMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
-    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
 
     client = TestClient(app, headers=_AUTH)
@@ -1079,7 +1079,7 @@ def test_rescued_hit_misses_when_validator_invalid(monkeypatch):
     monkeypatch.setattr(openai_compat, "_validator", StubValidatorInvalid())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubRescueMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
-    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
 
     client = TestClient(app, headers=_AUTH)
