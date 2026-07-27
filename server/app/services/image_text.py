@@ -30,6 +30,7 @@ from app.config import (
     CACHE_IMAGE_OCR_MIN_CONFIDENCE,
     CACHE_IMAGE_OCR_MIN_WORDS,
     CACHE_IMAGE_TEXT_MIN_JACCARD,
+    CACHE_IMAGE_TEXT_MIN_SHARED_TOKENS,
     OCR_TIMEOUT_SECONDS,
     TESSERACT_BIN,
     TESSERACT_LANGS,
@@ -69,15 +70,31 @@ class OcrResult:
 
     @property
     def is_ambiguous(self) -> bool:
-        """OCR found real text, but not enough of it to compare documents by words.
+        """Text is present but OCR cannot be trusted to have read it correctly.
 
-        These must be neither served nor stored. Sending them to the pixel gate
-        instead — which is what used to happen — was the single largest source of
-        wrong answers: 1,712 false merges on one measured corpus and 204 on
-        another, because two different pages of text look near-identical to CLIP.
-        Refusing them costs a cache miss, which is always recoverable.
+        Neither served nor stored. Sending these to the pixel gate instead — what
+        used to happen — was the largest single source of wrong answers: 1,712
+        false merges on one measured corpus and 204 on another, because two
+        different pages of text look near-identical to CLIP. It matters because
+        only ~11% of real scanned business forms clear the confidence floor.
+
+        The test is CONFIDENCE, not length. An earlier version keyed on "below the
+        document bar", which made a short crop permanently un-cacheable even
+        though OCR had read it perfectly (measured live: 9 words at 86.8
+        confidence, refused on every request). A confident read of a little text
+        is a small document; an unconfident read of a lot of text is garbage.
+
+        Counts TOKENS rather than word_count, because word_count only includes
+        words above the per-word confidence floor: a page where every word is read
+        badly scores zero there and would slip through to the pixel gate — exactly
+        the population that must not reach it.
         """
-        return self.ok and self.word_count >= CACHE_IMAGE_AMBIGUOUS_MIN_WORDS and not self.is_document
+        return (
+            self.ok
+            and not self.is_document
+            and len(self.tokens) >= CACHE_IMAGE_AMBIGUOUS_MIN_WORDS
+            and self.mean_confidence < CACHE_IMAGE_OCR_MIN_CONFIDENCE
+        )
 
     def token_string(self) -> str:
         """Stable scalar form for Chroma metadata (scalar-only)."""
@@ -193,7 +210,8 @@ def matches(new: frozenset[str], stored: frozenset[str]) -> TextMatch:
     merge serves someone else's document. See docs/image-gate.md.
     """
     tj = _jaccard(new, stored)
-    return TextMatch(tj >= CACHE_IMAGE_TEXT_MIN_JACCARD, tj)
+    enough = len(new & stored) >= CACHE_IMAGE_TEXT_MIN_SHARED_TOKENS
+    return TextMatch(enough and tj >= CACHE_IMAGE_TEXT_MIN_JACCARD, tj)
 
 
 def _self_test() -> None:
@@ -202,22 +220,29 @@ def _self_test() -> None:
         body = "\n".join(f"5\t1\t1\t1\t1\t{i}\t0\t0\t1\t1\t{c}\t{w}" for i, (w, c) in enumerate(rows))
         return head + "\n" + body + "\n"
 
-    # A confident, wordy page is a document; a sparse or low-confidence one is not.
+    # Confidence decides, not length.
     doc = _parse_tsv(tsv([(f"word{i}", 95.0) for i in range(60)]))
     assert doc.ok and doc.is_document, "confident wordy page must be a document"
-    sparse = _parse_tsv(tsv([(f"word{i}", 95.0) for i in range(10)]))
-    assert not sparse.is_document, "too few words is not a document"
+
+    # The live regression: a short crop read perfectly is a small document, not
+    # something to refuse. Measured at 9 words / 86.8 confidence.
+    crop = _parse_tsv(tsv([(f"word{i}", 86.8) for i in range(9)]))
+    assert crop.is_document, "a confident short crop must be cacheable"
+    assert not crop.is_ambiguous
+
     garbage = _parse_tsv(tsv([(f"word{i}", 30.0) for i in range(200)]))
     assert not garbage.is_document, "low-confidence text is not a document (angled screen photo)"
-    assert _parse_tsv("").word_count == 0
+    assert garbage.is_ambiguous, "unreliable OCR must be refused, not sent to the pixel gate"
+    assert not doc.is_ambiguous, "a document is not ambiguous"
 
+    assert _parse_tsv("").word_count == 0
+    assert not _parse_tsv("").is_ambiguous, "no text at all is a photo, not ambiguous"
     # Rows tesseract emits with conf=-1 (layout rows) must not count.
     assert _parse_tsv(tsv([("ignored", -1.0)])).word_count == 0
 
-    # Text present but under the document bar: neither served nor stored.
-    assert sparse.is_ambiguous, "a few confident words is ambiguous, not a photo"
-    assert not doc.is_ambiguous, "a document is not ambiguous"
-    assert not _parse_tsv("").is_ambiguous, "no text at all is a photo, not ambiguous"
+    # A ratio over a couple of tokens is noise: never a match, however "identical".
+    tiny = frozenset({"abc", "def"})
+    assert not matches(tiny, tiny).matched, "two shared tokens is not evidence"
 
     # Same document matches; different documents do not.
     a = frozenset({"complex", "analysis", "course", "142180", "boazc"})

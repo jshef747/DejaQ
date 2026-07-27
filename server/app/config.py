@@ -126,7 +126,20 @@ CACHE_IMAGE_MAX_HAMMING = int(_get_float("DEJAQ_CACHE_IMAGE_MAX_HAMMING", 15))
 # recall — a miss, never a wrong answer.
 CACHE_IMAGE_OCR_ENABLED = _get_bool("DEJAQ_CACHE_IMAGE_OCR_ENABLED", True)
 CACHE_IMAGE_OCR_MIN_CONFIDENCE = _get_float("DEJAQ_CACHE_IMAGE_OCR_MIN_CONFIDENCE", 80.0)
-CACHE_IMAGE_OCR_MIN_WORDS = int(_get_float("DEJAQ_CACHE_IMAGE_OCR_MIN_WORDS", 25))
+# The word floor is deliberately low: the CONFIDENCE floor does the real work.
+# It was 45, then 25, and both were wrong for the same reason — a short crop of a
+# question is read perfectly (measured live: 9 words at 86.8 confidence) but has
+# little text, so a high floor made it permanently un-cacheable. Swept 6/8/10/15/25
+# over both corpora: 0 false merges at every level and under a point of recall
+# between them. On 60 real photos a floor of 6 reclassifies just 2, and the worst
+# overlap between any two text-bearing photos is 0.038 against a 0.80 threshold.
+CACHE_IMAGE_OCR_MIN_WORDS = int(_get_float("DEJAQ_CACHE_IMAGE_OCR_MIN_WORDS", 6))
+
+# A ratio over a handful of tokens is noise, not similarity: two images with three
+# tokens each that happen to share them score a perfect 1.0. No such pair exists in
+# the measured corpora, so this guards an edge the data does not cover rather than
+# one it demonstrates. Kept below the smallest real document seen (9 words).
+CACHE_IMAGE_TEXT_MIN_SHARED_TOKENS = int(_get_float("DEJAQ_CACHE_IMAGE_TEXT_MIN_SHARED_TOKENS", 4))
 
 # An image that yields real text but misses the document bar is neither a
 # document nor a photo: it is un-cacheable. It used to fall through to the pixel

@@ -120,7 +120,9 @@ def test_one_threshold_decides_regardless_of_digits():
 
 def test_ambiguous_images_are_never_served():
     """Real text, below the document bar: the pixel path used to take these."""
-    ambiguous = OcrResult(frozenset({"some", "words"}), word_count=8,
+    # Text is present (tokens found) but read badly — the confidence is what
+    # disqualifies it, not the amount of text.
+    ambiguous = OcrResult(frozenset({"some", "words", "here", "more"}), word_count=8,
                           mean_confidence=55.0, ok=True)
     assert ambiguous.is_ambiguous and not ambiguous.is_document
     assert _image_kind(ambiguous) == "ambiguous"
