@@ -125,7 +125,16 @@ CACHE_IMAGE_MAX_HAMMING = int(_get_float("DEJAQ_CACHE_IMAGE_MAX_HAMMING", 15))
 # The cost is that src032's variants split across kinds, losing some of its own
 # recall — a miss, never a wrong answer.
 CACHE_IMAGE_OCR_ENABLED = _get_bool("DEJAQ_CACHE_IMAGE_OCR_ENABLED", True)
-CACHE_IMAGE_OCR_MIN_CONFIDENCE = _get_float("DEJAQ_CACHE_IMAGE_OCR_MIN_CONFIDENCE", 80.0)
+# Swept 50-80 over both corpora: **0 false merges at every level**, because the
+# 0.80 token threshold does the safety work — this floor only routes. It was 80,
+# which sat inside the range real screenshots actually produce (measured live at
+# 86.8, 84.8, 80.5 and 77.5 on one user's images) and refused them at random.
+# Lowering it costs some photo recall: on 480 real photo files, 42 are routed to
+# the document path at 80 and 69 at 60, and those lose pixel matching. Worst
+# overlap between any two of them is 0.041 at every level, so they cannot merge —
+# they simply miss. Documents are the workload that matters here, so the trade
+# favours them.
+CACHE_IMAGE_OCR_MIN_CONFIDENCE = _get_float("DEJAQ_CACHE_IMAGE_OCR_MIN_CONFIDENCE", 60.0)
 # The word floor is deliberately low: the CONFIDENCE floor does the real work.
 # It was 45, then 25, and both were wrong for the same reason — a short crop of a
 # question is read perfectly (measured live: 9 words at 86.8 confidence) but has

@@ -27,7 +27,8 @@ A magnitude-preserving grayscale comparison failed the same way (0.62 same-docum
 
 A pixel-based "is this a document?" detector was tried and **rejected**: a real photo of a screen full of text measured 0.3% near-white and saturation 8.3 — statistically a photo — yet contained 155 readable words. The OCR result itself is the classifier.
 
-Both criteria must hold (`mean confidence ≥ 80` **and** `≥ 25 words at conf ≥ 60`), because each catches what the other misses:
+Both criteria must hold (`mean confidence ≥ 60` **and** `≥ 6 words at conf ≥ 60`). The
+original table below was built against a floor of 80 and 45 words:
 
 | group | mean confidence | confident words |
 |---|---|---|
@@ -37,7 +38,22 @@ Both criteria must hold (`mean confidence ≥ 80` **and** `≥ 25 words at conf 
 
 An unreadable screen photo reached 60 confident words but only ~35 confidence; the wordiest real photo reached 87.7 confidence but only 38 words.
 
-### The word floor was 45, and it cost a real miss
+### Both routing floors were set too high, and both cost real misses
+
+The confidence floor of 80 sat **inside** the range real screenshots produce. One user's
+images measured 86.8, 84.8, 80.5 and 77.5 — so whether a screenshot was cacheable at all came
+down to OCR noise. At 77.5 it was refused on every request.
+
+Swept 50–80 over both corpora: **0 false merges at every level**. The floor does not carry
+safety — the 0.80 token threshold does — it only routes. Lowering it moves images from
+"refused entirely" into "compared by words", which measured zero merges.
+
+The cost is photo recall: of 480 real photo files, 42 route to the document path at a floor of
+80 and 69 at 60, and those lose pixel matching. The worst overlap between any two of them is
+**0.041** at every level, so they cannot merge — they simply miss. Documents are the workload
+that matters here, so the trade favours them. Floor is now **60**.
+
+### The word floor was 45, then 25, and it cost real misses
 
 A **cropped exercise snippet** — two lines of a Hebrew complexity-theory question — OCR'd to **34 words at 84.8 confidence**. Confident, unambiguously a document, but under the 45-word floor, so it fell to the photo path and missed at **hamming 36** — while its token overlap with a re-cropped upload of the same snippet was **0.833**. Cropped snippets are a normal way to ask about a worksheet, so this was a whole class of misses.
 

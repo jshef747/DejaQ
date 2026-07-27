@@ -53,7 +53,12 @@ from app.services.service_factory import (
 from app.tasks.cache_tasks import generalize_and_store_task
 from app.config import (
     CACHE_ALIAS_ENABLED,
+    CACHE_BAND_MAX_DISTANCE,
+    CACHE_IMAGE_MAX_DISTANCE,
+    CACHE_IMAGE_MAX_HAMMING,
     CACHE_IMAGE_OCR_ENABLED,
+    CACHE_IMAGE_OCR_MIN_CONFIDENCE,
+    CACHE_IMAGE_TEXT_MIN_JACCARD,
     EXTERNAL_MODEL_NAME,
     ROUTING_THRESHOLD,
     USE_CELERY,
@@ -314,21 +319,26 @@ def _evaluate_image_gate(
 
 def _image_log_suffix(
     has_image: bool,
+    kind: str | None,
     clip_distance: float | None,
     hamming: int | None,
     token_jaccard: float | None,
 ) -> str:
-    """Trailing image metrics for the per-request `done` summary line.
+    """Trailing image summary for the per-request `done` line.
 
-    Empty for text-only requests; otherwise reports whichever gate ran (pixel
-    metrics for photos, token overlap for documents)."""
+    Only the metrics belonging to the path that actually ran are printed. Printing
+    all of them meant every line carried two or three `n/a` fields, which made the
+    real number hard to find.
+    """
     if not has_image:
         return ""
-    return (
-        f" image=true image_clip_distance={_fmt_opt(clip_distance, '{:.4f}')}"
-        f" image_hamming={_fmt_opt(hamming, '{}')}"
-        f" image_token_jaccard={_fmt_opt(token_jaccard, '{:.3f}')}"
-    )
+    if kind == "document" and token_jaccard is not None:
+        return f" image=document text_match={token_jaccard:.3f}"
+    if kind == "photo" and clip_distance is not None:
+        return f" image=photo clip={clip_distance:.4f} hamming={_fmt_opt(hamming, '{}')}"
+    # Nothing was compared: no cached image to compare against, or the image was
+    # refused outright. The kind alone explains which.
+    return f" image={kind or 'unknown'}"
 
 
 def _legacy_cache_lookup(cache_result: tuple[str, ...] | None) -> CacheLookupResult:
@@ -606,16 +616,22 @@ async def run_chat_pipeline(
                         image_fp = await run_in_threadpool(compute_image_fingerprint, image_bytes)
                 except Exception:
                     logger.exception("Image fingerprint failed; image treated as un-cacheable")
+            _kind = _image_kind(image_ocr)
+            # Say WHY this kind was chosen — the thresholds are the usual cause of
+            # a surprising miss, so print them next to the values they judged.
+            if _kind == "document":
+                _why = (f"readable text (confidence {image_ocr.mean_confidence:.1f} >= "
+                        f"{CACHE_IMAGE_OCR_MIN_CONFIDENCE:.0f}, {image_ocr.word_count} words)")
+            elif _kind == "ambiguous":
+                _why = (f"NOT CACHEABLE: text found but confidence "
+                        f"{image_ocr.mean_confidence:.1f} < {CACHE_IMAGE_OCR_MIN_CONFIDENCE:.0f}")
+            elif image_fp is None:
+                _why = "NOT CACHEABLE: too uniform to fingerprint by pixels"
+            else:
+                _why = f"no readable text; pixel fingerprint {image_fp.dhash_hex}"
             logger.info(
-                "image_request attached=true bytes=%d mime=%s kind=%s ocr_words=%d "
-                "ocr_confidence=%.1f dhash=%s query=%s",
-                len(image_bytes),
-                image_mime or "?",
-                _image_kind(image_ocr),
-                image_ocr.word_count if image_ocr else 0,
-                image_ocr.mean_confidence if image_ocr else 0.0,
-                image_fp.dhash_hex if image_fp else "none",
-                hide_content(user_query),
+                "image kind=%s %.0fKB — %s | prompt=%s",
+                _kind, len(image_bytes) / 1024, _why, hide_content(user_query),
             )
 
         # Image gate. Kinds must agree (a photo never matches a document entry,
@@ -636,17 +652,26 @@ async def run_chat_pipeline(
                 _image_hamming = detail.get("hamming")
                 _image_token_jaccard = detail.get("token_jaccard")
                 _image_gate_logged = True
+                # Print only the comparison that actually ran, against its own
+                # threshold, so the number that decided the outcome is obvious.
+                if "token_jaccard" in detail:
+                    _measured = (f"text_match={detail['token_jaccard']:.3f} "
+                                 f"(need >= {CACHE_IMAGE_TEXT_MIN_JACCARD:.2f})")
+                elif detail.get("clip_distance") is not None:
+                    _measured = (f"clip={detail['clip_distance']:.4f} "
+                                 f"(need <= {CACHE_IMAGE_MAX_DISTANCE:.2f}), "
+                                 f"hamming={detail.get('hamming')} "
+                                 f"(need <= {CACHE_IMAGE_MAX_HAMMING})")
+                else:
+                    _measured = f"not compared ({reason})"
                 logger.info(
-                    "image_gate verdict=%s request_kind=%s entry_kind=%s reason=%s "
-                    "clip_distance=%s hamming=%s token_jaccard=%s "
-                    "matched_entry=%s matched_query=%s",
-                    "accept" if verdict else "reject",
-                    _request_kind, _entry_kind, reason,
-                    _fmt_opt(detail.get("clip_distance"), "{:.4f}"),
-                    _fmt_opt(detail.get("hamming"), "{}"),
-                    _fmt_opt(detail.get("token_jaccard"), "{:.3f}"),
-                    cache_lookup.entry_id or "?",
+                    "image_gate %s — this=%s cached=%s %s | text_distance=%.4f "
+                    "matched_prompt=%s entry=%s",
+                    "ACCEPT" if verdict else "REJECT",
+                    _request_kind, _entry_kind, _measured,
+                    float(cache_lookup.distance or 0.0),
                     _diagnostic_prompt(cache_lookup.matched_query) or "",
+                    cache_lookup.entry_id or "?",
                 )
                 if not verdict:
                     cache_lookup = CacheLookupResult(
@@ -657,14 +682,20 @@ async def run_chat_pipeline(
                 else:
                     _image_anchored = _request_has_image
 
-        # Image request that never reached a cache hit to gate against — record
-        # how close the text landed so the log still shows the image outcome.
+        # The text lookup found no candidate to gate at all, so the image was never
+        # compared. Report how close the TEXT got and to what, because that — not
+        # the image — is what stopped the hit here.
         if _request_has_image and not _image_gate_logged:
+            _near = cache_lookup.nearest_distance
+            if _near is None:
+                _detail = "no entry in this department is close enough on text"
+            else:
+                _detail = (f"nearest text_distance={_near:.4f} "
+                           f"(need <= {CACHE_BAND_MAX_DISTANCE:.2f}) "
+                           f"nearest_prompt={_diagnostic_prompt(cache_lookup.nearest_prompt) or ''!r}")
             logger.info(
-                "image_gate verdict=miss kind=%s reason=no_cached_image nearest_text_distance=%s query=%s",
-                _image_kind(image_ocr),
-                f"{cache_lookup.nearest_distance:.4f}" if cache_lookup.nearest_distance is not None else "n/a",
-                hide_content(user_query),
+                "image_gate NOT REACHED — kind=%s, the image was never compared: %s | prompt=%s",
+                _image_kind(image_ocr), _detail, hide_content(user_query),
             )
 
         _validator_verdict: str | None = None
@@ -765,7 +796,8 @@ async def run_chat_pipeline(
                     trace.summary(),
                     _enriched_log_suffix(enriched, enrich_succeeded),
                     _nearest_log_suffix(cache_lookup),
-                    _image_log_suffix(_request_has_image, _image_clip_distance, _image_hamming, _image_token_jaccard),
+                    _image_log_suffix(_request_has_image, _image_kind(image_ocr) if _request_has_image else None,
+                              _image_clip_distance, _image_hamming, _image_token_jaccard),
                 )
 
                 prompt_tokens = int(len(clean_query.split()) * 1.3)
@@ -1010,7 +1042,8 @@ async def run_chat_pipeline(
             trace.summary(),
             _enriched_log_suffix(enriched, enrich_succeeded),
             _nearest_log_suffix(cache_lookup),
-            _image_log_suffix(_request_has_image, _image_clip_distance, _image_hamming, _image_token_jaccard),
+            _image_log_suffix(_request_has_image, _image_kind(image_ocr) if _request_has_image else None,
+                              _image_clip_distance, _image_hamming, _image_token_jaccard),
         )
 
         prompt_tokens = int(len(clean_query.split()) * 1.3)
