@@ -244,19 +244,94 @@ Measured on `gemma4:e2b` (`evals/validator/scripts/image_intent_check.py`, 25 pa
 
 The single miss is `what does this say?` vs `translate this to english` at distance **0.2497** — past `DEJAQ_CACHE_BAND_MAX_DISTANCE` (0.20), so the validator is never called on it in production. Worth recording anyway: that pair is a **verbatim few-shot** in the prompt and the model still answered VALID, which is a fair measure of how much `gemma4:e2b` can be pushed on read-vs-translate. Reachable phrasings of the same trap (`transcribe`/`translate` 0.1603, `what is written here?`/`translate what is written here` 0.1359) are rejected only after the prompt gained an explicit containment rule: extra words about *tone or depth* keep it VALID, extra words changing *output language or form* make it INVALID.
 
+## Round 3: the populations rounds 1 and 2 never contained
+
+Rounds 1 and 2 were both documents, and the photo path had only ever been measured on
+synthetic variants of 60 source images. Round 3 adds real photographs, real receipts, real
+screenshots and real camera photos of screens — 1.85M labelled pairs in total, scored by
+`evals/image_similarity/gate_report.py`, which runs the application's own predicates rather
+than a copy of them.
+
+| corpus | recall | false merges | wrong answers per cache hit |
+|---|---|---|---|
+| round 1 — coursework + DocUNet | 32.4% | 0 | 0% |
+| round 2 — FUNSD + arXiv | 13.2% | 1 | 0.8% |
+| receipts — SROIE | 19.4% | **2** | 0.8% |
+| screenshots — Rico | 48.2% | 19 | 3.2% |
+| photos — INRIA Holidays | 7.0% | **1** | 1.5% |
+| augmentations — the original 480 | 44.6% | 0 | 0% |
+| recaptures — UHDM photos of screens | 76.9% | 0 | 0% |
+
+Recall here is lower than the figures quoted earlier in this document because it is measured
+**end to end**: an image the router refuses is counted as a miss. `protocol.py` measures
+recall among document-routed images only. Both are correct; they answer different questions.
+
+### 0.80 is not the zero-merge point after all
+
+Two SROIE receipts from one restaurant — same items, same total, differing only in invoice
+number (1054250 vs 1032236) and date — reach token overlap **0.848**. The claim that 0.798
+was the ceiling held only because no earlier corpus contained same-vendor receipts.
+
+Zero merges needs **0.85** on receipts. It needs 0.95 on Rico screenshots, but that number is
+soft: those pairs are one screen with a dialog open, or with different chips selected — the
+same content in a different state, not somebody else's document. The receipt pair is the one
+that matters, because answering "what is the invoice number?" from it is simply wrong.
+
+Cost of moving 0.80 → 0.85, as document-routed recall: round 1 44.4% → 33.8%, round 2 36.7%
+→ 27.2%, receipts 20.5% → 12.1%, screenshots 55.5% → 47.4%.
+
+### The photo path has one real merge, and dHash is what prevents the rest
+
+A daylight rocky beach and a sunset over water (`hol01008` / `hol01268`) are served as the
+same image: CLIP **0.0929**, hamming **6**. Both are portrait seascapes split by a horizon,
+which is exactly the degenerate-hash failure the comment in `image_fingerprint.py` warns
+about. A CLIP ceiling of 0.08 removes it, costing the re-upload corpus 69.5% → 66.3%.
+
+The opposite result argues for keeping hamming exactly where it is: two different photographs
+of one terraced hillside measured CLIP **0.027** and were refused only by hamming 29. CLIP
+alone cannot tell two photos of a scene apart from the same photo twice.
+
+### Resolution, not framing, is what breaks the document path
+
+Round 1 pairs, by what changed between two captures of one page:
+
+| change | served |
+|---|---|
+| same resolution, any crop change | 63–78% |
+| different resolution, same crop | 3–35% |
+
+This is why a re-screenshot at a different zoom misses. `CANON_HEIGHT=1600` in
+`features_rich.py` tests normalising it away before OCR: it works on the axis it targets
+(dpi110 vs dpi200, 8.7% → 40.0%) but costs as much where resolution already matched (71.3% →
+44.7%), because resizing an already-good render degrades it. Net 38.6% → 41.2%, no new
+merges. Real, but not the fix it appeared to be — a size-aware version that only upscales is
+the obvious next probe.
+
+### End to end through the API
+
+`evals/image_similarity/e2e_gate.py` drives the running server over eleven scenarios;
+9 of 11 behave as specified. The two deviations:
+
+- **A 4% crop of one render misses** (token overlap 0.597). The document path serves
+  essentially only near-identical re-uploads.
+- **A camera photo of a screen HITS**, which was not expected — the complaint that started
+  this work. The photo path serves 76.9% of UHDM recapture pairs with no false merges.
+  Caveat: UHDM captures are aligned with their source; a handheld photo at an angle is harder.
+
 ## What the evidence does not cover
 
-The thresholds above rest on 286,000 labelled pairs across two corpora, re-derivable with
-`evals/image_similarity/protocol.py`. Three gaps remain, and they are real:
+Re-derivable with `evals/image_similarity/`. The remaining gaps:
 
-- **Photos of screens are barely covered.** Every measured image is a render, a scan, or a
-  photo of *paper*. The case that prompted this work — photographing a laptop screen — rests
-  on a handful of examples. No public dataset supplies it, least of all in Hebrew.
-- **Round 2 is English.** Tesseract's Hebrew behaviour differs, and the Hebrew evidence comes
-  from one person's coursework.
-- **Renders stand in for re-screenshotting**, not for re-photographing. Rasterising a page at
-  a different DPI is a genuinely independent render, but it does not reproduce perspective,
-  glare or moiré.
+- **Hebrew is one person's coursework**, from one university's templates. Tesseract's Hebrew
+  behaviour differs from its English behaviour and nothing else probes it.
+- **The photo path's positives are still weak at the middle.** Holidays pairs are different
+  photographs of one scene (refused by design); the augmentation corpus is variants of a
+  single shot. The realistic case — the same object photographed twice a second apart — is
+  measured by neither.
+- **Screenshot ground truth counts a UI state change as different content.** Those merge
+  counts need eyes on them before they justify a threshold move.
+- **Nothing measures whether a served answer was useful**, only whether it concerned the same
+  image.
 
 An earlier version of this document derived the document thresholds from **three syllabi** and
 described the resulting separation as roughly 10×. Measured against a proper corpus, that rule

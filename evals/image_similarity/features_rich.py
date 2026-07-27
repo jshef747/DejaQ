@@ -31,10 +31,29 @@ from app.services.image_text import _TOKEN_RE  # noqa: E402
 import os
 CORPUS = Path(__file__).parent / os.environ.get("CORPUS_DIR", "corpus")
 OUT = Path(__file__).parent / os.environ.get("FEATURES_OUT", "features_rich.jsonl")
+# Set CANON_HEIGHT to scale every image to a fixed height BEFORE OCR. Measured:
+# two renders of one page at the same DPI agree on 63-78% of their words, but at
+# different DPI only 3-35% - resolution, not framing, is what breaks the document
+# path. This exists to test whether normalising it away recovers the difference.
+CANON_HEIGHT = int(os.environ.get("CANON_HEIGHT", "0"))
+
+
+def _to_canonical_height(data: bytes) -> bytes:
+    import io
+
+    with Image.open(io.BytesIO(data)) as im:
+        if im.height == CANON_HEIGHT:
+            return data
+        w = max(1, round(im.width * CANON_HEIGHT / im.height))
+        buf = io.BytesIO()
+        im.convert("RGB").resize((w, CANON_HEIGHT), Image.LANCZOS).save(buf, "PNG")
+        return buf.getvalue()
 
 
 def ocr_words(data: bytes) -> tuple[list, float, float]:
     """Return (words, page_w, page_h) with pixel boxes, in reading order."""
+    if CANON_HEIGHT:
+        data = _to_canonical_height(data)
     proc = subprocess.run(
         [TESSERACT_BIN, "stdin", "stdout", "-l", TESSERACT_LANGS, "--psm", "3", "tsv"],
         input=data, capture_output=True, timeout=60,
