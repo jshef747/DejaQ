@@ -122,9 +122,27 @@ It mattered so much because the routing bar is high relative to real-world scans
 So 89% of genuine scanned forms took the unsafe path. The confidence floor of 80 was
 calibrated on clean renders and does not describe real scans.
 
-**Fix:** an image with ≥ `CACHE_IMAGE_AMBIGUOUS_MIN_WORDS` (4) readable words that is not a
-confident document is now classified `ambiguous` — never served, never stored, no pixel
-fingerprint computed. It becomes a cache miss, which regenerates.
+**Fix:** an image with ≥ `CACHE_IMAGE_AMBIGUOUS_MIN_WORDS` (4) tokens read *below* the
+confidence floor is classified `ambiguous` — never served, never stored, no pixel fingerprint
+computed. It becomes a cache miss, which regenerates.
+
+The test is **OCR quality, not amount of text**, and getting that wrong caused a live
+regression. The first version keyed on "below the document bar", which also caught a short
+crop of a question — 9 words at 86.8 confidence, read perfectly — and made it permanently
+un-cacheable. An unreliable read of a lot of text is garbage; a confident read of a little
+text is a small document.
+
+That also exposed the word floor as dead weight. Swept 6/8/10/15/25 over both corpora: **0
+false merges at every level**, with under a point of recall between them, because the
+confidence floor does the separating. On 60 real photos a floor of 6 reclassifies only 2, and
+the worst overlap between any two text-bearing photos is 0.038 against a 0.80 threshold. The
+floor has been 45, then 25, now **6**; each reduction fixed real misses and cost nothing
+measurable.
+
+A minimum of `CACHE_IMAGE_TEXT_MIN_SHARED_TOKENS` (4) shared tokens is also required before an
+overlap ratio counts at all — two images with three tokens each that happen to share them
+would otherwise score a perfect 1.0. No such pair appears in the corpora; this guards an edge
+the data does not cover.
 
 Separately, near-uniform images (a mostly-blank page is a white rectangle, and CLIP sees all
 white rectangles as identical) are refused by `tile_variety()`: distinct dHashes over a 4×4
