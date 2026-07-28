@@ -42,8 +42,27 @@ OUT = Path(__file__).parent / os.environ.get("FEATURES_OUT", "features_rich.json
 #   CANON_WORD_HEIGHT scale so the median OCR word is a fixed pixel height. Costs
 #                     a throwaway OCR pass to measure, but it is invariant to
 #                     cropping, which is what CANON_HEIGHT gets wrong.
+#   CANON_QUANT       snap the scale factor to a geometric ladder of this ratio.
+#                     Without it, two NEARLY IDENTICAL images measure slightly
+#                     different median word heights (OCR noise), get slightly
+#                     different factors, and stop agreeing - which is why word
+#                     normalisation cost 71.3% -> 60.4% on same-resolution pairs.
+#                     Snapping makes near-identical images get an identical
+#                     factor. 0 disables.
+#   CANON_UPSCALE_ONLY  never shrink: skip the second pass when the image is
+#                     already at or above the target. Downscaling throws away the
+#                     detail OCR needs, and skipping is also what makes the cost
+#                     conditional rather than paid on every request.
 CANON_HEIGHT = int(os.environ.get("CANON_HEIGHT", "0"))
 CANON_WORD_HEIGHT = float(os.environ.get("CANON_WORD_HEIGHT", "0"))
+CANON_QUANT = float(os.environ.get("CANON_QUANT", "0"))
+CANON_UPSCALE_ONLY = os.environ.get("CANON_UPSCALE_ONLY", "") not in ("", "0")
+# Control: scale EVERY image by the same fixed factor. It cannot normalise
+# anything, so it isolates one question - does resampling by itself change what
+# OCR reads? If same-resolution pairs still agree under this, the recall lost by
+# the schemes above comes from giving two similar images DIFFERENT factors, which
+# is fixable. If they do not, resampling is the ceiling and none of this works.
+CANON_FIXED_SCALE = float(os.environ.get("CANON_FIXED_SCALE", "0"))
 
 
 def _rescale(data: bytes, factor: float) -> bytes:
@@ -58,6 +77,16 @@ def _rescale(data: bytes, factor: float) -> bytes:
         return buf.getvalue()
 
 
+def _quantise(factor: float) -> float:
+    """Snap to the nearest rung of a geometric ladder, so two images whose
+    measured word heights differ by OCR noise get the SAME scale factor."""
+    if CANON_QUANT <= 1.0:
+        return factor
+    import math
+
+    return CANON_QUANT ** round(math.log(factor, CANON_QUANT))
+
+
 def _median_word_height(words: list) -> float:
     heights = sorted(h for _, c, _, _, _, h in words if c >= 60.0)
     return heights[len(heights) // 2] if heights else 0.0
@@ -65,6 +94,8 @@ def _median_word_height(words: list) -> float:
 
 def ocr_words(data: bytes, _rescaled: bool = False) -> tuple[list, float, float]:
     """Return (words, page_w, page_h) with pixel boxes, in reading order."""
+    if CANON_FIXED_SCALE and not _rescaled:
+        data = _rescale(data, CANON_FIXED_SCALE)
     if CANON_HEIGHT and not _rescaled:
         import io
 
@@ -103,7 +134,9 @@ def ocr_words(data: bytes, _rescaled: bool = False) -> tuple[list, float, float]
         if median > 0:
             # Re-read at the scale that makes text a fixed size. Unlike page
             # height this is unaffected by how the page was cropped.
-            return ocr_words(_rescale(data, CANON_WORD_HEIGHT / median), _rescaled=True)
+            factor = _quantise(CANON_WORD_HEIGHT / median)
+            if not (CANON_UPSCALE_ONLY and factor <= 1.0):
+                return ocr_words(_rescale(data, factor), _rescaled=True)
     return words, page_w, page_h
 
 

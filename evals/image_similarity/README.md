@@ -124,10 +124,15 @@ between two captures of one page:
 | same resolution, any crop | 63–78% |
 | different resolution, same crop | 3–35% |
 
-`CANON_HEIGHT=1600 features_rich.py` tests normalising this away before OCR. It works on the
-axis it targets (dpi110 vs dpi200: 8.7% → 40.0%) but *costs* as much where resolution already
-matched (71.3% → 44.7%), because resizing an already-good render degrades it. Net 38.6% →
-41.2% with no new merges: real, but not the fix it looked like.
+Normalising it away before OCR was investigated in full and **rejected** — see
+`## Rejected: normalising image size before OCR` in [docs/image-gate.md](../../docs/image-gate.md).
+Four variants, all reproducible from `features_rich.py` env knobs (`CANON_HEIGHT`,
+`CANON_WORD_HEIGHT` + `CANON_QUANT`, `CANON_FIXED_SCALE`, and `hybrid_probe.py` for the
+routing-only recombination). The short version: a flat 2× upscale gains 8 points of recall and
+introduces false merges on three of four corpora — 16 on receipts, 4 on the coursework — because
+reading a page more completely also reads the shared boilerplate of two near-duplicate documents
+more completely. Two different receipts go from 0.848 overlap to 0.983. `ocr_cost.py` measures
+what it would cost on the request path.
 
 ## Dataset notes worth keeping
 
@@ -138,6 +143,11 @@ matched (71.3% → 44.7%), because resizing an already-good render degrades it. 
 - INRIA Holidays files three byte-identical photos under two scene ids. `gate_report.load()`
   collapses groups holding an identical fingerprint; without that the corpus reports false
   merges that are really labelling errors.
+- `build_corpus.py` emits **duplicate label rows** for the DocUNet half — round 1's
+  `labels.json` has 1097 entries over 845 distinct files. Duplicates pair with themselves at
+  overlap 1.0 and are always served, so they inflate round-1 recall (23.8% deduplicated vs
+  24.7% raw) without affecting merge counts. Deduplicate on `path` before quoting a round-1
+  recall number.
 - UHDM recapture pairs are camera captures **aligned with their source**, so 76.9% is an
   upper bound for photographing a screen. A handheld phone photo at an angle is harder.
 

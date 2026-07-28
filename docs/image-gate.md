@@ -327,12 +327,54 @@ Round 1 pairs, by what changed between two captures of one page:
 | same resolution, any crop change | 63–78% |
 | different resolution, same crop | 3–35% |
 
-This is why a re-screenshot at a different zoom misses. `CANON_HEIGHT=1600` in
-`features_rich.py` tests normalising it away before OCR: it works on the axis it targets
-(dpi110 vs dpi200, 8.7% → 40.0%) but costs as much where resolution already matched (71.3% →
-44.7%), because resizing an already-good render degrades it. Net 38.6% → 41.2%, no new
-merges. Real, but not the fix it appeared to be — a size-aware version that only upscales is
-the obvious next probe.
+This is why a re-screenshot at a different zoom misses.
+
+### Rejected: normalising image size before OCR
+
+Investigated properly and **not adopted**. Three variants, all in `features_rich.py` behind
+env knobs so the result can be reproduced:
+
+1. **Normalise page height** (`CANON_HEIGHT`). Fixes the axis it targets and costs as much
+   where resolution already matched, because a *cropped* page is shorter and therefore gets a
+   different factor than the full page it should match.
+2. **Normalise by text size** (`CANON_WORD_HEIGHT`, `CANON_QUANT`) — measure the median OCR
+   word, scale so it hits a target, snap the factor to a geometric ladder so near-identical
+   images get an identical factor. Swept over targets 24/30/36 and ladders 1.25/1.5: best was
+   +4.7 points, under the +5 bar set in advance, and the ranking was unstable (target 30 with
+   snapping scored *worse* than without it). Costs **+1,038 ms** per request: two OCR passes,
+   the second on an enlarged image.
+3. **Flat 2× upscale** (`CANON_FIXED_SCALE`) — the control, run to test whether resampling
+   itself was the problem. It is not: a uniform factor leaves same-resolution pairs untouched
+   (69.4% → 71.6%). It beat both adaptive schemes on the coursework subset, +12 points.
+
+Variant 3 looked like the answer and is the one that must not ship. Measured on the wider
+corpora at the shipped 0.85 threshold:
+
+| corpus | shipped | flat 2× | routing-only hybrid |
+|---|---|---|---|
+| coursework | 23.8% / **0** merges | 31.7% / **4** | 23.8% / 0 |
+| round 2 | 9.9% / 1 | 29.8% / 0 | 11.1% / 0 |
+| receipts | 11.5% / **0** | 13.5% / **16** | 11.4% / 0 |
+| screenshots | 41.4% / 15 | 45.7% / 20 | 41.5% / 18 |
+
+**The mechanism that produces the recall also produces the merges.** Reading a page more
+completely reads the shared boilerplate of two near-duplicate documents more completely too:
+two different receipts went from 0.848 overlap to **0.983**. Better OCR moves the whole
+distribution up, it does not improve the separation. No threshold rescues it — zero merges on
+the upscaled receipts needs 0.99, where recall is 1.2%, far below the 11.5% available without
+upscaling at all.
+
+Variant 4, the **routing-only hybrid**: take the *kind* from an upscaled read (document /
+ambiguous / photo) but keep matching on the original tokens. Routing cannot cause a merge, so
+this is safe by construction — and it gains almost nothing, 0 to 1.2 points. Round 2's large
+gain under flat upscaling came from better *matching*, not better routing.
+
+One narrow use survives: routing on an upscaled read closes the "scan OCR cannot read at all"
+pixel leak (round 2, 1 merge → 0) at no recall cost. Only worth its latency if that leak
+matters.
+
+Cost, for completeness: flat 2× is **+263 ms** on screenshots and **+432 ms** on page renders,
+one pass. On a 3024×4032 phone photo it is seconds — the upscale makes it a 48-megapixel page.
 
 ### End to end through the API
 
