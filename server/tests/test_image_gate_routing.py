@@ -57,15 +57,17 @@ def test_kinds_never_mix(request_kind, entry_kw):
     assert reason.startswith("kind_mismatch")
 
 
-def test_document_served_when_words_and_identifiers_agree():
-    tokens = {"complex", "analysis", "course", "142180", "syllabus"}
+def test_document_served_when_words_agree():
+    """Ten shared tokens and one extra scores 0.909 — clear of the 0.85 bar."""
+    tokens = {"complex", "analysis", "course", "142180", "syllabus",
+              "semester", "lecture", "credits", "faculty", "hours"}
     e = entry(image_kind="document", image_text=" ".join(sorted(tokens)))
     ok, reason, detail = _evaluate_image_gate(
         request_kind="document", entry_kind="document",
         fingerprint=None, ocr=doc_ocr(tokens | {"extra"}), lookup=e,
     )
     assert ok and reason == "text_pass"
-    assert detail["token_jaccard"] > 0.35
+    assert detail["token_jaccard"] > 0.85
 
 
 def test_shared_template_different_identifiers_rejected():
@@ -73,7 +75,7 @@ def test_shared_template_different_identifiers_rejected():
 
     Measured at 0.578 token overlap live. It used to be rejected by a digit-token
     rule; that rule is gone (it admitted merges in every swept configuration and
-    fired on OCR junk), so the single 0.80 threshold now rejects it directly.
+    fired on OCR junk), so the single threshold now rejects it directly.
     """
     template = {"school", "computer", "science", "credits", "semester", "syllabus", "faculty"}
     stored = template | {"142180", "complex"}
@@ -85,7 +87,7 @@ def test_shared_template_different_identifiers_rejected():
     )
     assert not ok, "different courses on one template must not be served"
     assert reason == "text_mismatch"
-    assert detail["token_jaccard"] < 0.80, "must fall below the measured safe threshold"
+    assert detail["token_jaccard"] < 0.85, "must fall below the measured safe threshold"
 
 
 def test_document_without_ocr_is_not_served():
@@ -111,7 +113,7 @@ def test_one_threshold_decides_regardless_of_digits():
     a = frozenset({"alpha", "beta", "gamma", "delta", "epsilon"})
     near = frozenset({"alpha", "beta", "gamma", "delta", "zeta"})
     assert matches(a, a).matched
-    assert not matches(a, near).matched, "0.67 overlap must fail the 0.80 threshold"
+    assert not matches(a, near).matched, "0.67 overlap must fail the threshold"
 
     # Identical word overlap, one pair with digits and one without, must agree.
     with_digits = frozenset({"142180", "beta", "gamma", "delta", "epsilon"})

@@ -196,18 +196,20 @@ class TextMatch:
 def matches(new: frozenset[str], stored: frozenset[str]) -> TextMatch:
     """Same document when the two OCR vocabularies overlap past one threshold.
 
-    0.80 is the measured zero-false-merge point. Swept over 69,411 pairs of
-    genuinely different documents, the highest overlap any of them reached was
-    0.798 — two exam papers for the same course, same lecturer and same semester,
-    differing only by a date, a time and one letter (מועד א' vs מועד ב').
+    0.85 is the measured zero-false-merge point. It was 0.80, on the evidence
+    that no two genuinely different documents exceeded 0.798 — two exam papers
+    for one course differing only by a date, a time and one letter. That held
+    only because the corpus contained no two receipts from one shop: measured on
+    real scanned receipts, two from one restaurant with the same items and the
+    same total, differing only in invoice number and date, reach 0.848.
 
     It is deliberately one number rather than a rule with zones. Four independent
     approaches (word order, page layout, structured fields, noise-robust text)
     were measured against this same data and none beat a plain threshold without
     admitting merges somewhere: the difference between two near-duplicate
     documents is a small localised edit, and no global similarity score isolates
-    it. Recall is therefore capped near 45-54%; a miss costs one API call, a
-    merge serves someone else's document. See docs/image-gate.md.
+    it. Recall is therefore low; a miss costs one API call, a merge serves
+    someone else's document. See docs/image-gate.md.
     """
     tj = _jaccard(new, stored)
     enough = len(new & stored) >= CACHE_IMAGE_TEXT_MIN_SHARED_TOKENS
@@ -244,13 +246,16 @@ def _self_test() -> None:
     tiny = frozenset({"abc", "def"})
     assert not matches(tiny, tiny).matched, "two shared tokens is not evidence"
 
-    # Same document matches; different documents do not.
-    a = frozenset({"complex", "analysis", "course", "142180", "boazc"})
-    a2 = frozenset({"complex", "analysis", "course", "142180", "boazc", "extra"})
+    # Same document matches; different documents do not. Ten shared tokens with
+    # one extra on one side scores 0.909 — clear of the threshold rather than
+    # balanced on it, so this fixture tests the rule and not the constant.
+    a = frozenset({"complex", "analysis", "course", "142180", "boazc",
+                   "semester", "lecture", "credits", "faculty", "syllabus"})
+    a2 = a | {"extra"}
     assert matches(a, a2).matched, "same document with one extra token must match"
 
     # The measured false-merge case: shared template, different course. Rejected
-    # now on word overlap alone (0.578 < 0.80), with no identifier rule involved.
+    # on word overlap alone (0.578), with no identifier rule involved.
     tmpl = {"school", "computer", "science", "credits", "semester", "syllabus", "faculty", "hours"}
     t1 = frozenset(tmpl | {"142180", "complex"})
     t2 = frozenset(tmpl | {"142241", "cloud"})
@@ -258,14 +263,15 @@ def _self_test() -> None:
     assert not m.matched, f"different courses on one template must not match (tj={m.token_jaccard:.3f})"
 
     # Either side of the threshold. Two 100-token documents sharing S tokens
-    # overlap S/(200-S), so 85 shared -> 0.739 (reject) and 92 -> 0.852 (accept).
-    # The measured worst different-document pair sat at 0.798, just under the bar.
-    shared = [f"s{i}" for i in range(92)]
-    base = frozenset(shared + [f"a{i}" for i in range(8)])
+    # overlap S/(200-S), so 85 shared -> 0.739 (reject) and 95 -> 0.905 (accept).
+    # The measured worst different-document pair — two receipts from one
+    # restaurant differing by invoice number and date — sat at 0.848.
+    shared = [f"s{i}" for i in range(95)]
+    base = frozenset(shared + [f"a{i}" for i in range(5)])
     near_miss = frozenset(shared[:85] + [f"b{i}" for i in range(15)])
-    near_hit = frozenset(shared + [f"c{i}" for i in range(8)])
+    near_hit = frozenset(shared + [f"c{i}" for i in range(5)])
     assert not matches(base, near_miss).matched, "0.74 overlap must not be served"
-    assert matches(base, near_hit).matched, "0.85 overlap must be served"
+    assert matches(base, near_hit).matched, "0.90 overlap must be served"
     assert matches(base, base).matched, "identical documents must match"
 
     # Round-trip through the Chroma scalar form.

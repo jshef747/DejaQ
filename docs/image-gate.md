@@ -68,14 +68,20 @@ The **confidence floor does nearly all the filtering** — dropping the word flo
 
 Note the three text-heavy photos that route to the document path at *any* floor (92–198 words, conf 80–86) are photos **of documents** — the routing is correct, not a misclassification.
 
-## Document matching: one threshold at 0.80
+## Document matching: one threshold at 0.85
 
-**Serve when OCR token overlap ≥ 0.80.** Nothing else — no identifier rule, no zones.
+**Serve when OCR token overlap ≥ 0.85.** Nothing else — no identifier rule, no zones.
 
-That number is the measured zero-false-merge point. Swept over **69,411 pairs of genuinely
-different documents**, the highest overlap any of them reached was **0.798**: two exam papers
-for the same course, same lecturer, same semester, differing only by a date, a time and one
-letter. The threshold sits immediately above the worst case the evidence contains.
+It was 0.80 until round 3. The reasoning for 0.80 was that over 69,411 pairs of genuinely
+different documents the highest overlap reached was 0.798 — two exam papers for one course
+differing only by a date, a time and one letter. That was true of the corpus, and the corpus
+was missing a population: **two receipts from one shop**. Measured on real scanned receipts,
+two from one restaurant with the same items and the same total, differing only in invoice
+number (1054250 vs 1032236) and date, reach **0.848**.
+
+0.85 is the zero-merge point over all seven corpora (~1.85M labelled pairs). The lesson is the
+one this document already ends on: a threshold is only as safe as the failure modes its corpus
+contains.
 
 ### What this replaced, and why
 
@@ -96,16 +102,25 @@ The digit rule failed three separate ways:
 
 ### The cost, stated plainly
 
-| threshold | round 1 (coursework + DocUNet) | round 2 (forms + papers) |
-|---|---|---|
-| 0.70 | 77.9% recall / **114 merges** | 78.7% / 0 |
-| 0.75 | 62.5% / 43 | 68.7% / 0 |
-| **0.80** | **45.4% / 0** | **54.0% / 0** |
-| 0.85 | 31.4% / 0 | 39.2% / 0 |
+Recall among document-routed pairs, per threshold, with merges in brackets:
 
-Round 2 is clean at every threshold — all the danger lives in documents sharing a template.
-Recall of ~45–54% is the accepted trade: a miss costs one API call, a merge serves an answer
-about a different document.
+| threshold | round 1 | round 2 | receipts | screenshots |
+|---|---|---|---|---|
+| 0.70 | 82.6% (570) | 54.4% (0) | 43.3% (49) | 70.3% (31) |
+| 0.75 | 60.6% (215) | 44.9% (0) | 31.3% (10) | 63.3% (20) |
+| 0.80 | 44.4% (0) | 36.7% (0) | 20.5% (**2**) | 55.5% (10) |
+| **0.85** | **33.8% (0)** | **27.2% (0)** | **12.1% (0)** | **47.4% (8)** |
+| 0.95 | 19.9% (0) | 8.9% (0) | 1.9% (0) | 29.4% (0) |
+
+End to end — counting images the router refuses as misses — moving 0.80 → 0.85 cost round 1
+32.4% → 24.7%, receipts 19.4% → 11.5%, screenshots 48.2% → 41.4%, recaptures 76.9% → 67.2%.
+That is roughly a quarter of all image cache hits, given up to remove two merges. It is the
+trade this project has taken from the start: a miss costs one API call, a merge serves an
+answer about a different document.
+
+The screenshot column never reaches zero until 0.95, and that number should not be acted on:
+inspected by eye, those pairs are one screen with a modal open or with different chips
+selected — the same content in a different state, not somebody else's document.
 
 ### Why not something smarter
 
@@ -172,11 +187,22 @@ below 10.
 > blank, they merely look alike. The ambiguous-image rule, not this guard, is what closes the
 > leak.
 
-## Photo matching: why both thresholds stay load-bearing
+## Photo matching: CLIP at 0.08, and why both thresholds stay load-bearing
 
-For photos the CLIP + dHash gate is unchanged and validated on 480 labeled images (86,730 cross-pairs): **0 false merges**, with per-variant acceptance of 100% (brightness), 100% (logo), 100% (resize), 98.3% (recompress), 95% (crop), 76.7% (rotation).
+The CLIP ceiling is **0.08**, lowered from 0.10 in round 3. On 812 real photographs (INRIA
+Holidays, 300 scenes, 325,930 different-scene pairs) a daylight rocky beach and a sunset over
+water were served as the same image at **CLIP 0.0929 / hamming 6** — both are portrait
+seascapes split by a horizon, which is the degenerate-dHash case described below. 0.08 is the
+highest ceiling admitting none of them. It costs the re-upload corpus 69.5% → 66.3%.
 
-There is no unguarded trusted tier: the closest genuinely-*different* photo pair sits at CLIP ~0.048, well inside any usable CLIP ceiling, so dHash gates every photo hit (~0.24 ms, deterministic).
+The original 480-image validation still holds at the new ceiling: **0 false merges**, with
+per-variant acceptance of 100% (brightness), 100% (logo), 100% (resize), 98.3% (recompress),
+95% (crop), 76.7% (rotation).
+
+There is no unguarded trusted tier, and hamming is not the one to loosen. Two **different**
+photographs of one terraced hillside measured CLIP **0.027** — inside any usable semantic
+ceiling — and were refused by hamming 29 alone. dHash gates every photo hit (~0.24 ms,
+deterministic) and buying photo recall by relaxing it would open that class immediately.
 
 A proposed "structural tier" — accept strong dHash agreement (hamming ≤ 10) under a looser CLIP ceiling — was measured and **rejected**: 39 false accepts. dHash degenerates on low-structure images; two unrelated 4K photos with a left-right brightness split each hash to a repeating `0f0f…` and land at hamming 8.
 
@@ -194,7 +220,8 @@ It also could not fix the real case it was written for: on the actual screenshot
 
 ## Known limits, by design
 
-- **Far or angled photos of a screen never match** — OCR returns garbage (the same document scored 0.000 against itself). They fail as a cache *miss*, which regenerates, never as a false merge.
+- **Far or angled photos of a screen never match** — OCR returns garbage (the same document scored 0.000 against itself). They fail as a cache *miss*, which regenerates, never as a false merge. A *square-on* camera photo of a screen does match, via the photo path: 76.9% of 134 UHDM pairs, no merges.
+- **A scan that OCR cannot read at all** (0–2 tokens) misses the ambiguous rule, which needs 4 tokens, and falls to the pixel path where two blank-looking forms merge (measured: two FUNSD forms at CLIP 0.0648 / hamming 14). This is the one leak left standing, and closing it needs a "failed document scan" signal rather than a threshold.
 - Heavy photo edits (print/scan, paint, blur, rotation) fail the photo gate and become a miss.
 - A photo never matches a document entry and vice-versa; a text request matches neither.
 - Hebrew OCR quality drives document results; Tesseract `heb` is strong on clean renders, poor on skewed photos.

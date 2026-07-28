@@ -31,29 +31,45 @@ from app.services.image_text import _TOKEN_RE  # noqa: E402
 import os
 CORPUS = Path(__file__).parent / os.environ.get("CORPUS_DIR", "corpus")
 OUT = Path(__file__).parent / os.environ.get("FEATURES_OUT", "features_rich.jsonl")
-# Set CANON_HEIGHT to scale every image to a fixed height BEFORE OCR. Measured:
-# two renders of one page at the same DPI agree on 63-78% of their words, but at
-# different DPI only 3-35% - resolution, not framing, is what breaks the document
-# path. This exists to test whether normalising it away recovers the difference.
+# Two ways to normalise resolution before OCR. Measured: two renders of one page
+# at the same DPI agree on 63-78% of their words, but at different DPI only
+# 3-35% - resolution, not framing, is what breaks the document path.
+#
+#   CANON_HEIGHT      scale every image to a fixed pixel height. Fixes the DPI
+#                     axis but PENALISES crops, because a cropped page is shorter
+#                     and therefore gets scaled by a different factor than the
+#                     full page it should match.
+#   CANON_WORD_HEIGHT scale so the median OCR word is a fixed pixel height. Costs
+#                     a throwaway OCR pass to measure, but it is invariant to
+#                     cropping, which is what CANON_HEIGHT gets wrong.
 CANON_HEIGHT = int(os.environ.get("CANON_HEIGHT", "0"))
+CANON_WORD_HEIGHT = float(os.environ.get("CANON_WORD_HEIGHT", "0"))
 
 
-def _to_canonical_height(data: bytes) -> bytes:
+def _rescale(data: bytes, factor: float) -> bytes:
     import io
 
+    if abs(factor - 1.0) < 0.02:
+        return data
     with Image.open(io.BytesIO(data)) as im:
-        if im.height == CANON_HEIGHT:
-            return data
-        w = max(1, round(im.width * CANON_HEIGHT / im.height))
+        size = (max(1, round(im.width * factor)), max(1, round(im.height * factor)))
         buf = io.BytesIO()
-        im.convert("RGB").resize((w, CANON_HEIGHT), Image.LANCZOS).save(buf, "PNG")
+        im.convert("RGB").resize(size, Image.LANCZOS).save(buf, "PNG")
         return buf.getvalue()
 
 
-def ocr_words(data: bytes) -> tuple[list, float, float]:
+def _median_word_height(words: list) -> float:
+    heights = sorted(h for _, c, _, _, _, h in words if c >= 60.0)
+    return heights[len(heights) // 2] if heights else 0.0
+
+
+def ocr_words(data: bytes, _rescaled: bool = False) -> tuple[list, float, float]:
     """Return (words, page_w, page_h) with pixel boxes, in reading order."""
-    if CANON_HEIGHT:
-        data = _to_canonical_height(data)
+    if CANON_HEIGHT and not _rescaled:
+        import io
+
+        with Image.open(io.BytesIO(data)) as im:
+            data = _rescale(data, CANON_HEIGHT / im.height)
     proc = subprocess.run(
         [TESSERACT_BIN, "stdin", "stdout", "-l", TESSERACT_LANGS, "--psm", "3", "tsv"],
         input=data, capture_output=True, timeout=60,
@@ -81,6 +97,13 @@ def ocr_words(data: bytes) -> tuple[list, float, float]:
         text = c[idx["text"]].strip()
         if level == 5 and text and conf >= 0:
             words.append([text, conf, left, top, width, height])
+
+    if CANON_WORD_HEIGHT and not _rescaled:
+        median = _median_word_height(words)
+        if median > 0:
+            # Re-read at the scale that makes text a fixed size. Unlike page
+            # height this is unaffected by how the page was cropped.
+            return ocr_words(_rescale(data, CANON_WORD_HEIGHT / median), _rescaled=True)
     return words, page_w, page_h
 
 

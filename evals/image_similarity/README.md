@@ -92,16 +92,25 @@ Seven corpora, roughly 1.85M labelled pairs, scored against the shipped constant
 | augment | the original 480 Copydays-derived variants | 44.6% | 0 | 0% |
 | recapture | UHDM — camera photos of screens, paired with the source | 76.9% | 0 | 0% |
 
-**The 0.80 token threshold is not the zero-merge point it was believed to be.** Two SROIE
-receipts from one restaurant — same items, same total, differing only in invoice number and
-date — reach 0.848. Zero merges needs 0.85 on receipts and 0.95 on UI screenshots, and the
-screenshot figure is soft: those pairs are the same screen with a dialog open or different
-chips selected, i.e. the same content in a different state, not somebody else's document.
+The table above is at the **old** constants (token 0.80, CLIP 0.10), which is what the round
+found. Both have since moved, and the two merges they were moved for are gone:
 
-**The photo path has one unambiguous merge.** A daylight rocky beach and a sunset over water
+**The 0.80 token threshold was not the zero-merge point it was believed to be.** Two SROIE
+receipts from one restaurant — same items, same total, differing only in invoice number and
+date — reach 0.848. **Shipped is now 0.85**, which is clean on receipts. Zero merges on UI
+screenshots would need 0.95, and that figure is soft: those pairs are the same screen with a
+dialog open or different chips selected, i.e. the same content in a different state, not
+somebody else's document.
+
+**The photo path had one unambiguous merge.** A daylight rocky beach and a sunset over water
 (`hol01008` / `hol01268`) measure CLIP 0.0929, hamming 6 — both are portrait seascapes split
 by a horizon, which is the dHash degeneracy `image_fingerprint.py` already warns about.
-Lowering the CLIP ceiling to 0.08 removes it.
+**Shipped is now 0.08**, which removes it.
+
+At the new constants the seven corpora score 24.7 / 9.9 / 11.5 / 41.4 / 7.0 / 41.8 / 67.2%
+recall, with false merges 0 / 1 / 0 / 15 / 0 / 0 / 0 — the surviving round-2 merge is two
+FUNSD forms that OCR could not read at all (0–2 tokens), which fall to the pixel path because
+the ambiguous rule needs 4 tokens.
 
 **dHash earns its place.** Two different photos of one terraced hillside measured CLIP
 **0.027** — well inside any sane semantic ceiling — and were refused only by hamming 29.

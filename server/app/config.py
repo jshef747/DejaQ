@@ -90,12 +90,20 @@ CACHE_ALIAS_ENABLED = _get_bool("DEJAQ_CACHE_ALIAS_ENABLED", True)
 
 # Image fingerprint gate: a cached entry that carries an image is served to an
 # image request ONLY if BOTH the CLIP cosine distance and the perceptual-hash
-# (dHash) hamming distance are within bounds. Offline validation across two
-# datasets (own photos + INRIA Copydays) showed the closest genuinely-different
-# photo pair at CLIP ~0.048, inside any plausible "trusted" zone — so unlike the
-# text path, image hits get NO unguarded fast tier: dHash (~0.24ms) gates every
-# one. hamming<=15 held cross-group rejection at 89.5% (own) / 99.3% (Copydays).
-CACHE_IMAGE_MAX_DISTANCE = _get_float("DEJAQ_CACHE_IMAGE_MAX_DISTANCE", 0.10)
+# (dHash) hamming distance are within bounds. Image hits get NO unguarded fast
+# tier: dHash (~0.24ms) gates every one.
+#
+# 0.08, not 0.10. On 812 real photographs (INRIA Holidays, 300 scenes, 325,930
+# different-scene pairs) a daylight rocky beach and a sunset over water were
+# served as the same image at CLIP 0.0929 / hamming 6 — both are portrait
+# seascapes split by a horizon, which is the degenerate-hash case image_
+# fingerprint.py already warns about. 0.08 is the highest ceiling that admits
+# none of those; it costs the re-upload corpus 69.5% -> 66.3% recall.
+#
+# hamming stays at 15 and is not negotiable downward-in-strictness: two DIFFERENT
+# photographs of one terraced hillside measured CLIP 0.027 — inside any sane
+# semantic ceiling — and were refused by hamming 29 alone.
+CACHE_IMAGE_MAX_DISTANCE = _get_float("DEJAQ_CACHE_IMAGE_MAX_DISTANCE", 0.08)
 CACHE_IMAGE_MAX_HAMMING = int(_get_float("DEJAQ_CACHE_IMAGE_MAX_HAMMING", 15))
 
 # Note: both thresholds are load-bearing and neither may be relaxed alone. A
@@ -168,19 +176,22 @@ CACHE_IMAGE_AMBIGUOUS_MIN_WORDS = int(_get_float("DEJAQ_CACHE_IMAGE_AMBIGUOUS_MI
 # at 10 removed all 1,712 of those merges and 0 of the 60 real photos.
 CACHE_IMAGE_MIN_TILE_VARIETY = int(_get_float("DEJAQ_CACHE_IMAGE_MIN_TILE_VARIETY", 10))
 
-# Matching: one threshold on OCR token overlap. 0.80 is the measured
-# zero-false-merge point — over 69,411 different-document pairs the highest
-# overlap any of them reached was 0.798 (two exam papers for the same course
-# differing only by a date, a time and one letter).
+# Matching: one threshold on OCR token overlap.
+#
+# 0.85, not 0.80. 0.80 was believed to be the zero-false-merge point because no
+# corpus then measured contained two receipts from one shop: two SROIE receipts
+# from one restaurant — same items, same total, differing only in invoice number
+# and date — reach 0.848. 0.85 is the measured zero-merge point once real
+# receipts are in the corpus.
 #
 # It was previously 0.70 plus a digit-token rule, which measured 234 false merges.
 # Both the extra zones and the digit rule are gone: a joint sweep found that every
-# configuration keeping them admitted merges. This costs recall (~45% coursework,
-# ~54% forms and papers, from 89.8%) and that is the intended trade — a miss costs
+# configuration keeping them admitted merges. This costs recall (coursework 44%
+# -> 34% of document-routed pairs) and that is the intended trade — a miss costs
 # one API call, a merge serves an answer about someone else's document.
-# Raise the value for more safety, lower it for more hits; 0.70 buys ~78% recall
-# at a measured 114 merges. Full curve in docs/image-gate.md.
-CACHE_IMAGE_TEXT_MIN_JACCARD = _get_float("DEJAQ_CACHE_IMAGE_TEXT_MIN_JACCARD", 0.80)
+# Raise the value for more safety, lower it for more hits; 0.80 buys back ~10
+# points at 2 measured merges. Full curve in docs/image-gate.md.
+CACHE_IMAGE_TEXT_MIN_JACCARD = _get_float("DEJAQ_CACHE_IMAGE_TEXT_MIN_JACCARD", 0.85)
 
 TESSERACT_BIN = _get_text("DEJAQ_TESSERACT_BIN", "tesseract")
 TESSERACT_LANGS = _get_text("DEJAQ_TESSERACT_LANGS", "heb+eng")
