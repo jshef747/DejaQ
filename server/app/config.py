@@ -88,6 +88,115 @@ CACHE_RESCUE_MAX_DISTANCE = _get_float("DEJAQ_CACHE_RESCUE_MAX_DISTANCE", 0.60)
 # typo becomes an instant trusted hit next time.
 CACHE_ALIAS_ENABLED = _get_bool("DEJAQ_CACHE_ALIAS_ENABLED", True)
 
+# Image fingerprint gate: a cached entry that carries an image is served to an
+# image request ONLY if BOTH the CLIP cosine distance and the perceptual-hash
+# (dHash) hamming distance are within bounds. Image hits get NO unguarded fast
+# tier: dHash (~0.24ms) gates every one.
+#
+# 0.08, not 0.10. On 812 real photographs (INRIA Holidays, 300 scenes, 325,930
+# different-scene pairs) a daylight rocky beach and a sunset over water were
+# served as the same image at CLIP 0.0929 / hamming 6 — both are portrait
+# seascapes split by a horizon, which is the degenerate-hash case image_
+# fingerprint.py already warns about. 0.08 is the highest ceiling that admits
+# none of those; it costs the re-upload corpus 69.5% -> 66.3% recall.
+#
+# hamming stays at 15 and is not negotiable downward-in-strictness: two DIFFERENT
+# photographs of one terraced hillside measured CLIP 0.027 — inside any sane
+# semantic ceiling — and were refused by hamming 29 alone.
+CACHE_IMAGE_MAX_DISTANCE = _get_float("DEJAQ_CACHE_IMAGE_MAX_DISTANCE", 0.08)
+CACHE_IMAGE_MAX_HAMMING = int(_get_float("DEJAQ_CACHE_IMAGE_MAX_HAMMING", 15))
+
+# Note: both thresholds are load-bearing and neither may be relaxed alone. A
+# "structural tier" (accept on hamming <= 10 with a looser CLIP ceiling) was
+# measured and rejected — see the comment in services/image_fingerprint.py.
+# The pixel gate above applies to PHOTOS only; documents go through OCR (below),
+# because pixel similarity is actively wrong for them: two DIFFERENT syllabi on
+# one university template measured CLIP 0.027 / hamming 0 (i.e. would have been
+# served as the same image), while two screenshots of the SAME syllabus measured
+# hamming 10-19 (i.e. would have missed).
+
+# --- Image document path (OCR) ---
+# Routing: an image is treated as a document only when OCR returns confident
+# text. Measured over 4 rendered document pages, 4 handheld photos of a screen
+# and 12 real photos: documents scored mean confidence 83.3-92.2 with 54-373
+# confident words; unreadable screen photos reached 60 confident words but only
+# ~35 mean confidence; the wordiest real photo reached 87.7 confidence but only
+# 38 words. Requiring BOTH separates them with margin on either side.
+#
+# The word floor was 45 and cost a real miss: a cropped exercise snippet (two
+# lines of Hebrew) OCR'd to 34 words at 84.8 confidence, so it fell to the photo
+# path and missed at hamming 36 — while its token overlap with the re-cropped
+# version was 0.833. Swept 20/25/30/34/35/40/45 over the 60 real photos: the
+# confidence floor does nearly all the filtering, so 25 misroutes exactly ONE
+# extra photo (src032, the 38-word one above) and produces **0 false merges at
+# every floor** (max cross-photo token_jaccard 0.038 against a 0.35 threshold).
+# The cost is that src032's variants split across kinds, losing some of its own
+# recall — a miss, never a wrong answer.
+CACHE_IMAGE_OCR_ENABLED = _get_bool("DEJAQ_CACHE_IMAGE_OCR_ENABLED", True)
+# Swept 50-80 over both corpora: **0 false merges at every level**, because the
+# 0.80 token threshold does the safety work — this floor only routes. It was 80,
+# which sat inside the range real screenshots actually produce (measured live at
+# 86.8, 84.8, 80.5 and 77.5 on one user's images) and refused them at random.
+# Lowering it costs some photo recall: on 480 real photo files, 42 are routed to
+# the document path at 80 and 69 at 60, and those lose pixel matching. Worst
+# overlap between any two of them is 0.041 at every level, so they cannot merge —
+# they simply miss. Documents are the workload that matters here, so the trade
+# favours them.
+CACHE_IMAGE_OCR_MIN_CONFIDENCE = _get_float("DEJAQ_CACHE_IMAGE_OCR_MIN_CONFIDENCE", 60.0)
+# The word floor is deliberately low: the CONFIDENCE floor does the real work.
+# It was 45, then 25, and both were wrong for the same reason — a short crop of a
+# question is read perfectly (measured live: 9 words at 86.8 confidence) but has
+# little text, so a high floor made it permanently un-cacheable. Swept 6/8/10/15/25
+# over both corpora: 0 false merges at every level and under a point of recall
+# between them. On 60 real photos a floor of 6 reclassifies just 2, and the worst
+# overlap between any two text-bearing photos is 0.038 against a 0.80 threshold.
+CACHE_IMAGE_OCR_MIN_WORDS = int(_get_float("DEJAQ_CACHE_IMAGE_OCR_MIN_WORDS", 6))
+
+# A ratio over a handful of tokens is noise, not similarity: two images with three
+# tokens each that happen to share them score a perfect 1.0. No such pair exists in
+# the measured corpora, so this guards an edge the data does not cover rather than
+# one it demonstrates. Kept below the smallest real document seen (9 words).
+CACHE_IMAGE_TEXT_MIN_SHARED_TOKENS = int(_get_float("DEJAQ_CACHE_IMAGE_TEXT_MIN_SHARED_TOKENS", 4))
+
+# An image that yields real text but misses the document bar is neither a
+# document nor a photo: it is un-cacheable. It used to fall through to the pixel
+# gate, which was the largest single source of wrong answers — 1,712 false merges
+# on one measured corpus and 204 on another, because two different pages of text
+# are near-identical to CLIP. The bar matters: only 11% of real scanned business
+# forms clear the confidence floor (their median is 60.3), so the fallback was
+# carrying most real-world documents. 4 words is where the merge count in the
+# measured corpora collapses (204 -> 9); below it an image carries no readable
+# text at all and the pixel gate is the right tool.
+CACHE_IMAGE_AMBIGUOUS_MIN_WORDS = int(_get_float("DEJAQ_CACHE_IMAGE_AMBIGUOUS_MIN_WORDS", 4))
+
+# Near-uniform images cannot be fingerprinted by pixels: a mostly-blank page is a
+# white rectangle, and CLIP and dHash see all white rectangles as identical.
+# Counted as distinct dHashes over a 4x4 grid, 60 real photos scored 13-16 of 16,
+# while the blank page renders that were false-merging scored below 10. Blocking
+# at 10 removed all 1,712 of those merges and 0 of the 60 real photos.
+CACHE_IMAGE_MIN_TILE_VARIETY = int(_get_float("DEJAQ_CACHE_IMAGE_MIN_TILE_VARIETY", 10))
+
+# Matching: one threshold on OCR token overlap.
+#
+# 0.85, not 0.80. 0.80 was believed to be the zero-false-merge point because no
+# corpus then measured contained two receipts from one shop: two SROIE receipts
+# from one restaurant — same items, same total, differing only in invoice number
+# and date — reach 0.848. 0.85 is the measured zero-merge point once real
+# receipts are in the corpus.
+#
+# It was previously 0.70 plus a digit-token rule, which measured 234 false merges.
+# Both the extra zones and the digit rule are gone: a joint sweep found that every
+# configuration keeping them admitted merges. This costs recall (coursework 44%
+# -> 34% of document-routed pairs) and that is the intended trade — a miss costs
+# one API call, a merge serves an answer about someone else's document.
+# Raise the value for more safety, lower it for more hits; 0.80 buys back ~10
+# points at 2 measured merges. Full curve in docs/image-gate.md.
+CACHE_IMAGE_TEXT_MIN_JACCARD = _get_float("DEJAQ_CACHE_IMAGE_TEXT_MIN_JACCARD", 0.85)
+
+TESSERACT_BIN = _get_text("DEJAQ_TESSERACT_BIN", "tesseract")
+TESSERACT_LANGS = _get_text("DEJAQ_TESSERACT_LANGS", "heb+eng")
+OCR_TIMEOUT_SECONDS = _get_float("DEJAQ_OCR_TIMEOUT_SECONDS", 20.0)
+
 # Model backend: generation runs through Ollama (local or remote per this URL).
 OLLAMA_URL = _get_text("DEJAQ_OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_TIMEOUT_SECONDS = _get_float("DEJAQ_OLLAMA_TIMEOUT_SECONDS", 60.0)

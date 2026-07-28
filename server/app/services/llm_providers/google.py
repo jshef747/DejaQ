@@ -1,3 +1,4 @@
+import base64
 import logging
 import time
 from functools import lru_cache
@@ -39,7 +40,13 @@ class GoogleProviderClient:
         for msg in request.history:
             role = "model" if msg["role"] == "assistant" else msg["role"]
             contents.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
-        contents.append(types.Content(role="user", parts=[types.Part(text=request.query)]))
+        user_parts = [types.Part(text=request.query)]
+        if request.image_b64:
+            user_parts.insert(0, types.Part.from_bytes(
+                data=base64.b64decode(request.image_b64),
+                mime_type=request.image_mime or "image/jpeg",
+            ))
+        contents.append(types.Content(role="user", parts=user_parts))
 
         config = types.GenerateContentConfig(
             system_instruction=request.system_prompt,

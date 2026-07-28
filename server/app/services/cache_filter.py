@@ -13,11 +13,21 @@ FILLER_PATTERNS = re.compile(
 MIN_WORD_COUNT = 3
 
 
-def should_cache(enriched_query: str, normalized_query: str) -> tuple[bool, str]:
+def should_cache(
+    enriched_query: str, normalized_query: str, has_image: bool = False
+) -> tuple[bool, str]:
     """Decide whether a response should be cached.
 
     Returns (should_cache, reason) tuple for logging/UI.
     """
+    # Every rule below judges the TEXT, which is the whole query only when there
+    # is no image. "solve it" (2 words) is the normal way to ask about an
+    # attached image and was being dropped as too short, so nothing was ever
+    # stored and no image could ever hit. An image entry is pinned to its
+    # fingerprint, so a thin query cannot leak it to an unrelated ask.
+    if has_image:
+        return True, "image attached"
+
     # Rule 1: Too short after normalization
     word_count = len(normalized_query.split())
     if word_count < MIN_WORD_COUNT:

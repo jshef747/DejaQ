@@ -427,6 +427,7 @@ function difficultyMeta(
 export default function ChatApp() {
   const [messages, setMessages] = useState<AppMessage[]>([]);
   const [input, setInput] = useState("");
+  const [image, setImage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<ChatSettings>(DEFAULT_CHAT_SETTINGS);
@@ -525,14 +526,23 @@ export default function ChatApp() {
 
   async function handleSend() {
     const text = input.trim();
-    if (!text || isLoading) return;
+    if ((!text && !image) || isLoading) return;
     if (!settings.deptSlug) {
       addToast("error", "Select a department in Settings to start chatting.");
       setSettingsOpen(true);
       return;
     }
 
-    const userMsg: AppMessage = { id: newId(), role: "user", content: text, ts: Date.now() };
+    // The backend needs a non-empty query; default one for image-only sends.
+    const queryText = text || "What is in this image?";
+    const sentImage = image;
+    const userMsg: AppMessage = {
+      id: newId(),
+      role: "user",
+      content: queryText,
+      ts: Date.now(),
+      imageUrl: sentImage,
+    };
 
     // Capture snapshot before any state updates so async code works with stable refs.
     const preSendMessages = messages;
@@ -540,6 +550,7 @@ export default function ChatApp() {
 
     setMessages(withUserMsg);
     setInput("");
+    setImage(null);
     setIsLoading(true);
 
     // Pre-allocate the assistant message so we can append deltas in-place.
@@ -560,6 +571,7 @@ export default function ChatApp() {
       settings.deptSlug,
       settings.modelProfile,
       settings.routingMode,
+      sentImage,
       (delta) => {
         if (firstDelta) {
           // Show the placeholder bubble and hide the typing indicator on first byte.
@@ -580,6 +592,7 @@ export default function ChatApp() {
       // Revert optimistic messages so the user can retry.
       setMessages(preSendMessages);
       setInput(text);
+      setImage(sentImage);
       return;
     }
 
@@ -899,6 +912,9 @@ export default function ChatApp() {
             onChange={setInput}
             onSend={handleSend}
             disabled={isLoading}
+            image={image}
+            onImageChange={setImage}
+            onImageError={(msg) => addToast("error", msg)}
           />
         </div>
 

@@ -14,6 +14,8 @@ export interface AppMessage {
   content: string;
   ts: number;
   sourceLabel?: string;
+  // Data URL of an image the user attached to this message (user messages only).
+  imageUrl?: string | null;
   // Assistant-only fields:
   modelUsed?: string | null;
   interactionId?: string | null;
@@ -164,7 +166,28 @@ export default function ChatMessage({ message, onFeedback, onInspect, inspected 
             wordBreak: "break-word",
           }}
         >
-          {isUser ? message.content : <MarkdownContent content={message.content} />}
+          {isUser ? (
+            <>
+              {message.imageUrl && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={message.imageUrl}
+                  alt="Attached"
+                  style={{
+                    borderRadius: "8px",
+                    display: "block",
+                    marginBottom: message.content ? "8px" : 0,
+                    maxHeight: "240px",
+                    maxWidth: "100%",
+                    objectFit: "contain",
+                  }}
+                />
+              )}
+              {message.content}
+            </>
+          ) : (
+            <MarkdownContent content={message.content} />
+          )}
         </div>
       </div>
 

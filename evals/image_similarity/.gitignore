@@ -1,0 +1,10 @@
+# Datasets and derived artefacts: rebuildable, large, and in some cases not ours
+# to redistribute. Only the code is tracked.
+dataset/
+corpus*/
+docunet/
+dl/
+reports/
+*.jsonl
+*.log
+gate_report.json

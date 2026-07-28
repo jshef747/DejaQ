@@ -76,6 +76,7 @@ export async function sendChatMessage(
   deptSlug: string,
   modelProfile: ModelProfile = "default",
   routingMode: RoutingMode = "auto",
+  image: string | null = null,
   onDelta?: (chunk: string) => void,
 ): Promise<ChatResult> {
   let response: Response;
@@ -83,7 +84,7 @@ export async function sendChatMessage(
     response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...serverHeader() },
-      body: JSON.stringify({ messages, deptSlug, modelProfile, routingMode }),
+      body: JSON.stringify({ messages, deptSlug, modelProfile, routingMode, image }),
     });
   } catch {
     return { kind: "error", status: 0, message: "Network error. Could not reach the chat server." };
@@ -126,7 +127,11 @@ export async function sendChatMessage(
         if (raw === "[DONE]") break outer;
         try {
           const chunk = JSON.parse(raw);
-          const delta: string = chunk?.choices?.[0]?.delta?.content ?? "";
+          // chat/completions chunk, or Responses API text delta (image requests
+          // go through /v1/responses, whose stream uses response.output_text.delta).
+          const delta: string =
+            chunk?.choices?.[0]?.delta?.content ??
+            (chunk?.type === "response.output_text.delta" ? chunk?.delta ?? "" : "");
           if (delta) {
             text += delta;
             onDelta?.(delta);

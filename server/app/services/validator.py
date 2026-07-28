@@ -120,6 +120,59 @@ _FEW_SHOTS = [
     ),
 ]
 
+# --- Image-anchored mode: compare QUESTION to QUESTION, never to the answer ---
+# When the image gate accepted a hit it has already proven the two requests carry
+# the SAME image. The answer is then useless to the validator: an image query's
+# meaning lives in the picture ("how to solve?"), so judging "does this answer
+# cover this question?" is underdetermined and over-rejects (observed live:
+# "how to solve this?" vs "how to solve?" at distance 0.0753 was rejected).
+# The one thing left to check is whether the two questions ask for the same
+# thing about that image — and the embedding cannot do it: numbered-item swaps
+# land at distance 0.0867-0.1351, overlapping legitimate paraphrases
+# (0.0753-0.1094). See docs/image-gate.md.
+_IMAGE_SYSTEM_PROMPT = (
+    "Two questions were asked about THE SAME image. The image has already been verified "
+    "identical, so you do NOT need to see it.\n"
+    "Decide whether both questions ask for the same thing about that image.\n"
+    "Reply with exactly one word: VALID or INVALID.\n"
+    "VALID = the same request, reworded, retyped with typos, or asked in a different tone.\n"
+    "INVALID = a different part, element, item, or fact of the image, a different number or "
+    "letter (question 1 vs question 2, part a vs part b), or a different task on it "
+    "(reading vs translating vs summarising).\n"
+    "One question containing the other does NOT make them the same. Judge the extra words:\n"
+    "- extra words about tone or depth (simply, in short, step by step, in detail) = same "
+    "request, VALID.\n"
+    "- extra words changing the output language or form (in Hebrew, translate, as a table, "
+    "as code) = different request, INVALID.\n"
+    "The image content is unknown to you, so a difference you cannot resolve is a real "
+    "difference: when in doubt, choose INVALID."
+)
+
+_IMAGE_FEW_SHOTS = [
+    # Paraphrase — the live false rejection this mode exists to fix.
+    ("CACHED QUESTION: how to solve this?\nNEW QUESTION: how to solve?", "VALID"),
+    # Tone only.
+    ("CACHED QUESTION: explain this\nNEW QUESTION: explain this simply", "VALID"),
+    # Typos never change the ask.
+    ("CACHED QUESTION: what is in this image?\nNEW QUESTION: waht is in ths image?", "VALID"),
+    # Numbered-item swap: the worksheet trap. Distance 0.0867-0.1026 — trusted zone.
+    (
+        "CACHED QUESTION: what is the answer to question 1?\n"
+        "NEW QUESTION: what is the answer to question 2?",
+        "INVALID",
+    ),
+    ("CACHED QUESTION: solve part a\nNEW QUESTION: solve part b", "INVALID"),
+    # Different element of the same document.
+    (
+        "CACHED QUESTION: what does the title say?\nNEW QUESTION: what is the lecturer name?",
+        "INVALID",
+    ),
+    # Different task on the same image.
+    ("CACHED QUESTION: what does this say?\nNEW QUESTION: translate this to english", "INVALID"),
+    # Containment: the new question is the old one plus a form-changing modifier.
+    ("CACHED QUESTION: summarize this\nNEW QUESTION: summarize this in hebrew", "INVALID"),
+]
+
 # Word-count cap on cached_answer before validator call.
 # At ~400 words (~500 tokens) we stay under ~42% of the 2048-ctx window,
 # safely below the 56% threshold where the model outputs garbage.
@@ -137,6 +190,7 @@ class ValidatorService:
         cached_query: str,
         cached_answer: str,
         mismatch_hint: str | None = None,
+        image_anchored: bool = False,
     ) -> tuple[bool, str]:
         """Return (is_valid, raw_verdict). Fail-safe: unparseable output → False (INVALID).
 
@@ -144,16 +198,25 @@ class ValidatorService:
         questions differ (e.g. "'list' vs 'string'") — computed by the lexical
         alignment gate. Sharpens the verdict on single-word-swap traps, where
         near-identical wording otherwise invites a false VALID.
-        """
-        words = cached_answer.split()
-        if len(words) > _MAX_ANSWER_WORDS:
-            cached_answer = " ".join(words[:_MAX_ANSWER_WORDS])
 
-        final = (
-            f"CACHED QUESTION: {cached_query}\n"
-            f"CACHED ANSWER: {cached_answer}\n"
-            f"NEW QUESTION: {new_query}"
-        )
+        image_anchored: the image gate already proved both requests carry the same
+        image, so cached_answer is ignored and the two QUESTIONS are compared
+        instead (see _IMAGE_SYSTEM_PROMPT).
+        """
+        if image_anchored:
+            system_prompt, few_shots = _IMAGE_SYSTEM_PROMPT, _IMAGE_FEW_SHOTS
+            cached_answer = ""  # never sent in this mode
+            final = f"CACHED QUESTION: {cached_query}\nNEW QUESTION: {new_query}"
+        else:
+            system_prompt, few_shots = _SYSTEM_PROMPT, _FEW_SHOTS
+            words = cached_answer.split()
+            if len(words) > _MAX_ANSWER_WORDS:
+                cached_answer = " ".join(words[:_MAX_ANSWER_WORDS])
+            final = (
+                f"CACHED QUESTION: {cached_query}\n"
+                f"CACHED ANSWER: {cached_answer}\n"
+                f"NEW QUESTION: {new_query}"
+            )
         if mismatch_hint:
             final += (
                 f"\nNOTE: the new question differs from the cached question at these words: "
@@ -161,8 +224,8 @@ class ValidatorService:
                 f"asked, reply INVALID."
             )
 
-        messages: list[dict] = [{"role": "system", "content": _SYSTEM_PROMPT}]
-        for user_msg, assistant_msg in _FEW_SHOTS:
+        messages: list[dict] = [{"role": "system", "content": system_prompt}]
+        for user_msg, assistant_msg in few_shots:
             messages.append({"role": "user", "content": user_msg})
             messages.append({"role": "assistant", "content": assistant_msg})
         messages.append({"role": "user", "content": final})

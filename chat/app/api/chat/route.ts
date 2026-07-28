@@ -25,15 +25,46 @@ const SSE_HEADERS_TO_FORWARD = [
   "x-dejaq-cache-matched-query",
 ];
 
+interface ChatMsg {
+  role: "user" | "assistant" | "system";
+  content: string;
+}
+
+// Convert the flat message list into Responses API `input` items, attaching the
+// image (a data: URL) to the most recent user message as an input_image part.
+function buildResponsesInput(messages: ChatMsg[], imageDataUrl: string) {
+  const items = messages.map((m) => ({
+    role: m.role,
+    content: [{ type: "input_text", text: m.content }] as Array<Record<string, string>>,
+  }));
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (items[i].role === "user") {
+      items[i].content.push({ type: "input_image", image_url: imageDataUrl });
+      break;
+    }
+  }
+  return items;
+}
+
 export async function POST(request: NextRequest) {
   const config = getDejaQConfig(request.headers.get("x-dejaq-server"));
   if (isNextResponse(config)) return config;
 
   const body = await request.json();
+  const hasImage = typeof body.image === "string" && body.image.startsWith("data:");
+
+  // Image requests must use the Responses API — it's the only endpoint that
+  // accepts images and runs the CLIP+dHash fingerprint gate. Text-only requests
+  // stay on chat/completions. Both stream SSE; the client parser handles both.
+  const endpoint = hasImage ? "/v1/responses" : "/v1/chat/completions";
+  const payload = hasImage
+    ? { model: "default", input: buildResponsesInput(body.messages, body.image), stream: true }
+    : { model: "default", messages: body.messages, stream: true };
+
   let response: Response;
   const fetchStart = Date.now();
   try {
-    response = await fetch(`${config.apiBaseUrl}/v1/chat/completions`, {
+    response = await fetch(`${config.apiBaseUrl}${endpoint}`, {
       method: "POST",
       headers: buildGatewayHeaders(
         config.apiKey,
@@ -41,11 +72,7 @@ export async function POST(request: NextRequest) {
         body.modelProfile as ModelProfile,
         body.routingMode as RoutingMode,
       ),
-      body: JSON.stringify({
-        model: "default",
-        messages: body.messages,
-        stream: true,
-      }),
+      body: JSON.stringify(payload),
       signal: AbortSignal.timeout(API_TIMEOUT_MS),
     });
   } catch {

@@ -1,5 +1,6 @@
 # server/app/routers/openai_compat.py
 import asyncio
+import base64
 import hashlib
 import logging
 import time
@@ -27,6 +28,17 @@ from app.services.external_llm import ExternalLLMService
 from app.services.credential_service import CredentialService, SUPPORTED_PROVIDERS
 from app.services.llm_providers import LIVE_PROVIDERS
 from app.services.memory_chromaDB import CacheLookupResult, get_memory_service
+from app.services.image_fingerprint import (
+    ImageFingerprint,
+    fingerprint as compute_image_fingerprint,
+    gate_result as image_gate_result,
+)
+from app.services.image_text import (
+    OcrResult,
+    extract as extract_image_text,
+    matches as text_matches,
+    tokens_from_string,
+)
 from app.dependencies.auth import ResolvedWorkspace, require_org_key
 from app.services.provider_inference import provider_for_model
 from app.services import cache_filter, llm_config_service
@@ -41,6 +53,12 @@ from app.services.service_factory import (
 from app.tasks.cache_tasks import generalize_and_store_task
 from app.config import (
     CACHE_ALIAS_ENABLED,
+    CACHE_BAND_MAX_DISTANCE,
+    CACHE_IMAGE_MAX_DISTANCE,
+    CACHE_IMAGE_MAX_HAMMING,
+    CACHE_IMAGE_OCR_ENABLED,
+    CACHE_IMAGE_OCR_MIN_CONFIDENCE,
+    CACHE_IMAGE_TEXT_MIN_JACCARD,
     EXTERNAL_MODEL_NAME,
     ROUTING_THRESHOLD,
     USE_CELERY,
@@ -48,7 +66,7 @@ from app.config import (
 )
 from app.db.session import get_session
 from app.utils.exceptions import ExternalLLMError
-from app.utils.logger import clear_request_id, content_snippet, set_request_id
+from app.utils.logger import clear_request_id, content_snippet, hide_content, set_request_id
 from app.utils.pipeline_trace import PipelineTrace
 from app.schemas.chat import ExternalLLMRequest
 from app.services.chat_messages import extract_pipeline_inputs
@@ -232,6 +250,97 @@ def _enriched_log_suffix(enriched: str, enrich_succeeded: bool) -> str:
     return f" enriched_prompt={prompt}"
 
 
+def _fmt_opt(value, fmt: str) -> str:
+    return fmt.format(value) if value is not None else "n/a"
+
+
+def _image_kind(ocr: OcrResult | None) -> str:
+    """Which gate applies: its words, its pixels, or neither.
+
+    "ambiguous" means OCR found real text but not enough to compare by words.
+    Such an image is never served and never stored — routing it to the pixel gate
+    instead was the largest measured source of wrong answers (docs/image-gate.md).
+    No entry is ever written with this kind, so the gate's kind check rejects it
+    without needing a special case.
+    """
+    if ocr and ocr.is_document:
+        return "document"
+    if ocr and ocr.is_ambiguous:
+        return "ambiguous"
+    return "photo"
+
+
+def _entry_image_kind(lookup: CacheLookupResult) -> str:
+    """Kind of the matched cache entry — "text" when it carries no image.
+
+    Falls back to inspecting the stored fingerprints so entries written before
+    image_kind existed still classify correctly.
+    """
+    if lookup.image_kind:
+        return lookup.image_kind
+    if lookup.image_text:
+        return "document"
+    if lookup.image_dhash and lookup.image_clip:
+        return "photo"
+    return "text"
+
+
+def _evaluate_image_gate(
+    *,
+    request_kind: str,
+    entry_kind: str,
+    fingerprint: ImageFingerprint | None,
+    ocr: OcrResult | None,
+    lookup: CacheLookupResult,
+) -> tuple[bool, str, dict]:
+    """Decide whether a cached image entry may be served. Returns (ok, reason, metrics).
+
+    Kinds must match first: a photo must never be served a document's answer (or
+    a text-only entry's), because their fingerprints are not comparable at all.
+    """
+    if request_kind != entry_kind:
+        return False, f"kind_mismatch_{request_kind}_vs_{entry_kind}", {}
+
+    if request_kind == "document":
+        if ocr is None:
+            return False, "ocr_unavailable", {}
+        match = text_matches(ocr.tokens, tokens_from_string(lookup.image_text))
+        return (
+            match.matched,
+            "text_pass" if match.matched else "text_mismatch",
+            {"token_jaccard": match.token_jaccard},
+        )
+
+    if fingerprint is None:
+        return False, "fingerprint_failed", {}
+    gate = image_gate_result(fingerprint, lookup.image_dhash, lookup.image_clip)
+    return gate.passed, gate.reason, {"clip_distance": gate.clip_distance, "hamming": gate.hamming}
+
+
+def _image_log_suffix(
+    has_image: bool,
+    kind: str | None,
+    clip_distance: float | None,
+    hamming: int | None,
+    token_jaccard: float | None,
+) -> str:
+    """Trailing image summary for the per-request `done` line.
+
+    Only the metrics belonging to the path that actually ran are printed. Printing
+    all of them meant every line carried two or three `n/a` fields, which made the
+    real number hard to find.
+    """
+    if not has_image:
+        return ""
+    if kind == "document" and token_jaccard is not None:
+        return f" image=document text_match={token_jaccard:.3f}"
+    if kind == "photo" and clip_distance is not None:
+        return f" image=photo clip={clip_distance:.4f} hamming={_fmt_opt(hamming, '{}')}"
+    # Nothing was compared: no cached image to compare against, or the image was
+    # refused outright. The kind alone explains which.
+    return f" image={kind or 'unknown'}"
+
+
 def _legacy_cache_lookup(cache_result: tuple[str, ...] | None) -> CacheLookupResult:
     if cache_result is None:
         return CacheLookupResult(hit=False)
@@ -266,13 +375,27 @@ def _bg_generalize_and_store(
     tenant_id: str,
     cache_namespace: str = "dejaq_default",
     model_profile: str = MODEL_PROFILE_DEFAULT,
+    image_dhash: str | None = None,
+    image_clip: str | None = None,
+    image_kind: str | None = None,
+    image_text: str | None = None,
 ) -> None:
     start = time.perf_counter()
     doc_id = _doc_id(clean_query)
     try:
-        generalized = asyncio.run(_services_for_model_profile(model_profile).adjuster.generalize(answer))
+        # Image-anchored answers are stored verbatim — see the note in
+        # tasks/cache_tasks.py: generalization cannot see the image and invents
+        # specifics, and the image gate already pins the answer to one image.
+        if image_kind:
+            generalized = answer
+        else:
+            generalized = asyncio.run(_services_for_model_profile(model_profile).adjuster.generalize(answer))
         memory = get_memory_service(cache_namespace)
-        doc_id = memory.store_interaction(clean_query, generalized, original_query, tenant_id)
+        doc_id = memory.store_interaction(
+            clean_query, generalized, original_query, tenant_id,
+            image_dhash=image_dhash, image_clip=image_clip,
+            image_kind=image_kind, image_text=image_text,
+        )
         latency_ms = int((time.perf_counter() - start) * 1000)
         query = content_snippet(clean_query)
         if query:
@@ -390,11 +513,20 @@ async def run_chat_pipeline(
     max_tokens: int | None,
     raw_request: Request,
     background_tasks: BackgroundTasks,
+    image: tuple[bytes, str] | None = None,
 ) -> ChatPipelineResult:
     """Core DejaQ pipeline: enrich → normalize → cache → validate → adjust/generate → store.
 
-    Raises PipelineError for HTTP-level failures (402, 422, 500).
+    `image` is (bytes, mime) for an image request; None for text. Image requests
+    are gated on BOTH CLIP distance and dHash before a cache hit is served, and
+    always routed to the (vision-capable) external provider on a miss.
+
+    Raises PipelineError for HTTP-level failures (400, 402, 422, 500).
     """
+    image_bytes, image_mime = image if image else (None, None)
+    _request_has_image = image_bytes is not None
+    image_fp: ImageFingerprint | None = None
+    image_ocr: OcrResult | None = None
     _t0 = time.monotonic()
     trace = PipelineTrace()
     cache_namespace: str = getattr(raw_request.state, "cache_namespace", "dejaq_default")
@@ -456,6 +588,116 @@ async def run_chat_pipeline(
         except Exception:
             logger.exception("Cache check failed")
 
+        # Fingerprint the image once — used both to gate a hit and to store on a
+        # miss. Two kinds, compared by completely different means:
+        #   document (OCR found confident text) -> compared by its words
+        #   photo    (everything else)          -> compared by CLIP + dHash
+        # Pixel similarity is actively wrong for documents: two DIFFERENT syllabi
+        # on one template measured CLIP 0.027 / hamming 0 while two screenshots of
+        # the SAME syllabus measured hamming 10-19. See docs/image-gate.md.
+        _image_clip_distance: float | None = None
+        _image_hamming: int | None = None
+        _image_token_jaccard: float | None = None
+        _image_gate_logged = False
+        _image_anchored = False  # the gate accepted: this hit is pinned to one image
+        if _request_has_image:
+            if CACHE_IMAGE_OCR_ENABLED:
+                try:
+                    with trace.step("image_ocr"):
+                        image_ocr = await run_in_threadpool(extract_image_text, image_bytes)
+                except Exception:
+                    logger.exception("OCR failed; treating image as a photo")
+            # Only photos need a pixel fingerprint. Documents are compared by
+            # words, and ambiguous images are not cacheable at all — computing one
+            # for them is what used to let them merge with unrelated pages.
+            if _image_kind(image_ocr) == "photo":
+                try:
+                    with trace.step("image_fp"):
+                        image_fp = await run_in_threadpool(compute_image_fingerprint, image_bytes)
+                except Exception:
+                    logger.exception("Image fingerprint failed; image treated as un-cacheable")
+            _kind = _image_kind(image_ocr)
+            # Say WHY this kind was chosen — the thresholds are the usual cause of
+            # a surprising miss, so print them next to the values they judged.
+            if _kind == "document":
+                _why = (f"readable text (confidence {image_ocr.mean_confidence:.1f} >= "
+                        f"{CACHE_IMAGE_OCR_MIN_CONFIDENCE:.0f}, {image_ocr.word_count} words)")
+            elif _kind == "ambiguous":
+                _why = (f"NOT CACHEABLE: text found but confidence "
+                        f"{image_ocr.mean_confidence:.1f} < {CACHE_IMAGE_OCR_MIN_CONFIDENCE:.0f}")
+            elif image_fp is None:
+                _why = "NOT CACHEABLE: too uniform to fingerprint by pixels"
+            else:
+                _why = f"no readable text; pixel fingerprint {image_fp.dhash_hex}"
+            logger.info(
+                "image kind=%s %.0fKB — %s | prompt=%s",
+                _kind, len(image_bytes) / 1024, _why, hide_content(user_query),
+            )
+
+        # Image gate. Kinds must agree (a photo never matches a document entry,
+        # and a text request never matches either), then the matching kind's rule
+        # decides.
+        if cache_lookup.hit:
+            _entry_kind = _entry_image_kind(cache_lookup)
+            _request_kind = _image_kind(image_ocr) if _request_has_image else "text"
+            if _request_has_image or _entry_kind != "text":
+                verdict, reason, detail = _evaluate_image_gate(
+                    request_kind=_request_kind,
+                    entry_kind=_entry_kind,
+                    fingerprint=image_fp,
+                    ocr=image_ocr,
+                    lookup=cache_lookup,
+                )
+                _image_clip_distance = detail.get("clip_distance")
+                _image_hamming = detail.get("hamming")
+                _image_token_jaccard = detail.get("token_jaccard")
+                _image_gate_logged = True
+                # Print only the comparison that actually ran, against its own
+                # threshold, so the number that decided the outcome is obvious.
+                if "token_jaccard" in detail:
+                    _measured = (f"text_match={detail['token_jaccard']:.3f} "
+                                 f"(need >= {CACHE_IMAGE_TEXT_MIN_JACCARD:.2f})")
+                elif detail.get("clip_distance") is not None:
+                    _measured = (f"clip={detail['clip_distance']:.4f} "
+                                 f"(need <= {CACHE_IMAGE_MAX_DISTANCE:.2f}), "
+                                 f"hamming={detail.get('hamming')} "
+                                 f"(need <= {CACHE_IMAGE_MAX_HAMMING})")
+                else:
+                    _measured = f"not compared ({reason})"
+                logger.info(
+                    "image_gate %s — this=%s cached=%s %s | text_distance=%.4f "
+                    "matched_prompt=%s entry=%s",
+                    "ACCEPT" if verdict else "REJECT",
+                    _request_kind, _entry_kind, _measured,
+                    float(cache_lookup.distance or 0.0),
+                    _diagnostic_prompt(cache_lookup.matched_query) or "",
+                    cache_lookup.entry_id or "?",
+                )
+                if not verdict:
+                    cache_lookup = CacheLookupResult(
+                        hit=False,
+                        nearest_distance=cache_lookup.distance,
+                        nearest_prompt=cache_lookup.matched_query,
+                    )
+                else:
+                    _image_anchored = _request_has_image
+
+        # The text lookup found no candidate to gate at all, so the image was never
+        # compared. Report how close the TEXT got and to what, because that — not
+        # the image — is what stopped the hit here.
+        if _request_has_image and not _image_gate_logged:
+            _near = cache_lookup.nearest_distance
+            if _near is None:
+                _detail = "no entry in this department is close enough on text"
+            else:
+                _detail = (f"nearest text_distance={_near:.4f} "
+                           f"(need <= {CACHE_BAND_MAX_DISTANCE:.2f}) "
+                           f"nearest_prompt={_diagnostic_prompt(cache_lookup.nearest_prompt) or ''!r}")
+            logger.info(
+                "image_gate NOT REACHED — kind=%s, the image was never compared: %s | prompt=%s",
+                _image_kind(image_ocr), _detail, hide_content(user_query),
+            )
+
         _validator_verdict: str | None = None
         if cache_lookup.hit:
             cached_answer = cache_lookup.generalized_answer or ""
@@ -487,6 +729,10 @@ async def run_chat_pipeline(
                                 cache_lookup.matched_query or "",
                                 cached_answer,
                                 mismatch_hint=_hint,
+                                # Only sent when set: the TypeError fallback below
+                                # drops the hint, so text calls must stay unchanged
+                                # for validators that predate this kwarg.
+                                **({"image_anchored": True} if _image_anchored else {}),
                             )
                         except TypeError:
                             # Stub/legacy validator without the mismatch_hint kwarg
@@ -506,16 +752,24 @@ async def run_chat_pipeline(
                     nearest_prompt=cache_lookup.matched_query,
                 )
                 logger.info(
-                    "validator rejected cache hit distance=%.4f matched_query=%r steps=%s",
+                    "validator rejected cache hit mode=%s distance=%.4f matched_query=%r steps=%s",
+                    "image" if _image_anchored else "text",
                     _cache_distance, _cache_matched_query, trace.summary(),
                 )
             else:
-                try:
-                    with trace.step("adjust"):
-                        answer = await services.adjuster.adjust(user_query, cached_answer)
-                except Exception:
-                    logger.exception("Context adjuster failed")
+                if _image_anchored:
+                    # Image answers are stored verbatim (the generalizer invents
+                    # specifics it cannot see — docs/image-gate.md), so no tone was
+                    # ever stripped and there is nothing to put back. Running the
+                    # adjuster here would be the same blind rewrite, plus ~2.1s.
                     answer = cached_answer
+                else:
+                    try:
+                        with trace.step("adjust"):
+                            answer = await services.adjuster.adjust(user_query, cached_answer)
+                    except Exception:
+                        logger.exception("Context adjuster failed")
+                        answer = cached_answer
                 model_used = "cache"
 
                 response_id = f"{cache_namespace}:{_entry_id}"
@@ -536,12 +790,14 @@ async def run_chat_pipeline(
                 if _requires_validation and CACHE_ALIAS_ENABLED:
                     asyncio.create_task(_store_alias_bg(cache_namespace, clean_query, _entry_id))
                 logger.info(
-                    "done cache=hit route=cache model=%s response_id=%s latency=%dms band=%s rescued=%s steps=%s%s%s",
+                    "done cache=hit route=cache model=%s response_id=%s latency=%dms band=%s rescued=%s steps=%s%s%s%s",
                     model_used, response_id, _latency,
                     _requires_validation, bool(getattr(cache_lookup, "rescued", False)),
                     trace.summary(),
                     _enriched_log_suffix(enriched, enrich_succeeded),
                     _nearest_log_suffix(cache_lookup),
+                    _image_log_suffix(_request_has_image, _image_kind(image_ocr) if _request_has_image else None,
+                              _image_clip_distance, _image_hamming, _image_token_jaccard),
                 )
 
                 prompt_tokens = int(len(clean_query.split()) * 1.3)
@@ -570,7 +826,11 @@ async def run_chat_pipeline(
                 )
 
         # 4. Cache miss — classify then route
-        if routing_mode == ROUTING_MODE_EASY_LOCAL:
+        if _request_has_image:
+            # The local model is text-only; image queries must go to a vision-capable
+            # external provider regardless of difficulty or routing mode.
+            classification = {"complexity": "hard", "score": 1.0, "task_type": "image_external"}
+        elif routing_mode == ROUTING_MODE_EASY_LOCAL:
             classification = {"complexity": "easy", "score": 0.0, "task_type": "forced_local"}
         elif routing_mode == ROUTING_MODE_HARD_EXTERNAL:
             classification = {"complexity": "hard", "score": 1.0, "task_type": "forced_external"}
@@ -634,6 +894,8 @@ async def run_chat_pipeline(
                         system_prompt=system_prompt
                         or "You are a helpful assistant. Answer the user's query concisely and accurately.",
                         temperature=temperature or 0.7,
+                        image_b64=base64.b64encode(image_bytes).decode("ascii") if _request_has_image else None,
+                        image_mime=image_mime,
                     )
                     ext_response = await _external_llm.generate_response(
                         ext_request,
@@ -673,9 +935,32 @@ async def run_chat_pipeline(
         will_cache = False
         try:
             with trace.step("filter"):
-                will_cache, _ = cache_filter.should_cache(enriched, clean_query)
+                will_cache, _ = cache_filter.should_cache(
+                    enriched, clean_query, has_image=_request_has_image
+                )
         except Exception:
             logger.exception("Cache filter failed")
+
+        # Never cache a failed generation. Without this the user-facing apology
+        # ("I'm sorry, I couldn't process your request…") is stored as a real
+        # answer and served to every later match — observed live.
+        if route == "error":
+            will_cache = False
+            logger.warning("generation failed; not caching the error response")
+
+        # An image with no usable fingerprint of either kind can't be gated on
+        # future hits, so don't cache it — the query text alone would wrongly
+        # match a plain text ask later. This now also covers the two cases that
+        # used to reach the pixel gate and merge with unrelated documents: an
+        # "ambiguous" image (real text, below the document bar) gets no
+        # fingerprint computed, and a near-uniform one gets None back.
+        _img_kind = _image_kind(image_ocr) if _request_has_image else None
+        _img_text = image_ocr.token_string() if (image_ocr and image_ocr.is_document) else None
+        _img_dhash = image_fp.dhash_hex if image_fp else None
+        _img_clip = image_fp.clip_b64 if image_fp else None
+        if _request_has_image and not _img_text and not (_img_dhash and _img_clip):
+            will_cache = False
+            logger.info("image not cacheable kind=%s; answer will not be stored", _img_kind)
 
         store_status = "skipped"
         miss_response_id: str | None = None
@@ -685,10 +970,20 @@ async def run_chat_pipeline(
             with trace.step("store"):
                 if USE_CELERY:
                     try:
+                        # Text requests keep the legacy positional-args call; image
+                        # fingerprints ride as kwargs only when present.
+                        _apply_kwargs: dict = {
+                            "headers": {"dejaq_model_profile": model_profile},
+                            "ignore_result": True,
+                        }
+                        if _request_has_image:
+                            _apply_kwargs["kwargs"] = {
+                                "image_dhash": _img_dhash, "image_clip": _img_clip,
+                                "image_kind": _img_kind, "image_text": _img_text,
+                            }
                         generalize_and_store_task.apply_async(
                             args=(clean_query, answer, user_query, workspace_slug, cache_namespace),
-                            headers={"dejaq_model_profile": model_profile},
-                            ignore_result=True,
+                            **_apply_kwargs,
                         )
                         store_status = "queued"
                     except Exception as exc:
@@ -703,6 +998,10 @@ async def run_chat_pipeline(
                             workspace_slug,
                             cache_namespace,
                             model_profile,
+                            _img_dhash,
+                            _img_clip,
+                            _img_kind,
+                            _img_text,
                         )
                         store_status = "background-fallback"
                 else:
@@ -714,6 +1013,10 @@ async def run_chat_pipeline(
                         workspace_slug,
                         cache_namespace,
                         model_profile,
+                        _img_dhash,
+                        _img_clip,
+                        _img_kind,
+                        _img_text,
                     )
                     store_status = "background"
 
@@ -734,11 +1037,13 @@ async def run_chat_pipeline(
         )
         diff_score = float(classification.get("score", 0.0))
         logger.info(
-            "done cache=miss route=%s model=%s store=%s response_id=%s latency=%dms difficulty_score=%.4f steps=%s%s%s",
+            "done cache=miss route=%s model=%s store=%s response_id=%s latency=%dms difficulty_score=%.4f steps=%s%s%s%s",
             route, model_used, store_status, miss_response_id or "none", _latency, diff_score,
             trace.summary(),
             _enriched_log_suffix(enriched, enrich_succeeded),
             _nearest_log_suffix(cache_lookup),
+            _image_log_suffix(_request_has_image, _image_kind(image_ocr) if _request_has_image else None,
+                              _image_clip_distance, _image_hamming, _image_token_jaccard),
         )
 
         prompt_tokens = int(len(clean_query.split()) * 1.3)
