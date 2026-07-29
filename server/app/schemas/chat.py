@@ -13,6 +13,11 @@ class ExternalLLMRequest(BaseModel):
     temperature: float = Field(0.7, description="Sampling temperature")
     image_b64: str | None = Field(None, description="Base64 image bytes attached to the query, if any")
     image_mime: str | None = Field(None, description="MIME type of the attached image, e.g. image/jpeg")
+    # PDFs only. Markdown is inlined into `query` instead — it is already text,
+    # and no provider has a markdown part to send it as.
+    file_b64: str | None = Field(None, description="Base64 PDF bytes attached to the query, if any")
+    file_mime: str | None = Field(None, description="MIME type of the attached file, e.g. application/pdf")
+    file_name: str | None = Field(None, description="Original filename, sent where the provider wants one")
 
 
 class ExternalLLMResponse(BaseModel):

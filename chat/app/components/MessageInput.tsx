@@ -2,18 +2,41 @@
 
 import { useEffect, useRef } from "react";
 
+import type { Attachment } from "./chat-store";
+
 // Reject files larger than this before base64-encoding — keeps the request body
-// and localStorage sane. CLIP downsizes to 224px anyway, so this loses nothing.
-const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+// and localStorage sane. Mirrors DEJAQ_MAX_ATTACHMENT_BYTES on the server, which
+// is the limit that actually holds; this one just fails faster and more kindly.
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+
+// Markdown arrives with an unreliable MIME — browsers commonly send text/plain
+// or nothing at all for a .md file — so the extension is the better signal and
+// either one is accepted. Kept in step with services/file_text.py::kind_for.
+const MARKDOWN_SUFFIXES = [".md", ".markdown", ".mdown", ".mkd", ".txt"];
+
+function attachmentKind(file: File): Attachment["kind"] | null {
+  const name = file.name.toLowerCase();
+  if (file.type.startsWith("image/")) return "image";
+  if (file.type === "application/pdf" || name.endsWith(".pdf")) return "pdf";
+  if (MARKDOWN_SUFFIXES.some((s) => name.endsWith(s))) return "markdown";
+  if (file.type === "text/markdown" || file.type === "text/x-markdown") return "markdown";
+  return null;
+}
+
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 interface Props {
   value: string;
   onChange: (value: string) => void;
   onSend: () => void;
   disabled: boolean;
-  image: string | null;
-  onImageChange: (dataUrl: string | null) => void;
-  onImageError?: (message: string) => void;
+  attachment: Attachment | null;
+  onAttachmentChange: (attachment: Attachment | null) => void;
+  onAttachmentError?: (message: string) => void;
 }
 
 export default function MessageInput({
@@ -21,9 +44,9 @@ export default function MessageInput({
   onChange,
   onSend,
   disabled,
-  image,
-  onImageChange,
-  onImageError,
+  attachment,
+  onAttachmentChange,
+  onAttachmentError,
 }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -44,39 +67,56 @@ export default function MessageInput({
     }
   }
 
-  function attachImageFile(file: File) {
-    if (!file.type.startsWith("image/")) {
-      onImageError?.("Only image files can be attached.");
+  function attachFile(file: File) {
+    const kind = attachmentKind(file);
+    if (!kind) {
+      onAttachmentError?.("Attach an image, a PDF, or a Markdown file.");
       return;
     }
-    if (file.size > MAX_IMAGE_BYTES) {
-      onImageError?.("Image is too large (max 10 MB).");
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      onAttachmentError?.(`That file is too large (max ${formatBytes(MAX_ATTACHMENT_BYTES)}).`);
       return;
     }
     const reader = new FileReader();
-    reader.onload = () => onImageChange(typeof reader.result === "string" ? reader.result : null);
-    reader.onerror = () => onImageError?.("Could not read that image.");
+    // Everything goes as a data URL, PDFs included — the backend takes data URLs
+    // only (no remote fetches, no file ids), so one transport covers every kind.
+    reader.onload = () =>
+      onAttachmentChange(
+        typeof reader.result === "string"
+          ? { dataUrl: reader.result, kind, name: file.name, size: file.size, sticky: false }
+          : null,
+      );
+    reader.onerror = () => onAttachmentError?.("Could not read that file.");
     reader.readAsDataURL(file);
   }
 
   function handleFilePick(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     e.target.value = ""; // allow re-picking the same file
-    if (file) attachImageFile(file);
+    if (file) attachFile(file);
   }
 
   function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
-    // Grab the first image in the clipboard (screenshots, copied image files).
-    // Let text paste through untouched by only acting when an image is present.
-    const imageItem = Array.from(e.clipboardData.items).find((i) => i.type.startsWith("image/"));
-    const file = imageItem?.getAsFile();
+    // Grab the first attachable file in the clipboard (screenshots, copied
+    // files). Let text paste through untouched by only acting on a real file.
+    const file = Array.from(e.clipboardData.items)
+      .map((i) => (i.kind === "file" ? i.getAsFile() : null))
+      .find((f): f is File => f != null && attachmentKind(f) != null);
     if (file) {
       e.preventDefault();
-      attachImageFile(file);
+      attachFile(file);
     }
   }
 
-  const canSend = !disabled && (value.trim().length > 0 || image != null);
+  function handleDrop(e: React.DragEvent) {
+    const file = e.dataTransfer.files?.[0];
+    if (file) {
+      e.preventDefault();
+      attachFile(file);
+    }
+  }
+
+  const canSend = !disabled && (value.trim().length > 0 || attachment != null);
 
   return (
     <div
@@ -86,44 +126,94 @@ export default function MessageInput({
         padding: "12px 16px",
       }}
     >
-      {image && (
+      {attachment && (
         <div
           style={{
-            alignItems: "center",
             background: "var(--bg)",
-            border: "1px solid var(--border-2)",
+            // A pinned attachment rides along with every message from here on,
+            // which costs money and shapes the cache lookup. Make that state
+            // impossible to miss rather than letting it look like a fresh pick.
+            border: `1px solid ${attachment.sticky ? "var(--accent-border)" : "var(--border-2)"}`,
             borderRadius: "8px",
-            display: "flex",
-            gap: "10px",
             marginBottom: "8px",
             padding: "8px 10px",
           }}
         >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={image}
-            alt="Attached"
-            style={{ borderRadius: "6px", height: "44px", objectFit: "cover", width: "44px" }}
-          />
-          <span style={{ color: "var(--fg-dim)", flex: 1, fontSize: "12px" }}>
-            Image attached
+        <div style={{ alignItems: "center", display: "flex", gap: "10px" }}>
+          {attachment.kind === "image" ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={attachment.dataUrl}
+              alt="Attached"
+              style={{ borderRadius: "6px", height: "44px", objectFit: "cover", width: "44px" }}
+            />
+          ) : (
+            // A document has nothing to preview, so the icon carries the type.
+            <div
+              style={{
+                alignItems: "center",
+                background: "var(--bg-3)",
+                borderRadius: "6px",
+                color: "var(--accent)",
+                display: "flex",
+                flexShrink: 0,
+                height: "44px",
+                justifyContent: "center",
+                width: "44px",
+              }}
+            >
+              <DocumentIcon />
+            </div>
+          )}
+          <span
+            style={{
+              alignItems: "center",
+              color: attachment.sticky ? "var(--fg)" : "var(--fg-dim)",
+              display: "flex",
+              flex: 1,
+              fontSize: "12px",
+              gap: "6px",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {attachment.sticky && (
+              <span style={{ color: "var(--accent)", display: "flex", flexShrink: 0 }}>
+                <PinIcon />
+              </span>
+            )}
+            {attachment.kind === "image"
+              ? attachment.sticky
+                ? "Image pinned"
+                : "Image attached"
+              : `${attachment.name || "Document"} · ${formatBytes(attachment.size)}${
+                  attachment.sticky ? " · pinned" : ""
+                }`}
           </span>
           <button
-            onClick={() => onImageChange(null)}
-            title="Remove image"
-            aria-label="Remove attached image"
+            onClick={() => onAttachmentChange(null)}
+            title={attachment.sticky ? "Stop sending this attachment" : "Remove attachment"}
+            aria-label={attachment.sticky ? "Unpin attachment" : "Remove attachment"}
             style={{
               background: "var(--bg-3)",
               border: "1px solid var(--border)",
               borderRadius: "5px",
               color: "var(--fg-dim)",
               cursor: "pointer",
+              flexShrink: 0,
               fontSize: "12px",
               padding: "3px 8px",
             }}
           >
-            Remove
+            {attachment.sticky ? "Unpin" : "Remove"}
           </button>
+        </div>
+        {attachment.sticky && (
+          <p style={{ color: "var(--fg-dim)", fontSize: "11px", margin: "6px 0 0" }}>
+            Sent with every message so follow-ups can see it. Unpin to stop.
+          </p>
+        )}
         </div>
       )}
       <div
@@ -137,6 +227,8 @@ export default function MessageInput({
           padding: "8px 8px 8px 8px",
           transition: "border-color 0.15s",
         }}
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={handleDrop}
         onFocusCapture={(e) =>
           (e.currentTarget.style.borderColor = "var(--accent-border)")
         }
@@ -147,21 +239,21 @@ export default function MessageInput({
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*"
+          accept="image/*,application/pdf,.pdf,.md,.markdown,.mdown,.mkd,.txt,text/markdown"
           onChange={handleFilePick}
           style={{ display: "none" }}
         />
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={disabled}
-          title="Attach image"
-          aria-label="Attach image"
+          title="Attach an image, PDF, or Markdown file"
+          aria-label="Attach a file"
           style={{
             alignItems: "center",
             background: "transparent",
             border: "none",
             borderRadius: "6px",
-            color: image ? "var(--accent)" : "var(--fg-dim)",
+            color: attachment ? "var(--accent)" : "var(--fg-dim)",
             cursor: disabled ? "not-allowed" : "pointer",
             display: "flex",
             flexShrink: 0,
@@ -179,7 +271,7 @@ export default function MessageInput({
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           disabled={disabled}
-          placeholder={disabled ? "Waiting for response…" : "Ask anything… (Enter to send, paste an image to attach)"}
+          placeholder={disabled ? "Waiting for response…" : "Ask anything… (Enter to send, paste or drop a file to attach)"}
           rows={1}
           style={{
             background: "transparent",
@@ -236,6 +328,25 @@ function AttachIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
       <path d="M13 6.5l-5.5 5.5a2.5 2.5 0 0 1-3.5-3.5l5.5-5.5a1.5 1.5 0 0 1 2 2L6 10.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function PinIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4">
+      <path d="M6 1.5h4l-.5 4 2.5 2.5H4L6.5 5.5 6 1.5z" strokeLinejoin="round" />
+      <path d="M8 8v6.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function DocumentIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
+      <path d="M9.5 1.5H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V5l-3.5-3.5z" strokeLinejoin="round" />
+      <path d="M9.5 1.5V5H13" strokeLinejoin="round" />
+      <path d="M5.5 8h5M5.5 10.5h5" strokeLinecap="round" />
     </svg>
   );
 }

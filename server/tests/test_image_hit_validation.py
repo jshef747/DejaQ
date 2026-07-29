@@ -129,7 +129,7 @@ def _document_ocr() -> OcrResult:
 def test_image_mode_compares_questions_and_never_sends_the_answer():
     backend = CapturingBackend()
     ok, _ = asyncio.run(ValidatorService(backend, "m").validate(
-        "how to solve?", "how to solve this?", CACHED_ANSWER, image_anchored=True,
+        "how to solve?", "how to solve this?", CACHED_ANSWER, attachment_anchored=True,
     ))
     assert ok
     final = backend.messages[-1]["content"]
@@ -161,7 +161,7 @@ def test_image_hit_validates_in_image_mode_and_skips_the_adjuster(monkeypatch):
 
     assert response.status_code == 200
     assert response.headers["x-dejaq-model-used"] == "cache"
-    assert validator.kwargs.get("image_anchored") is True
+    assert validator.kwargs.get("attachment_anchored") is True
     assert adjuster.adjust_calls == [], "image hits must be served verbatim"
     assert response.json()["output_text"] == CACHED_ANSWER
 
@@ -176,7 +176,7 @@ def test_image_hit_rejected_by_validator_is_not_served(monkeypatch):
 
     response = _post_image("what is the answer to question 2?")
 
-    assert validator.kwargs.get("image_anchored") is True
+    assert validator.kwargs.get("attachment_anchored") is True
     assert response.headers.get("x-dejaq-model-used") != "cache"
     assert CACHED_ANSWER not in response.text
 
@@ -205,7 +205,7 @@ def test_text_hit_still_adjusts_and_uses_answer_mode(monkeypatch):
     assert response.status_code == 200
     # Not merely False — the kwarg is omitted so the pipeline's TypeError fallback
     # (which drops mismatch_hint) is never triggered for text validators.
-    assert "image_anchored" not in validator.kwargs
+    assert "attachment_anchored" not in validator.kwargs
     assert adjuster.adjust_calls == [CACHED_ANSWER]
 
 
@@ -218,7 +218,7 @@ def test_short_image_query_is_still_cached(monkeypatch):
     from app.services import cache_filter
 
     assert cache_filter.should_cache("solve it", "solve it")[0] is False
-    assert cache_filter.should_cache("solve it", "solve it", has_image=True)[0] is True
+    assert cache_filter.should_cache("solve it", "solve it", has_attachment=True)[0] is True
     # The text path is untouched.
     assert cache_filter.should_cache("what is the capital of france", "capital of france")[0] is True
     assert cache_filter.should_cache("thanks", "thanks")[0] is False

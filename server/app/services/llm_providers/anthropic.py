@@ -42,6 +42,16 @@ class AnthropicProviderClient:
                 }},
                 {"type": "text", "text": request.query},
             ]})
+        elif request.file_b64:
+            # Same source block as the image above, different part type.
+            messages.append({"role": "user", "content": [
+                {"type": "document", "source": {
+                    "type": "base64",
+                    "media_type": request.file_mime or "application/pdf",
+                    "data": request.file_b64,
+                }},
+                {"type": "text", "text": request.query},
+            ]})
         else:
             messages.append({"role": "user", "content": request.query})
 

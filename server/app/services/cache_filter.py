@@ -14,19 +14,20 @@ MIN_WORD_COUNT = 3
 
 
 def should_cache(
-    enriched_query: str, normalized_query: str, has_image: bool = False
+    enriched_query: str, normalized_query: str, has_attachment: bool = False
 ) -> tuple[bool, str]:
     """Decide whether a response should be cached.
 
     Returns (should_cache, reason) tuple for logging/UI.
     """
     # Every rule below judges the TEXT, which is the whole query only when there
-    # is no image. "solve it" (2 words) is the normal way to ask about an
+    # is no attachment. "solve it" (2 words) is the normal way to ask about an
     # attached image and was being dropped as too short, so nothing was ever
-    # stored and no image could ever hit. An image entry is pinned to its
-    # fingerprint, so a thin query cannot leak it to an unrelated ask.
-    if has_image:
-        return True, "image attached"
+    # stored and no image could ever hit. The same is true of "summarise this"
+    # over a PDF. An attachment-anchored entry is pinned to its fingerprint (or,
+    # for files, its exact hash), so a thin query cannot leak it to an unrelated ask.
+    if has_attachment:
+        return True, "attachment present"
 
     # Rule 1: Too short after normalization
     word_count = len(normalized_query.split())

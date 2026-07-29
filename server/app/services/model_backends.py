@@ -70,6 +70,16 @@ class OllamaBackend:
             "model": ollama_model,
             "messages": request.messages,
             "stream": False,
+            # Gemma 4 is a thinking model: left alone it emits a `thinking` block
+            # BEFORE `content`, and both are drawn from the same num_predict
+            # budget. Measured on gemma4:e4b with num_predict=1024, a complexity
+            # -theory question spent the entire budget on 3,301 characters of
+            # thinking and returned content="" — a 20-second request that
+            # produced a blank answer, which then got queued for caching. The
+            # same prompt with think disabled returns 3,370 characters of answer.
+            # Every role here wants the answer, never the scratchpad, so this is
+            # off for all of them. Harmless on non-thinking models.
+            "think": False,
             "options": {
                 "temperature": request.temperature,
                 "num_predict": request.max_tokens,

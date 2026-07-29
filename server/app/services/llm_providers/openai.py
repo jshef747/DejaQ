@@ -41,6 +41,18 @@ class OpenAIProviderClient:
                     "url": f"data:{request.image_mime or 'image/jpeg'};base64,{request.image_b64}"
                 }},
             ]
+        elif request.file_b64:
+            # Chat Completions takes a PDF as an `file` part carrying a data URL.
+            # A `file_id` from the Files API would avoid re-uploading the same
+            # document every turn, but that needs an upload+lifecycle of its own;
+            # inline is correct while requests stay one-shot and under the size cap.
+            user_content = [
+                {"type": "text", "text": request.query},
+                {"type": "file", "file": {
+                    "filename": request.file_name or "document.pdf",
+                    "file_data": f"data:{request.file_mime or 'application/pdf'};base64,{request.file_b64}",
+                }},
+            ]
         else:
             user_content = request.query
         messages.append({"role": "user", "content": user_content})

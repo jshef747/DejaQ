@@ -58,6 +58,9 @@ export function buildGatewayHeaders(
   deptSlug?: string,
   modelProfile: ModelProfile = "default",
   routingMode: RoutingMode = "auto",
+  // True when the attachment was carried over from an earlier turn rather than
+  // freshly picked. Diagnostic only — the server logs it and changes nothing.
+  attachmentSticky = false,
 ): HeadersInit {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -68,6 +71,7 @@ export function buildGatewayHeaders(
 
   const dept = deptSlug?.trim();
   if (dept) headers["X-DejaQ-Department"] = dept;
+  if (attachmentSticky) headers["X-DejaQ-Attachment-Sticky"] = "true";
 
   return headers;
 }

@@ -11,6 +11,7 @@ import {
   DEFAULT_CHAT_SETTINGS,
   loadSettings,
   persistSettings,
+  type Attachment,
   type ChatSettings,
 } from "./chat-store";
 import {
@@ -427,7 +428,7 @@ function difficultyMeta(
 export default function ChatApp() {
   const [messages, setMessages] = useState<AppMessage[]>([]);
   const [input, setInput] = useState("");
-  const [image, setImage] = useState<string | null>(null);
+  const [attachment, setAttachment] = useState<Attachment | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<ChatSettings>(DEFAULT_CHAT_SETTINGS);
@@ -495,6 +496,7 @@ export default function ChatApp() {
     setMessages([]);
     setActiveConvId(null);
     setInput("");
+    setAttachment(null);
     setInspectedMsgId(null);
     setInspectorOpen(false);
   }
@@ -508,6 +510,10 @@ export default function ChatApp() {
     setActiveConvId(conv.id);
     setMessages(conv.messages);
     setInput("");
+    // The pin belongs to the conversation it was attached in. A stored
+    // conversation never carries one back (see the note in handleSend), so
+    // switching always drops it rather than silently re-sending the old file.
+    setAttachment(null);
     setInspectedMsgId(null);
     setInspectorOpen(false);
   }
@@ -519,6 +525,7 @@ export default function ChatApp() {
     if (id === activeConvId) {
       setMessages([]);
       setActiveConvId(null);
+      setAttachment(null);
       setInspectedMsgId(null);
       setInspectorOpen(false);
     }
@@ -526,22 +533,33 @@ export default function ChatApp() {
 
   async function handleSend() {
     const text = input.trim();
-    if ((!text && !image) || isLoading) return;
+    if ((!text && !attachment) || isLoading) return;
     if (!settings.deptSlug) {
       addToast("error", "Select a department in Settings to start chatting.");
       setSettingsOpen(true);
       return;
     }
 
-    // The backend needs a non-empty query; default one for image-only sends.
-    const queryText = text || "What is in this image?";
-    const sentImage = image;
+    // The backend needs a non-empty query; default one for attachment-only sends.
+    const sentAttachment = attachment;
+    const queryText =
+      text ||
+      (sentAttachment && sentAttachment.kind !== "image"
+        ? "What is in this document?"
+        : "What is in this image?");
     const userMsg: AppMessage = {
       id: newId(),
       role: "user",
       content: queryText,
       ts: Date.now(),
-      imageUrl: sentImage,
+      imageUrl: sentAttachment?.kind === "image" ? sentAttachment.dataUrl : null,
+      fileName:
+        sentAttachment && sentAttachment.kind !== "image"
+          ? sentAttachment.name || "Document"
+          : null,
+      // Distinguishes the turn that uploaded the file from the turns that
+      // re-sent it, so the transcript shows which is which.
+      attachmentSticky: sentAttachment?.sticky ?? false,
     };
 
     // Capture snapshot before any state updates so async code works with stable refs.
@@ -550,7 +568,14 @@ export default function ChatApp() {
 
     setMessages(withUserMsg);
     setInput("");
-    setImage(null);
+    // The attachment is NOT cleared here. It stays pinned so every follow-up
+    // carries it: without that, turn 2 goes to /v1/chat/completions with no file
+    // at all — the model answers from its own previous reply, and the answer is
+    // stored as an ungated plain-text entry that a different document could
+    // later match. The pin is dropped only by Unpin or a conversation switch.
+    // ponytail: pin lives in memory only. A 10MB base64 data URL does not fit in
+    // localStorage, so a reload means re-attaching; persist small ones if
+    // surviving a reload is ever asked for.
     setIsLoading(true);
 
     // Pre-allocate the assistant message so we can append deltas in-place.
@@ -571,7 +596,7 @@ export default function ChatApp() {
       settings.deptSlug,
       settings.modelProfile,
       settings.routingMode,
-      sentImage,
+      sentAttachment,
       (delta) => {
         if (firstDelta) {
           // Show the placeholder bubble and hide the typing indicator on first byte.
@@ -589,11 +614,37 @@ export default function ChatApp() {
 
     if (isApiError(result)) {
       addToast("error", result.message);
-      // Revert optimistic messages so the user can retry.
+      // Revert optimistic messages so the user can retry. The attachment needs
+      // no restoring — it was never cleared — and a failed send leaves it
+      // un-pinned, so a retry still reads as the first attempt.
       setMessages(preSendMessages);
       setInput(text);
-      setImage(sentImage);
       return;
+    }
+
+    // The assistant bubble is only ever created by the first delta, so a stream
+    // that yields none leaves the finalization below mapping over a list with no
+    // assistantId: it quietly no-ops and the user sees their own message, no
+    // reply, and no error whatsoever. Observed live — a thinking model spent its
+    // whole token budget on the scratchpad and returned an empty answer with
+    // HTTP 200. Never fail silently here.
+    if (firstDelta) {
+      if (result.text) {
+        setMessages((prev) => [...prev, { ...assistantPlaceholder, content: result.text }]);
+      } else {
+        addToast("error", "The model returned an empty answer. Try rephrasing, or switch routing to external.");
+        setMessages(preSendMessages);
+        setInput(text);
+        return;
+      }
+      firstDelta = false;
+    }
+
+    // The send worked, so the attachment is now being carried rather than freshly
+    // picked. Identity check because the user may have swapped in a different
+    // file while this request was in flight — that one is still fresh.
+    if (sentAttachment) {
+      setAttachment((prev) => (prev === sentAttachment ? { ...prev, sticky: true } : prev));
     }
 
     // Attach metadata to the assistant message now that the stream is complete.
@@ -912,9 +963,9 @@ export default function ChatApp() {
             onChange={setInput}
             onSend={handleSend}
             disabled={isLoading}
-            image={image}
-            onImageChange={setImage}
-            onImageError={(msg) => addToast("error", msg)}
+            attachment={attachment}
+            onAttachmentChange={setAttachment}
+            onAttachmentError={(msg) => addToast("error", msg)}
           />
         </div>
 

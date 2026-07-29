@@ -8,10 +8,13 @@ import redis as redis_lib
 from app.celery_app import celery_app
 from app.config import REDIS_URL, EVICTION_FLOOR
 from app.services.context_adjuster import ContextAdjusterService
-from app.services.memory_chromaDB import get_memory_service, _pool
+from app.services.memory_chromaDB import derive_doc_id, get_memory_service, _pool
 from app.services.service_factory import get_context_adjuster_service
 
 logger = logging.getLogger("dejaq.tasks.cache")
+
+# Bound, not reimplemented — this id must match the router's and the store's.
+_doc_id = derive_doc_id
 
 
 def _is_suppressed(clean_query: str) -> bool:
@@ -70,6 +73,8 @@ def generalize_and_store_task(
     image_clip: str | None = None,
     image_kind: str | None = None,
     image_text: str | None = None,
+    file_sha: str | None = None,
+    file_kind: str | None = None,
 ) -> dict:
     """Generalize an LLM answer (via Phi-3.5) and store in ChromaDB cache.
 
@@ -77,9 +82,10 @@ def generalize_and_store_task(
     cache_namespace selects the ChromaDB collection (department isolation).
     The image_* args are the scalar fingerprints for image requests (all None
     for text): photos carry dhash+clip, documents carry OCR tokens in image_text.
+    The file_* args are the exact identity of an attached PDF/Markdown file.
     """
     start = time.perf_counter()
-    doc_id = hashlib.sha256(clean_query.encode()).hexdigest()[:16]
+    doc_id = _doc_id(clean_query, file_sha, image_text=image_text, image_dhash=image_dhash)
     if _is_suppressed(clean_query):
         logger.info("cache_store status=suppressed namespace=%s doc_id=%s", cache_namespace, doc_id)
         return {"status": "suppressed", "clean_query": clean_query}
@@ -88,13 +94,14 @@ def generalize_and_store_task(
         headers = getattr(self.request, "headers", None) or {}
         resolved_model_profile = headers.get("dejaq_model_profile") or model_profile
         memory = get_memory_service(cache_namespace)
-        # Image-anchored answers are stored verbatim. Generalization strips tone so a
-        # TEXT answer survives rephrasing, but it only sees the answer — never the
-        # image — so on image answers it invents specifics instead (observed live: a
-        # Complex Analysis syllabus was stored as "Statistics or Data Analysis
-        # Course"). The image gate already guarantees the same image, so there is
-        # nothing to generalize across and the rewrite is pure risk.
-        if image_kind:
+        # Attachment-anchored answers are stored verbatim. Generalization strips
+        # tone so a TEXT answer survives rephrasing, but it only sees the answer —
+        # never the image or the file — so on attachment answers it invents
+        # specifics instead (observed live: a Complex Analysis syllabus was stored
+        # as "Statistics or Data Analysis Course"). The gate already guarantees
+        # the same attachment, so there is nothing to generalize across and the
+        # rewrite is pure risk.
+        if image_kind or file_kind:
             generalized = answer
         else:
             context_adjuster = _get_adjuster(resolved_model_profile)
@@ -103,6 +110,7 @@ def generalize_and_store_task(
             clean_query, generalized, original_query, user_id,
             image_dhash=image_dhash, image_clip=image_clip,
             image_kind=image_kind, image_text=image_text,
+            file_sha=file_sha, file_kind=file_kind,
         )
         latency_ms = int((time.perf_counter() - start) * 1000)
         logger.info(

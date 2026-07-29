@@ -8,6 +8,7 @@ from typing import AsyncGenerator
 from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from app.config import MAX_ATTACHMENT_BYTES
 from app.dependencies.auth import ResolvedWorkspace, require_org_key
 
 from app.schemas.openai_compat import OAIMessage
@@ -47,32 +48,47 @@ def _new_item_id() -> str:
     return "msg-" + uuid.uuid4().hex[:16]
 
 
-def _parse_data_url(url: str) -> tuple[bytes, str]:
+def _parse_data_url(url: str, what: str = "image", default_mime: str = "image/jpeg") -> tuple[bytes, str]:
     """Decode a `data:<mime>;base64,<payload>` URL into (bytes, mime).
 
-    v1 supports data URLs only (the common upload path). Remote http(s) image
-    URLs are rejected — fetching them server-side is an SSRF risk not worth it here.
+    v1 supports data URLs only (the common upload path). Remote http(s) URLs are
+    rejected — fetching them server-side is an SSRF risk not worth it here.
     """
     if not url.startswith("data:"):
-        raise PipelineError(400, "Only data: image URLs are supported (base64-encode the image).")
+        raise PipelineError(400, f"Only data: {what} URLs are supported (base64-encode the {what}).")
     try:
         header, payload = url[len("data:"):].split(",", 1)
-        mime = header.split(";", 1)[0] or "image/jpeg"
-        return base64.b64decode(payload), mime
+        mime = header.split(";", 1)[0] or default_mime
+        data = base64.b64decode(payload)
     except (ValueError, binascii.Error) as exc:
-        raise PipelineError(400, f"Malformed data image URL: {exc}") from exc
+        raise PipelineError(400, f"Malformed data {what} URL: {exc}") from exc
+    # A client-side size check is not a limit; anything speaking the API directly
+    # bypasses it. This is the one that holds.
+    if len(data) > MAX_ATTACHMENT_BYTES:
+        raise PipelineError(
+            400,
+            f"Attached {what} is too large ({len(data) / 1048576:.1f} MB); "
+            f"the limit is {MAX_ATTACHMENT_BYTES / 1048576:.0f} MB.",
+        )
+    return data, mime
 
 
 def _responses_request_to_messages(
     req: OAIResponsesRequest,
-) -> tuple[list[OAIMessage], tuple[bytes, str] | None]:
+) -> tuple[list[OAIMessage], tuple[bytes, str] | None, tuple[bytes, str, str] | None]:
     """Convert Responses API input + instructions into a flat OAIMessage list,
-    plus the single attached image as (bytes, mime) if present.
+    plus the single attached image as (bytes, mime) and the single attached file
+    as (bytes, mime, filename), if present.
 
-    v1 accepts at most one image across the whole request; more raises HTTP 400.
+    v1 accepts at most ONE attachment across the whole request — one image or one
+    file, not several and not both. More than one raises HTTP 400. The single-slot
+    rule exists because the cache gate compares one attachment against one stored
+    fingerprint; several would need a combined identity that nothing downstream
+    understands yet.
     """
     msgs: list[OAIMessage] = []
     image: tuple[bytes, str] | None = None
+    file: tuple[bytes, str, str] | None = None
 
     if req.instructions:
         msgs.append(OAIMessage(role="system", content=req.instructions))
@@ -93,10 +109,18 @@ def _responses_request_to_messages(
                     if p.type == "input_image" and p.image_url:
                         if image is not None:
                             raise PipelineError(400, "At most one image per request is supported.")
-                        image = _parse_data_url(p.image_url)
+                        image = _parse_data_url(p.image_url, "image", "image/jpeg")
+                    elif p.type == "input_file" and p.file_data:
+                        if file is not None:
+                            raise PipelineError(400, "At most one file per request is supported.")
+                        data, mime = _parse_data_url(p.file_data, "file", "application/pdf")
+                        file = (data, mime, p.filename or "")
                 msgs.append(OAIMessage(role=item.role, content=" ".join(text_parts)))
 
-    return msgs, image
+    if image is not None and file is not None:
+        raise PipelineError(400, "Attach either an image or a file, not both.")
+
+    return msgs, image, file
 
 
 def _build_response_body(
@@ -180,7 +204,7 @@ async def responses(
     resolved_workspace: ResolvedWorkspace = Depends(require_org_key),
 ):
     try:
-        messages, image = _responses_request_to_messages(oai_request)
+        messages, image, file = _responses_request_to_messages(oai_request)
         result = await run_chat_pipeline(
             messages=messages,
             model=oai_request.model,
@@ -189,6 +213,7 @@ async def responses(
             raw_request=raw_request,
             background_tasks=background_tasks,
             image=image,
+            file=file,
         )
     except PipelineError as exc:
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})

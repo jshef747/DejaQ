@@ -46,6 +46,12 @@ class GoogleProviderClient:
                 data=base64.b64decode(request.image_b64),
                 mime_type=request.image_mime or "image/jpeg",
             ))
+        # A PDF is the same call with a different mime type — Gemini parses it natively.
+        if request.file_b64:
+            user_parts.insert(0, types.Part.from_bytes(
+                data=base64.b64decode(request.file_b64),
+                mime_type=request.file_mime or "application/pdf",
+            ))
         contents.append(types.Content(role="user", parts=user_parts))
 
         config = types.GenerateContentConfig(

@@ -197,6 +197,35 @@ TESSERACT_BIN = _get_text("DEJAQ_TESSERACT_BIN", "tesseract")
 TESSERACT_LANGS = _get_text("DEJAQ_TESSERACT_LANGS", "heb+eng")
 OCR_TIMEOUT_SECONDS = _get_float("DEJAQ_OCR_TIMEOUT_SECONDS", 20.0)
 
+# --- File gate (PDF, Markdown) ---
+# Deliberately three settings and NO swept thresholds, unlike the image gate
+# above. Images need approximate identity because OCR is noisy — two reads of one
+# page disagree, so every constant up there had to be measured over ~1.85M
+# labelled pairs. PDF and Markdown hand us the text directly and deterministically:
+# the same file always extracts the same characters, so identity is EXACT
+# (sha256 of the whitespace-normalised text) and false merges are impossible by
+# construction. There is no recall-vs-merge curve here, so there is nothing to
+# sweep and no eval harness. See docs/file-gate.md.
+CACHE_FILE_ENABLED = _get_bool("DEJAQ_CACHE_FILE_ENABLED", True)
+
+# Generation ceiling when the client sends no limit of its own. 4096 rather than
+# 1024 because 1024 truncated ordinary answers mid-sentence (done_reason=length);
+# one measured coursework answer needed ~3,700 tokens on its own.
+DEFAULT_MAX_TOKENS = int(_get_float("DEJAQ_DEFAULT_MAX_TOKENS", 4096))
+
+# Below this many characters a file cannot be identified, so it is neither served
+# nor stored — the same rule as the image gate's `ambiguous` class, and the reason
+# a scanned PDF (no text layer, ~0 characters extracted) is refused rather than
+# guessed at. Not a tuned number: anything from a few dozen up works identically,
+# because the population it separates (0-2 chars vs a real document) is not close
+# to the line. Raising it only refuses more short-but-real files.
+CACHE_FILE_MIN_CHARS = int(_get_float("DEJAQ_CACHE_FILE_MIN_CHARS", 200))
+
+# Server-side attachment size cap, applied to files AND images. The chat client
+# checks 10MB of its own, but a client-side check is not a limit — anything
+# speaking the API directly bypasses it.
+MAX_ATTACHMENT_BYTES = int(_get_float("DEJAQ_MAX_ATTACHMENT_BYTES", 10 * 1024 * 1024))
+
 # Model backend: generation runs through Ollama (local or remote per this URL).
 OLLAMA_URL = _get_text("DEJAQ_OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_TIMEOUT_SECONDS = _get_float("DEJAQ_OLLAMA_TIMEOUT_SECONDS", 60.0)

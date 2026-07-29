@@ -128,4 +128,5 @@ def test_bg_store_accepts_all_image_arguments_positionally():
     assert params == [
         "clean_query", "answer", "original_query", "tenant_id", "cache_namespace",
         "model_profile", "image_dhash", "image_clip", "image_kind", "image_text",
+        "file_sha", "file_kind",
     ]

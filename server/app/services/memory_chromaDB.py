@@ -43,6 +43,42 @@ def _embed(text: str) -> list[float]:
     return _get_embedder().encode(text, normalize_embeddings=True).tolist()
 
 
+def derive_doc_id(
+    normalized_query: str,
+    file_sha: str | None = None,
+    *,
+    image_text: str | None = None,
+    image_dhash: str | None = None,
+) -> str:
+    """The one place an entry id is computed. Import it, don't reimplement it.
+
+    The id keys on the question AND the attachment. Without the attachment part,
+    two DIFFERENT attachments asked the same question — and "summarise this
+    document" / "what is in this image?" are the questions people actually ask —
+    produce the same id and silently overwrite each other on upsert, so the
+    second upload evicts the first rather than being cached alongside it.
+
+    Attachment identity, in precedence order: the exact hash for a file, the OCR
+    tokens for a document image, the perceptual hash for a photo. Documents are
+    keyed by their words rather than their pixels for the same reason the gate
+    compares them that way — a re-crop or a re-shoot of one page must land on
+    one entry (see docs/image-gate.md).
+
+    Text entries keep their existing ids: the suffix is only added when an
+    attachment is present. Existing image entries are not migrated — at worst
+    one duplicate entry per query+image pair until the old one is evicted.
+    """
+    if file_sha:
+        source = f"{normalized_query}|file:{file_sha}"
+    elif image_text:
+        source = f"{normalized_query}|image-text:{image_text}"
+    elif image_dhash:
+        source = f"{normalized_query}|image-dhash:{image_dhash}"
+    else:
+        source = normalized_query
+    return hashlib.sha256(source.encode()).hexdigest()[:16]
+
+
 @dataclass(frozen=True)
 class CacheLookupResult:
     hit: bool
@@ -71,6 +107,11 @@ class CacheLookupResult:
     image_clip: str | None = None
     image_kind: str | None = None
     image_text: str | None = None
+    # File identity of the matched entry (present only for PDF/Markdown entries).
+    # One exact hash, not a fingerprint to compare approximately — file text is
+    # deterministic, so the gate is equality. See services/file_text.py.
+    file_sha: str | None = None
+    file_kind: str | None = None
 
 
 class MemoryService:
@@ -193,6 +234,8 @@ class MemoryService:
             image_clip=best_meta.get("image_clip"),
             image_kind=best_meta.get("image_kind"),
             image_text=best_meta.get("image_text"),
+            file_sha=best_meta.get("file_sha"),
+            file_kind=best_meta.get("file_kind"),
         )
 
     def check_cache(self, normalized_query: str) -> Optional[tuple[str, str, float, str]]:
@@ -221,8 +264,15 @@ class MemoryService:
         image_clip: str | None = None,
         image_kind: str | None = None,
         image_text: str | None = None,
+        file_sha: str | None = None,
+        file_kind: str | None = None,
     ) -> str:
-        doc_id = hashlib.sha256(normalized_query.encode()).hexdigest()[:16]
+        doc_id = derive_doc_id(
+            normalized_query,
+            file_sha,
+            image_text=image_text,
+            image_dhash=image_dhash,
+        )
         embedding = _embed(normalized_query)
         metadata = {
             "generalized_answer": generalized_answer,
@@ -243,6 +293,10 @@ class MemoryService:
             metadata["image_clip"] = image_clip
         if image_text:
             metadata["image_text"] = image_text
+        # File identity: one exact hash, written only for file requests.
+        if file_sha and file_kind:
+            metadata["file_sha"] = file_sha
+            metadata["file_kind"] = file_kind
         self._collection.upsert(
             ids=[doc_id],
             embeddings=[embedding],
@@ -397,6 +451,27 @@ class MemoryService:
         deleted = sum(1 for entry_id in ids if self.delete_entry(entry_id))
         logger.info("Purged %d image entries from %s", deleted, self._collection.name)
         return deleted
+
+    def count_file_entries(self, file_sha: str) -> int:
+        """How many entries hold this exact file, regardless of their question.
+
+        Only used to make the "gate never reached" log line honest: without it,
+        re-uploading a known document with a new question logs the same way as
+        uploading a document nobody has ever sent, and those are different
+        problems. Never affects what is served.
+
+        There is deliberately no purge command for file entries, which is why
+        this is the only file-wide query here: an exact hash cannot go stale the
+        way a swept image threshold can, so stored file entries never need
+        sweeping out after a rule change.
+        """
+        if not file_sha:
+            return 0
+        try:
+            return len(self._collection.get(where={"file_sha": file_sha}, include=[])["ids"])
+        except Exception:
+            logger.debug("count_file_entries failed for %s", file_sha[:8], exc_info=True)
+            return 0
 
     def evict_below_floor(self, floor: float) -> int:
         """Delete all entries with score < floor. Returns count of deleted entries."""
