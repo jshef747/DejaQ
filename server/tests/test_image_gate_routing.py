@@ -1,7 +1,12 @@
 """Routing + matching rules for the two-path image gate (no OCR binary needed)."""
 import pytest
 
-from app.routers.openai_compat import _entry_image_kind, _evaluate_image_gate, _image_kind
+from app.routers.openai_compat import (
+    _doc_id,
+    _entry_image_kind,
+    _evaluate_image_gate,
+    _image_kind,
+)
 from app.services.image_fingerprint import ImageFingerprint
 from app.services.image_text import OcrResult, matches, tokens_from_string
 from app.services.memory_chromaDB import CacheLookupResult
@@ -164,3 +169,40 @@ def test_cropped_snippet_is_a_document():
 def test_token_string_round_trip():
     tokens = frozenset({"alpha", "142180", "beta"})
     assert tokens_from_string(OcrResult(tokens, 5, 90.0, True).token_string()) == tokens
+
+
+# --- entry identity -----------------------------------------------------------
+
+def test_two_images_asked_the_same_question_get_separate_entries():
+    """Without the image component in the id, the second upload would overwrite
+    the first — and "what is in this image?" / "solve it" are the questions people
+    actually ask, which the cache filter deliberately lets through despite being
+    too short. Mirrors the file-side test in test_file_gate.py.
+    """
+    q = "what is in this image"
+
+    # Documents are keyed by their OCR tokens.
+    a = doc_ocr({"integral", "substitution"}).token_string()
+    b = doc_ocr({"risotto", "parmesan"}).token_string()
+    assert _doc_id(q, image_text=a) != _doc_id(q, image_text=b)
+
+    # Photos have no readable text, so they are keyed by their dhash.
+    assert _doc_id(q, image_dhash="0f0f0f0f0f0f0f0f") != _doc_id(q, image_dhash="f0f0f0f0f0f0f0f0")
+
+    # A document and a photo never collide either.
+    assert _doc_id(q, image_text=a) != _doc_id(q, image_dhash="0f0f0f0f0f0f0f0f")
+
+    # Text entries keep their existing ids, so nothing already cached moves.
+    assert _doc_id(q) == _doc_id(q, image_text=None, image_dhash=None)
+
+
+def test_every_id_derivation_site_agrees():
+    """The router, the Celery task and the store all write the same entry id.
+    Three hand-rolled copies drifting apart is exactly how the overwrite bug
+    reached production, so they share one function.
+    """
+    from app.services.memory_chromaDB import derive_doc_id
+    from app.tasks.cache_tasks import _doc_id as task_doc_id
+
+    assert _doc_id is derive_doc_id
+    assert task_doc_id is derive_doc_id

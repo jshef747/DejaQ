@@ -14,6 +14,20 @@ export interface ChatSettings {
   routingMode: RoutingMode;
 }
 
+// One attachment per message: an image, a PDF, or a Markdown file. `dataUrl` is
+// the only transport — the DejaQ API takes data URLs and nothing else.
+export interface Attachment {
+  dataUrl: string;
+  kind: "image" | "pdf" | "markdown";
+  name: string;
+  size: number;
+  // The attachment stays pinned after a send, so follow-ups carry it too.
+  // false = the user just picked it, true = it survived a send and is being
+  // re-sent. Nothing branches on this; it only labels the chip and the server
+  // log so a carried turn can be told apart from a fresh one.
+  sticky: boolean;
+}
+
 export type ModelProfile = "default" | "weak_cpu";
 export type RoutingMode = "auto" | "easy_local" | "hard_external";
 

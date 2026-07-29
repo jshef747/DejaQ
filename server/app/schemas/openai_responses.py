@@ -5,9 +5,13 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class OAIResponsesContentPart(BaseModel):
-    type: Literal["input_text", "input_image", "output_text"]
+    type: Literal["input_text", "input_image", "input_file", "output_text"]
     text: Optional[str] = None
     image_url: Optional[str] = None
+    # input_file, matching OpenAI's shape. `file_data` is a data: URL, same as
+    # image_url — DejaQ takes no remote URLs and no file ids.
+    filename: Optional[str] = None
+    file_data: Optional[str] = None
 
 
 class OAIResponsesInputItem(BaseModel):

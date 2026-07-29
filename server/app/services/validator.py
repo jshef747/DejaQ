@@ -190,7 +190,7 @@ class ValidatorService:
         cached_query: str,
         cached_answer: str,
         mismatch_hint: str | None = None,
-        image_anchored: bool = False,
+        attachment_anchored: bool = False,
     ) -> tuple[bool, str]:
         """Return (is_valid, raw_verdict). Fail-safe: unparseable output → False (INVALID).
 
@@ -199,11 +199,16 @@ class ValidatorService:
         alignment gate. Sharpens the verdict on single-word-swap traps, where
         near-identical wording otherwise invites a false VALID.
 
-        image_anchored: the image gate already proved both requests carry the same
-        image, so cached_answer is ignored and the two QUESTIONS are compared
-        instead (see _IMAGE_SYSTEM_PROMPT).
+        attachment_anchored: the image gate (or the file gate, which proves it
+        exactly) already established that both requests carry the same attachment,
+        so cached_answer is ignored and the two QUESTIONS are compared instead
+        (see _IMAGE_SYSTEM_PROMPT). The prompt is worded around images because
+        that is where the failure mode was measured — numbered-item siblings like
+        "solve part a"/"part b" sit CLOSER in embedding space than legitimate
+        paraphrases — but the question it asks ("do these ask for the same thing
+        about the same attachment?") is identical for a PDF.
         """
-        if image_anchored:
+        if attachment_anchored:
             system_prompt, few_shots = _IMAGE_SYSTEM_PROMPT, _IMAGE_FEW_SHOTS
             cached_answer = ""  # never sent in this mode
             final = f"CACHED QUESTION: {cached_query}\nNEW QUESTION: {new_query}"

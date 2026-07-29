@@ -35,7 +35,7 @@ def test_malformed_data_url_rejected():
 
 
 def test_text_only_returns_no_image():
-    msgs, image = _responses_request_to_messages(_req("just text"))
+    msgs, image, _file = _responses_request_to_messages(_req("just text"))
     assert image is None
     assert [m.content for m in msgs] == ["just text"]
 
@@ -45,7 +45,7 @@ def test_single_image_extracted():
         {"type": "input_text", "text": "what is this?"},
         {"type": "input_image", "image_url": _data_url(b"IMG", "image/webp")},
     ]
-    msgs, image = _responses_request_to_messages(_req(content))
+    msgs, image, _file = _responses_request_to_messages(_req(content))
     assert image == (b"IMG", "image/webp")
     assert msgs[0].content == "what is this?"  # image part stripped from text
 

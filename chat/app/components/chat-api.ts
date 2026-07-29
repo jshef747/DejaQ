@@ -2,7 +2,7 @@
 // It only calls this Next.js app's /api/* routes; DejaQ credentials stay
 // server-side in chat/.env.local.
 
-import { loadServerBaseUrl, type ModelProfile, type RoutingMode } from "./chat-store";
+import { loadServerBaseUrl, type Attachment, type ModelProfile, type RoutingMode } from "./chat-store";
 
 // Attach the user-selected DejaQ server as a header the /api/* routes read.
 // `override` lets the Settings modal test an unsaved value; otherwise use the
@@ -76,7 +76,7 @@ export async function sendChatMessage(
   deptSlug: string,
   modelProfile: ModelProfile = "default",
   routingMode: RoutingMode = "auto",
-  image: string | null = null,
+  attachment: Attachment | null = null,
   onDelta?: (chunk: string) => void,
 ): Promise<ChatResult> {
   let response: Response;
@@ -84,7 +84,7 @@ export async function sendChatMessage(
     response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...serverHeader() },
-      body: JSON.stringify({ messages, deptSlug, modelProfile, routingMode, image }),
+      body: JSON.stringify({ messages, deptSlug, modelProfile, routingMode, attachment }),
     });
   } catch {
     return { kind: "error", status: 0, message: "Network error. Could not reach the chat server." };
