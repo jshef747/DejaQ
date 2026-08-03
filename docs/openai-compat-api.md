@@ -87,6 +87,46 @@ Gateway headers:
 > `POST /v1/responses` (OpenAI Responses API, newer format) shares the same auth, headers, and
 > pipeline. It is stateless: `previous_response_id` / `conversation` are rejected with HTTP 400.
 
+### Attachments — `/v1/responses` only
+
+`/v1/responses` is the only endpoint that accepts attachments. A request may carry **one**
+attachment: an `input_image` **or** an `input_file`, never both.
+
+| Part | Field | Accepts |
+| --- | --- | --- |
+| `input_image` | `image_url` | `data:<mime>;base64,<payload>` |
+| `input_file` | `file_data` (+ optional `filename`) | `data:<mime>;base64,<payload>` — PDF (`application/pdf`, `.pdf`) or Markdown (`text/markdown`, `text/plain`, `.md`/`.markdown`/`.txt`) |
+
+Rejected with **HTTP 400**:
+
+- a non-`data:` URL in `image_url` or `file_data` (`http(s):` is not fetched)
+- more than one `input_image` — *"At most one image per request is supported."*
+- more than one `input_file` — *"At most one file per request is supported."*
+- one of each — *"Attach either an image or a file, not both."*
+- either exceeding `DEJAQ_MAX_ATTACHMENT_BYTES` (default 10 MB)
+
+**How an attachment changes serving.** It never enters the cache key — the text pipeline runs
+unchanged — but a cache hit is served only if the relevant **gate** also confirms the stored
+entry was anchored to the same attachment:
+
+- **Image gate.** Confident OCR text → *document*, matched on OCR token overlap
+  (`DEJAQ_CACHE_IMAGE_TEXT_MIN_JACCARD`, 0.85) with a shared-token floor
+  (`DEJAQ_CACHE_IMAGE_TEXT_MIN_SHARED_TOKENS`, 4). Little or no readable text → *photo*,
+  matched on CLIP distance **and** dHash hamming. Text read *below* the confidence floor is
+  neither: never served, never stored. Kinds never mix, and a text-only request matches
+  neither. Documents require the `tesseract` binary; without it they degrade to the photo path.
+- **File gate.** Exact `sha256` of the whitespace-normalised extracted text — no thresholds,
+  no fuzzy matching, false merges impossible by construction. Text under
+  `DEJAQ_CACHE_FILE_MIN_CHARS` (200) is never served and never stored (scanned, corrupt, or
+  encrypted PDFs land here); the answer still returns, uncached.
+
+On a miss, attachment requests skip the difficulty classifier and route unconditionally to the
+workspace's external provider (the local model is text-only). Attachment answers are stored
+verbatim, so on an attachment-anchored hit the context adjuster is skipped — no tone was ever
+stripped. Raw image bytes are never stored, only fingerprints.
+
+Thresholds and their measured derivations: [image-gate.md](image-gate.md), [file-gate.md](file-gate.md).
+
 ## Pipeline Behavior
 
 ```text

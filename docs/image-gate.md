@@ -166,7 +166,7 @@ text is a small document.
 That also exposed the word floor as dead weight. Swept 6/8/10/15/25 over both corpora: **0
 false merges at every level**, with under a point of recall between them, because the
 confidence floor does the separating. On 60 real photos a floor of 6 reclassifies only 2, and
-the worst overlap between any two text-bearing photos is 0.038 against a 0.80 threshold. The
+the worst overlap between any two text-bearing photos is 0.038 against a 0.85 threshold. The
 floor has been 45, then 25, now **6**; each reduction fixed real misses and cost nothing
 measurable.
 

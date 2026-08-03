@@ -1,6 +1,6 @@
 # DejaQ
 
-DejaQ is an LLM gateway that reduces cost and latency with semantic caching, local routing, and organization-scoped provider credentials. Existing clients can use the OpenAI-compatible API while operators manage organizations, API keys, credentials, stats, and feedback through the management API, CLI, TUI, or dashboard.
+DejaQ is an LLM gateway that reduces cost and latency with semantic caching, local routing, and workspace-scoped provider credentials. Existing clients can use the OpenAI-compatible API while operators manage workspaces, API keys, credentials, stats, and feedback through the management API, CLI, TUI, or dashboard.
 
 ## Project Document
 
@@ -18,7 +18,7 @@ OpenAI-compatible request
         -> INVALID: treat as miss
      -> miss: difficulty classifier
         -> easy: local model (Gemma 4 E4B)
-        -> hard: org provider credential (OpenAI / Anthropic / Google)
+        -> hard: workspace provider credential (OpenAI / Anthropic / Google)
   -> response
   -> background generalize + store when cacheable
 ```
@@ -28,7 +28,7 @@ OpenAI-compatible request
 ```text
 server/              FastAPI app, gateway, management API, dejaq-admin CLI, Celery tasks
 dashboard/           Next.js dashboard (/admin/v1/*; Supabase auth optional)
-chat/                Standalone Next.js chat app with server-side org API key proxy
+chat/                Standalone Next.js chat app with server-side workspace API key proxy
 evals/               Offline eval harnesses: enricher, normalizer, adjuster, validator
 docs/                Product/API notes + getting-started.md
 openspec/            Specs and proposal history
@@ -61,7 +61,7 @@ devices on the same network can reach them (the script prints the LAN URLs). The
 (3000), ChromaDB (8001), and Redis stay localhost-only. Under the default `AUTH_MODE=local`
 the admin API is unauthenticated, so only use `--lan` on trusted networks.
 
-Then open the dashboard at `http://localhost:3000/dashboard`, create an organization
+Then open the dashboard at `http://localhost:3000/dashboard`, create a workspace
 and generate an API key, and use it as `Authorization: Bearer <key>` against the gateway
 (or paste it into the chat app at `http://localhost:4000`).
 
@@ -109,22 +109,49 @@ Fill `DEJAQ_API_KEY` in `chat/.env.local`. The chat app runs at `http://localhos
 ## Main Interfaces
 
 - `GET /health`
-- `POST /v1/chat/completions` — OpenAI Chat Completions-compatible gateway, authenticated by DejaQ org API key
+- `POST /v1/chat/completions` — OpenAI Chat Completions-compatible gateway, authenticated by DejaQ workspace API key
 - `POST /v1/responses` — OpenAI Responses API (newer recommended format), same auth, stateless (`previous_response_id` rejected)
-- `POST /v1/feedback` — cache feedback with optional thumbs-down escalation to the next serving tier (cache → local → external), authenticated by DejaQ org API key
+- `POST /v1/feedback` — cache feedback with optional thumbs-down escalation to the next serving tier (cache → local → external), authenticated by DejaQ workspace API key
 - `/admin/v1/*` — management API; Supabase JWT in deployment, dev-admin context in local mode
-- `dejaq-admin` — org, department, key, and stats CLI (headless/server-only bootstrap)
+- `dejaq-admin` — workspace, department, key, and stats CLI (headless/server-only bootstrap)
 
 Responses include `X-DejaQ-Interaction-Id`, `X-DejaQ-Tier` (`cache`|`local`|`external`), and (when cached) `X-DejaQ-Response-Id` headers. See [docs/getting-started.md](docs/getting-started.md), [docs/openai-compat-api.md](docs/openai-compat-api.md), [docs/cli-instructions.md](docs/cli-instructions.md), [server/README.md](server/README.md), and [dashboard/README.md](dashboard/README.md).
 
-## Bootstrap an org + key
+## Attachments (images and files)
 
-Either through the dashboard (Organizations → create, Keys → generate) or headless via the CLI:
+`/v1/responses` accepts **one** attachment per request — either an `input_image` or an
+`input_file`, never both, and never two of a kind (each violation is a `400`). Both must be
+`data:` URLs and are capped at `DEJAQ_MAX_ATTACHMENT_BYTES` (10 MB). `/v1/chat/completions`
+does not accept attachments.
+
+The attachment never enters the cache key: the text pipeline runs exactly as it would
+without it, and a cache hit is served only if an **attachment gate** also confirms the
+stored entry was anchored to the *same* attachment. On a miss, attachment requests skip the
+difficulty classifier and route straight to the workspace's external provider.
+
+- **Images** (`input_image`) — an image that OCRs to confident text is treated as a
+  *document* and matched by its words; one with little readable text is a *photo* and
+  matched by its pixels (CLIP + dHash); one with text read *below* the confidence floor is
+  refused outright — never served, never stored. Documents need the `tesseract` binary
+  (`start.sh` warns when it is missing; without it, documents fall back to the photo path).
+  Raw image bytes are never stored, only fingerprints.
+- **Files** (`input_file`) — PDF (via `pypdf`) and Markdown. The gate is an exact `sha256`
+  of the whitespace-normalised extracted text, so false merges are impossible by
+  construction. A file yielding under `DEJAQ_CACHE_FILE_MIN_CHARS` (200) characters — a
+  scanned PDF with no text layer, or a corrupt or encrypted one — is never served and never
+  stored; the answer still comes back, there is just no cache entry.
+
+Thresholds and their measured derivations: [docs/image-gate.md](docs/image-gate.md) and
+[docs/file-gate.md](docs/file-gate.md). Every setting is listed in `.env.example`.
+
+## Bootstrap a workspace + key
+
+Either through the dashboard (Workspaces → create, Keys → generate) or headless via the CLI:
 
 ```bash
 cd server
-uv run dejaq-admin org create --name Demo
-uv run dejaq-admin key generate --org demo
+uv run dejaq-admin workspace create --name Demo
+uv run dejaq-admin key generate --workspace demo
 ```
 
 ## Verification
