@@ -8,7 +8,7 @@ import redis as redis_lib
 from app.celery_app import celery_app
 from app.config import REDIS_URL, EVICTION_FLOOR
 from app.services.context_adjuster import ContextAdjusterService
-from app.services.memory_chromaDB import derive_doc_id, get_memory_service, _pool
+from app.services.memory_chromaDB import derive_doc_id, get_memory_service, list_namespaces, _pool
 from app.services.service_factory import get_context_adjuster_service
 
 logger = logging.getLogger("dejaq.tasks.cache")
@@ -130,9 +130,25 @@ def generalize_and_store_task(
     queue="background",
 )
 def evict_low_score_entries() -> dict:
-    """Scan all active ChromaDB namespaces and delete entries below EVICTION_FLOOR."""
+    """Scan every ChromaDB namespace and delete entries below EVICTION_FLOOR.
+
+    Namespaces come from ChromaDB, not from this worker's `_pool`. The pool only
+    holds namespaces this process has served since it started, so a beat task
+    reading it swept nothing after a restart and never touched a department whose
+    traffic went to a different worker - the entries a score floor exists to
+    remove are exactly the ones nobody is asking for.
+    """
     total_deleted = 0
-    namespaces = list(_pool.keys())
+    try:
+        namespaces = list_namespaces()
+    except Exception:
+        # Sweeping what this worker knows about is worse than sweeping
+        # everything, and better than sweeping nothing.
+        logger.error(
+            "Could not list ChromaDB namespaces; falling back to this worker's pool",
+            exc_info=True,
+        )
+        namespaces = list(_pool.keys())
     for namespace in namespaces:
         try:
             memory = get_memory_service(namespace)

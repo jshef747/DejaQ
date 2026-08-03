@@ -30,6 +30,7 @@ from app.schemas.openai_responses import (
     ResponseOutputTextDoneEvent,
 )
 from app.routers.openai_compat import ChatPipelineResult, PipelineError, run_chat_pipeline
+from app.services.file_text import kind_for as file_kind_for
 
 logger = logging.getLogger("dejaq.router.openai_responses")
 
@@ -73,6 +74,23 @@ def _parse_data_url(url: str, what: str = "image", default_mime: str = "image/jp
     return data, mime
 
 
+def _unsupported_file_detail(mime: str, filename: str | None) -> str:
+    """Message for an attachment we have no extractor for.
+
+    Same shape as the other attachment 400s: name what arrived, then name what is
+    accepted. This is a check on the TYPE, never on the bytes - a PDF we recognise
+    but cannot read (a scan, a corrupt file, an encrypted one) is still answered
+    normally and is only refused a cache entry. See services/file_text.py.
+    """
+    described = f"'{mime}'" if mime else "(no type given)"
+    if filename:
+        described += f" ({filename})"
+    return (
+        f"Unsupported file type {described}; attach a PDF (.pdf) or a "
+        "Markdown/text file (.md, .markdown, .txt)."
+    )
+
+
 def _responses_request_to_messages(
     req: OAIResponsesRequest,
 ) -> tuple[list[OAIMessage], tuple[bytes, str] | None, tuple[bytes, str, str] | None]:
@@ -113,7 +131,17 @@ def _responses_request_to_messages(
                     elif p.type == "input_file" and p.file_data:
                         if file is not None:
                             raise PipelineError(400, "At most one file per request is supported.")
-                        data, mime = _parse_data_url(p.file_data, "file", "application/pdf")
+                        # No default MIME. Assuming application/pdf here handed
+                        # untyped bytes to pypdf while file_text read the same
+                        # empty MIME as Markdown; now both call an absent MIME
+                        # unknown and the filename decides.
+                        data, mime = _parse_data_url(p.file_data, "file", "")
+                        # A type we have no extractor for used to be decoded,
+                        # logged and then dropped, and the request answered 200
+                        # as if nothing had been attached. Reject it like every
+                        # other unusable attachment shape instead.
+                        if not file_kind_for(mime, p.filename):
+                            raise PipelineError(400, _unsupported_file_detail(mime, p.filename))
                         file = (data, mime, p.filename or "")
                 msgs.append(OAIMessage(role=item.role, content=" ".join(text_parts)))
 

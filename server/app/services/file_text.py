@@ -41,10 +41,15 @@ from app.config import CACHE_FILE_MIN_CHARS
 logger = logging.getLogger("dejaq.services.file_text")
 
 PDF_MIME = "application/pdf"
-# Markdown arrives with an unreliable MIME — browsers commonly send text/plain or
-# an empty string for a .md file — so the extension is the more trustworthy signal
-# and either one is accepted.
-_MARKDOWN_MIMES = frozenset({"text/markdown", "text/x-markdown", "text/plain", ""})
+# Markdown arrives with an unreliable MIME - browsers commonly send text/plain
+# for a .md file - so the extension is the more trustworthy signal and either one
+# is accepted. An EMPTY MIME is deliberately not in this set: it means "no type
+# given", not "markdown". A `.md` upload with no MIME is still recognised by its
+# extension, while an untyped, unnamed attachment stays unsupported instead of
+# being decoded as text (the router's data-URL parser makes the same assumption -
+# it used to default an empty MIME to application/pdf, so the same attachment was
+# a PDF to one module and Markdown to the other).
+_MARKDOWN_MIMES = frozenset({"text/markdown", "text/x-markdown", "text/plain"})
 _MARKDOWN_SUFFIXES = (".md", ".markdown", ".mdown", ".mkd", ".txt")
 
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -183,6 +188,8 @@ def _self_test() -> None:
     assert kind_for("text/plain", "notes.md") == "markdown"
     assert kind_for("", "notes.md") == "markdown", "browsers often send no MIME for .md"
     assert kind_for("image/png", "photo.png") == "", "images are not files here"
+    assert kind_for("text/csv", "rows.csv") == "", "we have no extractor for csv"
+    assert kind_for("", None) == "", "no MIME and no name is unknown, not markdown"
 
     a = extract(long_text.encode("utf-8"), "text/markdown", "a.md")
     assert a.ok and a.kind == "markdown"

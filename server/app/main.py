@@ -10,6 +10,7 @@ from app.middleware.api_key import ApiKeyMiddleware
 from app.utils.logger import setup_logging
 from app.config import (
     CONTEXT_ADJUSTER_MODEL_NAME,
+    CREDENTIAL_ENCRYPTION_KEY,
     ENRICHER_MODEL_NAME,
     GENERALIZER_MODEL_NAME,
     LOCAL_LLM_MODEL_NAME,
@@ -43,6 +44,16 @@ async def lifespan(app: FastAPI):
         CONTEXT_ADJUSTER_MODEL_NAME,
         OLLAMA_URL,
     )
+    # Say it once at boot rather than only when a request needs it: without this
+    # key no provider credential can be stored or read, so every request that
+    # routes external (which is every image and every file) can only end in a
+    # 402. Not fatal - the local model and the cache work without it.
+    if not CREDENTIAL_ENCRYPTION_KEY.strip():
+        logger.warning(
+            "DEJAQ_CREDENTIAL_ENCRYPTION_KEY is not set - external provider "
+            "credentials cannot be stored or used, so hard queries and every "
+            "attachment request will return 402. See .env.example."
+        )
     get_normalizer_service()
     get_llm_router_service()
     get_context_adjuster_service()

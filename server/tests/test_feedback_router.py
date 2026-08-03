@@ -87,3 +87,81 @@ def test_feedback_route_returns_escalation_fields_for_interaction_feedback(monke
     assert captured["department"] == "eng"
     assert captured["interaction_id"] == "int_parent"
     assert "tier" not in captured
+
+
+class _FakeMemory:
+    """Minimal cache stand-in: records what was scored or deleted."""
+
+    def __init__(self):
+        self.deleted: list[str] = []
+        self.score = 0.0
+
+    def get_negative_count(self, doc_id: str) -> int:
+        return 0
+
+    def delete_entry(self, doc_id: str) -> bool:
+        self.deleted.append(doc_id)
+        return True
+
+    def update_score(self, doc_id: str, delta: float) -> float:
+        self.score += delta
+        return self.score
+
+
+def _stub_workspace_with_department_named_default(monkeypatch):
+    """A workspace whose department is literally NAMED "Default".
+
+    slugify_name("Default") == "default", and dept_repo stores every real
+    department as `<workspace>__<slug>` - so its entries live in `acme__default`
+    while the no-department fallback would be `acme--default`. Both exist; only
+    the middleware's lookup knows which applies.
+    """
+    from app.middleware.api_key import _KEY_CACHE
+
+    monkeypatch.setattr(_KEY_CACHE, "resolve", lambda token: ("acme", 7))
+    monkeypatch.setattr(
+        _KEY_CACHE,
+        "namespace",
+        lambda workspace_id, workspace_slug, dept_slug: (
+            "acme__default" if dept_slug == "default" else "acme--default"
+        ),
+    )
+
+
+def test_feedback_works_for_a_department_actually_named_default(monkeypatch):
+    """Re-deriving the namespace from the slugs sent this to `acme--default`,
+    mismatched the entry's own namespace, and raised past the router as a 500."""
+    from app.services import feedback_service
+
+    memory = _FakeMemory()
+
+    async def _log_feedback(*args, **kwargs):
+        return None
+
+    _stub_workspace_with_department_named_default(monkeypatch)
+    monkeypatch.setattr(feedback_service, "get_memory_service", lambda namespace: memory)
+    monkeypatch.setattr(feedback_service.request_logger, "log_feedback", _log_feedback)
+
+    response = TestClient(app).post(
+        "/v1/feedback",
+        headers={"Authorization": "Bearer org-key", "X-DejaQ-Department": "default"},
+        json={"response_id": "acme__default:doc1", "rating": "positive"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "new_score": 1.0}
+
+
+def test_feedback_for_another_workspaces_response_id_is_4xx_not_500(monkeypatch):
+    """A genuine mismatch is a caller error. FeedbackNamespaceMismatch subclasses
+    neither ValueError nor FeedbackNotFound, so the router used to let it out."""
+    _stub_workspace_with_department_named_default(monkeypatch)
+
+    response = TestClient(app, raise_server_exceptions=False).post(
+        "/v1/feedback",
+        headers={"Authorization": "Bearer org-key", "X-DejaQ-Department": "default"},
+        json={"response_id": "someone-else__eng:doc1", "rating": "positive"},
+    )
+
+    assert response.status_code == 422
+    assert "does not belong" in response.json()["detail"]

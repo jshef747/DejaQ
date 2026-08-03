@@ -202,11 +202,24 @@ class ExplodingValidator:
         raise AssertionError("validator should not be called")
 
 
-class NoCredentialService:
-    """Stub CredentialService: no encryption key needed, no stored credentials."""
+def no_stored_credential(session, workspace_id, provider):
+    """Stub credential lookup: this workspace has none, and none is not an error.
 
-    def get_decrypted_key(self, session, workspace_id, provider):
-        return None
+    Replaces the router's get_workspace_provider_key, which reads the row before
+    it needs an encryption key - so a test needs neither.
+    """
+    return None
+
+
+def stored_credential(key: str, providers: tuple[str, ...] | None = None):
+    """Stub credential lookup that hands back `key` (for `providers`, if given)."""
+
+    def _lookup(session, workspace_id, provider):
+        if providers is not None and provider not in providers:
+            return None
+        return key
+
+    return _lookup
 
 
 class CapturingRegistry:
@@ -536,7 +549,7 @@ def test_force_hard_external_header_skips_classifier(monkeypatch):
     monkeypatch.setattr(openai_compat, "_classifier", ExplodingClassifier())
     monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
-    monkeypatch.setattr(openai_compat, "CredentialService", NoCredentialService)
+    monkeypatch.setattr(openai_compat, "get_workspace_provider_key", no_stored_credential)
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
 
     client = TestClient(app, headers=_AUTH)
@@ -595,9 +608,7 @@ def test_auto_routing_uses_org_threshold_zero_to_route_external(monkeypatch):
 
     monkeypatch.setattr("app.config.CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.setattr(
-        openai_compat.CredentialService,
-        "get_decrypted_key",
-        lambda self, session, workspace_id, provider: "sk-openai-live",
+        openai_compat, "get_workspace_provider_key", stored_credential("sk-openai-live")
     )
 
     from app.middleware.api_key import _KEY_CACHE
@@ -669,9 +680,9 @@ def test_force_hard_external_uses_org_external_model_provider(monkeypatch):
 
     monkeypatch.setattr("app.config.CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.setattr(
-        openai_compat.CredentialService,
-        "get_decrypted_key",
-        lambda self, session, workspace_id, provider: "sk-ant-live" if provider == "anthropic" else None,
+        openai_compat,
+        "get_workspace_provider_key",
+        stored_credential("sk-ant-live", providers=("anthropic",)),
     )
 
     from app.middleware.api_key import _KEY_CACHE
@@ -911,7 +922,7 @@ def test_hard_query_without_org_credential_returns_402_without_env_fallback(monk
     monkeypatch.setattr(openai_compat, "_classifier", HardClassifier())
     monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
-    monkeypatch.setattr(openai_compat, "CredentialService", NoCredentialService)
+    monkeypatch.setattr(openai_compat, "get_workspace_provider_key", no_stored_credential)
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
 
     client = TestClient(app, headers=_AUTH)
