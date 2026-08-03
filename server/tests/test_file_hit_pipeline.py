@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.routers import openai_compat
 from app.services import file_text
-from app.services.memory_chromaDB import CacheLookupResult
+from app.services.memory_chromaDB import CacheLookupResult, derive_doc_id
 from tests.test_file_gate import make_pdf
 from tests.test_openai_compat_smoke import (
     _AUTH,
@@ -25,6 +25,8 @@ from tests.test_openai_compat_smoke import (
 )
 
 CACHED_ANSWER = "The termination clause allows either party to exit with 30 days' notice."
+ORIGINAL_QUESTION = "what are the termination terms of this contract?"
+TYPO_QUESTION = "waht are teh terminaton trems of this contarct?"
 DOC_TEXT = " ".join(f"clause{i}" for i in range(45))
 OTHER_TEXT = DOC_TEXT + " and one additional paragraph entirely"
 
@@ -251,6 +253,282 @@ def test_log_says_whether_the_file_was_carried_from_an_earlier_turn(monkeypatch,
     with caplog.at_level("INFO", logger="dejaq.router.openai_compat"):
         _post("who signed it?", pdf=PDF_A, sticky=True)
     assert "carried-over" in next(m for m in caplog.messages if m.startswith("file kind="))
+
+
+class AliasLearningMemory(FileHitMemory):
+    """A file-anchored entry, plus whatever aliases the router asks us to store.
+
+    `store_alias` mirrors the real MemoryService exactly: it copies the parent's
+    ANSWER and nothing else — no `file_sha`, no `file_kind`. That is the whole
+    bug. An alias of a file-anchored entry is an ordinary text entry holding an
+    answer about a document, and the file gate can no longer see anything to
+    gate on.
+
+    The seeded entry sits in the validator-guarded band (`requires_validation`),
+    which is the only tier alias learning fires on.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.aliases: dict[str, str] = {}
+
+    def lookup_cache(self, clean_query: str):
+        if clean_query in self.aliases:
+            return CacheLookupResult(
+                hit=True,
+                generalized_answer=CACHED_ANSWER,
+                entry_id=self.aliases[clean_query],
+                distance=0.0,
+                matched_query=clean_query,
+                # No file_sha/file_kind — precisely what store_alias writes.
+            )
+        return CacheLookupResult(
+            hit=True,
+            generalized_answer=CACHED_ANSWER,
+            entry_id="doc-file",
+            distance=0.1802,  # inside the band, so the validator runs
+            matched_query=ORIGINAL_QUESTION,
+            file_sha=self.file_sha,
+            file_kind=self.file_kind,
+            requires_validation=True,
+        )
+
+    def store_alias(self, alias_query: str, source_entry_id: str) -> str:
+        doc_id = f"alias-{len(self.aliases)}"
+        self.aliases[alias_query] = doc_id
+        return doc_id
+
+
+class SynchronousAliasWriter:
+    """Runs `_store_alias_bg`'s work inline so the assertions are deterministic.
+
+    The router fires alias learning through `asyncio.create_task`; whether that
+    task gets a slice before TestClient tears the loop down is a race. Replacing
+    only the background wrapper keeps the decision under test — the branch at
+    the alias-learning call site — and makes the write itself synchronous.
+    """
+
+    def __init__(self, memory):
+        self.memory = memory
+        self.calls: list[tuple[str, str, str]] = []
+
+    def __call__(self, namespace: str, alias_query: str, source_entry_id: str):
+        self.calls.append((namespace, alias_query, source_entry_id))
+        self.memory.store_alias(alias_query, source_entry_id)
+
+        async def _already_done():
+            return None
+
+        return _already_done()
+
+
+def test_no_alias_is_learned_for_a_file_anchored_hit(monkeypatch):
+    """Alias learning must not launder a file answer into an ungated text entry.
+
+    `store_alias` copies the answer and drops `file_sha`/`file_kind`, so an alias
+    of a file-anchored entry is reachable by question text alone. Learning one
+    would hand the next asker an answer about a document they never attached.
+    """
+    memory = AliasLearningMemory()
+    alias_writer = SynchronousAliasWriter(memory)
+    _patch_pipeline(
+        monkeypatch, validator=RecordingValidator(True),
+        adjuster=TrackingAdjuster(), memory=memory,
+    )
+    monkeypatch.setattr(openai_compat, "_store_alias_bg", alias_writer)
+
+    resp = _post(TYPO_QUESTION, pdf=PDF_A)
+
+    # The hit itself is legitimate: same file, validator accepted.
+    assert resp.headers["x-dejaq-tier"] == "cache"
+    assert resp.json()["output_text"] == CACHED_ANSWER
+    # ...but nothing about it may be remembered as a text entry.
+    assert alias_writer.calls == []
+    assert memory.aliases == {}
+
+
+def test_the_typod_phrasing_is_not_reachable_without_the_file(monkeypatch):
+    """The end-to-end leak, in the shipped default configuration.
+
+    A1 seeds a file-anchored entry; A2 asks the same thing with a typo and the
+    same PDF, which hits and (before the fix) taught an alias; A3 asks the typo'd
+    question with NO FILE AT ALL and was served the contract's answer.
+    """
+    memory = AliasLearningMemory()
+    alias_writer = SynchronousAliasWriter(memory)
+    _patch_pipeline(
+        monkeypatch, validator=RecordingValidator(True),
+        adjuster=TrackingAdjuster(), memory=memory,
+    )
+    monkeypatch.setattr(openai_compat, "_store_alias_bg", alias_writer)
+
+    # A2 — typo'd question, file attached: a real, correctly gated cache hit.
+    assert _post(TYPO_QUESTION, pdf=PDF_A).headers["x-dejaq-tier"] == "cache"
+
+    # A3 — same typo'd question, nothing attached.
+    resp = _post(TYPO_QUESTION)
+
+    assert resp.headers.get("x-dejaq-tier") != "cache"
+    assert CACHED_ANSWER not in resp.text
+
+
+def test_alias_learning_still_works_for_a_plain_text_hit(monkeypatch):
+    """The fix is scoped to attachment-anchored hits; text hits keep learning."""
+
+    class TextBandMemory(AliasLearningMemory):
+        def lookup_cache(self, clean_query: str):
+            return CacheLookupResult(
+                hit=True,
+                generalized_answer=CACHED_ANSWER,
+                entry_id="doc-text",
+                distance=0.1802,
+                matched_query=ORIGINAL_QUESTION,
+                requires_validation=True,
+            )
+
+    memory = TextBandMemory()
+    alias_writer = SynchronousAliasWriter(memory)
+    _patch_pipeline(
+        monkeypatch, validator=RecordingValidator(True),
+        adjuster=TrackingAdjuster(), memory=memory,
+    )
+    monkeypatch.setattr(openai_compat, "_store_alias_bg", alias_writer)
+
+    resp = _post(TYPO_QUESTION)
+
+    assert resp.headers["x-dejaq-tier"] == "cache"
+    assert [c[1] for c in alias_writer.calls] == [TYPO_QUESTION.lower()]
+
+
+class RecordingStoreMemory:
+    """Records what the background store actually wrote, and derives entry ids
+    the same way the real MemoryService does — so a mismatch between the id
+    handed to the client and the id of the row on disk shows up as one."""
+
+    def __init__(self):
+        self.stored: list[dict] = []
+
+    def lookup_cache(self, clean_query: str):
+        return CacheLookupResult(hit=False)
+
+    def count_file_entries(self, file_sha: str) -> int:
+        return 0
+
+    def store_interaction(
+        self, normalized_query, generalized_answer, original_query, user_id,
+        image_dhash=None, image_clip=None, image_kind=None, image_text=None,
+        file_sha=None, file_kind=None,
+    ) -> str:
+        doc_id = derive_doc_id(
+            normalized_query, file_sha, image_text=image_text, image_dhash=image_dhash
+        )
+        self.stored.append({
+            "doc_id": doc_id,
+            "normalized_query": normalized_query,
+            "generalized_answer": generalized_answer,
+            "file_sha": file_sha,
+            "file_kind": file_kind,
+        })
+        return doc_id
+
+
+class BlindGeneralizer(TrackingAdjuster):
+    """Stands in for Phi-3.5 on an answer it cannot see the source of. The real
+    thing invents specifics; this one just marks that it ran."""
+
+    def __init__(self):
+        super().__init__()
+        self.generalize_calls: list[str] = []
+
+    async def generalize(self, answer: str) -> str:
+        self.generalize_calls.append(answer)
+        return "an agreed-upon period of notice"
+
+
+class BrokenCeleryTask:
+    """Redis down: apply_async raises and the router degrades to in-process."""
+
+    def apply_async(self, *args, **kwargs):
+        raise ConnectionError("Error 61 connecting to localhost:6379. Connection refused.")
+
+
+def _patch_external_provider(monkeypatch, answer: str):
+    class StubExternal:
+        async def generate_response(self, request, provider=None, api_key=None):
+            from app.schemas.chat import ExternalLLMResponse
+
+            return ExternalLLMResponse(
+                text=answer, model_used=request.model,
+                prompt_tokens=5, completion_tokens=6, latency_ms=10.0,
+            )
+
+    class KeyedCredentialService:
+        def get_decrypted_key(self, session, workspace_id, provider):
+            return "sk-test-live"
+
+    monkeypatch.setattr(openai_compat, "_external_llm", StubExternal())
+    monkeypatch.setattr(openai_compat, "CredentialService", KeyedCredentialService)
+    monkeypatch.setattr(
+        openai_compat, "_read_effective_llm_config",
+        lambda workspace_slug, workspace_id: openai_compat.EffectiveLlmConfig(
+            external_model="gpt-4o-mini", routing_threshold=0.0,
+        ),
+    )
+
+
+PROVIDER_ANSWER = "Either party may terminate this agreement with thirty days written notice."
+
+
+def _post_pdf_miss_with_broken_celery(monkeypatch, memory, adjuster):
+    _patch_pipeline(monkeypatch, validator=RecordingValidator(True), adjuster=adjuster, memory=memory)
+    monkeypatch.setattr(openai_compat, "USE_CELERY", True)
+    monkeypatch.setattr(openai_compat, "generalize_and_store_task", BrokenCeleryTask())
+    _patch_external_provider(monkeypatch, PROVIDER_ANSWER)
+    return _post(ORIGINAL_QUESTION, pdf=PDF_A)
+
+
+def test_celery_fallback_stores_the_file_identity(monkeypatch):
+    """A broker outage must not turn a document answer into an ungated text entry.
+
+    The Celery-dispatch-failure fallback passed the image arguments but stopped
+    short of `file_sha`/`file_kind`, so both defaulted to None and the entry was
+    written with no file identity at all — after which the file gate has nothing
+    to gate on and a later question with no attachment is served the document's
+    answer.
+    """
+    memory = RecordingStoreMemory()
+    resp = _post_pdf_miss_with_broken_celery(monkeypatch, memory, BlindGeneralizer())
+
+    assert resp.status_code == 200
+    assert len(memory.stored) == 1
+    entry = memory.stored[0]
+    assert entry["file_sha"] == SHA_A
+    assert entry["file_kind"] == "pdf"
+
+
+def test_celery_fallback_does_not_generalize_an_attachment_answer(monkeypatch):
+    """`if image_kind or file_kind` is what keeps attachment answers verbatim.
+
+    With the file arguments dropped that test was false, so the generalizer —
+    which cannot see the PDF — rewrote a specific contractual term into a vague
+    paraphrase before it was stored.
+    """
+    memory = RecordingStoreMemory()
+    adjuster = BlindGeneralizer()
+    _post_pdf_miss_with_broken_celery(monkeypatch, memory, adjuster)
+
+    assert adjuster.generalize_calls == []
+    assert memory.stored[0]["generalized_answer"] == PROVIDER_ANSWER
+
+
+def test_celery_fallback_response_id_addresses_the_entry_written(monkeypatch):
+    """The id handed to the client is what /v1/feedback resolves. It is derived
+    WITH the file hash, so an entry stored WITHOUT one is unaddressable."""
+    memory = RecordingStoreMemory()
+    resp = _post_pdf_miss_with_broken_celery(monkeypatch, memory, BlindGeneralizer())
+
+    returned = resp.headers["x-dejaq-response-id"]
+    assert returned.rsplit(":", 1)[1] == memory.stored[0]["doc_id"]
 
 
 def test_scanned_pdf_answers_but_is_never_stored(monkeypatch):
