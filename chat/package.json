@@ -6,7 +6,8 @@
     "dev": "cross-env DEBUG= next dev --webpack -p 4000",
     "dev:turbo": "cross-env DEBUG= next dev --turbopack -p 4000",
     "build": "cross-env DEBUG= next build --webpack",
-    "start": "next start -p 4000"
+    "start": "next start -p 4000",
+    "test": "vitest run"
   },
   "dependencies": {
     "lucide-react": "^1.14.0",
@@ -21,6 +22,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "cross-env": "^10.1.0",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.10"
   }
 }

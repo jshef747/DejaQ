@@ -1,6 +1,7 @@
-// LocalStorage-backed settings for non-secret chat UI preferences.
-// DejaQ credentials are read server-side from chat/.env.local and are never
-// persisted in the browser.
+// LocalStorage-backed settings for chat UI preferences, including the DejaQ
+// workspace API key. A key entered here is sent to the chat app's own /api/*
+// routes as a header and never logged; DEJAQ_API_KEY in chat/.env.local is
+// only the fallback used when this is empty.
 
 const STORAGE_KEY = "dejaq_chat_settings";
 
@@ -9,6 +10,8 @@ export interface ChatSettings {
   // i.e. http://127.0.0.1:8000). Set to http://<other-host>:8000 to point the
   // chat app at a DejaQ server running on another machine on the LAN.
   serverBaseUrl: string;
+  // Empty string = fall back to DEJAQ_API_KEY in chat/.env.local.
+  apiKey: string;
   deptSlug: string;
   modelProfile: ModelProfile;
   routingMode: RoutingMode;
@@ -33,6 +36,7 @@ export type RoutingMode = "auto" | "easy_local" | "hard_external";
 
 export const DEFAULT_CHAT_SETTINGS: ChatSettings = {
   serverBaseUrl: "",
+  apiKey: "",
   deptSlug: "",
   modelProfile: "default",
   routingMode: "auto",
@@ -50,6 +54,7 @@ function sanitizeSettings(value: unknown): ChatSettings {
   const parsed = typeof value === "object" && value !== null ? value as Record<string, unknown> : {};
   return {
     serverBaseUrl: typeof parsed.serverBaseUrl === "string" ? parsed.serverBaseUrl.trim() : "",
+    apiKey: typeof parsed.apiKey === "string" ? parsed.apiKey.trim() : "",
     deptSlug: typeof parsed.deptSlug === "string" ? parsed.deptSlug : "",
     modelProfile: parseModelProfile(parsed.modelProfile),
     routingMode: parseRoutingMode(parsed.routingMode),
@@ -78,4 +83,9 @@ export function persistSettings(settings: ChatSettings): void {
 // call so the browser can point the proxy at another host without a rebuild.
 export function loadServerBaseUrl(): string {
   return loadSettings().serverBaseUrl;
+}
+
+// The saved API key override (empty = fall back to DEJAQ_API_KEY server-side).
+export function loadApiKey(): string {
+  return loadSettings().apiKey;
 }
