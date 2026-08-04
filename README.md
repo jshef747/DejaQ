@@ -137,11 +137,14 @@ difficulty classifier and route straight to the workspace's external provider.
   stored, while fewer tokens than that leave it a photo. Documents need the `tesseract` binary
   (`start.sh` warns when it is missing; without it, documents fall back to the photo path).
   Raw image bytes are never stored, only fingerprints.
-- **Files** (`input_file`) — PDF (via `pypdf`) and Markdown. The gate is an exact `sha256`
-  of the whitespace-normalised extracted text, so false merges are impossible by
-  construction. A file yielding under `DEJAQ_CACHE_FILE_MIN_CHARS` (200) characters — a
-  scanned PDF with no text layer, or a corrupt or encrypted one — is never served and never
-  stored; the answer still comes back, there is just no cache entry.
+- **Files** (`input_file`) — PDF (via `pypdf`), Word documents (`.docx`, via `python-docx`,
+  paragraphs and tables only), and any text or code file (Markdown, `.txt`, source, config,
+  or extensionless files like `Dockerfile` — anything that decodes as UTF-8). The gate is an
+  exact `sha256` of the whitespace-normalised extracted text, so false merges are impossible
+  by construction. `DEJAQ_CACHE_FILE_MIN_CHARS` (200) applies only to PDF and DOCX, where
+  extraction can fail silently — a scanned PDF with no text layer, or a corrupt/encrypted
+  file, is never served and never stored; the answer still comes back, there is just no
+  cache entry. Text/code files have no such floor and are cached down to one character.
 
 Thresholds and their measured derivations: [docs/image-gate.md](docs/image-gate.md) and
 [docs/file-gate.md](docs/file-gate.md). Every setting is listed in `.env.example`.

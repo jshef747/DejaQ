@@ -6,7 +6,7 @@ This document exists mostly to explain an absence. [docs/image-gate.md](image-ga
 
 The image gate approximates identity because **OCR output is noisy**. Two reads of the same page disagree on characters, so "is this the same document?" can only ever be answered as "are these similar enough?" — and *enough* is a number that has to be found empirically, defended against the population that breaks it, and re-derived whenever the corpus changes. That is where the 0.85 token-overlap threshold, the 0.08 CLIP ceiling, the hamming ceiling, and the confidence floors all come from.
 
-A PDF or a Markdown file hands us the text **directly and deterministically**. The same bytes always extract the same characters. So:
+A PDF, a DOCX, or a text/Markdown/code file hands us the text **directly and deterministically**. The same bytes always extract the same characters. So:
 
 | | image gate | file gate |
 |---|---|---|
@@ -20,24 +20,37 @@ There is no recall-versus-false-merge curve to plot, because the two are not in 
 
 ## What the gate actually does
 
-1. Extract text — `pypdf` for PDF, UTF-8 decode for Markdown.
-2. Normalise: collapse every whitespace run to a single space, trim. **Nothing else.** No case folding, no punctuation stripping, no header removal.
-3. `sha256` the result. That string is the file's identity.
-4. Serve a cached entry only when `request.sha == entry.file_sha` **and** the kinds agree.
+1. Identify the kind — PDF and DOCX are recognised by MIME or extension, checked first because a DOCX is a ZIP under the hood and would otherwise be misread. Everything else is decided by content: if the bytes are a strict UTF-8 decode, it is text — Markdown, plain text, or any kind of source/config file — and there is no extension list to maintain. See [Text and code files](#text-and-code-files-content-not-a-list) below.
+2. Extract text — `pypdf` for PDF, `python-docx` (paragraphs + tables only) for DOCX, UTF-8 decode for everything text-shaped.
+3. Normalise: collapse every whitespace run to a single space, trim. **Nothing else.** No case folding, no punctuation stripping, no header removal.
+4. `sha256` the result. That string is the file's identity.
+5. Serve a cached entry only when `request.sha == entry.file_sha` **and** the kinds agree.
 
 Step 2 is the only place where a judgement is embedded, so it is worth stating what it buys and what it costs. It buys the "same document, different producer" case: a PDF re-saved by another tool commonly reflows line breaks and spacing while preserving every word, and without normalisation those would be two different documents. It costs nothing measurable, because it cannot merge two files that differ in any actual character.
 
 Case folding was considered and rejected: the same file always extracts the same case, so folding buys nothing, and it could only ever merge two documents that genuinely differ.
 
+## Text and code files: content, not a list
+
+Whether an attachment is "text" is decided by attempting a strict UTF-8 decode of its bytes, not by checking its MIME against a maintained list or its extension against a maintained list. If it decodes, it is text — a `.py`, `.js`, `.css`, `.json` file, a `Dockerfile` with no extension at all, anything. If it does not decode, it is not.
+
+This replaces an earlier, MIME-dependent check that made the same file's acceptance depend on what the browser happened to report: a `.py` file was accepted when the browser sent `text/plain` and rejected for `text/x-python`, an empty MIME, or `video/mp2t` (what browsers commonly report for `.ts`). Content sniffing removes that dependency entirely — the same bytes get the same decision regardless of MIME.
+
+DOCX must be checked **before** the text sniff, not after: a `.docx` file is a ZIP archive, so its bytes are not valid UTF-8 and would otherwise be rejected by the text path (or, if some ZIP payload happened to decode, misread as garbage). PDF is checked first for the same reason.
+
 ## Files that cannot be identified are refused
 
-If the normalised text is shorter than `DEJAQ_CACHE_FILE_MIN_CHARS` (200), the file is **never served and never stored**. The answer still comes back from the provider; there is simply no cache entry.
+`DEJAQ_CACHE_FILE_MIN_CHARS` (200) applies only where extraction can fail **silently** — PDF and DOCX. If the normalised text is shorter than the floor, the file is **never served and never stored**. The answer still comes back from the provider; there is simply no cache entry.
 
 The population this catches is **scanned PDFs** — an image of a page has no text layer, so `pypdf` returns approximately nothing. This mirrors the image gate's `ambiguous` class and is the same reasoning: an attachment we cannot identify must not be guessed at. The image gate learned this the expensive way — routing unidentifiable text-bearing images to the pixel path produced 1,712 and 204 false merges on two measured corpora, because two different pages of text look near-identical to CLIP. The file gate declines to repeat it.
 
 200 is not a tuned number. Anything from a few dozen upward behaves identically, because the populations it separates (0–2 characters from a scan, versus hundreds from a real document) are nowhere near the line. Raising it only refuses more short-but-real files.
 
-Corrupt and encrypted PDFs land in the same bucket via the same rule: nothing extracted, no identity, not cached.
+Corrupt and encrypted PDFs land in the same bucket via the same rule: nothing extracted, no identity, not cached. A corrupt or password-protected DOCX behaves identically — `_extract_docx` never raises, it returns empty text, and the same floor refuses it.
+
+**Text, Markdown, and code files have no floor.** There is no extraction step to go wrong: decoding is exact, so a 50-character script genuinely is 50 characters and its hash is a true identity, not a guess at one. The only requirement is at least one character after whitespace normalisation — a whitespace-only file has nothing to identify it by. This is a deliberate behaviour change: short `.md`/`.txt` files that were previously refused by the 200-character floor are now cached.
+
+DOCX text extraction is deliberately limited to **paragraphs and tables only** — no headers, footers, footnotes, comments, tracked changes, or document properties. Those can all change without the document meaningfully changing (someone adds a review comment, Word bumps a modified-date property, a footer page number ticks over), and hashing them in would make the cache miss on almost every re-save with no visible reason why.
 
 ## Entry identity includes the file
 
@@ -59,9 +72,9 @@ Note that the exact hash proves the *file* is the same; it says nothing about wh
 | | how it is sent |
 |---|---|
 | PDF | native document part — Google `Part.from_bytes(mime_type="application/pdf")`, Anthropic `document` block, OpenAI `file` part |
-| Markdown | inlined into the prompt inside a `<<<ATTACHED DOCUMENT>>>` fence, explicitly labelled as data rather than instructions |
+| DOCX, Markdown, text/code | inlined into the prompt inside a `<<<ATTACHED DOCUMENT>>>` fence, explicitly labelled as data rather than instructions |
 
-Markdown is inlined because no provider has a markdown part and it is already text. The fence is a trust boundary: the document is untrusted input from whoever uploaded it, and a file containing "ignore your instructions" must read as content.
+DOCX and text/code files are inlined for the same reason Markdown always was: no provider has a native part for them, and once extracted they are all just text, so one mechanism covers every non-PDF kind. The fence is a trust boundary: the document is untrusted input from whoever uploaded it, and a file containing "ignore your instructions" must read as content — this matters even more for code, which routinely contains strings and comments that look like directives.
 
 Attachment content never enters the **cache key**. The enricher, normalizer, and embedding see only the user's question, exactly as with images — a 40-page document would produce a useless key and an enormous embedding.
 

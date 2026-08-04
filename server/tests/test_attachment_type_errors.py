@@ -19,7 +19,8 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.routers import openai_compat
-from tests.test_file_gate import make_pdf
+from app.services.file_text import DOCX_MIME
+from tests.test_file_gate import make_docx, make_pdf
 from tests.test_openai_compat_smoke import (
     _AUTH,
     StubAdjuster,
@@ -101,37 +102,67 @@ def _post_file(query: str, data: bytes, *, mime: str | None, filename: str | Non
 
 
 def test_unsupported_file_type_is_rejected_not_silently_dropped():
-    """A csv was decoded, size-checked, classified - then dropped, and the model
-    answered from the question alone with a confident 200 and no signal at all."""
+    """A file whose bytes are not valid UTF-8 - and that is not a PDF or DOCX by
+    MIME/extension - was decoded, size-checked, classified, then dropped, and
+    the model answered from the question alone with a confident 200 and no
+    signal at all."""
     resp = _post_file(
-        "what is in this spreadsheet?", b"a,b,c\n1,2,3\n", mime="text/csv", filename="notes.csv"
+        "what is in this image?", b"\x89PNG\x0d\x0a\x1a\x0a\x00\x01\xff",
+        mime="image/png", filename="notes.png",
     )
 
     assert resp.status_code == 400
     detail = resp.json()["detail"]
-    assert "text/csv" in detail, "the message must name the type it rejected"
+    assert "image/png" in detail, "the message must name the type it rejected"
     assert "PDF" in detail and "Markdown" in detail, "and what is accepted"
+
+
+def test_csv_is_accepted_as_a_text_file(monkeypatch):
+    """CSV has no dedicated extractor, but its bytes decode as plain UTF-8 text,
+    so it is accepted the same way any other text/code file is - the whole point
+    of content-sniffing instead of a maintained format list."""
+    memory = _NoHitMemory()
+    _patch_pipeline(monkeypatch, memory)
+
+    resp = _post_file(
+        "what is in this spreadsheet?", b"a,b,c\n1,2,3\n", mime="text/csv", filename="notes.csv"
+    )
+
+    assert resp.status_code != 400
 
 
 def test_office_document_is_rejected_with_the_same_shape():
     resp = _post_file(
         "summarise this",
-        b"PK\x03\x04 not really a docx",
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        filename="report.docx",
+        b"\x00\x01\xffnot a real office file",
+        mime="application/vnd.ms-excel",
+        filename="report.xls",
     )
 
     assert resp.status_code == 400
-    assert "wordprocessingml" in resp.json()["detail"]
+    assert "ms-excel" in resp.json()["detail"]
 
 
 def test_untyped_data_url_is_not_assumed_to_be_a_pdf():
     """`data:;base64,` used to mean application/pdf to the router and Markdown to
-    file_text - the same attachment, two answers. It is now simply unknown."""
-    resp = _post_file("what does this say?", b"\x00\x01\x02binary", mime=None, filename=None)
+    file_text - the same attachment, two answers. An untyped upload with bytes
+    that are not valid UTF-8 is now simply unknown."""
+    resp = _post_file("what does this say?", b"\xff\xfe\x00binary garbage", mime=None, filename=None)
 
     assert resp.status_code == 400
     assert "no type given" in resp.json()["detail"]
+
+
+def test_untyped_data_url_with_text_bytes_is_accepted_as_text(monkeypatch):
+    """The same untyped, unnamed upload - but with bytes that ARE valid UTF-8 -
+    is no longer refused just for lacking a MIME and a filename: the content
+    itself is enough to identify it as text."""
+    memory = _NoHitMemory()
+    _patch_pipeline(monkeypatch, memory)
+
+    resp = _post_file("what does this say?", b"just some plain text content here", mime=None, filename=None)
+
+    assert resp.status_code != 400
 
 
 def test_untyped_markdown_upload_still_works_by_its_extension(monkeypatch):
@@ -149,7 +180,8 @@ def test_untyped_markdown_upload_still_works_by_its_extension(monkeypatch):
     [
         ("scanned pdf (no text layer)", make_pdf(""), "application/pdf", "scan.pdf"),
         ("corrupt pdf", b"%PDF-1.4 truncated garbage", "application/pdf", "broken.pdf"),
-        ("markdown too short to identify", b"hi", "text/markdown", "note.md"),
+        ("docx too short to identify", make_docx(["hi"]), DOCX_MIME, "short.docx"),
+        ("corrupt docx", b"PK\x03\x04 not really a docx", DOCX_MIME, "broken.docx"),
     ],
 )
 def test_recognised_but_uncacheable_files_are_answered_not_rejected(

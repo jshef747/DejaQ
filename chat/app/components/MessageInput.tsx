@@ -9,18 +9,24 @@ import type { Attachment } from "./chat-store";
 // is the limit that actually holds; this one just fails faster and more kindly.
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
-// Markdown arrives with an unreliable MIME — browsers commonly send text/plain
-// or nothing at all for a .md file — so the extension is the better signal and
-// either one is accepted. Kept in step with services/file_text.py::kind_for.
-const MARKDOWN_SUFFIXES = [".md", ".markdown", ".mdown", ".mkd", ".txt"];
+const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
-function attachmentKind(file: File): Attachment["kind"] | null {
+// KEEP THIS IN STEP WITH services/file_text.py::kind_for. A mismatch here means
+// the browser offers a file the server will 400 on, or the reverse.
+//
+// PDF and DOCX are recognised by MIME or extension. Everything else the
+// browser reports (Markdown, plain text, source/config files, whatever MIME a
+// given browser happens to send) is treated client-side as a "markdown"-kind
+// attachment and handed to the server as-is — the server is the one place
+// that actually decides "is this text?" by attempting a UTF-8 decode of the
+// bytes, since a browser can't cheaply replicate that check before upload. A
+// file that fails the server's decode comes back as a normal send error.
+function attachmentKind(file: File): Attachment["kind"] {
   const name = file.name.toLowerCase();
   if (file.type.startsWith("image/")) return "image";
   if (file.type === "application/pdf" || name.endsWith(".pdf")) return "pdf";
-  if (MARKDOWN_SUFFIXES.some((s) => name.endsWith(s))) return "markdown";
-  if (file.type === "text/markdown" || file.type === "text/x-markdown") return "markdown";
-  return null;
+  if (file.type === DOCX_MIME || name.endsWith(".docx")) return "docx";
+  return "markdown";
 }
 
 export function formatBytes(bytes: number): string {
@@ -69,10 +75,6 @@ export default function MessageInput({
 
   function attachFile(file: File) {
     const kind = attachmentKind(file);
-    if (!kind) {
-      onAttachmentError?.("Attach an image, a PDF, or a Markdown file.");
-      return;
-    }
     if (file.size > MAX_ATTACHMENT_BYTES) {
       onAttachmentError?.(`That file is too large (max ${formatBytes(MAX_ATTACHMENT_BYTES)}).`);
       return;
@@ -101,7 +103,7 @@ export default function MessageInput({
     // files). Let text paste through untouched by only acting on a real file.
     const file = Array.from(e.clipboardData.items)
       .map((i) => (i.kind === "file" ? i.getAsFile() : null))
-      .find((f): f is File => f != null && attachmentKind(f) != null);
+      .find((f): f is File => f != null);
     if (file) {
       e.preventDefault();
       attachFile(file);
@@ -239,14 +241,19 @@ export default function MessageInput({
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*,application/pdf,.pdf,.md,.markdown,.mdown,.mkd,.txt,text/markdown"
+          // No accept filter: text/code files are recognised by content on the
+          // server (any UTF-8 file), not by a maintained extension list, so
+          // there is no fixed set to filter the picker to. Images, PDF, and
+          // DOCX are still recognised as such by attachmentKind() above; a
+          // genuinely unsupported pick (a binary file) is rejected server-side
+          // with a clear error surfaced as a toast.
           onChange={handleFilePick}
           style={{ display: "none" }}
         />
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={disabled}
-          title="Attach an image, PDF, or Markdown file"
+          title="Attach an image, PDF, Word doc, or text/code file"
           aria-label="Attach a file"
           style={{
             alignItems: "center",

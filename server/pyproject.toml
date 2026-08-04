@@ -36,6 +36,9 @@ dependencies = [
     # rather than laid out, so pymupdf's speed and pdfplumber's table handling buy
     # nothing here.
     "pypdf>=6.0.0",
+    # DOCX text extraction for the file gate. MIT, matching the pypdf choice
+    # above — no AGPL dependency for a feature this small.
+    "python-docx>=1.1.0",
     # Used by services/image_fingerprint.py, which imported it while it was in
     # neither pyproject.toml nor uv.lock — the venv worked only by accident.
     "pillow>=11.0.0",
