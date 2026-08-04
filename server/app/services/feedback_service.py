@@ -106,6 +106,15 @@ def list_feedback(
 
 
 def _namespace_for(org: str, department: str) -> str:
+    """Best-effort reconstruction of a namespace from workspace + department slug.
+
+    Only a fallback for callers that have no request state to read it from (the
+    admin surface). It is a guess, not the authority: `--default` is right for the
+    no-department case, where no Department row exists, but a department that is
+    genuinely *named* "Default" slugs to "default" and is stored by dept_repo as
+    `<workspace>__default`. Callers that can pass the namespace the write path
+    used should do so - see `cache_namespace` on submit_feedback().
+    """
     if department == "default":
         return f"{org}--default"
     return f"{org}__{department}"
@@ -153,9 +162,11 @@ def _apply_cache_feedback(
     org: str,
     department: str,
     validate_namespace: bool,
+    cache_namespace: str | None = None,
 ) -> FeedbackResult:
     namespace, doc_id = _split_response_id(response_id)
-    if validate_namespace and namespace != _namespace_for(org, department):
+    expected = cache_namespace or _namespace_for(org, department)
+    if validate_namespace and namespace != expected:
         raise FeedbackNamespaceMismatch(response_id)
 
     memory = get_memory_service(namespace)
@@ -182,7 +193,16 @@ async def submit_feedback(
     workspace_id: int | None = None,
     department: str,
     validate_namespace: bool,
+    cache_namespace: str | None = None,
 ) -> FeedbackResult:
+    """Apply feedback to a cached entry, and escalate when asked to.
+
+    `cache_namespace` is the namespace the WRITE path used for this caller,
+    resolved from the departments table by the API-key middleware. Pass it
+    whenever it is available: re-deriving it from the workspace and department
+    slugs cannot distinguish a department named "Default" from having no
+    department at all, and the two live in different collections.
+    """
     if response_id is None and interaction_id is None:
         raise ValueError("Either response_id or interaction_id is required")
 
@@ -206,6 +226,7 @@ async def submit_feedback(
             org=org,
             department=department,
             validate_namespace=validate_namespace,
+            cache_namespace=cache_namespace,
         )
     else:
         result = FeedbackResult(status="ok")

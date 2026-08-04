@@ -24,7 +24,12 @@ from app.schemas.openai_compat import (
 )
 from app.services.llm_router import _LOCAL_MODEL_NAME
 from app.services.external_llm import ExternalLLMService
-from app.services.credential_service import CredentialService, SUPPORTED_PROVIDERS
+from app.services.credential_service import (
+    ENCRYPTION_KEY_MISMATCH_DETAIL,
+    SUPPORTED_PROVIDERS,
+    CredentialEncryptionKeyMissing,
+    get_workspace_provider_key,
+)
 from app.services.llm_providers import LIVE_PROVIDERS
 from app.services.memory_chromaDB import CacheLookupResult, derive_doc_id, get_memory_service
 from app.services.image_fingerprint import (
@@ -1113,9 +1118,18 @@ async def run_chat_pipeline(
                     if workspace_id is not None:
                         try:
                             with get_session() as session:
-                                decrypted_key = CredentialService().get_decrypted_key(session, workspace_id, provider)
-                        except ValueError as exc:
+                                decrypted_key = get_workspace_provider_key(
+                                    session, workspace_id, provider
+                                )
+                        # A missing server key and an undecryptable credential are
+                        # both operator problems, so both are 500s - but they say
+                        # which one, instead of surfacing an exception string. A
+                        # workspace with no credential falls through to the 402
+                        # below, which is what it always should have been.
+                        except CredentialEncryptionKeyMissing as exc:
                             raise PipelineError(500, str(exc)) from exc
+                        except ValueError as exc:
+                            raise PipelineError(500, ENCRYPTION_KEY_MISMATCH_DETAIL) from exc
                     if decrypted_key is None:
                         raise PipelineError(
                             402,

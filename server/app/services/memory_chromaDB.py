@@ -528,3 +528,16 @@ def get_memory_service(namespace: str = "dejaq_default") -> "MemoryService":
     if namespace not in _pool:
         _pool[namespace] = MemoryService(collection_name=namespace)
     return _pool[namespace]
+
+
+def list_namespaces() -> list[str]:
+    """Every namespace that EXISTS, not just the ones this process has opened.
+
+    `_pool` is per-process and filled lazily, so anything that iterates it sees
+    only the namespaces this worker happened to serve since it last started -
+    after a restart, none. ChromaDB is the authority on what exists, so ask it.
+    """
+    client = chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
+    # chromadb has returned bare names in some versions and Collection objects in
+    # others; both shapes answer the same question.
+    return [c if isinstance(c, str) else c.name for c in client.list_collections()]

@@ -17,6 +17,16 @@ SUPPORTED_PROVIDERS = {
 }
 
 
+class CredentialEncryptionKeyMissing(RuntimeError):
+    """The server has no usable DEJAQ_CREDENTIAL_ENCRYPTION_KEY.
+
+    Deliberately not a ValueError, and deliberately not the same condition as
+    "this workspace has no credential for the provider". The second is an
+    ordinary 402 the operator fixes in the dashboard; this one is a server
+    misconfiguration no API caller can do anything about.
+    """
+
+
 class CredentialService:
     def __init__(self) -> None:
         raw_key = config.CREDENTIAL_ENCRYPTION_KEY.strip()
@@ -82,3 +92,40 @@ class CredentialService:
             "created_at": row.created_at,
             "updated_at": row.updated_at,
         }
+
+
+ENCRYPTION_KEY_MISSING_DETAIL = (
+    "The server has no usable DEJAQ_CREDENTIAL_ENCRYPTION_KEY, so stored provider "
+    "credentials cannot be decrypted. An operator must set it in server/.env "
+    "(see .env.example) and restart the server."
+)
+
+ENCRYPTION_KEY_MISMATCH_DETAIL = (
+    "A stored provider credential could not be decrypted with the server's "
+    "DEJAQ_CREDENTIAL_ENCRYPTION_KEY. An operator must restore the original key or "
+    "re-enter the credential."
+)
+
+
+def get_workspace_provider_key(session: Session, workspace_id: int, provider: str) -> str | None:
+    """Decrypt a workspace's key for `provider`, or None when it has none.
+
+    The row is read BEFORE the Fernet is built, and that order is the point.
+    Constructing CredentialService first meant a server with no encryption key
+    raised on the way to a lookup that would have found nothing anyway - so a
+    workspace with no credential (an ordinary 402) reported itself as an internal
+    error. Since a key cannot be stored without the encryption key either, a fresh
+    checkout has no rows, which made every external-routed request - every image
+    and every file, which always route external - a 500 out of the box.
+
+    A row that exists but cannot be decrypted is a genuine server-side problem and
+    still raises; the caller reports it as one.
+    """
+    row = credential_repo.get_credential(session, workspace_id, provider.lower())
+    if row is None:
+        return None
+    try:
+        service = CredentialService()
+    except ValueError as exc:
+        raise CredentialEncryptionKeyMissing(ENCRYPTION_KEY_MISSING_DETAIL) from exc
+    return service.decrypt(row.encrypted_key)
