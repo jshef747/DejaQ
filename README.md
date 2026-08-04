@@ -131,8 +131,9 @@ difficulty classifier and route straight to the workspace's external provider.
 
 - **Images** (`input_image`) — an image that OCRs to confident text is treated as a
   *document* and matched by its words; one with little readable text is a *photo* and
-  matched by its pixels (CLIP + dHash); one with text read *below* the confidence floor is
-  refused outright — never served, never stored. Documents need the `tesseract` binary
+  matched by its pixels (CLIP + dHash); one with at least `DEJAQ_CACHE_IMAGE_AMBIGUOUS_MIN_WORDS`
+  (4) tokens read *below* the confidence floor is refused outright — never served, never
+  stored, while fewer tokens than that leave it a photo. Documents need the `tesseract` binary
   (`start.sh` warns when it is missing; without it, documents fall back to the photo path).
   Raw image bytes are never stored, only fingerprints.
 - **Files** (`input_file`) — PDF (via `pypdf`) and Markdown. The gate is an exact `sha256`

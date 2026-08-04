@@ -1,6 +1,6 @@
 # OpenAI-Compatible API
 
-DejaQ exposes `POST /v1/chat/completions` so OpenAI SDK clients can point at the gateway and receive semantic caching, local routing, and org-scoped external provider fallback.
+DejaQ exposes `POST /v1/chat/completions` so OpenAI SDK clients can point at the gateway and receive semantic caching, local routing, and workspace-scoped external provider fallback.
 
 ## Base URL
 
@@ -10,13 +10,13 @@ http://127.0.0.1:8000/v1
 
 ## Authentication
 
-Gateway calls require a DejaQ organization API key:
+Gateway calls require a DejaQ workspace API key:
 
 ```text
-Authorization: Bearer <dejaq-org-api-key>
+Authorization: Bearer <dejaq-workspace-api-key>
 ```
 
-Use `dejaq-admin key generate --org <slug>` or the dashboard key screen to create keys. `/admin/v1/*` uses Supabase JWTs instead; those tokens are not accepted by the gateway.
+Use `dejaq-admin key generate --workspace <slug>` or the dashboard key screen to create keys. `/admin/v1/*` authenticates separately, following `DEJAQ_AUTH_MODE`: it defaults to `local` (an unauthenticated dev-admin context, protected by loopback binding) whenever `SUPABASE_URL` is blank, and validates a Supabase JWT otherwise. Neither an admin token nor a Supabase JWT is accepted by the `/v1/*` gateway, which always uses workspace API keys.
 
 Optional department isolation:
 
@@ -112,8 +112,10 @@ entry was anchored to the same attachment:
 - **Image gate.** Confident OCR text → *document*, matched on OCR token overlap
   (`DEJAQ_CACHE_IMAGE_TEXT_MIN_JACCARD`, 0.85) with a shared-token floor
   (`DEJAQ_CACHE_IMAGE_TEXT_MIN_SHARED_TOKENS`, 4). Little or no readable text → *photo*,
-  matched on CLIP distance **and** dHash hamming. Text read *below* the confidence floor is
-  neither: never served, never stored. Kinds never mix, and a text-only request matches
+  matched on CLIP distance **and** dHash hamming. At least
+  `DEJAQ_CACHE_IMAGE_AMBIGUOUS_MIN_WORDS` (4) tokens read *below* the confidence floor is
+  neither: never served, never stored; below that token count the image is treated as a
+  photo and does take the pixel path. Kinds never mix, and a text-only request matches
   neither. Documents require the `tesseract` binary; without it they degrade to the photo path.
 - **File gate.** Exact `sha256` of the whitespace-normalised extracted text — no thresholds,
   no fuzzy matching, false merges impossible by construction. Text under
@@ -137,16 +139,16 @@ request
      -> hit: context adjuster + return
      -> miss: difficulty classifier
         -> easy: local model
-        -> hard: encrypted org provider credential
+        -> hard: encrypted workspace provider credential
   -> background generalize + store when cacheable
 ```
 
 - Cache hit: `x-dejaq-model-used: cache`.
 - Easy miss: served by the configured local model backend.
-- Hard miss: served by the provider inferred from the org's configured model, using encrypted org credentials.
+- Hard miss: served by the provider inferred from the workspace's configured model, using encrypted workspace credentials.
 - Missing hard-query credentials return `402 Payment Required`.
 
-There is no runtime `GEMINI_API_KEY` fallback. Store provider credentials through the dashboard or `/admin/v1/orgs/{org}/credentials/{provider}`.
+There is no runtime `GEMINI_API_KEY` fallback. Store provider credentials through the dashboard or `PUT /admin/v1/workspaces/{workspace_slug}/credentials/{provider}`.
 
 ## SDK Example
 
@@ -155,7 +157,7 @@ from openai import OpenAI
 
 client = OpenAI(
     base_url="http://127.0.0.1:8000/v1",
-    api_key="<dejaq-org-api-key>",
+    api_key="<dejaq-workspace-api-key>",
 )
 
 response = client.chat.completions.create(
@@ -172,7 +174,7 @@ If the gateway returns `x-dejaq-response-id`, submit feedback to:
 
 ```http
 POST /v1/feedback
-Authorization: Bearer <dejaq-org-api-key>
+Authorization: Bearer <dejaq-workspace-api-key>
 Content-Type: application/json
 ```
 

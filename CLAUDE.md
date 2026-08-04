@@ -176,7 +176,7 @@ Generation always runs through Ollama (`DEJAQ_OLLAMA_URL`); there is no per-role
 | `DEJAQ_CACHE_IMAGE_AMBIGUOUS_MIN_WORDS` | `4` | Tokens at which a text-bearing image read BELOW the confidence floor becomes un-cacheable instead of falling to the photo path |
 | `DEJAQ_CACHE_IMAGE_TEXT_MIN_SHARED_TOKENS` | `4` | Shared tokens required before an overlap ratio counts as evidence at all |
 | `DEJAQ_CACHE_IMAGE_MIN_TILE_VARIETY` | `10` | Distinct dHashes over a 4×4 grid required to fingerprint by pixels; below it the image is too uniform to identify |
-| `DEJAQ_CACHE_FILE_ENABLED` | `true` | Kill switch for PDF/Markdown caching |
+| `DEJAQ_CACHE_FILE_ENABLED` | `true` | Kill switch for PDF/Markdown **attachments**, not just their caching: `false` means an attached file is never extracted and never sent to the provider, so the request is answered as if nothing were attached. Images have no equivalent switch |
 | `DEJAQ_CACHE_FILE_MIN_CHARS` | `200` | Below this many extracted characters a file has no identity, so it is neither served nor stored (scanned PDFs land here). Not a swept threshold — the populations it separates are nowhere near the line |
 | `DEJAQ_MAX_ATTACHMENT_BYTES` | `10485760` | Server-side attachment size cap, applied to files **and** images |
 | `DEJAQ_TESSERACT_BIN` | `tesseract` | OCR binary path (`brew install tesseract` / `apt install tesseract-ocr tesseract-ocr-heb`) |
