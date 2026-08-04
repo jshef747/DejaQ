@@ -1283,12 +1283,12 @@ async def run_chat_pipeline(
                             workspace_slug,
                             cache_namespace,
                             model_profile,
-                            _img_dhash,
-                            _img_clip,
-                            _img_kind,
-                            _img_text,
-                            _file_sha,
-                            _file_kind,
+                            image_dhash=_img_dhash,
+                            image_clip=_img_clip,
+                            image_kind=_img_kind,
+                            image_text=_img_text,
+                            file_sha=_file_sha,
+                            file_kind=_file_kind,
                         )
                         store_status = "background-fallback"
                 else:
@@ -1300,12 +1300,12 @@ async def run_chat_pipeline(
                         workspace_slug,
                         cache_namespace,
                         model_profile,
-                        _img_dhash,
-                        _img_clip,
-                        _img_kind,
-                        _img_text,
-                        _file_sha,
-                        _file_kind,
+                        image_dhash=_img_dhash,
+                        image_clip=_img_clip,
+                        image_kind=_img_kind,
+                        image_text=_img_text,
+                        file_sha=_file_sha,
+                        file_kind=_file_kind,
                     )
                     store_status = "background"
 
