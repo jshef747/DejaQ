@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { Eye, EyeOff } from "lucide-react";
 import { checkServerHealth, fetchDepartments, isApiError, type Department } from "./chat-api";
 import type { ChatSettings, ModelProfile, RoutingMode } from "./chat-store";
 
@@ -16,6 +17,8 @@ type DeptLoadStatus = "idle" | "loading" | "loaded" | "error";
 
 export default function SettingsModal({ open, initialSettings, onSave, onClose }: Props) {
   const [serverBaseUrl, setServerBaseUrl] = useState(initialSettings.serverBaseUrl);
+  const [apiKey, setApiKey] = useState(initialSettings.apiKey);
+  const [showApiKey, setShowApiKey] = useState(false);
   const [deptSlug, setDeptSlug] = useState(initialSettings.deptSlug);
   const [modelProfile, setModelProfile] = useState<ModelProfile>(initialSettings.modelProfile);
   const [routingMode, setRoutingMode] = useState<RoutingMode>(initialSettings.routingMode);
@@ -28,6 +31,8 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
   useEffect(() => {
     if (!open) return;
     setServerBaseUrl(initialSettings.serverBaseUrl);
+    setApiKey(initialSettings.apiKey);
+    setShowApiKey(false);
     setDeptSlug(initialSettings.deptSlug);
     setModelProfile(initialSettings.modelProfile);
     setRoutingMode(initialSettings.routingMode);
@@ -38,20 +43,22 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
     setTimeout(() => firstInputRef.current?.focus(), 50);
 
     let cancelled = false;
-    fetchDepartments(initialSettings.serverBaseUrl).then((result) => {
-      if (cancelled) return;
-      if (isApiError(result)) {
-        setDepartments([]);
-        setDeptStatus("error");
-        setHealth("error");
-        setHealthText(result.message);
-        return;
-      }
+    fetchDepartments({ server: initialSettings.serverBaseUrl, apiKey: initialSettings.apiKey }).then(
+      (result) => {
+        if (cancelled) return;
+        if (isApiError(result)) {
+          setDepartments([]);
+          setDeptStatus("error");
+          setHealth("error");
+          setHealthText(result.status === 401 ? "API key rejected. Check the key and try again." : result.message);
+          return;
+        }
 
-      setDepartments(result);
-      setDeptStatus("loaded");
-      setDeptSlug((prev) => (result.some((d) => d.slug === prev) ? prev : result[0]?.slug ?? ""));
-    });
+        setDepartments(result);
+        setDeptStatus("loaded");
+        setDeptSlug((prev) => (result.some((d) => d.slug === prev) ? prev : result[0]?.slug ?? ""));
+      },
+    );
 
     return () => {
       cancelled = true;
@@ -59,6 +66,7 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
   }, [
     open,
     initialSettings.serverBaseUrl,
+    initialSettings.apiKey,
     initialSettings.deptSlug,
     initialSettings.modelProfile,
     initialSettings.routingMode,
@@ -77,30 +85,37 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
     setHealth("checking");
     setHealthText("");
     const target = serverBaseUrl.trim();
-    const result = await checkServerHealth(target);
-    if (result.reachable) {
-      setHealth("ok");
-      setHealthText(`Connected. Celery: ${result.celery}`);
-      // Pull departments from the entered server so the dropdown matches it.
-      setDeptStatus("loading");
-      const depts = await fetchDepartments(target);
-      if (isApiError(depts)) {
-        setDepartments([]);
-        setDeptStatus("error");
-      } else {
-        setDepartments(depts);
-        setDeptStatus("loaded");
-        setDeptSlug((prev) => (depts.some((d) => d.slug === prev) ? prev : depts[0]?.slug ?? ""));
-      }
-    } else {
+    const key = apiKey.trim();
+    const result = await checkServerHealth({ server: target, apiKey: key });
+    if (!result.reachable) {
       setHealth("error");
       setHealthText(result.message ?? "Cannot reach the DejaQ server.");
+      return;
     }
+
+    // Pull departments from the entered server + key so the dropdown, and the
+    // key's validity, both match what's currently typed.
+    setDeptStatus("loading");
+    const depts = await fetchDepartments({ server: target, apiKey: key });
+    if (isApiError(depts)) {
+      setDepartments([]);
+      setDeptStatus("error");
+      setHealth("error");
+      setHealthText(depts.status === 401 ? "API key rejected. Check the key and try again." : depts.message);
+      return;
+    }
+
+    setDepartments(depts);
+    setDeptStatus("loaded");
+    setDeptSlug((prev) => (depts.some((d) => d.slug === prev) ? prev : depts[0]?.slug ?? ""));
+    setHealth("ok");
+    setHealthText(`Connected. Celery: ${result.celery}`);
   }
 
   function handleSave() {
     onSave({
       serverBaseUrl: serverBaseUrl.trim(),
+      apiKey: apiKey.trim(),
       deptSlug: deptSlug.trim(),
       modelProfile,
       routingMode,
@@ -154,7 +169,8 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
           <div>
             <h2 style={{ fontSize: "14px", fontWeight: 600, margin: 0 }}>Chat Settings</h2>
             <p style={{ color: "var(--fg-dim)", fontSize: "12px", margin: "2px 0 0" }}>
-              Credentials are configured server-side in chat/.env.local.
+              Paste a workspace API key below, or leave it blank to use DEJAQ_API_KEY from
+              chat/.env.local.
             </p>
           </div>
           <button
@@ -189,6 +205,43 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
               autoComplete="off"
               style={inputStyle}
             />
+          </Field>
+
+          <Field
+            label="API key"
+            hint="Paste a workspace API key to use it instead of DEJAQ_API_KEY from chat/.env.local. Stored in this browser only."
+          >
+            <div style={{ position: "relative" }}>
+              <input
+                type={showApiKey ? "text" : "password"}
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="dq_..."
+                spellCheck={false}
+                autoComplete="off"
+                style={{ ...inputStyle, paddingRight: "38px" }}
+              />
+              <button
+                type="button"
+                onClick={() => setShowApiKey((v) => !v)}
+                aria-label={showApiKey ? "Hide API key" : "Show API key"}
+                style={{
+                  alignItems: "center",
+                  background: "transparent",
+                  border: "none",
+                  color: "var(--fg-dimmer)",
+                  cursor: "pointer",
+                  display: "flex",
+                  padding: "4px",
+                  position: "absolute",
+                  right: "6px",
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                }}
+              >
+                {showApiKey ? <EyeOff size={15} /> : <Eye size={15} />}
+              </button>
+            </div>
           </Field>
 
           <Field

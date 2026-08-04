@@ -11,7 +11,10 @@ import {
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
-  const config = getDejaQConfig(request.headers.get("x-dejaq-server"));
+  const config = getDejaQConfig(
+    request.headers.get("x-dejaq-server"),
+    request.headers.get("x-dejaq-key"),
+  );
   if (isNextResponse(config)) return config;
 
   let response: Response;

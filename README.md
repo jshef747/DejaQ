@@ -67,7 +67,8 @@ and generate an API key, and use it as `Authorization: Bearer <key>` against the
 
 Stacks: `all` (backend + dashboard + chat), `server` (backend + dashboard, no chat),
 `client` (chat app only — connects to a DejaQ server elsewhere on the network; set the
-server address in the chat Settings modal, plus a valid `DEJAQ_API_KEY` in `chat/.env.local`).
+server address and API key in the chat Settings modal, or via `DEJAQ_API_BASE_URL` /
+`DEJAQ_API_KEY` in `chat/.env.local` — see [chat/README.md](chat/README.md)).
 
 Backend + dashboard (no chat), or manual launch:
 
@@ -104,7 +105,7 @@ cp .env.local.example .env.local
 npm run dev
 ```
 
-Fill `DEJAQ_API_KEY` in `chat/.env.local`. The chat app runs at `http://localhost:4000`, calls its own `/api/*` routes from the browser, and those server routes forward to the backend through `DEJAQ_API_BASE_URL`.
+Fill `DEJAQ_API_KEY` in `chat/.env.local`, or leave it blank and paste a key into the chat app's Settings modal instead (a Settings key wins). The chat app runs at `http://localhost:4000`, calls its own `/api/*` routes from the browser, and those server routes forward to the backend through `DEJAQ_API_BASE_URL`. See [chat/README.md](chat/README.md) for details.
 
 ## Main Interfaces
 

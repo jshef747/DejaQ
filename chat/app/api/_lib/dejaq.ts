@@ -32,13 +32,26 @@ function resolveBaseUrl(override?: string | null): string {
   return fallback.trim().replace(/\/$/, "");
 }
 
-export function getDejaQConfig(serverOverride?: string | null): DejaQConfig | NextResponse {
-  const apiKey = process.env.DEJAQ_API_KEY?.trim();
+// Resolve the workspace API key. A client-supplied override (X-DejaQ-Key, set
+// from the chat Settings modal so a workspace created during dev testing can
+// be used without a restart) wins when non-empty; otherwise fall back to
+// DEJAQ_API_KEY in chat/.env.local.
+function resolveApiKey(override?: string | null): string {
+  const candidate = (override ?? "").trim();
+  return candidate || (process.env.DEJAQ_API_KEY?.trim() ?? "");
+}
+
+export function getDejaQConfig(
+  serverOverride?: string | null,
+  keyOverride?: string | null,
+): DejaQConfig | NextResponse {
+  const apiKey = resolveApiKey(keyOverride);
   if (!apiKey) {
     return NextResponse.json(
       {
         code: "missing_dejaq_api_key",
-        message: "Chat app is missing DEJAQ_API_KEY in chat/.env.local.",
+        message:
+          "No DejaQ API key configured. Paste one into Settings, or set DEJAQ_API_KEY in chat/.env.local.",
       },
       { status: 424 },
     );
