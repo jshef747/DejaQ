@@ -1006,7 +1006,18 @@ async def run_chat_pipeline(
                 asyncio.create_task(_increment_hit_count_bg(cache_namespace, _entry_id))
                 # Alias learning: the validator vouched for this band/rescue hit,
                 # so remember the typo'd phrasing — next time it's a trusted hit.
-                if _requires_validation and CACHE_ALIAS_ENABLED:
+                #
+                # Never for an attachment-anchored hit. store_alias copies the
+                # parent's ANSWER, `original_query` and `user_id` — and none of
+                # `file_sha`, `file_kind` or the `image_*` fields. An alias of a
+                # file- or image-anchored entry is therefore a plain TEXT entry
+                # holding an answer about a document nobody attached, reachable
+                # by question text alone with nothing left for either gate to
+                # gate on. The next asker gets someone else's contract, and no
+                # reason to suspect it. Attachment-aware alias learning (copying
+                # the identity across) is the feature version and is tracked
+                # separately; this branch just must not launder the identity away.
+                if _requires_validation and CACHE_ALIAS_ENABLED and not _attachment_anchored:
                     asyncio.create_task(_store_alias_bg(cache_namespace, clean_query, _entry_id))
                 logger.info(
                     "done cache=hit route=cache model=%s response_id=%s latency=%dms band=%s rescued=%s steps=%s%s%s%s",
@@ -1258,6 +1269,12 @@ async def run_chat_pipeline(
                         # Broker/result-backend down (e.g. Redis outage): degrade to in-process
                         # storage instead of failing the user-facing chat request.
                         logger.warning("Celery dispatch failed (%s); storing in-process", type(exc).__name__)
+                        # Every attachment argument, or the entry loses its
+                        # identity: without file_sha/file_kind the row is an
+                        # ungated TEXT entry, the answer goes through the
+                        # generalizer that cannot see the document, and the id
+                        # returned above (derived WITH the file hash) addresses
+                        # a row that was never written.
                         background_tasks.add_task(
                             _bg_generalize_and_store,
                             clean_query,
@@ -1266,10 +1283,12 @@ async def run_chat_pipeline(
                             workspace_slug,
                             cache_namespace,
                             model_profile,
-                            _img_dhash,
-                            _img_clip,
-                            _img_kind,
-                            _img_text,
+                            image_dhash=_img_dhash,
+                            image_clip=_img_clip,
+                            image_kind=_img_kind,
+                            image_text=_img_text,
+                            file_sha=_file_sha,
+                            file_kind=_file_kind,
                         )
                         store_status = "background-fallback"
                 else:
@@ -1281,12 +1300,12 @@ async def run_chat_pipeline(
                         workspace_slug,
                         cache_namespace,
                         model_profile,
-                        _img_dhash,
-                        _img_clip,
-                        _img_kind,
-                        _img_text,
-                        _file_sha,
-                        _file_kind,
+                        image_dhash=_img_dhash,
+                        image_clip=_img_clip,
+                        image_kind=_img_kind,
+                        image_text=_img_text,
+                        file_sha=_file_sha,
+                        file_kind=_file_kind,
                     )
                     store_status = "background"
 

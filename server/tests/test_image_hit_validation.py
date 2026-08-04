@@ -222,3 +222,47 @@ def test_short_image_query_is_still_cached(monkeypatch):
     # The text path is untouched.
     assert cache_filter.should_cache("what is the capital of france", "capital of france")[0] is True
     assert cache_filter.should_cache("thanks", "thanks")[0] is False
+
+
+def test_no_alias_is_learned_for_an_image_anchored_hit(monkeypatch):
+    """The image half of the alias leak — same mechanism as the file half.
+
+    `store_alias` copies the answer and drops every `image_*` field, so an alias
+    of an image-anchored entry is a plain text entry that the kind check can no
+    longer refuse. Reproduced live: the photo-derived answer was served at
+    `x-dejaq-tier: cache` to a request carrying no image at all.
+    """
+
+    class BandImageMemory(ImageHitMemory):
+        def lookup_cache(self, clean_query: str):
+            return CacheLookupResult(
+                hit=True,
+                generalized_answer=CACHED_ANSWER,
+                entry_id="doc-img",
+                distance=0.1802,  # in the band, so alias learning is eligible
+                matched_query="how to solve this?",
+                image_kind="document",
+                image_text=" ".join(sorted(TOKENS)),
+                requires_validation=True,
+            )
+
+    alias_calls: list[tuple] = []
+
+    def _record_alias(namespace, alias_query, source_entry_id):
+        alias_calls.append((namespace, alias_query, source_entry_id))
+
+        async def _already_done():
+            return None
+
+        return _already_done()
+
+    _patch_pipeline(
+        monkeypatch, validator=RecordingValidator(accept=True), adjuster=TrackingAdjuster(),
+        memory=BandImageMemory(), ocr=_document_ocr(),
+    )
+    monkeypatch.setattr(openai_compat, "_store_alias_bg", _record_alias)
+
+    response = _post_image("hwo to slove this?")
+
+    assert response.headers["x-dejaq-model-used"] == "cache"
+    assert alias_calls == []
