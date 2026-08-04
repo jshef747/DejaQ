@@ -129,12 +129,12 @@ CACHE_IMAGE_MAX_HAMMING = int(_get_float("DEJAQ_CACHE_IMAGE_MAX_HAMMING", 15))
 # version was 0.833. Swept 20/25/30/34/35/40/45 over the 60 real photos: the
 # confidence floor does nearly all the filtering, so 25 misroutes exactly ONE
 # extra photo (src032, the 38-word one above) and produces **0 false merges at
-# every floor** (max cross-photo token_jaccard 0.038 against a 0.35 threshold).
+# every floor** (max cross-photo token_jaccard 0.038 against a 0.85 threshold).
 # The cost is that src032's variants split across kinds, losing some of its own
 # recall — a miss, never a wrong answer.
 CACHE_IMAGE_OCR_ENABLED = _get_bool("DEJAQ_CACHE_IMAGE_OCR_ENABLED", True)
 # Swept 50-80 over both corpora: **0 false merges at every level**, because the
-# 0.80 token threshold does the safety work — this floor only routes. It was 80,
+# 0.85 token threshold does the safety work — this floor only routes. It was 80,
 # which sat inside the range real screenshots actually produce (measured live at
 # 86.8, 84.8, 80.5 and 77.5 on one user's images) and refused them at random.
 # Lowering it costs some photo recall: on 480 real photo files, 42 are routed to
@@ -149,7 +149,7 @@ CACHE_IMAGE_OCR_MIN_CONFIDENCE = _get_float("DEJAQ_CACHE_IMAGE_OCR_MIN_CONFIDENC
 # little text, so a high floor made it permanently un-cacheable. Swept 6/8/10/15/25
 # over both corpora: 0 false merges at every level and under a point of recall
 # between them. On 60 real photos a floor of 6 reclassifies just 2, and the worst
-# overlap between any two text-bearing photos is 0.038 against a 0.80 threshold.
+# overlap between any two text-bearing photos is 0.038 against a 0.85 threshold.
 CACHE_IMAGE_OCR_MIN_WORDS = int(_get_float("DEJAQ_CACHE_IMAGE_OCR_MIN_WORDS", 6))
 
 # A ratio over a handful of tokens is noise, not similarity: two images with three
@@ -176,7 +176,8 @@ CACHE_IMAGE_AMBIGUOUS_MIN_WORDS = int(_get_float("DEJAQ_CACHE_IMAGE_AMBIGUOUS_MI
 # at 10 removed all 1,712 of those merges and 0 of the 60 real photos.
 CACHE_IMAGE_MIN_TILE_VARIETY = int(_get_float("DEJAQ_CACHE_IMAGE_MIN_TILE_VARIETY", 10))
 
-# Matching: one threshold on OCR token overlap.
+# Matching: OCR token overlap must clear this threshold AND the shared-token
+# floor above (CACHE_IMAGE_TEXT_MIN_SHARED_TOKENS) — see image_text.py.
 #
 # 0.85, not 0.80. 0.80 was believed to be the zero-false-merge point because no
 # corpus then measured contained two receipts from one shop: two SROIE receipts
