@@ -2,7 +2,7 @@ def provider_for_model(model_name: str) -> str:
     model = model_name.strip().lower()
     if model.startswith("gemini-"):
         return "google"
-    if model.startswith(("gpt-", "o1-", "o3-", "chatgpt-")):
+    if model.startswith(("gpt-", "o1-", "o3-", "o4-", "chatgpt-")):
         return "openai"
     if model.startswith("claude-"):
         return "anthropic"
