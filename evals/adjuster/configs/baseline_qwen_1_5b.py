@@ -1,4 +1,7 @@
-"""Baseline: Qwen 2.5-1.5B — mirrors production context_adjuster.py adjust() exactly."""
+"""Baseline: Qwen 2.5-1.5B — historical snapshot of production context_adjuster.py
+adjust(), predating the fix that removed the leaking photosynthesis few-shot and
+switched to temperature=0 (see server/app/services/context_adjuster.py). This
+config was not updated to match and no longer mirrors production exactly."""
 
 SYSTEM_PROMPT = (
     "Rewrite the ANSWER to match the tone of the QUESTION. "

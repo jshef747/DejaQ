@@ -261,3 +261,13 @@ VALIDATOR_MODEL_NAME = _get_text("DEJAQ_VALIDATOR_MODEL_NAME", "gemma_e2b")
 # query; skip the validator and serve them directly (the embedding already
 # guarantees the cached answer covers the question).
 VALIDATOR_SKIP_DISTANCE = _get_float("DEJAQ_VALIDATOR_SKIP_DISTANCE", 0.05)
+
+# Post-hoc safety net for the context adjuster: the minimum fraction of the
+# cached answer's content words that must survive into the tone-adjusted
+# answer. Below this, the adjustment is treated as a drift (e.g. the small
+# adjuster model regurgitating an unrelated topic) and the known-good cached
+# answer is served verbatim instead. Kept low, since a faithful tone rewrite
+# can legitimately drop most of the original wording (an ELI5 rewrite keeps
+# only the subject noun), so this only catches near-total topic loss, not
+# stylistic rephrasing. See app/services/context_adjuster.py.
+ADJUSTER_MIN_TOPIC_OVERLAP = _get_float("DEJAQ_ADJUSTER_MIN_TOPIC_OVERLAP", 0.1)

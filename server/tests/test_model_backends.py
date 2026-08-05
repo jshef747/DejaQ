@@ -77,7 +77,11 @@ def test_services_send_logical_model_names_to_backend():
     assert asyncio.run(normalizer.normalize("What is gravity?")) == "what is gravity?"
     assert asyncio.run(llm_router.generate_response("Hi", "easy")) == "backend output"
     assert asyncio.run(adjuster.generalize("Hello")) == "backend output"
-    assert asyncio.run(adjuster.adjust("Hi", "Hello")) == "backend output"
+    # "output" shares a content word with the fake reply "backend output" so
+    # the adjuster's topic-consistency safety net (tested separately in
+    # test_context_adjuster.py) doesn't swap in the cached answer here — this
+    # test only cares about model-name routing.
+    assert asyncio.run(adjuster.adjust("Hi", "output")) == "backend output"
 
     assert backend.requests[0].model_name == "qwen_1_5b"
     assert backend.requests[1].model_name == "gemma_local"
