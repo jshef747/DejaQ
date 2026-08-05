@@ -350,18 +350,21 @@ def _evaluate_file_gate(
     return True, "SAME FILE"
 
 
-def _query_with_markdown(user_query: str, doc: FileText | None) -> str:
-    """Inline an attached Markdown file into the prompt, fenced and labelled.
+def _query_with_inlined_file(user_query: str, doc: FileText | None) -> str:
+    """Inline an attached Markdown/text/DOCX file into the prompt, fenced and labelled.
 
     PDFs do not come through here — they go to the provider as a native document
-    part. Markdown has no such part anywhere, and it is already text, so inlining
-    it is both the simplest and the only option.
+    part. Every other kind (Markdown, plain text, source/config files, DOCX) has
+    no such part anywhere, and each one is already just text once extracted, so
+    inlining it via this one mechanism is both the simplest and the only option.
 
     The fence and the labelling are not decoration: the file is untrusted input
     from whoever uploaded it, and a document that contains "ignore your
-    instructions and ..." must read as content, not as a command.
+    instructions and ..." must read as content, not as a command. This matters
+    even more for code, which routinely contains strings and comments that look
+    like directives.
     """
-    if doc is None or doc.kind != "markdown" or not doc.text.strip():
+    if doc is None or doc.kind == "pdf" or not doc.text.strip():
         return user_query
     return (
         f"{user_query}\n\n"
@@ -1138,7 +1141,7 @@ async def run_chat_pipeline(
                         )
 
                     ext_request = ExternalLLMRequest(
-                        query=_query_with_markdown(user_query, file_doc),
+                        query=_query_with_inlined_file(user_query, file_doc),
                         history=history,
                         model=llm_config.external_model,
                         max_tokens=_max_tokens,

@@ -95,7 +95,7 @@ attachment: an `input_image` **or** an `input_file`, never both.
 | Part | Field | Accepts |
 | --- | --- | --- |
 | `input_image` | `image_url` | `data:<mime>;base64,<payload>` |
-| `input_file` | `file_data` (+ optional `filename`) | `data:<mime>;base64,<payload>` — PDF (`application/pdf`, `.pdf`) or Markdown (`text/markdown`, `text/plain`, `.md`/`.markdown`/`.txt`) |
+| `input_file` | `file_data` (+ optional `filename`) | `data:<mime>;base64,<payload>` — PDF (`application/pdf`, `.pdf`) or DOCX (`.docx`) by MIME/extension, or any other file whose bytes decode as UTF-8 (Markdown, plain text, source/config files — no maintained extension list) |
 
 Rejected with **HTTP 400**:
 
@@ -118,9 +118,10 @@ entry was anchored to the same attachment:
   photo and does take the pixel path. Kinds never mix, and a text-only request matches
   neither. Documents require the `tesseract` binary; without it they degrade to the photo path.
 - **File gate.** Exact `sha256` of the whitespace-normalised extracted text — no thresholds,
-  no fuzzy matching, false merges impossible by construction. Text under
-  `DEJAQ_CACHE_FILE_MIN_CHARS` (200) is never served and never stored (scanned, corrupt, or
-  encrypted PDFs land here); the answer still returns, uncached.
+  no fuzzy matching, false merges impossible by construction. For PDF/DOCX, where extraction
+  can fail silently, text under `DEJAQ_CACHE_FILE_MIN_CHARS` (200) is never served and never
+  stored (scanned, corrupt, or encrypted files land here); the answer still returns, uncached.
+  Text/Markdown/code files have no such floor.
 
 On a miss, attachment requests skip the difficulty classifier and route unconditionally to the
 workspace's external provider (the local model is text-only). Attachment answers are stored

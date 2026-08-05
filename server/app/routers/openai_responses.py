@@ -86,8 +86,9 @@ def _unsupported_file_detail(mime: str, filename: str | None) -> str:
     if filename:
         described += f" ({filename})"
     return (
-        f"Unsupported file type {described}; attach a PDF (.pdf) or a "
-        "Markdown/text file (.md, .markdown, .txt)."
+        f"Unsupported file type {described}; attach a PDF (.pdf), a Word "
+        "document (.docx), or a Markdown/text/code file (any UTF-8 encoded "
+        "file, e.g. .md, .txt, .py, .json)."
     )
 
 
@@ -140,7 +141,7 @@ def _responses_request_to_messages(
                         # logged and then dropped, and the request answered 200
                         # as if nothing had been attached. Reject it like every
                         # other unusable attachment shape instead.
-                        if not file_kind_for(mime, p.filename):
+                        if not file_kind_for(data, mime, p.filename):
                             raise PipelineError(400, _unsupported_file_detail(mime, p.filename))
                         file = (data, mime, p.filename or "")
                 msgs.append(OAIMessage(role=item.role, content=" ".join(text_parts)))

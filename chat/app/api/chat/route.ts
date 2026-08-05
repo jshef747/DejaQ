@@ -32,7 +32,7 @@ interface ChatMsg {
 
 interface Attachment {
   dataUrl: string;
-  kind: "image" | "pdf" | "markdown";
+  kind: "image" | "pdf" | "docx" | "markdown";
   name: string;
   size: number;
   sticky: boolean;
@@ -40,7 +40,9 @@ interface Attachment {
 
 // Convert the flat message list into Responses API `input` items, attaching the
 // file (a data: URL) to the most recent user message. Images go as an
-// input_image part; PDFs and Markdown go as an input_file part.
+// input_image part; every other kind (PDF, DOCX, Markdown/text/code) goes as
+// an input_file part — the server tells them apart by content, this route
+// doesn't need to.
 function buildResponsesInput(messages: ChatMsg[], attachment: Attachment) {
   const items = messages.map((m) => ({
     role: m.role,
@@ -63,7 +65,7 @@ function parseAttachment(value: unknown): Attachment | null {
   if (typeof value !== "object" || value === null) return null;
   const a = value as Record<string, unknown>;
   if (typeof a.dataUrl !== "string" || !a.dataUrl.startsWith("data:")) return null;
-  if (a.kind !== "image" && a.kind !== "pdf" && a.kind !== "markdown") return null;
+  if (a.kind !== "image" && a.kind !== "pdf" && a.kind !== "docx" && a.kind !== "markdown") return null;
   return {
     dataUrl: a.dataUrl,
     kind: a.kind,

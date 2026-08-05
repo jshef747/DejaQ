@@ -21,7 +21,7 @@ export interface ChatSettings {
 // the only transport — the DejaQ API takes data URLs and nothing else.
 export interface Attachment {
   dataUrl: string;
-  kind: "image" | "pdf" | "markdown";
+  kind: "image" | "pdf" | "docx" | "markdown";
   name: string;
   size: number;
   // The attachment stays pinned after a send, so follow-ups carry it too.
