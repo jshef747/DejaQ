@@ -21,12 +21,25 @@ def _dashboard_external_models() -> list[tuple[str, str]]:
     block = block_match.group(1)
 
     pairs: list[tuple[str, str]] = []
-    for provider_match in re.finditer(r"(\w+):\s*\[(.*?)\],\n\s*\n?", block, re.DOTALL):
+    for provider_match in re.finditer(r"(\w+):\s*\[(.*?)\]\s*,", block, re.DOTALL):
         provider, entries = provider_match.group(1), provider_match.group(2)
         for value_match in re.finditer(r'value:\s*"([^"]+)"', entries):
             pairs.append((value_match.group(1), provider))
 
+    total_values = len(re.findall(r'value:\s*"([^"]+)"', block))
     assert pairs, "Could not parse any models out of EXTERNAL_MODELS"
+    assert len(pairs) == total_values, (
+        f"parsed {len(pairs)} (model, provider) pairs but the EXTERNAL_MODELS "
+        f"block contains {total_values} 'value: \"...\"' entries - the "
+        "provider-block regex silently dropped some entries (e.g. the last "
+        "provider block, which has no trailing blank line after it)"
+    )
+    parsed_providers = {provider for _, provider in pairs}
+    for expected_provider in ("google", "openai", "anthropic"):
+        assert expected_provider in parsed_providers, (
+            f"no models parsed for provider '{expected_provider}' - the "
+            "provider-block regex failed to match its block"
+        )
     return pairs
 
 
