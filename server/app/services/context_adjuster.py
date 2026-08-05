@@ -7,7 +7,7 @@ from app.services.model_backends import CompletionRequest, ModelBackend
 
 logger = logging.getLogger("dejaq.services.context_adjuster")
 
-_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
 # Common function words, excluded so overlap is measured on content words only.
 _STOPWORDS = frozenset({
@@ -83,14 +83,21 @@ class ContextAdjusterService:
                 # Example 2: child-friendly → neutral
                 {"role": "user", "content": "ANSWER: Paris is the big fancy city where the Eiffel Tower lives! It's the capital of France and people eat yummy croissants there!"},
                 {"role": "assistant", "content": "Paris is the capital city of France. It is known for landmarks such as the Eiffel Tower."},
-                # Example 3: already neutral (should pass through)
-                {"role": "user", "content": "ANSWER: Photosynthesis is the process by which plants convert light energy into chemical energy, producing glucose and oxygen from carbon dioxide and water."},
-                {"role": "assistant", "content": "Photosynthesis is the process by which plants convert light energy into chemical energy, producing glucose and oxygen from carbon dioxide and water."},
+                # A third example (already-neutral passthrough) used to live
+                # here, on the topic of photosynthesis. Removed for the same
+                # reason as the equivalent example in adjust(): a small
+                # instruct model can regurgitate a few-shot's own subject
+                # matter instead of conditioning on the real ANSWER. The
+                # system prompt plus the two examples above are enough to
+                # demonstrate tone neutralization.
                 # Actual answer
                 {"role": "user", "content": f"ANSWER: {answer}"},
                 ],
                 max_tokens=1024,
-                temperature=0.3,
+                # Deterministic: this is a faithful tone-neutralization
+                # rewrite, not creative generation, so temperature buys
+                # nothing here (see adjust() below for the same reasoning).
+                temperature=0,
             )
         )
 

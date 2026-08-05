@@ -165,7 +165,8 @@ class TestIsTopicallyConsistent:
 
 class TestNoLeakingFewShot:
     """Regression guard: the photosynthesis few-shot that caused the original
-    leak must never come back into the adjuster's prompt construction."""
+    leak must never come back into the adjuster's prompt construction, in
+    either adjust() or its sibling generalize()."""
 
     pytestmark = pytest.mark.no_model
 
@@ -173,6 +174,7 @@ class TestNoLeakingFewShot:
         "provide a detailed analysis of photosynthesis",
         "Photosynthesis is how plants make food from sunlight",
         "biochemical process by which plants, algae, and certain bacteria",
+        "Photosynthesis is the process by which plants convert light energy into chemical energy, producing glucose and oxygen from carbon dioxide and water.",
     ]
 
     def test_leaking_fewshot_absent_from_adjust_prompt(self):
@@ -185,3 +187,22 @@ class TestNoLeakingFewShot:
         all_content = " ".join(m["content"] for m in sent.messages)
         for snippet in self._LEAKING_SNIPPETS:
             assert snippet not in all_content, f"leaking few-shot content resurfaced: {snippet!r}"
+
+    def test_leaking_fewshot_absent_from_generalize_prompt(self):
+        backend = _FakeBackend("some reply")
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        asyncio.run(service.generalize(CANARY_ANSWER))
+
+        sent = backend.requests[0]
+        all_content = " ".join(m["content"] for m in sent.messages)
+        for snippet in self._LEAKING_SNIPPETS:
+            assert snippet not in all_content, f"leaking few-shot content resurfaced: {snippet!r}"
+
+    def test_generalize_sends_temperature_zero(self):
+        backend = _FakeBackend("some reply")
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        asyncio.run(service.generalize(CANARY_ANSWER))
+
+        assert backend.requests[0].temperature == 0
