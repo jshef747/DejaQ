@@ -173,6 +173,79 @@ class TestIsTopicallyConsistent:
         assert not is_topically_consistent(drifted, cached)
 
 
+class TestOverlapThresholdCalibration:
+    """Regression guard for the ADJUSTER_MIN_TOPIC_OVERLAP retune, expressed as
+    the two populations measured in the safety-net threshold sweep: on-topic
+    rewrites that legitimately condense a long cached answer down to a handful
+    of shared nouns must be ACCEPTED, drifted output that survives on one
+    coincidental word or none must still be REJECTED.
+
+    None of these assert on the threshold constant, but they do bracket it. The
+    cached answer below has 58 content words, so the four cases score 0.0000 and
+    0.0172 (rejected) against 0.0345 and 0.0862 (accepted): the class passes
+    only while the threshold sits in (0.0172, 0.0345], and fails for any retune
+    outside that window. The measured decision gap - 0.0185, the highest overlap
+    of any genuine drift catch, to 0.0229, the lowest of any false positive -
+    lies inside it, so a future retune that leaves the gap breaks a test here
+    rather than passing silently."""
+
+    pytestmark = pytest.mark.no_model
+
+    _LONG_CACHED_ANSWER = (
+        "A durable message queue typically guarantees at-least-once delivery, "
+        "which means a consumer must be prepared to see the same message "
+        "arrive more than once after a crash, a network retry, or a "
+        "rebalance. The standard fix is to make message handling idempotent: "
+        "attach a unique identifier to every message at publish time, and "
+        "before processing a message, check a durable store of "
+        "previously-seen identifiers. If the identifier has already been "
+        "recorded, skip processing and simply re-acknowledge the message. If "
+        "it has not been seen, record it and process the message inside the "
+        "same transaction so a crash between the two steps cannot cause a "
+        "duplicate to slip through. This turns delivery that is merely "
+        "at-least-once into processing that behaves as exactly-once from the "
+        "consumer perspective."
+    )
+
+    def test_correct_short_condensation_of_long_answer_is_accepted(self):
+        condensed = (
+            "Give each message a unique identifier and record it once "
+            "handled, so a repeat delivery is recognized and skipped instead "
+            "of processed twice."
+        )
+        assert is_topically_consistent(condensed, self._LONG_CACHED_ANSWER)
+
+    def test_terse_condensation_sharing_two_words_is_accepted(self):
+        """0.0345 - the tightest accepted case, just above the 0.0229 floor of
+        the measured false-positive population. Fails if the threshold is ever
+        raised back past a two-word overlap."""
+        terse = (
+            "Stamp each message with an identifier, save it, and ignore "
+            "anything that shows up twice."
+        )
+        assert is_topically_consistent(terse, self._LONG_CACHED_ANSWER)
+
+    def test_regurgitated_placeholder_sharing_one_word_is_rejected(self):
+        """0.0172 - the loosest rejected case, just under the 0.0185 ceiling of
+        the measured genuine-catch population. This is the real post-#17 drift
+        shape (q154 in the report): the adjuster regurgitates its own inert
+        few-shot instead of rewriting the cached answer, and one content word
+        ('steps') coincidentally survives. Fails if the threshold is ever
+        lowered to where a single incidental word rescues drifted output."""
+        regurgitated_few_shot = (
+            "The mechanism converts an input value into an output value by "
+            "applying a fixed sequence of transformation steps."
+        )
+        assert not is_topically_consistent(regurgitated_few_shot, self._LONG_CACHED_ANSWER)
+
+    def test_rewrite_sharing_no_content_words_is_rejected(self):
+        off_topic = (
+            "A red panda spends most of its day resting in trees and mainly "
+            "eats bamboo shoots, though it is technically a carnivore."
+        )
+        assert not is_topically_consistent(off_topic, self._LONG_CACHED_ANSWER)
+
+
 class TestNoContentBearingFewShot:
     """Regression guard: no few-shot example in either adjust() or its sibling
     generalize() may carry a real-world fact a small model could regurgitate

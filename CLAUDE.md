@@ -160,7 +160,7 @@ Generation always runs through Ollama (`DEJAQ_OLLAMA_URL`); there is no per-role
 | `DEJAQ_LOCAL_LLM_MODEL_NAME` | `gemma_local` | Logical model label for local generation (→ Ollama tag) |
 | `DEJAQ_GENERALIZER_MODEL_NAME` | `phi_generalizer` | Logical model label for background generalizer (→ Ollama tag) |
 | `DEJAQ_CONTEXT_ADJUSTER_MODEL_NAME` | `qwen_1_5b` | Logical model label for context adjuster (→ Ollama tag) |
-| `DEJAQ_ADJUSTER_MIN_TOPIC_OVERLAP` | `0.1` | Post-hoc safety net: minimum fraction of the cached answer's content words that must survive a tone adjustment; below it, the adjuster's output is discarded and the cached answer is served verbatim instead |
+| `DEJAQ_ADJUSTER_MIN_TOPIC_OVERLAP` | `0.02` | Post-hoc safety net: minimum fraction of the cached answer's content words that must survive a tone adjustment; below it, the adjuster's output is discarded and the cached answer is served verbatim instead |
 | `DEJAQ_VALIDATOR_MODEL_NAME` | `gemma_e2b` | Logical model label for cache-answer validator (→ Ollama tag) |
 | `DEJAQ_VALIDATOR_SKIP_DISTANCE` | `0.05` | Cache hits at or below this cosine distance skip the validator |
 | `DEJAQ_CACHE_TRUST_DISTANCE` | `0.15` | Trusted-zone cosine ceiling; hits at or below are served directly |
