@@ -635,6 +635,57 @@ def test_auto_routing_uses_org_threshold_zero_to_route_external(monkeypatch):
     assert external.request.model == "gpt-5.4-mini"
 
 
+def test_external_route_reports_real_provider_usage_not_heuristic(monkeypatch):
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    class CapturingExternalLLM:
+        async def generate_response(self, request, provider=None, api_key=None):
+            from app.schemas.chat import ExternalLLMResponse
+
+            # Real provider counts (as Anthropic returns them) deliberately far
+            # from what len(text.split()) * 1.3 would compute for this short
+            # query/answer pair - if the route falls back to the heuristic,
+            # these assertions fail.
+            return ExternalLLMResponse(
+                text="short answer",
+                model_used=request.model,
+                prompt_tokens=44,
+                completion_tokens=300,
+                latency_ms=10.0,
+            )
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_classifier", HardClassifier())
+    monkeypatch.setattr(openai_compat, "_external_llm", CapturingExternalLLM())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
+    monkeypatch.setattr(openai_compat, "get_workspace_provider_key", stored_credential("sk-ant-live"))
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
+    monkeypatch.setattr(openai_compat, "USE_CELERY", False)
+
+    from cryptography.fernet import Fernet
+
+    monkeypatch.setattr("app.config.CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode())
+
+    client = TestClient(app, headers=_AUTH)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "Explain a hard thing."}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    usage = response.json()["usage"]
+    assert usage["prompt_tokens"] == 44
+    assert usage["completion_tokens"] == 300
+    assert usage["total_tokens"] == 344
+
+
 def test_force_hard_external_uses_org_external_model_provider(monkeypatch):
     async def _noop_log(*args, **kwargs):
         return None

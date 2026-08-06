@@ -1097,6 +1097,7 @@ async def run_chat_pipeline(
         answer: str = ""
         model_used: str = _local_model_used(services.llm_router, model_profile)
         route = "external" if complexity == "hard" else "local"
+        ext_response = None  # set below only on a successful external call; real provider usage lives on it
 
         try:
             with trace.step("generate"):
@@ -1352,8 +1353,17 @@ async def run_chat_pipeline(
                               _image_clip_distance, _image_hamming, _image_token_jaccard),
         )
 
-        prompt_tokens = int(len(clean_query.split()) * 1.3)
-        completion_tokens = int(len(answer.split()) * 1.3)
+        if route == "external" and ext_response is not None:
+            # Real provider usage, not the word-count estimate below - Anthropic (and
+            # any other provider client) already returns actual input/output token
+            # counts from the API response itself; this was being computed and then
+            # discarded on every external call, so DejaQ's own /v1/responses and
+            # /v1/chat/completions usage fields never reflected real spend.
+            prompt_tokens = ext_response.prompt_tokens
+            completion_tokens = ext_response.completion_tokens
+        else:
+            prompt_tokens = int(len(clean_query.split()) * 1.3)
+            completion_tokens = int(len(answer.split()) * 1.3)
         words = answer.split(" ")
         stream_chunks = [w + " " for w in words[:-1]] + [words[-1]] if words else [answer]
 
