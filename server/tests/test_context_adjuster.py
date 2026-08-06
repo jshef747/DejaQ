@@ -96,7 +96,8 @@ class _FakeBackend:
 
 
 class TestAdjustSafetyNet:
-    """Deterministic tests for the post-hoc fallback, no Ollama required."""
+    """Deterministic tests for the post-hoc fallback and the requests both
+    functions send, no Ollama required."""
 
     pytestmark = pytest.mark.no_model
 
@@ -122,6 +123,14 @@ class TestAdjustSafetyNet:
         service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
 
         asyncio.run(service.adjust("explain that in detail", CANARY_ANSWER))
+
+        assert backend.requests[0].temperature == 0
+
+    def test_generalize_sends_temperature_zero(self):
+        backend = _FakeBackend("some reply")
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        asyncio.run(service.generalize(CANARY_ANSWER))
 
         assert backend.requests[0].temperature == 0
 
@@ -164,80 +173,46 @@ class TestIsTopicallyConsistent:
         assert not is_topically_consistent(drifted, cached)
 
 
-class TestNoLeakingFewShot:
-    """Regression guard: the photosynthesis few-shot that caused the original
-    leak must never come back into the adjuster's prompt construction, in
-    either adjust() or its sibling generalize()."""
+class TestNoContentBearingFewShot:
+    """Regression guard: no few-shot example in either adjust() or its sibling
+    generalize() may carry a real-world fact a small model could regurgitate
+    verbatim - neither the photosynthesis/Paris examples that caused the
+    original leak nor a new one. This is the test that fails if someone adds
+    another real-world example later."""
 
     pytestmark = pytest.mark.no_model
 
+    _MARKERS = ["paris", "france", "gravity", "photosynthesis", "eiffel", "croissant"]
     _LEAKING_SNIPPETS = [
         "provide a detailed analysis of photosynthesis",
         "Photosynthesis is how plants make food from sunlight",
         "biochemical process by which plants, algae, and certain bacteria",
         "Photosynthesis is the process by which plants convert light energy into chemical energy, producing glucose and oxygen from carbon dioxide and water.",
     ]
-
-    def test_leaking_fewshot_absent_from_adjust_prompt(self):
-        backend = _FakeBackend("some reply")
-        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
-
-        asyncio.run(service.adjust("explain that in detail", CANARY_ANSWER))
-
-        sent = backend.requests[0]
-        all_content = " ".join(m["content"] for m in sent.messages)
-        for snippet in self._LEAKING_SNIPPETS:
-            assert snippet not in all_content, f"leaking few-shot content resurfaced: {snippet!r}"
-
-    def test_leaking_fewshot_absent_from_generalize_prompt(self):
-        backend = _FakeBackend("some reply")
-        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
-
-        asyncio.run(service.generalize(CANARY_ANSWER))
-
-        sent = backend.requests[0]
-        all_content = " ".join(m["content"] for m in sent.messages)
-        for snippet in self._LEAKING_SNIPPETS:
-            assert snippet not in all_content, f"leaking few-shot content resurfaced: {snippet!r}"
-
-    def test_generalize_sends_temperature_zero(self):
-        backend = _FakeBackend("some reply")
-        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
-
-        asyncio.run(service.generalize(CANARY_ANSWER))
-
-        assert backend.requests[0].temperature == 0
-
-
-class TestNoContentBearingFewShot:
-    """Regression guard: no few-shot example in either function may carry a
-    real-world fact a small model could regurgitate verbatim. This is the
-    test that fails if someone adds another real-world example later."""
-
-    pytestmark = pytest.mark.no_model
-
-    _MARKERS = ["paris", "france", "gravity", "photosynthesis", "eiffel", "croissant"]
+    _DENYLIST = [rf"\b{marker}\b" for marker in _MARKERS] + [
+        re.escape(snippet.lower()) for snippet in _LEAKING_SNIPPETS
+    ]
 
     @staticmethod
-    def _assert_no_markers(messages):
+    def _assert_no_content(messages):
         all_content = " ".join(m["content"] for m in messages).lower()
-        for marker in TestNoContentBearingFewShot._MARKERS:
-            assert not re.search(rf"\b{marker}\b", all_content), (
-                f"content-bearing few-shot marker found: {marker!r}"
+        for pattern in TestNoContentBearingFewShot._DENYLIST:
+            assert not re.search(pattern, all_content), (
+                f"content-bearing few-shot resurfaced: {pattern!r}"
             )
 
-    def test_adjust_prompt_has_no_content_markers(self):
+    def test_adjust_prompt_has_no_content(self):
         backend = _FakeBackend("some reply")
         service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
 
         asyncio.run(service.adjust("explain that in detail", CANARY_ANSWER))
 
-        self._assert_no_markers(backend.requests[0].messages)
+        self._assert_no_content(backend.requests[0].messages)
 
-    def test_generalize_prompt_has_no_content_markers(self):
+    def test_generalize_prompt_has_no_content(self):
         backend = _FakeBackend("some reply")
         service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
 
         asyncio.run(service.generalize(CANARY_ANSWER))
 
-        self._assert_no_markers(backend.requests[0].messages)
+        self._assert_no_content(backend.requests[0].messages)
