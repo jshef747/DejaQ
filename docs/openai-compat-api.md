@@ -74,6 +74,21 @@ Non-streaming responses use the OpenAI chat-completion shape:
 
 Streaming responses emit OpenAI-style `data:` SSE chunks followed by `data: [DONE]`.
 
+### `usage`: real counts vs. estimate
+
+`usage` is not derived the same way on every route, because only one route has a real token
+count to report:
+
+| Route | `prompt_tokens` / `completion_tokens` |
+| --- | --- |
+| External (hard miss answered by the provider) | The provider's own counts, read straight off its API response. These are what you were actually billed for. |
+| Local (easy miss) | Estimated as `words * 1.3`. Local generation returns no token count, so an estimate is all there is. |
+| Cache hit | Prompt estimated the same way; completion is `0`, since no generation happened. |
+
+An external call that errors falls back to the estimate along with the rest of the miss path.
+
+`/v1/responses` reports the same numbers under `input_tokens` / `output_tokens`.
+
 Gateway headers:
 
 | Header | Meaning |
