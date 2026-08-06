@@ -254,7 +254,21 @@ BIND_HOST = _get_text("DEJAQ_BIND_HOST", "127.0.0.1")
 ENRICHER_MODEL_NAME = _get_text("DEJAQ_ENRICHER_MODEL_NAME", "qwen_1_5b")
 NORMALIZER_MODEL_NAME = _get_text("DEJAQ_NORMALIZER_MODEL_NAME", "gemma_e2b")
 LOCAL_LLM_MODEL_NAME = _get_text("DEJAQ_LOCAL_LLM_MODEL_NAME", "gemma_local")
-GENERALIZER_MODEL_NAME = _get_text("DEJAQ_GENERALIZER_MODEL_NAME", "phi_generalizer")
+
+# Swapped from phi_generalizer (phi3.5:latest) to gemma_e2b (gemma4:e2b):
+# on a 20-query batch of fresh raw answers run through the real generalize()
+# call, phi3.5 ran away on 5/20 (25%, matching the incident); gemma4:e2b ran
+# away on 0/20, at roughly a third of the mean latency, with comparable or
+# better factual fidelity (phi3.5 sometimes added unrequested commentary not
+# present in the raw answer; gemma4:e2b mostly stayed a close, faithful
+# restatement). One residual weakness observed, not a runaway: on a
+# pathologically bare raw answer ("Au", no sentence), gemma4:e2b lost the
+# fact entirely ("Acknowledgement.") rather than restating it - phi3.5
+# mangled the same input into garbage instead, so this is not a regression,
+# but it is a real content-fidelity gap worth watching, not a clean bill of
+# health. See the incident report (dejaq-generalizer-runaway) for the full
+# comparison.
+GENERALIZER_MODEL_NAME = _get_text("DEJAQ_GENERALIZER_MODEL_NAME", "gemma_e2b")
 CONTEXT_ADJUSTER_MODEL_NAME = _get_text("DEJAQ_CONTEXT_ADJUSTER_MODEL_NAME", "qwen_1_5b")
 VALIDATOR_MODEL_NAME = _get_text("DEJAQ_VALIDATOR_MODEL_NAME", "gemma_e2b")
 # Cache hits at or below this cosine distance are near-identical to the stored
@@ -272,3 +286,25 @@ VALIDATOR_SKIP_DISTANCE = _get_float("DEJAQ_VALIDATOR_SKIP_DISTANCE", 0.05)
 # default of 0.1 was rejecting the latter as false positives on ~70% of its
 # firings. See app/services/context_adjuster.py for the check itself.
 ADJUSTER_MIN_TOPIC_OVERLAP = _get_float("DEJAQ_ADJUSTER_MIN_TOPIC_OVERLAP", 0.02)
+
+# Store-time safety net for generalize(): catches the generalizer model
+# finishing the real rewrite and then failing to stop, looping through
+# paraphrases of its own few-shot examples until it hits the token cap
+# (incident: dejaq-generalizer-runaway - a captured real answer went from 52
+# input characters to a 5,456-character loop that never terminated). Measured
+# against that capture plus a fresh 20-query batch: every clean rewrite
+# stayed within 8x the raw answer's length; the shortest observed corrupted
+# case (a contained few-shot leak, not even a full runaway) was 12.6x. This
+# sits inside that gap. See app/services/context_adjuster.py:is_generalization_sane.
+GENERALIZE_LENGTH_RATIO_MAX = _get_float("DEJAQ_GENERALIZE_LENGTH_RATIO_MAX", 10.0)
+# Below this absolute length, never flag on ratio alone - protects a short,
+# correct rewrite of a very short raw answer (e.g. "Au") from a ratio false
+# positive. Every captured corrupted case was far over this floor.
+GENERALIZE_LENGTH_ABS_FLOOR = _get_float("DEJAQ_GENERALIZE_LENGTH_ABS_FLOOR", 200.0)
+# Fraction of word 4-grams that repeat elsewhere in the output. Measured
+# clean rewrites at 0.000 (no repeated 4-grams at all, n=3 sampled); the two
+# captured runaways measured 0.136-0.150 even where each loop paraphrased
+# itself differently (never a literal repeat, which is why line/substring
+# matching alone misses this shape). Threshold sits inside that gap with
+# margin both directions.
+GENERALIZE_NGRAM_REPEAT_RATIO_MAX = _get_float("DEJAQ_GENERALIZE_NGRAM_REPEAT_RATIO_MAX", 0.08)

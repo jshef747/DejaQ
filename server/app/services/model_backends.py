@@ -20,6 +20,7 @@ class CompletionRequest:
     messages: list[PromptMessage]
     max_tokens: int
     temperature: float
+    stop: list[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +86,8 @@ class OllamaBackend:
                 "num_predict": request.max_tokens,
             },
         }
+        if request.stop:
+            payload["options"]["stop"] = request.stop
 
         if self._client is not None:
             response = await self._client.post("/api/chat", json=payload)

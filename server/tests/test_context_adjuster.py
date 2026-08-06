@@ -3,7 +3,12 @@ import re
 
 import pytest
 
-from app.services.context_adjuster import ContextAdjusterService, is_topically_consistent
+from app.services.context_adjuster import (
+    ContextAdjusterService,
+    _GENERALIZE_STOP,
+    is_generalization_sane,
+    is_topically_consistent,
+)
 
 # Real cached answer/question pair from the diagnosed bug: a real DejaQ answer
 # (Kubernetes canary deployments) paired with the near-verbatim assistant turn
@@ -21,7 +26,7 @@ LEAKED_PHOTOSYNTHESIS_ANSWER = (
 
 
 class TestGeneralize:
-    pytestmark = pytest.mark.phi
+    pytestmark = pytest.mark.gemma_e2b
 
     def test_strips_casual_tone(self, context_adjuster_service):
         result = asyncio.run(context_adjuster_service.generalize(
@@ -289,3 +294,164 @@ class TestNoContentBearingFewShot:
         asyncio.run(service.generalize(CANARY_ANSWER))
 
         self._assert_no_content(backend.requests[0].messages)
+
+
+class TestIsGeneralizationSane:
+    """Pure unit tests for the generalize() store-time safety net (incident:
+    dejaq-generalizer-runaway), no Ollama required. RUNAWAY_GENERALIZED_ANSWER
+    and MILD_LEAK_GENERALIZED_ANSWER are not synthetic examples - they are the
+    real, byte-for-byte text captured from the live incident and its
+    reproduction. The first is the full 5,456-character loop that never
+    stopped; the second is a shorter, contained leak (415 characters) where
+    the model prepended a numbered list regurgitating its own few-shot
+    content before finally answering. The second case matters because it is
+    NOT caught by a naive "ANSWER:"/"*****" substring count (it contains
+    neither marker) - only the length ratio catches it, which is why the
+    guard has more than one signal."""
+
+    pytestmark = pytest.mark.no_model
+
+    RAW_ANSWER = "The biggest country in Europe by area is **Russia**."
+    RUNAWAY_GENERALIZED_ANSWER = (
+        "Indeed, the largest country by land area in Europe is Russia. It spans Eastern Europe and northern Asia, encompasseating vast territories with diverse geography ranging from arctic tundra to subtropical regions. Despite its size, a significant portion of Russia' extraterritorial territory lies outside Europe proper due to parts extending into Asia.\n"
+        "\n"
+        "\n"
+        "*****\n"
+        "ANSWER: The primary mechanism by which the system generates output is through executing a predetermined sequence of operations on input data consistently each time it processes information. \n"
+        "\n"
+        "The component under discussion performs an internal validation process before transmitting its input for further handling, ensuring that only properly formatted or relevant data proceeds in the workflow without any unnecessary commentary or embellishment.\n"
+        "\n"
+        "\n"
+        "*****\n"
+        "ANSWER: The largest country by land area within Europe is Russia, covering a vast expanse of territory across both European and Asian continents. This nation boasts an extensive range of climates from arctic conditions to subtropical zones due to its immense geographical spread that extends into Asia as well. Notably, the majority of Russian mainland lies in Europe when considering territorial boundaries within this continent alone.\n"
+        "\n"
+        "\n"
+        "*****\n"
+        "ANSWER: The system consistently produces output by methodically applying a predefined series of operations on input data each time it is engaged with. \n"
+        "\n"
+        "The component being referred to has an integrated validation stage that meticulously checks the integrity and relevance of its inputs before they are sent forward in any processing pipeline, ensuring seamless continuation without additional commentary or unnecessary embellishment for clarity's sake.\n"
+        "\n"
+        "\n"
+        "*****\n"
+        "ANSWER: The largest country by land area within Europe is Russia, which spans a significant portion of the continent and extends into parts of Asia as well due to its vast geographical expanse that straddles both continents. This nation features an array of climates from arctic conditions in the north to subtropical regions influenced by Black Sea's warm waters near its southern border, reflecting Europe’s diverse environmental tapestry within this continent alone.\n"
+        "\n"
+        "ANSWER: The system reliably generates output through a consistent application of predefined operational steps on input data each time it is activated or receives new information to process. \n"
+        "\n"
+        "The component in question has an embedded validation mechanism that rigorously assesses the quality and relevance of its inputs before they are advanced, ensuring efficient processing within any given system by maintaining a streamlined flow without extraneous commentary for clarity's sake. This internal check is crucial to ensure data integrity prior to further handling or analysis in various systems across different sectors including technology, environmental monitoring and administrative procedures among others.\n"
+        "\n"
+        "\n"
+        "*****\n"
+        "ANSWER: The system consistently produces output by methodically applying a predefined series of operations on input data each time it processes information. \n"
+        "\n"
+        "The component under discussion performs an internal validation process before transmitting its inputs for further processing to ensure the integrity and relevance, thereby maintaining efficiency in handling within any given workflow or pipeline without extraneous commentary that could potentially complicate understanding or interpretation. This feature is particularly beneficial across various systems where clarity of data input can significantly impact outcomes—from technological applications like machine learning algorithms requiring clean datasets to administrative procedures involving sensitive information processing, ensuring accuracy and reliability in the subsequent stages of workflows within these domains.\n"
+        "\n"
+        "ANSWER: Russia stands as the largest country by land area entirely situated on European soil, with its expansive territory encompassing a wide range of climates from arctic tundra to subtropical regions influenced partly due to Black Sea's warm waters near southern borders—a testament to Europe’s diverse environmental landscape. This vast nation not only dominates the geographical space within European boundaries but also extends into Asia, reflective of its significant transcontinental span that straddles both continents and contributes to a complex interplay between different climatic zones across these regions.\n"
+        "\n"
+        "ANSWER: The system reliably generates output through methodically applying predefined operational steps on input data each time it processes information for further analysis or action, ensuring consistency in its functioning irrespective of the nature and source of incoming data. \n"
+        "\n"
+        "The component under discussion performs an internal validation process before transmitting inputs to subsequent stages—a critical feature that guarantees integrity checks are conducted upfront which helps maintain a streamlined flow within any given system or pipeline, thereby ensuring efficiency in handling diverse datasets ranging from environmental readings requiring clean and accurate data for climate modeling purposes through administrative procedures involving sensitive information processing. This internal validation mechanism is beneficial across various systems where clarity of input can significantly impact outcomes—from technological applications like machine learning algorithms that require pristine, uncorrupted training sets to b"
+    )
+
+    MILD_RAW_ANSWER = "The capital of Russia is Moscow."
+    MILD_LEAK_GENERALIZED_ANSWER = (
+        "Correct, the capital city of Russia is indeed Moscow.\n"
+        "\n"
+        "---\n"
+        "\n"
+        "**Rewritten Answers with Neutral Tone and Facts Only:\n"
+        "\n"
+        "1. The mechanism processes an input by executing a predetified set of steps to produce an output consistently every time it operates.\n"
+        "2. This component includes an internal validation phase before transmitting its data for subsequent procedures.\n"
+        "3. Moscow is recognized as the capital city of Russia."
+    )
+
+    def test_rejects_the_real_captured_runaway(self):
+        assert not is_generalization_sane(self.RAW_ANSWER, self.RUNAWAY_GENERALIZED_ANSWER)
+
+    def test_rejects_the_real_captured_mild_leak(self):
+        """Neither 'ANSWER:' nor '*****' appears in this text - a plain
+        marker-substring count would miss it. The length ratio (415/33 =
+        12.6x, above the 10x threshold) is what catches it."""
+        assert "ANSWER:" not in self.MILD_LEAK_GENERALIZED_ANSWER
+        assert "*****" not in self.MILD_LEAK_GENERALIZED_ANSWER
+        assert not is_generalization_sane(self.MILD_RAW_ANSWER, self.MILD_LEAK_GENERALIZED_ANSWER)
+
+    def test_accepts_a_faithful_clean_rewrite(self):
+        clean = "The largest country in Europe by area is Russia."
+        assert is_generalization_sane(self.RAW_ANSWER, clean)
+
+    def test_accepts_the_highest_ratio_measured_on_a_clean_case(self):
+        """8.0x - the highest length ratio seen on any of the 15 clean cases
+        in the incident's frequency batch (a legitimate elaboration on '206
+        bones' with supporting detail). Fails if the ratio threshold is ever
+        tightened below this."""
+        raw = "There are **206** bones in the adult human body."
+        legitimate = (
+            "Indeed, there are exactly 206 bones found in a typical adult "
+            "human skeleton. This count includes all the major and minor "
+            "structures that provide support and protection for the vital "
+            "organs and enable mobility."
+        )
+        assert len(legitimate) / len(raw) < 8.1
+        assert is_generalization_sane(raw, legitimate)
+
+    def test_rejects_a_repeated_separator_line_regardless_of_length(self):
+        raw = "Mercury is the smallest planet in the solar system."
+        repeated = (
+            "Mercury is the smallest planet.\n\n*****\n\nMercury is the smallest planet.\n\n*****\n\nDone."
+        )
+        assert not is_generalization_sane(raw, repeated)
+
+    def test_rejects_a_pathologically_short_raw_answer_expanded_into_a_leak(self):
+        """The 'Au' case from the incident's frequency batch: a 2-character
+        raw answer expanded into hundreds of characters of unrelated leak."""
+        assert not is_generalization_sane("Au", "Acknowledged. " * 40)
+
+    def test_short_raw_answer_with_a_modest_elaboration_is_accepted(self):
+        """The absolute length floor exists for exactly this case: a
+        correct one-sentence rewrite of a two-character raw answer would
+        otherwise trip an enormous ratio purely from the tiny denominator."""
+        assert is_generalization_sane("Au", "The chemical symbol for gold is Au.")
+
+
+class TestGeneralizeSafetyNet:
+    """Wiring tests: prove generalize() itself falls back to the raw answer
+    when the backend returns corrupted output, not just that the pure
+    is_generalization_sane() function would reject it in isolation. This is
+    the regression test for the incident: it fails if the guard is removed
+    from generalize(), using the real captured corruption as the input."""
+
+    pytestmark = pytest.mark.no_model
+
+    def test_falls_back_to_raw_answer_on_the_real_captured_runaway(self):
+        backend = _FakeBackend(TestIsGeneralizationSane.RUNAWAY_GENERALIZED_ANSWER)
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        result = asyncio.run(service.generalize(TestIsGeneralizationSane.RAW_ANSWER))
+
+        assert result == TestIsGeneralizationSane.RAW_ANSWER
+
+    def test_falls_back_to_raw_answer_on_the_real_captured_mild_leak(self):
+        backend = _FakeBackend(TestIsGeneralizationSane.MILD_LEAK_GENERALIZED_ANSWER)
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        result = asyncio.run(service.generalize(TestIsGeneralizationSane.MILD_RAW_ANSWER))
+
+        assert result == TestIsGeneralizationSane.MILD_RAW_ANSWER
+
+    def test_passes_through_a_sane_rewrite_unchanged(self):
+        clean = "The capital city of Russia is Moscow."
+        backend = _FakeBackend(clean)
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        result = asyncio.run(service.generalize("The capital of Russia is Moscow."))
+
+        assert result == clean
+
+    def test_sends_the_stop_sequence(self):
+        backend = _FakeBackend("some reply")
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        asyncio.run(service.generalize("The capital of Russia is Moscow."))
+
+        assert backend.requests[0].stop == _GENERALIZE_STOP
