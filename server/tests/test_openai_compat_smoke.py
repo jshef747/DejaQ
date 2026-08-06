@@ -660,10 +660,22 @@ def test_external_route_reports_real_provider_usage_not_heuristic(monkeypatch):
     monkeypatch.setattr(openai_compat, "_classifier", HardClassifier())
     monkeypatch.setattr(openai_compat, "_external_llm", CapturingExternalLLM())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
-    monkeypatch.setattr(openai_compat, "get_workspace_provider_key", stored_credential("sk-ant-live"))
+    monkeypatch.setattr(
+        openai_compat,
+        "get_workspace_provider_key",
+        stored_credential("sk-ant-live", providers=("anthropic",)),
+    )
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
     monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
+    monkeypatch.setattr(
+        openai_compat,
+        "_read_effective_llm_config",
+        lambda workspace_slug, workspace_id: openai_compat.EffectiveLlmConfig(
+            external_model="claude-sonnet-4-6",
+            routing_threshold=0.75,
+        ),
+    )
 
     from cryptography.fernet import Fernet
 
