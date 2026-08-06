@@ -77,19 +77,17 @@ class ContextAdjusterService:
                 model_name=self.generalize_model_name,
                 messages=[
                 {"role": "system", "content": "Rewrite the ANSWER into a neutral, factual tone. Remove slang, humor, and personality. Keep all facts. Output only the rewritten answer."},
+                # Few-shot examples must stay inert (no real-world fact in
+                # their content): a small instruct model can regurgitate a
+                # few-shot's own subject matter instead of conditioning on
+                # the real ANSWER. The turn shape below is what teaches
+                # tone-stripping; any real fact in it becomes a leak.
                 # Example 1: casual → neutral
-                {"role": "user", "content": "ANSWER: Yo, so basically gravity is like the Earth just pulling stuff down, ya know? Like when you toss a ball up it comes right back!"},
-                {"role": "assistant", "content": "Gravity is a fundamental force that causes objects with mass to attract one another. When an object is thrown upward near Earth's surface, gravitational pull causes it to return to the ground."},
-                # Example 2: child-friendly → neutral
-                {"role": "user", "content": "ANSWER: Paris is the big fancy city where the Eiffel Tower lives! It's the capital of France and people eat yummy croissants there!"},
-                {"role": "assistant", "content": "Paris is the capital city of France. It is known for landmarks such as the Eiffel Tower."},
-                # A third example (already-neutral passthrough) used to live
-                # here, on the topic of photosynthesis. Removed for the same
-                # reason as the equivalent example in adjust(): a small
-                # instruct model can regurgitate a few-shot's own subject
-                # matter instead of conditioning on the real ANSWER. The
-                # system prompt plus the two examples above are enough to
-                # demonstrate tone neutralization.
+                {"role": "user", "content": "ANSWER: Yo so basically the mechanism just takes whatever input you give it and spits out an output, no biggie, it does this by running through a fixed set of steps every time!"},
+                {"role": "assistant", "content": "The mechanism converts an input value into an output value by applying a fixed sequence of transformation steps."},
+                # Example 2: casual → neutral
+                {"role": "user", "content": "ANSWER: The little widget thingy is super handy, it just quietly does its own validation step before passing stuff along, no fuss!"},
+                {"role": "assistant", "content": "The component performs an internal validation step before forwarding its input for further processing."},
                 # Actual answer
                 {"role": "user", "content": f"ANSWER: {answer}"},
                 ],
@@ -115,23 +113,20 @@ class ContextAdjusterService:
                 model_name=self.adjust_model_name,
                 messages=[
                 {"role": "system", "content": "Rewrite the ANSWER to match the tone of the QUESTION. Keep all facts. Output only the rewritten answer."},
+                # Few-shot examples must stay inert (no real-world fact in
+                # their content): a small instruct model can pattern-match on
+                # the SHAPE of a request and regurgitate a few-shot's own
+                # subject matter instead of conditioning on the real ANSWER,
+                # whenever a real QUESTION merely resembles that example's
+                # shape. Any example carrying a real-world fact reintroduces
+                # this failure mode, so never add one - keep examples about a
+                # generic "mechanism" or similar inert subject.
                 # Example 1: casual/child tone
-                {"role": "user", "content": "QUESTION: explain gravity like I'm 5\nANSWER: Gravity is a fundamental force of attraction between objects with mass."},
-                {"role": "assistant", "content": "Imagine you have a ball. When you throw it up, it comes back down! That's because the Earth is really big and pulls everything toward it. That pulling is called gravity!"},
+                {"role": "user", "content": "QUESTION: explain it like I'm 5\nANSWER: The mechanism converts an input value into an output value by applying a fixed sequence of transformation steps."},
+                {"role": "assistant", "content": "Imagine a toy machine! You drop a ball in one side, some fun stuff happens inside, and a different toy pops out the other side! That's what this does, but with information instead of toys!"},
                 # Example 2: casual/brief tone
-                {"role": "user", "content": "QUESTION: yo whats the capital of france\nANSWER: The capital of France is Paris."},
-                {"role": "assistant", "content": "It's Paris!"},
-                # A third example demonstrating the formal/detailed direction used
-                # to live here, e.g. "provide a detailed analysis of photosynthesis".
-                # Removed: on a 148-query eval, 9/88 cache hits (10.2%) came back as
-                # a paraphrase of THAT example's assistant turn, a well-written but
-                # completely unrelated answer, whenever a real QUESTION merely
-                # resembled its shape ("give me something more detailed"). The small
-                # model was pattern-matching the request shape and regurgitating the
-                # example's own content instead of conditioning on the real ANSWER.
-                # The system prompt above already states the instruction; two
-                # examples are enough to demonstrate style transfer without handing
-                # the model a topic it can fall back on.
+                {"role": "user", "content": "QUESTION: give me the short version\nANSWER: The mechanism converts an input value into an output value by applying a fixed sequence of transformation steps: first validating the input, then transforming it, then producing the output."},
+                {"role": "assistant", "content": "It just turns input into output in a few simple steps."},
                 # Actual query
                 {"role": "user", "content": f"QUESTION: {original_query}\nANSWER: {general_answer}"},
                 ],
