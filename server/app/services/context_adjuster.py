@@ -1,8 +1,14 @@
 import logging
 import re
 import time
+from collections import Counter
 
-from app.config import ADJUSTER_MIN_TOPIC_OVERLAP
+from app.config import (
+    ADJUSTER_MIN_TOPIC_OVERLAP,
+    GENERALIZE_LENGTH_ABS_FLOOR,
+    GENERALIZE_LENGTH_RATIO_MAX,
+    GENERALIZE_NGRAM_REPEAT_RATIO_MAX,
+)
 from app.services.model_backends import CompletionRequest, ModelBackend
 
 logger = logging.getLogger("dejaq.services.context_adjuster")
@@ -53,6 +59,77 @@ def is_topically_consistent(adjusted: str, cached_answer: str) -> bool:
     return (overlap / len(cached_words)) >= ADJUSTER_MIN_TOPIC_OVERLAP
 
 
+# Empirically stops the runaway shape observed in the incident (the
+# generalizer regurgitating its own few-shot turn structure as fake
+# continuation turns) whenever the loop reuses this literal marker: on the
+# captured runaway it fires at offset 350, cutting the loop off before the
+# first fake continuation turn. Proven NOT sufficient alone: a
+# differently-worded loop (observed: restating a country count with a
+# different number each pass) never emits this string and runs to the token
+# cap regardless. is_generalization_sane() below is the actual guard; this is
+# a cheap, latency-free first line of defense with no downside when it
+# doesn't fire.
+#
+# Deliberately only the separator marker. "ANSWER:" variants were tried and
+# removed: the backend matches a stop string anywhere in the generated text,
+# so a legitimate quiz/exam-style rewrite that faithfully reproduces the raw
+# answer's own "ANSWER: ..." lines would be silently truncated mid-rewrite -
+# and a truncated prefix is SHORTER than the raw answer with no repetition,
+# so is_generalization_sane() cannot detect it. That trades a rare loop for a
+# silently wrong cache entry, which is the exact failure this guard exists to
+# prevent.
+_GENERALIZE_STOP = ["\n\n\n*****"]
+
+_NGRAM_SIZE = 4
+
+
+def _ngram_repetition_ratio(text: str, n: int = _NGRAM_SIZE) -> float:
+    words = _TOKEN_RE.findall(text.lower())
+    if len(words) <= n:
+        return 0.0
+    grams = [tuple(words[i:i + n]) for i in range(len(words) - n + 1)]
+    counts = Counter(grams)
+    repeated = sum(c - 1 for c in counts.values() if c > 1)
+    return repeated / len(grams)
+
+
+def is_generalization_sane(raw_answer: str, generalized: str) -> bool:
+    """Store-time safety net for generalize()'s own output.
+
+    Unlike is_topically_consistent() (which gates adjust() against drifting
+    from an already-trusted cached answer), this catches generalize() itself
+    finishing the real rewrite and then failing to stop: the model loops,
+    paraphrasing its own few-shot examples as fake continuation turns, until
+    it hits the token cap (incident: dejaq-generalizer-runaway - a 52-char
+    real answer produced a 5,456-character loop with no stop). Two
+    independent, cheap, stdlib-only signals, each measured against that
+    capture plus a fresh 20-query batch (see app/config.py for the numbers
+    behind each threshold):
+      - a blown length ratio against the raw answer (measured: 104.9x on the
+        full runaway, 13.0x on the shorter contained leak), or
+      - an elevated word n-gram repetition ratio (measured 0.150 on the
+        runaway; catches loops that reword slightly each pass, so no exact
+        line or substring repeats - e.g. restating a continent count with a
+        different number every loop).
+
+    A third signal - an exact verbatim-repeated line - was tried and removed:
+    it fired on neither captured incident (both separator lines are 5 chars,
+    below its own length floor), while it did reject ordinary structured
+    answers such as two markdown tables sharing a column-separator row,
+    silently disabling generalization for the answer shapes LLMs emit most.
+    """
+    if not generalized.strip():
+        return False
+    if (
+        len(generalized) > GENERALIZE_LENGTH_RATIO_MAX * max(len(raw_answer), 1)
+        and len(generalized) > GENERALIZE_LENGTH_ABS_FLOOR
+    ):
+        return False
+    if _ngram_repetition_ratio(generalized) > GENERALIZE_NGRAM_REPEAT_RATIO_MAX:
+        return False
+    return True
+
+
 class ContextAdjusterService:
 
     def __init__(
@@ -96,11 +173,21 @@ class ContextAdjusterService:
                 # rewrite, not creative generation, so temperature buys
                 # nothing here (see adjust() below for the same reasoning).
                 temperature=0,
+                stop=_GENERALIZE_STOP,
             )
         )
 
         latency = (time.time() - start) * 1000
         logger.debug("Generalization completed in %.2f ms", latency)
+
+        if not is_generalization_sane(answer, generalized):
+            logger.warning(
+                "Generalizer output failed sanity check (raw_len=%d, "
+                "generalized_len=%d); storing the raw answer un-generalized instead",
+                len(answer), len(generalized),
+            )
+            return answer
+
         return generalized
 
     async def adjust(self, original_query: str, general_answer: str) -> str:

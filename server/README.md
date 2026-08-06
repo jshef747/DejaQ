@@ -30,7 +30,7 @@ Generation runs through Ollama. Start it and pull the tags first:
 
 ```bash
 ollama serve
-ollama pull qwen2.5:0.5b qwen2.5:1.5b gemma4:e2b gemma4:e4b phi3.5:latest
+ollama pull qwen2.5:0.5b qwen2.5:1.5b gemma4:e2b gemma4:e4b
 ```
 
 Recommended local stack:

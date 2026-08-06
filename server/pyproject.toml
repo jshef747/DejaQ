@@ -64,6 +64,7 @@ markers = [
     "qwen: requires Qwen 0.5B",
     "qwen_1_5b: requires Qwen 1.5B",
     "phi: requires Phi-3.5 Mini",
+    "gemma_e2b: requires Gemma 4 E2B",
     "llama: requires Gemma 4 26B A4B",
     "deberta: requires NVIDIA DeBERTa",
 ]

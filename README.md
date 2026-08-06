@@ -29,7 +29,7 @@ OpenAI-compatible request
 server/              FastAPI app, gateway, management API, dejaq-admin CLI, Celery tasks
 dashboard/           Next.js dashboard (/admin/v1/*; Supabase auth optional)
 chat/                Standalone Next.js chat app with server-side workspace API key proxy
-evals/               Offline eval harnesses: enricher, normalizer, adjuster, validator
+evals/               Offline eval harnesses (see evals/README.md for the list)
 docs/                Product/API notes + getting-started.md
 openspec/            Specs and proposal history
 ```
@@ -43,7 +43,7 @@ Generation runs through **Ollama** (local or remote). Start it and pull the mode
 
 ```bash
 ollama serve
-ollama pull qwen2.5:0.5b qwen2.5:1.5b gemma4:e2b gemma4:e4b phi3.5:latest
+ollama pull qwen2.5:0.5b qwen2.5:1.5b gemma4:e2b gemma4:e4b
 ```
 
 ```bash
