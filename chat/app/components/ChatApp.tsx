@@ -186,19 +186,6 @@ function RequestInspector({ message, onClose, asDrawer }: InspectorProps) {
               </MetricCard>
             </div>
 
-            <InspectorSection title="Tokens">
-              <div
-                style={{
-                  display: "grid",
-                  gap: "10px",
-                  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-                }}
-              >
-                <TokenCount label="Prompt" value={message.promptTokens} />
-                <TokenCount label="Completion" value={message.completionTokens} />
-              </div>
-            </InspectorSection>
-
             {message.responseId && (
               <InspectorSection
                 title="Response ID"
@@ -287,31 +274,6 @@ function MetricCard({
     >
       <InspectorLabel>{label}</InspectorLabel>
       <div style={{ marginTop: "6px", minWidth: 0 }}>{children}</div>
-    </div>
-  );
-}
-
-function TokenCount({ label, value }: { label: string; value?: number }) {
-  return (
-    <div
-      style={{
-        background: "#181818",
-        border: "1px solid var(--border)",
-        borderRadius: "6px",
-        padding: "9px",
-      }}
-    >
-      <InspectorLabel>{label}</InspectorLabel>
-      <div
-        style={{
-          color: "var(--fg)",
-          fontFamily: "var(--font-jetbrains-mono, ui-monospace, 'SF Mono', Menlo, monospace)",
-          fontSize: "13px",
-          marginTop: "5px",
-        }}
-      >
-        {value ?? 0}
-      </div>
     </div>
   );
 }
