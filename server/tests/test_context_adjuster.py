@@ -173,6 +173,50 @@ class TestIsTopicallyConsistent:
         assert not is_topically_consistent(drifted, cached)
 
 
+class TestOverlapThresholdCalibration:
+    """Regression guard for the ADJUSTER_MIN_TOPIC_OVERLAP retune: a real,
+    on-topic rewrite that legitimately condenses a long cached answer down to
+    a handful of shared nouns must be ACCEPTED, while a rewrite sharing no
+    content words with the cached answer at all must still be REJECTED. This
+    is the exact shape of the two populations measured in the safety-net
+    threshold sweep (report: dejaq-safetynet-necessity) - it does not assert
+    on the threshold constant itself, so it keeps failing the right cases if
+    the constant is retuned again later."""
+
+    pytestmark = pytest.mark.no_model
+
+    _LONG_CACHED_ANSWER = (
+        "A durable message queue typically guarantees at-least-once delivery, "
+        "which means a consumer must be prepared to see the same message "
+        "arrive more than once after a crash, a network retry, or a "
+        "rebalance. The standard fix is to make message handling idempotent: "
+        "attach a unique identifier to every message at publish time, and "
+        "before processing a message, check a durable store of "
+        "previously-seen identifiers. If the identifier has already been "
+        "recorded, skip processing and simply re-acknowledge the message. If "
+        "it has not been seen, record it and process the message inside the "
+        "same transaction so a crash between the two steps cannot cause a "
+        "duplicate to slip through. This turns delivery that is merely "
+        "at-least-once into processing that behaves as exactly-once from the "
+        "consumer perspective."
+    )
+
+    def test_correct_short_condensation_of_long_answer_is_accepted(self):
+        condensed = (
+            "Give each message a unique identifier and record it once "
+            "handled, so a repeat delivery is recognized and skipped instead "
+            "of processed twice."
+        )
+        assert is_topically_consistent(condensed, self._LONG_CACHED_ANSWER)
+
+    def test_rewrite_sharing_no_content_words_is_rejected(self):
+        off_topic = (
+            "A red panda spends most of its day resting in trees and mainly "
+            "eats bamboo shoots, though it is technically a carnivore."
+        )
+        assert not is_topically_consistent(off_topic, self._LONG_CACHED_ANSWER)
+
+
 class TestNoContentBearingFewShot:
     """Regression guard: no few-shot example in either adjust() or its sibling
     generalize() may carry a real-world fact a small model could regurgitate

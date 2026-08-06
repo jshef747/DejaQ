@@ -266,8 +266,9 @@ VALIDATOR_SKIP_DISTANCE = _get_float("DEJAQ_VALIDATOR_SKIP_DISTANCE", 0.05)
 # cached answer's content words that must survive into the tone-adjusted
 # answer. Below this, the adjustment is treated as a drift (e.g. the small
 # adjuster model regurgitating an unrelated topic) and the known-good cached
-# answer is served verbatim instead. Kept low, since a faithful tone rewrite
-# can legitimately drop most of the original wording (an ELI5 rewrite keeps
-# only the subject noun), so this only catches near-total topic loss, not
-# stylistic rephrasing. See app/services/context_adjuster.py.
-ADJUSTER_MIN_TOPIC_OVERLAP = _get_float("DEJAQ_ADJUSTER_MIN_TOPIC_OVERLAP", 0.1)
+# answer is served verbatim instead. Measured, not guessed: across 52 recorded
+# safety-net firings, genuine drift never exceeded 0.0185 overlap while good
+# short condensations of long cached answers started at 0.0229 - the old
+# default of 0.1 was rejecting the latter as false positives on ~70% of its
+# firings. See app/services/context_adjuster.py for the check itself.
+ADJUSTER_MIN_TOPIC_OVERLAP = _get_float("DEJAQ_ADJUSTER_MIN_TOPIC_OVERLAP", 0.02)
