@@ -174,14 +174,21 @@ class TestIsTopicallyConsistent:
 
 
 class TestOverlapThresholdCalibration:
-    """Regression guard for the ADJUSTER_MIN_TOPIC_OVERLAP retune: a real,
-    on-topic rewrite that legitimately condenses a long cached answer down to
-    a handful of shared nouns must be ACCEPTED, while a rewrite sharing no
-    content words with the cached answer at all must still be REJECTED. This
-    is the exact shape of the two populations measured in the safety-net
-    threshold sweep (report: dejaq-safetynet-necessity) - it does not assert
-    on the threshold constant itself, so it keeps failing the right cases if
-    the constant is retuned again later."""
+    """Regression guard for the ADJUSTER_MIN_TOPIC_OVERLAP retune, expressed as
+    the two populations measured in the safety-net threshold sweep (report:
+    dejaq-safetynet-necessity): on-topic rewrites that legitimately condense a
+    long cached answer down to a handful of shared nouns must be ACCEPTED,
+    drifted output that survives on one coincidental word or none must still be
+    REJECTED.
+
+    None of these assert on the threshold constant, but they do bracket it. The
+    cached answer below has 58 content words, so the four cases score 0.0000 and
+    0.0172 (rejected) against 0.0345 and 0.0862 (accepted): the class passes
+    only while the threshold sits in (0.0172, 0.0345], and fails for any retune
+    outside that window. The measured decision gap - 0.0185, the highest overlap
+    of any genuine drift catch, to 0.0229, the lowest of any false positive -
+    lies inside it, so a future retune that leaves the gap breaks a test here
+    rather than passing silently."""
 
     pytestmark = pytest.mark.no_model
 
@@ -208,6 +215,29 @@ class TestOverlapThresholdCalibration:
             "of processed twice."
         )
         assert is_topically_consistent(condensed, self._LONG_CACHED_ANSWER)
+
+    def test_terse_condensation_sharing_two_words_is_accepted(self):
+        """0.0345 - the tightest accepted case, just above the 0.0229 floor of
+        the measured false-positive population. Fails if the threshold is ever
+        raised back past a two-word overlap."""
+        terse = (
+            "Stamp each message with an identifier, save it, and ignore "
+            "anything that shows up twice."
+        )
+        assert is_topically_consistent(terse, self._LONG_CACHED_ANSWER)
+
+    def test_regurgitated_placeholder_sharing_one_word_is_rejected(self):
+        """0.0172 - the loosest rejected case, just under the 0.0185 ceiling of
+        the measured genuine-catch population. This is the real post-#17 drift
+        shape (q154 in the report): the adjuster regurgitates its own inert
+        few-shot instead of rewriting the cached answer, and one content word
+        ('steps') coincidentally survives. Fails if the threshold is ever
+        lowered to where a single incidental word rescues drifted output."""
+        regurgitated_few_shot = (
+            "The mechanism converts an input value into an output value by "
+            "applying a fixed sequence of transformation steps."
+        )
+        assert not is_topically_consistent(regurgitated_few_shot, self._LONG_CACHED_ANSWER)
 
     def test_rewrite_sharing_no_content_words_is_rejected(self):
         off_topic = (
