@@ -1,7 +1,10 @@
 """Baseline: Qwen 2.5-1.5B — historical snapshot of production context_adjuster.py
-adjust(), predating the fix that removed the leaking photosynthesis few-shot and
-switched to temperature=0 (see server/app/services/context_adjuster.py). This
-config was not updated to match and no longer mirrors production exactly."""
+adjust(), predating the fix for the few-shot content leak. Production has since
+dropped the photosynthesis example, switched to temperature=0, and replaced the
+remaining examples with inert ones that carry no real-world fact (see
+server/app/services/context_adjuster.py). The gravity/France/photosynthesis
+few-shots below are the leaking prompt as it was; this config was not updated to
+match and no longer mirrors production."""
 
 SYSTEM_PROMPT = (
     "Rewrite the ANSWER to match the tone of the QUESTION. "
