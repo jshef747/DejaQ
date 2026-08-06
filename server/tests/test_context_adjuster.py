@@ -1,4 +1,5 @@
 import asyncio
+import re
 
 import pytest
 
@@ -206,3 +207,37 @@ class TestNoLeakingFewShot:
         asyncio.run(service.generalize(CANARY_ANSWER))
 
         assert backend.requests[0].temperature == 0
+
+
+class TestNoContentBearingFewShot:
+    """Regression guard: no few-shot example in either function may carry a
+    real-world fact a small model could regurgitate verbatim. This is the
+    test that fails if someone adds another real-world example later."""
+
+    pytestmark = pytest.mark.no_model
+
+    _MARKERS = ["paris", "france", "gravity", "photosynthesis", "eiffel", "croissant"]
+
+    @staticmethod
+    def _assert_no_markers(messages):
+        all_content = " ".join(m["content"] for m in messages).lower()
+        for marker in TestNoContentBearingFewShot._MARKERS:
+            assert not re.search(rf"\b{marker}\b", all_content), (
+                f"content-bearing few-shot marker found: {marker!r}"
+            )
+
+    def test_adjust_prompt_has_no_content_markers(self):
+        backend = _FakeBackend("some reply")
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        asyncio.run(service.adjust("explain that in detail", CANARY_ANSWER))
+
+        self._assert_no_markers(backend.requests[0].messages)
+
+    def test_generalize_prompt_has_no_content_markers(self):
+        backend = _FakeBackend("some reply")
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        asyncio.run(service.generalize(CANARY_ANSWER))
+
+        self._assert_no_markers(backend.requests[0].messages)
