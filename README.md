@@ -29,7 +29,7 @@ OpenAI-compatible request
 server/              FastAPI app, gateway, management API, dejaq-admin CLI, Celery tasks
 dashboard/           Next.js dashboard (/admin/v1/*; Supabase auth optional)
 chat/                Standalone Next.js chat app with server-side workspace API key proxy
-evals/               Offline eval harnesses: enricher, normalizer, adjuster, validator
+evals/               Offline eval harnesses (see evals/README.md for the list)
 docs/                Product/API notes + getting-started.md
 openspec/            Specs and proposal history
 ```

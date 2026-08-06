@@ -370,8 +370,8 @@ class TestIsGeneralizationSane:
 
     def test_rejects_the_real_captured_mild_leak(self):
         """Neither 'ANSWER:' nor '*****' appears in this text - a plain
-        marker-substring count would miss it. The length ratio (415/33 =
-        12.6x, above the 10x threshold) is what catches it."""
+        marker-substring count would miss it. The length ratio (415/32 =
+        13.0x, above the 10x threshold) is what catches it."""
         assert "ANSWER:" not in self.MILD_LEAK_GENERALIZED_ANSWER
         assert "*****" not in self.MILD_LEAK_GENERALIZED_ANSWER
         assert not is_generalization_sane(self.MILD_RAW_ANSWER, self.MILD_LEAK_GENERALIZED_ANSWER)

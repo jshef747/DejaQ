@@ -294,8 +294,9 @@ ADJUSTER_MIN_TOPIC_OVERLAP = _get_float("DEJAQ_ADJUSTER_MIN_TOPIC_OVERLAP", 0.02
 # input characters to a 5,456-character loop that never terminated). Measured
 # against that capture plus a fresh 20-query batch: every clean rewrite
 # stayed within 8x the raw answer's length; the shortest observed corrupted
-# case (a contained few-shot leak, not even a full runaway) was 12.6x. This
-# sits inside that gap. See app/services/context_adjuster.py:is_generalization_sane.
+# case (a contained few-shot leak, not even a full runaway) was 13.0x
+# (415 characters from a 32-character raw answer). This sits inside that gap.
+# See app/services/context_adjuster.py:is_generalization_sane.
 GENERALIZE_LENGTH_RATIO_MAX = _get_float("DEJAQ_GENERALIZE_LENGTH_RATIO_MAX", 10.0)
 # Below this absolute length, never flag on ratio alone - protects a short,
 # correct rewrite of a very short raw answer (e.g. "Au") from a ratio false
