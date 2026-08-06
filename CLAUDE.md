@@ -66,7 +66,7 @@ uv sync
 Generation runs through **Ollama** (local or remote). Start Ollama and pull the model tags first:
 ```bash
 ollama serve
-ollama pull qwen2.5:0.5b qwen2.5:1.5b gemma4:e2b gemma4:e4b phi3.5:latest
+ollama pull qwen2.5:0.5b qwen2.5:1.5b gemma4:e2b gemma4:e4b
 ```
 
 ```bash
@@ -161,6 +161,9 @@ Generation always runs through Ollama (`DEJAQ_OLLAMA_URL`); there is no per-role
 | `DEJAQ_GENERALIZER_MODEL_NAME` | `gemma_e2b` | Logical model label for background generalizer (→ Ollama tag) |
 | `DEJAQ_CONTEXT_ADJUSTER_MODEL_NAME` | `qwen_1_5b` | Logical model label for context adjuster (→ Ollama tag) |
 | `DEJAQ_ADJUSTER_MIN_TOPIC_OVERLAP` | `0.02` | Post-hoc safety net: minimum fraction of the cached answer's content words that must survive a tone adjustment; below it, the adjuster's output is discarded and the cached answer is served verbatim instead |
+| `DEJAQ_GENERALIZE_LENGTH_RATIO_MAX` | `10.0` | Store-time safety net: how many times longer than the raw answer a generalized rewrite may be before it is discarded and the raw answer stored un-generalized. Calibrated against the measured runaway, not guessed — rationale in `app/config.py` |
+| `DEJAQ_GENERALIZE_LENGTH_ABS_FLOOR` | `200.0` | Characters below which the length ratio is not applied, so a correct one-sentence rewrite of a two-character answer isn't rejected purely by its tiny denominator (`app/config.py`) |
+| `DEJAQ_GENERALIZE_NGRAM_REPEAT_RATIO_MAX` | `0.08` | Store-time safety net: maximum word 4-gram repetition ratio in a generalized rewrite; above it the output is a loop and the raw answer is stored instead (`app/config.py`) |
 | `DEJAQ_VALIDATOR_MODEL_NAME` | `gemma_e2b` | Logical model label for cache-answer validator (→ Ollama tag) |
 | `DEJAQ_VALIDATOR_SKIP_DISTANCE` | `0.05` | Cache hits at or below this cosine distance skip the validator |
 | `DEJAQ_CACHE_TRUST_DISTANCE` | `0.15` | Trusted-zone cosine ceiling; hits at or below are served directly |

@@ -76,7 +76,7 @@ def generalize_and_store_task(
     file_sha: str | None = None,
     file_kind: str | None = None,
 ) -> dict:
-    """Generalize an LLM answer (via Phi-3.5) and store in ChromaDB cache.
+    """Generalize an LLM answer (via Gemma 4 E2B) and store in ChromaDB cache.
 
     All arguments are plain strings — no model objects or unpickleable data.
     cache_namespace selects the ChromaDB collection (department isolation).

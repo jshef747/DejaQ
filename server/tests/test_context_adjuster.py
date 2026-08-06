@@ -395,12 +395,33 @@ class TestIsGeneralizationSane:
         assert len(legitimate) / len(raw) < 8.1
         assert is_generalization_sane(raw, legitimate)
 
-    def test_rejects_a_repeated_separator_line_regardless_of_length(self):
+    def test_rejects_verbatim_repeated_content_below_the_length_ratio(self):
+        """A short loop that never blows the length ratio (1.7x here) is
+        still caught, by the n-gram repetition signal alone."""
         raw = "Mercury is the smallest planet in the solar system."
         repeated = (
             "Mercury is the smallest planet.\n\n*****\n\nMercury is the smallest planet.\n\n*****\n\nDone."
         )
+        assert len(repeated) / len(raw) < 2.0
         assert not is_generalization_sane(raw, repeated)
+
+    def test_accepts_structured_content_that_repeats_a_table_separator_row(self):
+        """Two tables with different headers legitimately share an identical
+        column-separator row. The removed repeated-line signal rejected this
+        shape outright; the n-gram ratio correctly reads 0.0 on it, since
+        nothing but table punctuation repeats."""
+        raw = "List the storage limits and the retention windows for the two plans."
+        answer = (
+            "Storage limits:\n\n"
+            "| Plan | Included storage |\n"
+            "|--------|------------------|\n"
+            "| Basic | 20 GB |\n| Pro | 200 GB |\n\n"
+            "Retention windows:\n\n"
+            "| Tier | Backup retention |\n"
+            "|--------|------------------|\n"
+            "| Basic | 7 days |\n| Pro | 90 days |"
+        )
+        assert is_generalization_sane(raw, answer)
 
     def test_rejects_a_pathologically_short_raw_answer_expanded_into_a_leak(self):
         """The 'Au' case from the incident's frequency batch: a 2-character
@@ -455,3 +476,28 @@ class TestGeneralizeSafetyNet:
         asyncio.run(service.generalize("The capital of Russia is Moscow."))
 
         assert backend.requests[0].stop == _GENERALIZE_STOP
+
+    def test_no_stop_marker_can_truncate_a_legitimate_rewrite(self):
+        """A stop string is matched anywhere in the generated text, so a
+        marker that occurs in ordinary answer content (a quiz answer key's
+        own 'ANSWER:' lines) would silently truncate a faithful rewrite into
+        a shorter, non-repetitive prefix that is_generalization_sane() cannot
+        detect. Only the few-shot separator shape is safe to stop on."""
+        assert _GENERALIZE_STOP == ["\n\n\n*****"]
+
+        quiz_rewrite = (
+            "1. What is the capital of France?\nANSWER: Paris\n"
+            "2. What is the capital of Japan?\nANSWER: Tokyo"
+        )
+        assert not any(marker in quiz_rewrite for marker in _GENERALIZE_STOP)
+
+    def test_the_stop_marker_cuts_the_real_runaway_before_its_fake_turns(self):
+        """On the captured runaway the separator marker appears at offset 350,
+        ahead of every regurgitated continuation turn, so the stop alone
+        truncates it back to the correct rewrite."""
+        runaway = TestIsGeneralizationSane.RUNAWAY_GENERALIZED_ANSWER
+        cut = runaway.index(_GENERALIZE_STOP[0])
+
+        assert cut == 350
+        assert "ANSWER:" not in runaway[:cut]
+        assert is_generalization_sane(TestIsGeneralizationSane.RAW_ANSWER, runaway[:cut])

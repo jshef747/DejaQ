@@ -41,7 +41,7 @@ No `.env` is needed for local dev. (Optional overrides: copy `server/.env.exampl
 
 ```bash
 ollama serve
-ollama pull qwen2.5:0.5b qwen2.5:1.5b gemma4:e2b gemma4:e4b phi3.5:latest
+ollama pull qwen2.5:0.5b qwen2.5:1.5b gemma4:e2b gemma4:e4b
 ```
 
 ## 4. Start the stack

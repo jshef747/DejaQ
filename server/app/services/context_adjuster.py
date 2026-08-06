@@ -61,16 +61,26 @@ def is_topically_consistent(adjusted: str, cached_answer: str) -> bool:
 
 # Empirically stops the runaway shape observed in the incident (the
 # generalizer regurgitating its own few-shot turn structure as fake
-# continuation turns) whenever the loop reuses this literal marker. Proven
-# NOT sufficient alone: a differently-worded loop (observed: restating a
-# country count with a different number each pass) never emits either
-# string and runs to the token cap regardless. is_generalization_sane()
-# below is the actual guard; this is a cheap, latency-free first line of
-# defense with no downside when it doesn't fire.
-_GENERALIZE_STOP = ["\nANSWER:", "\n\nANSWER:", "\n\n\n*****"]
+# continuation turns) whenever the loop reuses this literal marker: on the
+# captured runaway it fires at offset 350, cutting the loop off before the
+# first fake continuation turn. Proven NOT sufficient alone: a
+# differently-worded loop (observed: restating a country count with a
+# different number each pass) never emits this string and runs to the token
+# cap regardless. is_generalization_sane() below is the actual guard; this is
+# a cheap, latency-free first line of defense with no downside when it
+# doesn't fire.
+#
+# Deliberately only the separator marker. "ANSWER:" variants were tried and
+# removed: the backend matches a stop string anywhere in the generated text,
+# so a legitimate quiz/exam-style rewrite that faithfully reproduces the raw
+# answer's own "ANSWER: ..." lines would be silently truncated mid-rewrite -
+# and a truncated prefix is SHORTER than the raw answer with no repetition,
+# so is_generalization_sane() cannot detect it. That trades a rare loop for a
+# silently wrong cache entry, which is the exact failure this guard exists to
+# prevent.
+_GENERALIZE_STOP = ["\n\n\n*****"]
 
 _NGRAM_SIZE = 4
-_MIN_REPEATED_LINE_LEN = 15
 
 
 def _ngram_repetition_ratio(text: str, n: int = _NGRAM_SIZE) -> float:
@@ -83,11 +93,6 @@ def _ngram_repetition_ratio(text: str, n: int = _NGRAM_SIZE) -> float:
     return repeated / len(grams)
 
 
-def _has_repeated_line(text: str) -> bool:
-    lines = [ln.strip() for ln in text.split("\n") if len(ln.strip()) >= _MIN_REPEATED_LINE_LEN]
-    return len(lines) != len(set(lines))
-
-
 def is_generalization_sane(raw_answer: str, generalized: str) -> bool:
     """Store-time safety net for generalize()'s own output.
 
@@ -96,15 +101,22 @@ def is_generalization_sane(raw_answer: str, generalized: str) -> bool:
     finishing the real rewrite and then failing to stop: the model loops,
     paraphrasing its own few-shot examples as fake continuation turns, until
     it hits the token cap (incident: dejaq-generalizer-runaway - a 52-char
-    real answer produced a 5,456-character loop with no stop). Three
+    real answer produced a 5,456-character loop with no stop). Two
     independent, cheap, stdlib-only signals, each measured against that
     capture plus a fresh 20-query batch (see app/config.py for the numbers
     behind each threshold):
-      - a blown length ratio against the raw answer,
-      - an exact verbatim-repeated line (the "*****" separator shape), or
-      - an elevated word n-gram repetition ratio (catches loops that reword
-        slightly each pass, so no exact line or substring repeats - e.g.
-        restating a continent count with a different number every loop).
+      - a blown length ratio against the raw answer (measured: 104.9x on the
+        full runaway, 13.0x on the shorter contained leak), or
+      - an elevated word n-gram repetition ratio (measured 0.150 on the
+        runaway; catches loops that reword slightly each pass, so no exact
+        line or substring repeats - e.g. restating a continent count with a
+        different number every loop).
+
+    A third signal - an exact verbatim-repeated line - was tried and removed:
+    it fired on neither captured incident (both separator lines are 5 chars,
+    below its own length floor), while it did reject ordinary structured
+    answers such as two markdown tables sharing a column-separator row,
+    silently disabling generalization for the answer shapes LLMs emit most.
     """
     if not generalized.strip():
         return False
@@ -112,8 +124,6 @@ def is_generalization_sane(raw_answer: str, generalized: str) -> bool:
         len(generalized) > GENERALIZE_LENGTH_RATIO_MAX * max(len(raw_answer), 1)
         and len(generalized) > GENERALIZE_LENGTH_ABS_FLOOR
     ):
-        return False
-    if _has_repeated_line(generalized):
         return False
     if _ngram_repetition_ratio(generalized) > GENERALIZE_NGRAM_REPEAT_RATIO_MAX:
         return False
