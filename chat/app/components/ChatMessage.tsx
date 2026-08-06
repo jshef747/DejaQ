@@ -168,7 +168,7 @@ export default function ChatMessage({ message, onFeedback, onInspect, inspected 
         </div>
       </div>
 
-      {/* Metadata row — color-coded model badge + token count + timestamp */}
+      {/* Metadata row — color-coded model badge + timestamp */}
       {!isUser && (
         <div
           style={{
@@ -186,11 +186,6 @@ export default function ChatMessage({ message, onFeedback, onInspect, inspected 
           {message.sourceLabel && (
             <span style={{ color: "var(--fg-dimmer)", fontSize: "10px" }}>
               {message.sourceLabel}
-            </span>
-          )}
-          {(message.promptTokens !== undefined || message.completionTokens !== undefined) && (
-            <span style={{ color: "var(--fg-dimmer)", fontFamily: "var(--font-mono)", fontSize: "10px" }}>
-              {(message.promptTokens ?? 0) + (message.completionTokens ?? 0)} tok
             </span>
           )}
           <span style={{ color: "var(--fg-dimmer)", fontSize: "10px" }}>
