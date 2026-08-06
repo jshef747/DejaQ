@@ -462,12 +462,12 @@ def _patch_external_provider(monkeypatch, answer: str):
                 prompt_tokens=5, completion_tokens=6, latency_ms=10.0,
             )
 
-    class KeyedCredentialService:
-        def get_decrypted_key(self, session, workspace_id, provider):
-            return "sk-test-live"
-
     monkeypatch.setattr(openai_compat, "_external_llm", StubExternal())
-    monkeypatch.setattr(openai_compat, "CredentialService", KeyedCredentialService)
+    monkeypatch.setattr(
+        openai_compat,
+        "get_workspace_provider_key",
+        lambda session, workspace_id, provider: "sk-test-live",
+    )
     monkeypatch.setattr(
         openai_compat, "_read_effective_llm_config",
         lambda workspace_slug, workspace_id: openai_compat.EffectiveLlmConfig(
