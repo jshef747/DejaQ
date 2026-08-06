@@ -175,11 +175,10 @@ class TestIsTopicallyConsistent:
 
 class TestOverlapThresholdCalibration:
     """Regression guard for the ADJUSTER_MIN_TOPIC_OVERLAP retune, expressed as
-    the two populations measured in the safety-net threshold sweep (report:
-    dejaq-safetynet-necessity): on-topic rewrites that legitimately condense a
-    long cached answer down to a handful of shared nouns must be ACCEPTED,
-    drifted output that survives on one coincidental word or none must still be
-    REJECTED.
+    the two populations measured in the safety-net threshold sweep: on-topic
+    rewrites that legitimately condense a long cached answer down to a handful
+    of shared nouns must be ACCEPTED, drifted output that survives on one
+    coincidental word or none must still be REJECTED.
 
     None of these assert on the threshold constant, but they do bracket it. The
     cached answer below has 58 content words, so the four cases score 0.0000 and
