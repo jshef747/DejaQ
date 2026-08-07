@@ -243,15 +243,19 @@ MAX_ATTACHMENT_BYTES = int(_get_float("DEJAQ_MAX_ATTACHMENT_BYTES", 10 * 1024 * 
 OLLAMA_URL = _get_text("DEJAQ_OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_TIMEOUT_SECONDS = _get_float("DEJAQ_OLLAMA_TIMEOUT_SECONDS", 60.0)
 
-# Context window sent with every Ollama request. Ollama's runtime default is
-# independent of what a model supports and is far smaller than both models here
-# allow (qwen2.5:1.5b 32768, gemma4:e2b 131072), and num_ctx bounds the PROMPT
-# as well as the generation: left unset, a REWRITE_MAX_TOKENS generation over a
-# long answer overflows the window and Ollama silently drops the head of the
-# prompt, so the rewrite never sees the tail of the answer it was told to
-# preserve - the same silently-truncated stored copy the budget exists to
-# prevent, reached from the other side. 32768 is the smaller model's own
-# maximum, so it is safe on both.
+# Context window for the two REWRITE roles only (generalize, adjust) - every
+# other role keeps Ollama's own runtime default. Ollama's default is independent
+# of what a model supports and far smaller than both models here allow
+# (qwen2.5:1.5b 32768, gemma4:e2b 131072), and num_ctx bounds the PROMPT as well
+# as the generation: left unset, a REWRITE_MAX_TOKENS generation over a long
+# answer overflows the window and Ollama silently drops the head of the prompt,
+# so the rewrite never sees the tail of the answer it was told to preserve - the
+# same silently-truncated stored copy the budget exists to prevent, reached from
+# the other side. 32768 is the smaller model's own maximum, so it is safe on
+# both. Scoped to those two roles because a window costs memory (a KV cache is
+# allocated at this size per loaded model) and no other role comes near it - an
+# enricher or validator call is a few hundred tokens, and the largest model in
+# the stack, gemma4:e4b, is not a rewrite role at all.
 OLLAMA_NUM_CTX = int(_get_float("DEJAQ_OLLAMA_NUM_CTX", 32768))
 
 # Supabase management auth
@@ -429,11 +433,20 @@ ADJUST_NGRAM_REPEAT_RATIO_MAX = _get_float("DEJAQ_ADJUST_NGRAM_REPEAT_RATIO_MAX"
 # require to keep every item and which therefore inherits its source's
 # repetition without inventing any.
 #
-# Size is what separates that from a loop, in both directions: a loop repeats
-# itself into MORE text than it was given (measured on a 50-item templated
-# list: a faithful rewrite is 1.18x, self-paraphrase loops 2.27x and up), or
-# collapses onto one item and repeats that instead (0.56x). 1.3 admits the
-# faithful rewrite with margin and leaves both loop shapes facing the
+# This is only half the exemption's condition. The other half is that the
+# baseline must already exceed the ceiling being exempted, i.e. carry
+# repetition for the rewrite to inherit at all - size alone would also exempt a
+# self-paraphrase loop over ordinary prose, which lands at its input's size
+# while inventing every repetition it has (measured on a 654-character
+# non-repetitive answer: loops at 0.789x scoring 0.680 and 1.052x scoring
+# 0.762). No separate constant for that half: the ceiling above is its own
+# floor. See context_adjuster._inherits_baseline_repetition().
+#
+# Size is what separates the templated case from a loop, in both directions: a
+# loop repeats itself into MORE text than it was given (measured on a 50-item
+# templated list: a faithful rewrite is 1.18x, self-paraphrase loops 2.27x and
+# up), or collapses onto one item and repeats that instead (0.56x). 1.3 admits
+# the faithful rewrite with margin and leaves both loop shapes facing the
 # unmodified ceiling.
 #
 # Scaling the ceilings to the baseline's own repetition was tried instead and

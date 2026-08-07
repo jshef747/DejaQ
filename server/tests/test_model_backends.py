@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 
 import httpx
@@ -18,6 +19,64 @@ class FakeBackend:
     async def complete(self, request: CompletionRequest) -> str:
         self.requests.append(request)
         return self.response
+
+
+def _post_and_capture_options(request: CompletionRequest) -> dict:
+    captured: dict[str, object] = {}
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        captured["payload"] = json.loads(http_request.read())
+        return httpx.Response(
+            200,
+            json={"message": {"role": "assistant", "content": "ok"}},
+        )
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="http://ollama.test",
+    )
+    backend = OllamaBackend(
+        base_url="http://ollama.test",
+        timeout_seconds=5.0,
+        client=client,
+    )
+    try:
+        asyncio.run(backend.complete(request))
+    finally:
+        asyncio.run(client.aclose())
+
+    return captured["payload"]["options"]
+
+
+def test_num_ctx_is_omitted_unless_the_caller_asks_for_one():
+    """A context window is memory: Ollama allocates a KV cache at that size per
+    loaded model. Only the two rewrite roles send prompts large enough to need
+    one, so every other role must leave the window at Ollama's own default."""
+    options = _post_and_capture_options(
+        CompletionRequest(
+            model_name="qwen_1_5b",
+            messages=[{"role": "user", "content": "hello"}],
+            max_tokens=32,
+            temperature=0.0,
+        )
+    )
+
+    assert "num_ctx" not in options
+    assert options["num_predict"] == 32
+
+
+def test_num_ctx_is_sent_when_the_caller_sets_one():
+    options = _post_and_capture_options(
+        CompletionRequest(
+            model_name="qwen_1_5b",
+            messages=[{"role": "user", "content": "hello"}],
+            max_tokens=8192,
+            temperature=0.0,
+            num_ctx=32768,
+        )
+    )
+
+    assert options["num_ctx"] == 32768
 
 
 def test_ollama_backend_posts_chat_request():

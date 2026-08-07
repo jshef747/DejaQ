@@ -6,8 +6,6 @@ from typing import Protocol, TypedDict
 
 import httpx
 
-from app.config import OLLAMA_NUM_CTX
-
 logger = logging.getLogger("dejaq.services.model_backends")
 
 
@@ -23,6 +21,12 @@ class CompletionRequest:
     max_tokens: int
     temperature: float
     stop: list[str] | None = None
+    # Context window for this call only. Left None, Ollama uses its own runtime
+    # default, which is what every role wants: a window is memory (the KV cache
+    # is allocated at that size per loaded model) and only a caller whose prompt
+    # plus generation can approach it has anything to gain. Set it there, not
+    # here — see generalize()/adjust() in services/context_adjuster.py.
+    num_ctx: int | None = None
 
 
 @dataclass(frozen=True)
@@ -86,18 +90,12 @@ class OllamaBackend:
             "options": {
                 "temperature": request.temperature,
                 "num_predict": request.max_tokens,
-                # num_ctx bounds the prompt as well as the generation, and
-                # Ollama's runtime default is set independently of what the
-                # model supports — far below it for both models here. Left
-                # unset, a large num_predict over a long prompt overflows the
-                # window and Ollama silently drops the head of the prompt, so
-                # the model never sees the answer it was handed. See
-                # OLLAMA_NUM_CTX in app/config.py.
-                "num_ctx": OLLAMA_NUM_CTX,
             },
         }
         if request.stop:
             payload["options"]["stop"] = request.stop
+        if request.num_ctx is not None:
+            payload["options"]["num_ctx"] = request.num_ctx
 
         if self._client is not None:
             response = await self._client.post("/api/chat", json=payload)

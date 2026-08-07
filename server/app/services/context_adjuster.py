@@ -12,6 +12,7 @@ from app.config import (
     GENERALIZE_LENGTH_RATIO_MAX,
     GENERALIZE_NGRAM_REPEAT_RATIO_MAX,
     NGRAM_EXEMPT_LENGTH_RATIO,
+    OLLAMA_NUM_CTX,
     REWRITE_MAX_TOKENS,
 )
 from app.services.model_backends import CompletionRequest, ModelBackend
@@ -97,9 +98,9 @@ def _ngram_repetition_ratio(text: str, n: int = _NGRAM_SIZE) -> float:
     return repeated / len(grams)
 
 
-def _is_faithful_size(baseline: str, output: str) -> bool:
-    """Whether `output` is close enough in size to `baseline` to inherit its
-    repetition legitimately, exempting it from the repetition ceiling.
+def _inherits_baseline_repetition(baseline: str, output: str, absolute_max: float) -> bool:
+    """Whether `output`'s repetition can only have come from `baseline`'s own,
+    exempting it from the repetition ceiling.
 
     The repetition ceilings are absolute and measured (0.08, see app/config.py),
     and this is the ONE population they cannot serve: a legitimately templated
@@ -109,13 +110,20 @@ def _is_faithful_size(baseline: str, output: str) -> bool:
     rewrite of that whole answer shape scores far past any ceiling low enough
     to catch a real loop.
 
-    Size is what separates the two: a rewrite that reproduces its input's
-    repetition without changing size has added no content, so it cannot be a
-    loop - a loop repeats itself INTO more text than it was given (measured on
-    the same templated list: a faithful rewrite is 1.18x, self-paraphrase loops
-    are 2.27x and up), or collapses onto one item and repeats that instead
-    (measured 0.56x). Both directions therefore leave the band and face the
-    unmodified ceiling.
+    Two conditions, and both are load-bearing:
+
+    - The baseline must ALREADY fail the same ceiling, i.e. carry repetition of
+      its own for a rewrite to inherit. Size alone is not enough: a pure
+      self-paraphrase loop over ordinary non-repetitive prose can land at the
+      baseline's own size (measured on a 654-character prose answer at 0.000:
+      loops at 0.789x scoring 0.680 and 1.052x scoring 0.762), and exempting
+      those reopens the ceiling on the very population it was calibrated
+      against.
+    - The sizes must stay close. A loop repeats itself INTO more text than it
+      was given (measured on the templated list: a faithful rewrite is 1.18x,
+      self-paraphrase loops 2.27x and up), or collapses onto one item and
+      repeats that instead (0.56x). Both directions leave the band and face the
+      unmodified ceiling.
 
     Scaling the ceiling to the baseline's own repetition was tried and removed:
     at 1.5x the baseline it opened a fail-open band on exactly this population,
@@ -123,6 +131,8 @@ def _is_faithful_size(baseline: str, output: str) -> bool:
     against a 0.527 ceiling while staying far under the length arm's 10x.
     """
     if not baseline:
+        return False
+    if _ngram_repetition_ratio(baseline) <= absolute_max:
         return False
     ratio = len(output) / len(baseline)
     return 1 / NGRAM_EXEMPT_LENGTH_RATIO <= ratio <= NGRAM_EXEMPT_LENGTH_RATIO
@@ -146,9 +156,9 @@ def is_generalization_sane(raw_answer: str, generalized: str) -> bool:
         (measured 0.150 on the runaway; catches loops that reword slightly
         each pass, so no exact line or substring repeats - e.g. restating a
         continent count with a different number every loop), applied unless
-        the rewrite is close enough in size to the raw answer to have
-        inherited that repetition rather than invented it - see
-        _is_faithful_size().
+        the raw answer was itself repetitive and the rewrite kept its size, so
+        the repetition can only have been inherited rather than invented - see
+        _inherits_baseline_repetition().
 
     A third signal - an exact verbatim-repeated line - was tried and removed:
     it fired on neither captured incident (both separator lines are 5 chars,
@@ -174,7 +184,9 @@ def is_generalization_sane(raw_answer: str, generalized: str) -> bool:
     ):
         return False
     if (
-        not _is_faithful_size(raw_answer, generalized)
+        not _inherits_baseline_repetition(
+            raw_answer, generalized, GENERALIZE_NGRAM_REPEAT_RATIO_MAX
+        )
         and _ngram_repetition_ratio(generalized) > GENERALIZE_NGRAM_REPEAT_RATIO_MAX
     ):
         return False
@@ -196,12 +208,13 @@ def is_adjustment_sane(cached_answer: str, adjusted: str) -> bool:
         which catches a loop that rewords itself each pass and so never
         repeats a literal line. This is the signal that does the real work: a
         runaway is repetitive by construction, whatever it was rewriting. It
-        is skipped for a rewrite that stayed close to the cached answer's own
-        size (_is_faithful_size), because the system prompt above REQUIRES
-        every bullet and numbered item to survive, so a same-size rewrite of a
-        templated answer reproduces that template's own repetition (a 50-item
-        list measures 0.35-0.48) - without that exemption the prompt would
-        manufacture the very signal that discards its output.
+        is skipped only when the cached answer was itself repetitive and the
+        rewrite kept its size (_inherits_baseline_repetition), because the
+        system prompt above REQUIRES every bullet and numbered item to
+        survive, so a same-size rewrite of a templated answer reproduces that
+        template's own repetition (a 50-item list measures 0.35-0.48) -
+        without that exemption the prompt would manufacture the very signal
+        that discards its output.
       - a blown length ratio against that same cached answer, as a backstop
         for a loop varied enough to stay under the repetition bar. It applies
         only once the cached answer clears ADJUST_LENGTH_ABS_FLOOR, because a
@@ -222,7 +235,9 @@ def is_adjustment_sane(cached_answer: str, adjusted: str) -> bool:
     ):
         return False
     if (
-        not _is_faithful_size(cached_answer, adjusted)
+        not _inherits_baseline_repetition(
+            cached_answer, adjusted, ADJUST_NGRAM_REPEAT_RATIO_MAX
+        )
         and _ngram_repetition_ratio(adjusted) > ADJUST_NGRAM_REPEAT_RATIO_MAX
     ):
         return False
@@ -275,6 +290,13 @@ class ContextAdjusterService:
                 # long answer mid-sentence - and the stored copy is what every
                 # future cache hit serves, so a truncated one never self-heals.
                 max_tokens=REWRITE_MAX_TOKENS,
+                # This role is one of only two that need a window set: num_ctx
+                # bounds the prompt as well as the generation, and the prompt
+                # here carries the whole answer being rewritten on top of that
+                # budget. Left at Ollama's own default, the pair overflows it
+                # and the head of the prompt is silently dropped - so the model
+                # never sees the tail of the answer it was told to preserve.
+                num_ctx=OLLAMA_NUM_CTX,
                 # Deterministic: this is a faithful tone-neutralization
                 # rewrite, not creative generation, so temperature buys
                 # nothing here (see adjust() below for the same reasoning).
@@ -385,6 +407,10 @@ class ContextAdjusterService:
                 # mid-sentence, and nothing downstream notices - the
                 # topic-overlap net passes on a truncated prefix.
                 max_tokens=REWRITE_MAX_TOKENS,
+                # The other role that needs a window set, for the reason
+                # generalize() above records: this prompt carries the whole
+                # cached answer on top of the same budget.
+                num_ctx=OLLAMA_NUM_CTX,
                 # Deterministic: this is a faithful rewrite, not creative
                 # generation, so temperature buys nothing here and only made the
                 # regurgitation failure above intermittent and hard to reproduce.

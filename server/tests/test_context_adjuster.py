@@ -11,6 +11,7 @@ from app.config import (
     OLLAMA_NUM_CTX,
     REWRITE_MAX_TOKENS,
 )
+from app.services.model_backends import CompletionRequest
 from app.services.context_adjuster import (
     ContextAdjusterService,
     _GENERALIZE_STOP,
@@ -69,6 +70,39 @@ TEMPLATED_LIST_REWRITE = _templated_pass(_LOOP_FRAMES[0])
 
 def templated_self_paraphrase_loop(passes: int) -> str:
     return "\n".join(_templated_pass(frame) for frame in _LOOP_FRAMES[:passes])
+
+
+# The counter-population to the templated list above: ordinary prose with no
+# repetition of its own (0.000), paired with pure self-paraphrase loops around
+# it that happen to land at roughly its size. Nothing here may be exempted -
+# every repeated 4-gram in these outputs was invented, not inherited.
+PROSE_ANSWER = (
+    "A canary deployment routes a small share of production traffic to a new "
+    "version while everyone else stays on the current one, so failures show up "
+    "against real requests before they reach the whole user base. Teams usually "
+    "start somewhere near one percent, watch error rates and latency against the "
+    "unchanged baseline, and widen the slice in steps once the numbers hold. If "
+    "something regresses, the rollback is a routing change rather than a "
+    "redeploy, which is why the pattern is popular for services where a bad "
+    "release is expensive to undo. It costs more infrastructure than a straight "
+    "rollout, since both versions run at once for as long as the bake takes."
+)
+_PROSE_LOOP_SENTENCES = (
+    "A canary deployment sends a little of the traffic to the new version. ",
+    "A canary deployment routes a bit of the traffic to the newer version. ",
+    "A canary deployment directs some of the traffic to the fresh version. ",
+    "A canary deployment passes part of the traffic to the updated version. ",
+    "A canary deployment moves a slice of the traffic to the latest version. ",
+    "A canary deployment shifts a portion of the traffic to the newest version. ",
+    "A canary deployment hands a fraction of the traffic to the second version. ",
+    "A canary deployment gives a share of the traffic to the revised version. ",
+    "A canary deployment feeds a sliver of the traffic to the current version. ",
+    "A canary deployment steers a segment of the traffic to the added version. ",
+)
+
+
+def prose_self_paraphrase_loop(sentences: int) -> str:
+    return "".join(_PROSE_LOOP_SENTENCES[:sentences])
 
 
 class TestGeneralize:
@@ -222,6 +256,34 @@ class TestAdjustSafetyNet:
         assert REWRITE_MAX_TOKENS >= 8192
         assert REWRITE_MAX_TOKENS >= DEFAULT_MAX_TOKENS
         assert REWRITE_MAX_TOKENS * 2 <= OLLAMA_NUM_CTX
+
+    def test_both_rewrite_steps_set_a_context_window(self):
+        """num_ctx bounds the prompt as well as the generation, and these two
+        prompts carry a whole answer on top of REWRITE_MAX_TOKENS of output -
+        left at Ollama's default the pair overflows and the head of the prompt
+        is dropped silently. The window has to hold both."""
+        backend = _FakeBackend("short reply")
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        asyncio.run(service.generalize(CANARY_ANSWER))
+        asyncio.run(service.adjust("explain that in detail", CANARY_ANSWER))
+
+        for request in backend.requests:
+            assert request.num_ctx == OLLAMA_NUM_CTX
+            assert request.num_ctx >= request.max_tokens * 2
+
+    def test_a_context_window_is_opt_in_per_request(self):
+        """Only these two roles need the window. A window is memory - Ollama
+        allocates a KV cache at that size per loaded model - and the enricher,
+        normalizer, validator and local answer model send prompts of a few
+        hundred tokens, so they keep Ollama's own default by leaving this
+        unset. Fails if the window is ever moved back onto the shared backend."""
+        assert CompletionRequest(
+            model_name="qwen_1_5b",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=32,
+            temperature=0,
+        ).num_ctx is None
 
     def test_both_rewrite_steps_send_the_same_budget(self):
         """One budget, not two: the same answer passes through generalize() at
@@ -589,6 +651,23 @@ class TestIsGeneralizationSane:
             )
             assert not is_generalization_sane(TEMPLATED_LIST_ANSWER, looped)
 
+    def test_rejects_a_same_size_loop_over_a_raw_answer_with_no_repetition(self):
+        """The size exemption must not fire when there was no repetition to
+        inherit. These loops sit INSIDE the length band (0.88x, 1.10x) and
+        under the 10x length arm, so size alone would exempt them - but the raw
+        answer scores 0.000, meaning every repeated 4-gram in the output was
+        invented. This is the ordinary-prose population the 0.08 ceiling was
+        calibrated against, and it governs here exactly as it always has."""
+        assert _ngram_repetition_ratio(PROSE_ANSWER) == 0.0
+
+        for sentences in (8, 10):
+            looped = prose_self_paraphrase_loop(sentences)
+            ratio = len(looped) / len(PROSE_ANSWER)
+
+            assert 1 / 1.3 < ratio < 1.3
+            assert _ngram_repetition_ratio(looped) > 0.08
+            assert not is_generalization_sane(PROSE_ANSWER, looped)
+
 
 class TestGeneralizeSafetyNet:
     """Wiring tests: prove generalize() itself falls back to the raw answer
@@ -852,6 +931,23 @@ class TestIsAdjustmentSane:
                 TEMPLATED_LIST_ANSWER
             )
             assert not is_adjustment_sane(TEMPLATED_LIST_ANSWER, looped)
+
+    def test_rejects_a_same_size_loop_over_a_cached_answer_with_no_repetition(self):
+        """The serve-time half: a loop landing at the cached answer's own size
+        over a cached answer that had no repetition of its own. is_topically_
+        consistent() is blind to it - every repeated phrase is drawn from the
+        cached answer's vocabulary, so it scores near the maximum - which
+        leaves the repetition ceiling as the only thing that sees it, and the
+        size exemption must not disarm it here."""
+        assert _ngram_repetition_ratio(PROSE_ANSWER) == 0.0
+
+        for sentences in (8, 10):
+            looped = prose_self_paraphrase_loop(sentences)
+            ratio = len(looped) / len(PROSE_ANSWER)
+
+            assert 1 / 1.3 < ratio < 1.3
+            assert is_topically_consistent(looped, PROSE_ANSWER)
+            assert not is_adjustment_sane(PROSE_ANSWER, looped)
 
 
 class TestAdjustRunawayGuard:
