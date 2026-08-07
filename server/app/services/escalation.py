@@ -198,7 +198,7 @@ async def _escalate_to_local(
     system_prompt: str | None,
 ) -> EscalationResult:
     try:
-        answer, latency, _ = await asyncio.wait_for(
+        answer, latency, done_reason = await asyncio.wait_for(
             get_llm_router_service().generate_local_response(
                 query,
                 history=history,
@@ -214,13 +214,27 @@ async def _escalate_to_local(
         logger.exception("Local feedback escalation failed interaction_id=%s", interaction.interaction_id)
         return EscalationResult(escalation_status="provider_error")
 
-    child = await response_registry.register(
-        response_id=await _cache_response_id_for_escalation(
+    # Same rule the miss path applies to its own generation: a cut-off answer
+    # never enters the cache, since a stored truncation is what every later
+    # match is served and it never self-heals. The escalated answer still
+    # reaches the user who asked for it; only the store is skipped.
+    if done_reason == "length":
+        logger.warning(
+            "feedback_escalation cache_store status=skipped reason=truncated (done_reason=length) "
+            "interaction_id=%s",
+            interaction.interaction_id,
+        )
+        escalated_response_id = None
+    else:
+        escalated_response_id = await _cache_response_id_for_escalation(
             interaction=interaction,
             query=query,
             history=history,
             answer=answer,
-        ),
+        )
+
+    child = await response_registry.register(
+        response_id=escalated_response_id,
         workspace_id=interaction.workspace_id,
         workspace_slug=interaction.workspace_slug,
         department=interaction.department,

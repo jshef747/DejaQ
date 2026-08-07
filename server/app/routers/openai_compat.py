@@ -1253,6 +1253,22 @@ async def run_chat_pipeline(
                 route, model_used,
             )
 
+        # A truncated answer is not an answer either. The client's own
+        # max_tokens (nothing clamps it) can cut a long answer off mid-sentence,
+        # and the generator's own signal is the only thing that knows: the text
+        # reads as a clean prefix. generalize()'s guard does not cover this one
+        # - it only sees whether the REWRITE was truncated, and its fallback
+        # returns this same cut-off raw answer. Stored, it never self-heals:
+        # every later match is served the same cut-off text, reported as
+        # finish_reason="stop" because a hit carries no truncation signal.
+        if finish_reason == "length":
+            will_cache = False
+            logger.warning(
+                "generation was truncated (finish_reason=length, route=%s model=%s); "
+                "not caching the cut-off answer",
+                route, model_used,
+            )
+
         # An image with no usable fingerprint of either kind can't be gated on
         # future hits, so don't cache it — the query text alone would wrongly
         # match a plain text ask later. This now also covers the two cases that

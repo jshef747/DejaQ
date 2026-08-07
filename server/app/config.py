@@ -254,11 +254,29 @@ OLLAMA_TIMEOUT_SECONDS = _get_float("DEJAQ_OLLAMA_TIMEOUT_SECONDS", 60.0)
 # so the rewrite never sees the tail of the answer it was told to preserve - the
 # same silently-truncated stored copy the budget exists to prevent, reached from
 # the other side. 32768 is the smaller model's own maximum, so it is safe on
-# both. Scoped to those two roles because a window costs memory (a KV cache is
-# allocated at this size per loaded model) and no other role comes near it - an
-# enricher or validator call is a few hundred tokens, and the largest model in
-# the stack, gemma4:e4b, is not a rewrite role at all.
+# both. Only the two rewrite roles NEED it; every other role that shares one of
+# their two models sends it anyway (enricher on qwen2.5:1.5b, normalizer and
+# validator on gemma4:e2b), because Ollama treats a changed runner option as a
+# reload of that model - two windows on one model tag unload and reload it
+# between consecutive roles on the same request, on the synchronous serve path.
+# That costs no extra memory over the rewrite roles alone: the model is already
+# loaded at this window whenever generalize()/adjust() run. gemma4:e4b, the
+# largest model in the stack, is not a rewrite role and shares one with none, so
+# it keeps Ollama's own default.
 OLLAMA_NUM_CTX = int(_get_float("DEJAQ_OLLAMA_NUM_CTX", 32768))
+
+# Deadline for adjust() alone, the one rewrite role on the synchronous
+# cache-hit path. Its budget is REWRITE_MAX_TOKENS, sized so a full-fidelity
+# rewrite of the largest stored answer fits; without a deadline of its own the
+# only bound left is OLLAMA_TIMEOUT_SECONDS, so a runaway spending that whole
+# budget makes a waiting user hold the fast path open for the full shared
+# timeout before the fallback fires. Not swept, and it does not need to be: the
+# fallback is the complete cached answer (the same one every other guard in
+# adjust() falls back to), so a deadline set too tight costs tone, never
+# content. Half OLLAMA_TIMEOUT_SECONDS, which leaves a slow but legitimate
+# large rewrite room while halving the worst case. generalize() gets no
+# equivalent - it runs in a background Celery task with nobody waiting on it.
+ADJUST_TIMEOUT_SECONDS = _get_float("DEJAQ_ADJUST_TIMEOUT_SECONDS", 30.0)
 
 # Supabase management auth
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
@@ -386,7 +404,8 @@ GENERALIZE_NGRAM_REPEAT_RATIO_MAX = _get_float("DEJAQ_GENERALIZE_NGRAM_REPEAT_RA
 #     length should stay in the same neighbourhood.
 #   - This runs on the synchronous cache-hit path, in front of a waiting user,
 #     where generalize() runs in a background Celery task. Since adjust()'s cap
-#     is DEFAULT_MAX_TOKENS a loop now spends the full budget before returning.
+#     is REWRITE_MAX_TOKENS a loop now spends the full budget before returning,
+#     bounded only by ADJUST_TIMEOUT_SECONDS above.
 #   - Growth only. adjust() legitimately SHRINKS a long cached answer whenever
 #     the question asks it to ("give me the short version", "explain it
 #     simply"), so there is no lower length bound here; ADJUSTER_MIN_TOPIC_

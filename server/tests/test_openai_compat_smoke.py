@@ -60,6 +60,14 @@ class StubRouter:
         return "Paris is the capital of France.", 12.0, "stop"
 
 
+class TruncatedStubRouter:
+    """Generation that spent its whole token budget: Ollama's own signal says
+    "length", and the text itself reads as a clean prefix."""
+
+    async def generate_local_response(self, query: str, history=None, max_tokens=1024, system_prompt=None):
+        return "Paris is the capital of Fra", 12.0, "length"
+
+
 class StubClassifier:
     calls = 0
 
@@ -1364,6 +1372,148 @@ def test_no_alias_stored_for_trusted_hit(monkeypatch):
     assert response.status_code == 200
     assert response.headers["x-dejaq-tier"] == "cache"
     assert not alias_calls  # trusted hits don't need aliases
+
+
+def _patch_for_truncation(monkeypatch, router):
+    """Minimum wiring for a cache miss answered by `router`, no models loaded."""
+
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "_llm_router", router)
+    monkeypatch.setattr(openai_compat, "_classifier", StubClassifier())
+    monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
+    monkeypatch.setattr(openai_compat, "USE_CELERY", False)
+    return TestClient(app, headers=_AUTH)
+
+
+def _sse_events(response) -> list[dict]:
+    """Parse `data:` payloads out of an SSE body, skipping the [DONE] sentinel."""
+    import json
+
+    return [
+        json.loads(line[len("data: "):])
+        for line in response.text.splitlines()
+        if line.startswith("data: ") and line != "data: [DONE]"
+    ]
+
+
+def test_truncated_miss_reports_length_on_chat_completions(monkeypatch):
+    """The wire-level end of the truncation signal. Without it a client that
+    sends a small max_tokens gets a cut-off answer labelled finish_reason=stop,
+    i.e. told the model finished when it did not."""
+    client = _patch_for_truncation(monkeypatch, TruncatedStubRouter())
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "max_tokens": 8,
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["finish_reason"] == "length"
+
+
+def test_untruncated_miss_still_reports_stop_on_chat_completions(monkeypatch):
+    """Control for the three tests around it: honest reporting has to mean
+    "length" only when the generator said so, not "length" everywhere."""
+    client = _patch_for_truncation(monkeypatch, StubRouter())
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.json()["choices"][0]["finish_reason"] == "stop"
+
+
+def test_truncated_miss_reports_length_on_the_final_stream_chunk(monkeypatch):
+    client = _patch_for_truncation(monkeypatch, TruncatedStubRouter())
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "max_tokens": 8,
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 200
+    chunks = _sse_events(response)
+    assert chunks[-1]["choices"][0]["finish_reason"] == "length"
+
+
+def test_truncated_miss_reports_incomplete_on_responses(monkeypatch):
+    """/v1/responses carries the same signal as a status, top-level and on the
+    output item - an SDK reads either one."""
+    client = _patch_for_truncation(monkeypatch, TruncatedStubRouter())
+
+    response = client.post(
+        "/v1/responses",
+        json={
+            "model": "gpt-4o-mini",
+            "input": "What is the capital of France?",
+            "max_output_tokens": 8,
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "incomplete"
+    assert payload["output"][0]["status"] == "incomplete"
+
+
+def test_untruncated_miss_still_reports_completed_on_responses(monkeypatch):
+    client = _patch_for_truncation(monkeypatch, StubRouter())
+
+    response = client.post(
+        "/v1/responses",
+        json={"model": "gpt-4o-mini", "input": "What is the capital of France?", "stream": False},
+    )
+
+    payload = response.json()
+    assert payload["status"] == "completed"
+    assert payload["output"][0]["status"] == "completed"
+
+
+def test_truncated_miss_reports_incomplete_on_streamed_responses(monkeypatch):
+    client = _patch_for_truncation(monkeypatch, TruncatedStubRouter())
+
+    response = client.post(
+        "/v1/responses",
+        json={
+            "model": "gpt-4o-mini",
+            "input": "What is the capital of France?",
+            "max_output_tokens": 8,
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 200
+    events = _sse_events(response)
+    item_done = [e for e in events if e.get("item", {}).get("status") == "incomplete"]
+    assert item_done, "no output_item.done carried the incomplete status"
+    # The terminal event still rides on `response.completed` (the Responses API
+    # has a distinct `response.incomplete` event DejaQ does not emit yet), so
+    # the payload status is what a client has to read.
+    assert events[-1]["response"]["status"] == "incomplete"
 
 
 def test_hard_query_unmapped_external_model_returns_422(monkeypatch):

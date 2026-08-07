@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 import time
@@ -7,6 +8,7 @@ from app.config import (
     ADJUST_LENGTH_ABS_FLOOR,
     ADJUST_LENGTH_RATIO_MAX,
     ADJUST_NGRAM_REPEAT_RATIO_MAX,
+    ADJUST_TIMEOUT_SECONDS,
     ADJUSTER_MIN_TOPIC_OVERLAP,
     GENERALIZE_LENGTH_ABS_FLOOR,
     GENERALIZE_LENGTH_RATIO_MAX,
@@ -357,7 +359,7 @@ class ContextAdjusterService:
 
         start = time.time()
 
-        adjusted = await self.adjust_backend.complete(
+        completion = self.adjust_backend.complete(
             CompletionRequest(
                 model_name=self.adjust_model_name,
                 messages=[
@@ -451,6 +453,21 @@ class ContextAdjusterService:
                 temperature=0,
             )
         )
+        # Every other guard in this function is post-hoc: they all need the
+        # generation to come back before they can reject it, so none of them
+        # bounds how long a waiting user holds the cache-hit path open. That is
+        # what this deadline is for (see ADJUST_TIMEOUT_SECONDS in
+        # app/config.py) - it fires into the same fallback the other guards
+        # use, the complete cached answer.
+        try:
+            adjusted = await asyncio.wait_for(completion, timeout=ADJUST_TIMEOUT_SECONDS)
+        except TimeoutError:
+            logger.warning(
+                "Context adjuster timed out after %.1fs (cached_len=%d); "
+                "serving the cached answer verbatim instead",
+                ADJUST_TIMEOUT_SECONDS, len(general_answer),
+            )
+            return general_answer
 
         latency = (time.time() - start) * 1000
         logger.debug("Context adjustment completed in %.2f ms", latency)

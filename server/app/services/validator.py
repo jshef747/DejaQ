@@ -1,6 +1,7 @@
 import logging
 import time
 
+from app.config import OLLAMA_NUM_CTX
 from app.services.model_backends import CompletionRequest, ModelBackend
 
 logger = logging.getLogger("dejaq.services.validator")
@@ -243,6 +244,15 @@ class ValidatorService:
                 model_name=self.model_name,
                 messages=messages,
                 max_tokens=8,
+                # A one-word verdict needs nothing near this window. It is set
+                # to match generalize(), which runs on the SAME model
+                # (gemma4:e2b): Ollama treats a changed runner option as a
+                # reload, so two different windows make it unload and reload
+                # the model between roles - here on the synchronous band-hit
+                # path, in front of a waiting user. Costs no extra memory - the
+                # model is already loaded at this window whenever generalize()
+                # runs.
+                num_ctx=OLLAMA_NUM_CTX,
                 temperature=0.0,
             )
         )).text

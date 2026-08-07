@@ -14,6 +14,7 @@ from app.config import (
     REWRITE_MAX_TOKENS,
 )
 from app.services.model_backends import CompletionRequest, CompletionResult
+from app.services import context_adjuster
 from app.services.context_adjuster import (
     ContextAdjusterService,
     _GENERALIZE_STOP,
@@ -311,17 +312,46 @@ class TestAdjustSafetyNet:
             assert request.num_ctx >= request.max_tokens * 2
 
     def test_a_context_window_is_opt_in_per_request(self):
-        """Only these two roles need the window. A window is memory - Ollama
-        allocates a KV cache at that size per loaded model - and the enricher,
-        normalizer, validator and local answer model send prompts of a few
-        hundred tokens, so they keep Ollama's own default by leaving this
-        unset. Fails if the window is ever moved back onto the shared backend."""
+        """The window stays a per-request opt-in rather than a backend-wide
+        default: only the roles sharing a model with a rewrite role send it
+        (see test_every_role_on_a_rewrite_model_sends_the_same_window below),
+        and the local answer model - gemma4:e4b, which shares with none - keeps
+        Ollama's own. Fails if the window is ever moved onto the shared
+        backend, which would apply it to that model too."""
         assert CompletionRequest(
             model_name="qwen_1_5b",
             messages=[{"role": "user", "content": "hi"}],
             max_tokens=32,
             temperature=0,
         ).num_ctx is None
+
+    def test_every_role_on_a_rewrite_model_sends_the_same_window(self):
+        """Ollama treats a changed runner option as a reload of that model, so
+        two windows on one model tag unload and reload it between consecutive
+        roles - enrich() then adjust() on qwen2.5:1.5b run back to back on
+        every multi-turn cache hit, with the user waiting. The enricher,
+        normalizer and validator therefore send the rewrite roles' window even
+        though their own prompts are a few hundred tokens; it costs nothing
+        extra, since the model is already loaded at this window whenever
+        generalize()/adjust() run."""
+        from app.services.context_enricher import ContextEnricherService
+        from app.services.normalizer import NormalizerService
+        from app.services.validator import ValidatorService
+
+        backend = _FakeBackend("best pizza")
+        asyncio.run(ContextEnricherService(backend, "qwen_1_5b").enrich(
+            "what about rome?", [{"role": "user", "content": "where should I eat?"}],
+        ))
+        asyncio.run(NormalizerService(backend, "gemma_e2b").normalize(
+            "what is the best pizza in rome?",
+        ))
+        asyncio.run(ValidatorService(backend, "gemma_e2b").validate(
+            "capital of france?", "what is the capital of france?", "Paris.",
+        ))
+
+        assert len(backend.requests) == 3
+        for request in backend.requests:
+            assert request.num_ctx == OLLAMA_NUM_CTX
 
     def test_both_rewrite_steps_send_the_same_budget(self):
         """One budget, not two: the same answer passes through generalize() at
@@ -823,8 +853,9 @@ class TestIsAdjustmentSane:
     """Pure unit tests for the adjust() serve-time safety net, the sibling of
     is_generalization_sane() above. adjust() carries no stop string (its
     few-shots are chat turns, with no separator marker to stop on) and runs at
-    DEFAULT_MAX_TOKENS on the synchronous cache-hit path, so this guard is the
-    only bound on a runaway rewrite reaching a waiting user."""
+    REWRITE_MAX_TOKENS on the synchronous cache-hit path, so this guard is the
+    only bound on a runaway rewrite reaching a waiting user (ADJUST_TIMEOUT_
+    SECONDS bounds how long it can take to get there, not what it returns)."""
 
     pytestmark = pytest.mark.no_model
 
@@ -1059,9 +1090,27 @@ class TestAdjustRunawayGuard:
     """Wiring tests: prove adjust() itself falls back to the cached answer when
     the backend returns a runaway, not just that is_adjustment_sane() would
     reject it in isolation. Regression test for raising adjust()'s cap to
-    DEFAULT_MAX_TOKENS - it fails if the guard is dropped from adjust()."""
+    REWRITE_MAX_TOKENS - it fails if the guard is dropped from adjust()."""
 
     pytestmark = pytest.mark.no_model
+
+    def test_falls_back_to_the_cached_answer_when_the_rewrite_stalls(self, monkeypatch):
+        """The one guard that does not need the generation to come back first:
+        every other check here is post-hoc, so none of them bounds how long a
+        waiting user holds the cache-hit path open."""
+
+        class _StallingBackend:
+            async def complete(self, request):
+                await asyncio.sleep(60)
+                raise AssertionError("the deadline should have fired first")
+
+        monkeypatch.setattr(context_adjuster, "ADJUST_TIMEOUT_SECONDS", 0.01)
+        backend = _StallingBackend()
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        result = asyncio.run(service.adjust("explain that in detail", CANARY_ANSWER))
+
+        assert result == CANARY_ANSWER
 
     def test_falls_back_to_the_cached_answer_on_a_runaway(self):
         looped = (
