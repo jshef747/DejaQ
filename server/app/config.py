@@ -323,6 +323,14 @@ ADJUSTER_MIN_TOPIC_OVERLAP = _get_float("DEJAQ_ADJUSTER_MIN_TOPIC_OVERLAP", 0.02
 # case (a contained few-shot leak, not even a full runaway) was 13.0x
 # (415 characters from a 32-character raw answer). This sits inside that gap.
 # See app/services/context_adjuster.py:is_generalization_sane.
+#
+# generalize()'s max_tokens moved from 1024 to DEFAULT_MAX_TOKENS so a long
+# answer stops truncating mid-sentence under the "Keep all facts" prompt (a
+# raw miss answer can reach ~3,700 tokens, openai_compat.py:667) - see
+# is_generalization_sane's docstring for why this ratio still holds at the
+# larger cap: it is a proportion of the raw answer's own length, not tied to
+# the token budget, so a longer-running loop only pushes it further past
+# this ceiling, never back under it.
 GENERALIZE_LENGTH_RATIO_MAX = _get_float("DEJAQ_GENERALIZE_LENGTH_RATIO_MAX", 10.0)
 # Below this absolute length, never flag on ratio alone - protects a short,
 # correct rewrite of a very short raw answer (e.g. "Au") from a ratio false

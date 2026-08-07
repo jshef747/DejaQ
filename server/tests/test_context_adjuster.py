@@ -146,6 +146,19 @@ class TestAdjustSafetyNet:
 
         assert backend.requests[0].temperature == 0
 
+    def test_generalize_can_reproduce_a_maximally_sized_answer(self):
+        """generalize()'s system prompt says 'Keep all facts', so its output
+        budget must match what a raw miss answer can reach (~3,700 tokens
+        measured, openai_compat.py:667) - a smaller cap truncates the stored
+        rewrite mid-sentence, and a truncated STORED answer never self-heals:
+        it is what every future cache hit serves."""
+        backend = _FakeBackend("The mechanism converts an input into an output.")
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        asyncio.run(service.generalize(CANARY_ANSWER))
+
+        assert backend.requests[0].max_tokens == DEFAULT_MAX_TOKENS
+
     def test_adjust_can_reproduce_a_maximally_sized_answer(self):
         """The adjust() system prompt requires every section, bullet and named
         entity to survive, so its output budget must match the one the raw
@@ -396,6 +409,23 @@ class TestIsGeneralizationSane:
         assert "ANSWER:" not in self.MILD_LEAK_GENERALIZED_ANSWER
         assert "*****" not in self.MILD_LEAK_GENERALIZED_ANSWER
         assert not is_generalization_sane(self.MILD_RAW_ANSWER, self.MILD_LEAK_GENERALIZED_ANSWER)
+
+    def test_rejects_the_real_captured_runaway_given_more_room_to_run(self):
+        """generalize()'s max_tokens moved from 1024 to DEFAULT_MAX_TOKENS
+        (~4x more budget) so a long, factual answer stops truncating. This
+        proves that does not weaken the guard: take the real captured
+        incident text (which ran to completion at the OLD 1024-token cap) and
+        extend it with more passes of its own self-paraphrasing, simulating
+        the same loop given the extra room the new cap allows. Both the
+        length ratio and the n-gram repetition signal only get MORE
+        pronounced with more room to loop, never less - a longer runway makes
+        a runaway easier to catch, not harder."""
+        extended = self.RUNAWAY_GENERALIZED_ANSWER + (
+            "\n\n" + self.RUNAWAY_GENERALIZED_ANSWER[len(self.RUNAWAY_GENERALIZED_ANSWER) // 2:]
+        ) * 3
+        assert len(extended) > len(self.RUNAWAY_GENERALIZED_ANSWER) * 2
+        assert _ngram_repetition_ratio(extended) > _ngram_repetition_ratio(self.RUNAWAY_GENERALIZED_ANSWER)
+        assert not is_generalization_sane(self.RAW_ANSWER, extended)
 
     def test_accepts_a_faithful_clean_rewrite(self):
         clean = "The largest country in Europe by area is Russia."

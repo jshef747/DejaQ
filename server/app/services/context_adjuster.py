@@ -121,6 +121,15 @@ def is_generalization_sane(raw_answer: str, generalized: str) -> bool:
     below its own length floor), while it did reject ordinary structured
     answers such as two markdown tables sharing a column-separator row,
     silently disabling generalization for the answer shapes LLMs emit most.
+
+    generalize()'s own max_tokens was raised from 1024 to DEFAULT_MAX_TOKENS so
+    a long, factual answer stops truncating mid-sentence under the "Keep all
+    facts" system prompt - a real raw answer can reach ~3,700 tokens
+    (openai_compat.py:667) and the stored copy is what every future cache hit
+    serves, so a truncated one never self-heals. That raise does not weaken
+    this guard: both signals are scale-invariant ratios, not tied to the token
+    cap - a longer runway for a loop to run only pushes its length ratio and
+    n-gram repetition further past these thresholds, never back under them.
     """
     if not generalized.strip():
         return False
@@ -210,7 +219,14 @@ class ContextAdjusterService:
                 # Actual answer
                 {"role": "user", "content": f"ANSWER: {answer}"},
                 ],
-                max_tokens=1024,
+                # Same ceiling the raw answer was generated under (see adjust()
+                # below for the identical reasoning). The system prompt above
+                # says "Keep all facts"; a raw miss answer can reach ~3,700
+                # tokens (openai_compat.py:667), so a 1024 cap truncated the
+                # generalized rewrite of a long answer mid-sentence before this
+                # was raised - and the stored copy is what every future cache
+                # hit serves, so a truncated one never self-heals.
+                max_tokens=DEFAULT_MAX_TOKENS,
                 # Deterministic: this is a faithful tone-neutralization
                 # rewrite, not creative generation, so temperature buys
                 # nothing here (see adjust() below for the same reasoning).
