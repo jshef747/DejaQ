@@ -43,6 +43,18 @@ class StubAdjuster:
         return general_answer
 
 
+class MarkerAdjuster:
+    """Returns a value distinguishable from general_answer, so a test can
+    prove whether adjust() ran just by inspecting the served content -
+    StubAdjuster's passthrough can't tell a skip from a no-op rewrite."""
+
+    async def generalize(self, answer: str) -> str:
+        return answer
+
+    async def adjust(self, original_query: str, general_answer: str) -> str:
+        return "ADJUSTED: " + general_answer
+
+
 class StubRouter:
     async def generate_local_response(self, query: str, history=None, max_tokens=1024, system_prompt=None):
         return "Paris is the capital of France.", 12.0
@@ -105,6 +117,28 @@ class StubHitMemory:
 
     def check_cache(self, clean_query: str):
         return ("Cached Paris answer.", "doc123", 0.04, "capital of france")
+
+    def increment_hit_count(self, doc_id: str):
+        return None
+
+
+class StubHitMemoryBeyondAdjustSkip:
+    """Trusted-tier hit (distance well under CACHE_TRUST_DISTANCE) but past
+    ADJUSTER_SKIP_DISTANCE - adjust() must still run for this one."""
+
+    def lookup_cache(self, clean_query: str):
+        return CacheLookupResult(
+            hit=True,
+            generalized_answer="Cached Paris answer.",
+            entry_id="docfar",
+            distance=0.10,
+            matched_query="capital of france",
+            nearest_distance=0.10,
+            nearest_prompt="capital of france",
+        )
+
+    def check_cache(self, clean_query: str):
+        return None
 
     def increment_hit_count(self, doc_id: str):
         return None
@@ -341,6 +375,103 @@ def test_cache_answer_registers_interaction_and_emits_tier_headers(monkeypatch):
     assert response.headers["x-dejaq-response-id"].endswith(":doc123")
     assert registry.calls[0]["served_tier"] == "cache"
     assert registry.calls[0]["response_id"].endswith(":doc123")
+
+
+def test_adjust_skipped_for_close_single_turn_repeat(monkeypatch):
+    """ADJUSTER_SKIP_DISTANCE: a single-turn near-duplicate of a cached
+    question (distance 0.04, no prior conversation) must serve the stored
+    answer verbatim - no adjust() call, no validator call. Uses an
+    ExplodingValidator to prove the validator is never reached either (it
+    already skips below VALIDATOR_SKIP_DISTANCE independent of this change);
+    MarkerAdjuster proves adjust() specifically was skipped, since its output
+    would be distinguishable from the raw cached text."""
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", MarkerAdjuster())
+    monkeypatch.setattr(openai_compat, "_validator", ExplodingValidator())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubHitMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+
+    client = TestClient(app, headers=_AUTH)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "what is teh capitol of frnace?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["choices"][0]["message"]["content"] == "Cached Paris answer."
+
+
+def test_adjust_runs_for_single_turn_hit_beyond_skip_distance(monkeypatch):
+    """A single-turn hit past ADJUSTER_SKIP_DISTANCE (distance 0.10, still
+    inside the trusted tier) is not close enough to assume there is no tone
+    gap - adjust() must still run."""
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", MarkerAdjuster())
+    monkeypatch.setattr(openai_compat, "_validator", StubValidatorValid())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubHitMemoryBeyondAdjustSkip())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+
+    client = TestClient(app, headers=_AUTH)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "what's the capital of france anyway?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["choices"][0]["message"]["content"] == "ADJUSTED: Cached Paris answer."
+
+
+def test_adjust_runs_for_multiturn_hit_even_when_close(monkeypatch):
+    """The single-turn restriction is what protects a genuine 'give me the
+    short version' follow-up (see config.py:ADJUSTER_SKIP_DISTANCE): even at
+    a distance inside the skip window, a hit reached through prior
+    conversation history must still go through adjust(), since only the
+    conversation - not the distance - can tell a repeat from a rewrite ask."""
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", MarkerAdjuster())
+    monkeypatch.setattr(openai_compat, "_validator", ExplodingValidator())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubHitMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+
+    client = TestClient(app, headers=_AUTH)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [
+                {"role": "user", "content": "What is the capital of France?"},
+                {"role": "assistant", "content": "Cached Paris answer."},
+                {"role": "user", "content": "give me the short version"},
+            ],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["choices"][0]["message"]["content"] == "ADJUSTED: Cached Paris answer."
 
 
 def test_cache_miss_includes_difficulty_and_nearest_cache_headers(monkeypatch, caplog):

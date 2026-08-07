@@ -276,6 +276,32 @@ VALIDATOR_MODEL_NAME = _get_text("DEJAQ_VALIDATOR_MODEL_NAME", "gemma_e2b")
 # guarantees the cached answer covers the question).
 VALIDATOR_SKIP_DISTANCE = _get_float("DEJAQ_VALIDATOR_SKIP_DISTANCE", 0.05)
 
+# Below this cosine distance, on a single-turn request only (no prior
+# conversation history - see openai_compat.py's use of `history`), skip
+# adjust() entirely and serve the stored generalized_answer verbatim. Measured
+# (data/dejaq-adjuster-over-condensation/report.md, follow-up sweep):
+# single-turn typo/rephrase repeats of an already-cached question - no real
+# tone or length ask - measured 0.0261-0.1687 (10 cases, 3 anchors); the
+# lowest single-turn request that DID explicitly ask for something different
+# ("explain in simple terms...") measured 0.0799. 0.075 sits inside that
+# narrow gap, covering the diagnosed incident (0.0706) with a small margin on
+# both sides. The gap is real but thin (13 samples total) and the tone side
+# has only 3 - narrower evidence than ADJUSTER_MIN_TOPIC_OVERLAP's 52-case
+# sweep, so this is a starting point to widen with more data, not a settled
+# constant.
+#
+# The single-turn restriction is load-bearing, not a nicety: a multi-turn
+# follow-up that DOES explicitly ask to shorten ("give me the short version")
+# measured distance 0.0000-0.0093 in the same sweep - indistinguishable from
+# or closer than typo noise - because the context enricher folds a
+# conversational "make that shorter" turn back into a standalone restatement
+# of the original question, discarding the length/tone request before the
+# embedding is ever computed. Distance alone cannot separate that case from a
+# meaningless typo repeat; requiring empty history rules out every case where
+# that collapse was observed, since a fresh single-turn message has no prior
+# answer for "shorter"/"like I'm 5" to refer to in the first place.
+ADJUSTER_SKIP_DISTANCE = _get_float("DEJAQ_ADJUSTER_SKIP_DISTANCE", 0.075)
+
 # Post-hoc safety net for the context adjuster: the minimum fraction of the
 # cached answer's content words that must survive into the tone-adjusted
 # answer. Below this, the adjustment is treated as a drift (e.g. the small

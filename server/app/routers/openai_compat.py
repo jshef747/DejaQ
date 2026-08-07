@@ -57,6 +57,7 @@ from app.services.service_factory import (
 )
 from app.tasks.cache_tasks import generalize_and_store_task
 from app.config import (
+    ADJUSTER_SKIP_DISTANCE,
     CACHE_ALIAS_ENABLED,
     CACHE_BAND_MAX_DISTANCE,
     CACHE_FILE_ENABLED,
@@ -983,12 +984,24 @@ async def run_chat_pipeline(
                     _cache_distance, _cache_matched_query, trace.summary(),
                 )
             else:
+                # Single-turn request (no prior conversation turns) close enough
+                # to the matched question that there is no real tone/length gap
+                # for adjust() to close — skip the rewrite and serve the stored
+                # answer verbatim, same fallback path used on adjuster failure
+                # and topic drift below. `not history` is load-bearing, not a
+                # nicety: it's what rules out a genuine "give me the short
+                # version" follow-up, which the context enricher folds back into
+                # a near-duplicate of the original question (measured distance
+                # as low as 0.0000) — see ADJUSTER_SKIP_DISTANCE in config.py.
+                _skip_adjust = (not history) and _cache_distance <= ADJUSTER_SKIP_DISTANCE
                 if _attachment_anchored:
                     # Attachment answers are stored verbatim (the generalizer
                     # invents specifics it cannot see — docs/image-gate.md), so no
                     # tone was ever stripped and there is nothing to put back.
                     # Running the adjuster here would be the same blind rewrite,
                     # plus ~2.1s.
+                    answer = cached_answer
+                elif _skip_adjust:
                     answer = cached_answer
                 else:
                     try:
