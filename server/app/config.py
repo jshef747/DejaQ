@@ -368,9 +368,10 @@ GENERALIZE_LENGTH_ABS_FLOOR = _get_float("DEJAQ_GENERALIZE_LENGTH_ABS_FLOOR", 20
 # captured runaways measured 0.136-0.150 even where each loop paraphrased
 # itself differently (never a literal repeat, which is why line/substring
 # matching alone misses this shape). Threshold sits inside that gap with
-# margin both directions. Applied unless the rewrite kept the raw answer's own
-# size (see NGRAM_EXEMPT_LENGTH_RATIO below), which is the only population this
-# value cannot serve.
+# margin both directions. Applied unless the raw answer was itself repetitive,
+# the rewrite kept its size, and the rewrite is no more repetitive than the raw
+# answer plus this same value (see NGRAM_EXEMPT_LENGTH_RATIO below) - which is
+# the only population this value cannot serve.
 GENERALIZE_NGRAM_REPEAT_RATIO_MAX = _get_float("DEJAQ_GENERALIZE_NGRAM_REPEAT_RATIO_MAX", 0.08)
 
 # Serve-time safety net for adjust(), the same two signals the generalize()
@@ -416,9 +417,10 @@ ADJUST_LENGTH_ABS_FLOOR = _get_float("DEJAQ_ADJUST_LENGTH_ABS_FLOOR", 200.0)
 # very vocabulary that check is looking for. Same threshold as the generalizer,
 # measured against the same population - clean rewrites at 0.000, captured
 # runaways at 0.136-0.150 even when each pass reworded itself - and likewise
-# skipped for a rewrite that kept the cached answer's own size (see
-# NGRAM_EXEMPT_LENGTH_RATIO below). That exemption matters more here than on
-# the generalize() side: adjust()'s system prompt explicitly REQUIRES the
+# skipped for a rewrite of an already-repetitive cached answer that kept its
+# size and added no repetition beyond it (see NGRAM_EXEMPT_LENGTH_RATIO below,
+# which uses this same value as that headroom). That exemption matters more
+# here than on the generalize() side: adjust()'s system prompt explicitly REQUIRES the
 # rewrite to keep every bullet and numbered item of the cached answer, so
 # without it the prompt would manufacture the very repetition that discards its
 # own output - silently turning adjust() into a no-op for every templated
@@ -433,14 +435,20 @@ ADJUST_NGRAM_REPEAT_RATIO_MAX = _get_float("DEJAQ_ADJUST_NGRAM_REPEAT_RATIO_MAX"
 # require to keep every item and which therefore inherits its source's
 # repetition without inventing any.
 #
-# This is only half the exemption's condition. The other half is that the
-# baseline must already exceed the ceiling being exempted, i.e. carry
-# repetition for the rewrite to inherit at all - size alone would also exempt a
-# self-paraphrase loop over ordinary prose, which lands at its input's size
-# while inventing every repetition it has (measured on a 654-character
-# non-repetitive answer: loops at 0.789x scoring 0.680 and 1.052x scoring
-# 0.762). No separate constant for that half: the ceiling above is its own
-# floor. See context_adjuster._inherits_baseline_repetition().
+# This is only one of the exemption's three conditions. The other two both
+# concern the repetition itself, and neither needs a constant of its own - the
+# ceiling being exempted serves as both:
+#   - The baseline must already exceed that ceiling, i.e. carry repetition for
+#     the rewrite to inherit at all. Size alone would also exempt a
+#     self-paraphrase loop over ordinary prose, which lands at its input's size
+#     while inventing every repetition it has (measured on a 657-character
+#     non-repetitive answer: loops at 0.877x and 1.102x scoring 0.202-0.208).
+#   - The output may exceed the baseline's own repetition by at most that
+#     ceiling. Otherwise the condition above is a binary gate and a baseline a
+#     hair over it exempts any same-size output however repetitive (measured on
+#     a mildly structured answer at 0.088: same-size loops score 0.570-0.618).
+#     The faithful templated rewrite this exemption exists for sits at +0.079.
+# See context_adjuster._inherits_baseline_repetition().
 #
 # Size is what separates the templated case from a loop, in both directions: a
 # loop repeats itself into MORE text than it was given (measured on a 50-item

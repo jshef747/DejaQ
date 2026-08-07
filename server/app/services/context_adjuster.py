@@ -110,32 +110,45 @@ def _inherits_baseline_repetition(baseline: str, output: str, absolute_max: floa
     rewrite of that whole answer shape scores far past any ceiling low enough
     to catch a real loop.
 
-    Two conditions, and both are load-bearing:
+    Three conditions, and all three are load-bearing:
 
     - The baseline must ALREADY fail the same ceiling, i.e. carry repetition of
       its own for a rewrite to inherit. Size alone is not enough: a pure
       self-paraphrase loop over ordinary non-repetitive prose can land at the
-      baseline's own size (measured on a 654-character prose answer at 0.000:
-      loops at 0.789x scoring 0.680 and 1.052x scoring 0.762), and exempting
-      those reopens the ceiling on the very population it was calibrated
-      against.
+      baseline's own size (measured on a 657-character prose answer at 0.000:
+      loops at 0.877x and 1.102x scoring 0.202-0.208), and exempting those
+      reopens the ceiling on the very population it was calibrated against.
     - The sizes must stay close. A loop repeats itself INTO more text than it
       was given (measured on the templated list: a faithful rewrite is 1.18x,
-      self-paraphrase loops 2.27x and up), or collapses onto one item and
+      self-paraphrase loops 2.45x and up), or collapses onto one item and
       repeats that instead (0.56x). Both directions leave the band and face the
       unmodified ceiling.
+    - The output may be no more repetitive than the baseline plus one ceiling's
+      worth of headroom. Without this the first condition is a binary gate: any
+      baseline a hair over the ceiling would exempt an arbitrarily repetitive
+      same-size output. Measured on a mildly structured answer - three parallel
+      bullets inside ordinary prose, 0.088 - where same-size self-paraphrase
+      loops score 0.570-0.618. The headroom is the ceiling itself rather than a
+      new constant: "about as repetitive as its source, plus what a clean
+      rewrite is allowed outright". The faithful templated rewrite this
+      exemption exists for sits at +0.079 against a 0.08 allowance.
 
     Scaling the ceiling to the baseline's own repetition was tried and removed:
     at 1.5x the baseline it opened a fail-open band on exactly this population,
     where a loop emitting 2-3 further self-paraphrase passes scored 0.508-0.526
-    against a 0.527 ceiling while staying far under the length arm's 10x.
+    against a 0.527 ceiling while staying far under the length arm's 10x. The
+    additive headroom above is bounded in absolute terms, so it cannot widen
+    the same way as the baseline's own repetition grows.
     """
     if not baseline:
         return False
-    if _ngram_repetition_ratio(baseline) <= absolute_max:
+    baseline_repetition = _ngram_repetition_ratio(baseline)
+    if baseline_repetition <= absolute_max:
         return False
     ratio = len(output) / len(baseline)
-    return 1 / NGRAM_EXEMPT_LENGTH_RATIO <= ratio <= NGRAM_EXEMPT_LENGTH_RATIO
+    if not 1 / NGRAM_EXEMPT_LENGTH_RATIO <= ratio <= NGRAM_EXEMPT_LENGTH_RATIO:
+        return False
+    return _ngram_repetition_ratio(output) - baseline_repetition <= absolute_max
 
 
 def is_generalization_sane(raw_answer: str, generalized: str) -> bool:
@@ -156,7 +169,8 @@ def is_generalization_sane(raw_answer: str, generalized: str) -> bool:
         (measured 0.150 on the runaway; catches loops that reword slightly
         each pass, so no exact line or substring repeats - e.g. restating a
         continent count with a different number every loop), applied unless
-        the raw answer was itself repetitive and the rewrite kept its size, so
+        the raw answer was itself repetitive, the rewrite kept its size, and
+        the rewrite is no more repetitive than the raw answer itself was, so
         the repetition can only have been inherited rather than invented - see
         _inherits_baseline_repetition().
 
@@ -208,8 +222,9 @@ def is_adjustment_sane(cached_answer: str, adjusted: str) -> bool:
         which catches a loop that rewords itself each pass and so never
         repeats a literal line. This is the signal that does the real work: a
         runaway is repetitive by construction, whatever it was rewriting. It
-        is skipped only when the cached answer was itself repetitive and the
-        rewrite kept its size (_inherits_baseline_repetition), because the
+        is skipped only when the cached answer was itself repetitive, the
+        rewrite kept its size, and the rewrite added no repetition of its own
+        (_inherits_baseline_repetition), because the
         system prompt above REQUIRES every bullet and numbered item to
         survive, so a same-size rewrite of a templated answer reproduces that
         template's own repetition (a 50-item list measures 0.35-0.48) -

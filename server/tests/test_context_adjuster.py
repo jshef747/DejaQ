@@ -6,8 +6,10 @@ import pytest
 from app.config import (
     ADJUST_LENGTH_ABS_FLOOR,
     ADJUST_LENGTH_RATIO_MAX,
+    ADJUST_NGRAM_REPEAT_RATIO_MAX,
     DEFAULT_MAX_TOKENS,
     GENERALIZE_LENGTH_RATIO_MAX,
+    GENERALIZE_NGRAM_REPEAT_RATIO_MAX,
     OLLAMA_NUM_CTX,
     REWRITE_MAX_TOKENS,
 )
@@ -103,6 +105,41 @@ _PROSE_LOOP_SENTENCES = (
 
 def prose_self_paraphrase_loop(sentences: int) -> str:
     return "".join(_PROSE_LOOP_SENTENCES[:sentences])
+
+
+# The population between the two above, and by far the most common answer shape
+# of the three: ordinary prose carrying a few parallel bullets, repetitive
+# enough to clear the ceiling (0.088) without being templated. It is what turns
+# the baseline condition into a binary gate - once it opens, a same-size loop
+# over it is exempted however repetitive it is, unless the output's own
+# repetition is also compared against the baseline's.
+MILD_STRUCTURE_ANSWER = (
+    "Blue-green deployment keeps two identical production environments and cuts "
+    "traffic from one to the other in a single switch, so a release becomes a "
+    "routing change instead of a gradual rollout. Three properties follow from "
+    "that:\n"
+    "- Speed: the standby environment is already running, so a revert costs one "
+    "routing change.\n"
+    "- Risk: the standby environment is already verified, so a revert costs one "
+    "known state.\n"
+    "- Price: the standby environment is already paid for, so a revert costs one "
+    "idle cluster.\n"
+    "Most teams accept the duplicated infrastructure for the minutes it saves "
+    "during an incident."
+)
+_MILD_STRUCTURE_LOOP_SENTENCES = (
+    "A blue-green deployment switches all of the traffic to the new environment at once. ",
+    "A blue-green deployment switches all of the traffic to the newer environment at once. ",
+    "A blue-green deployment switches all of the traffic to the fresh environment at once. ",
+    "A blue-green deployment switches all of the traffic to the second environment at once. ",
+    "A blue-green deployment switches all of the traffic to the standby environment at once. ",
+    "A blue-green deployment switches all of the traffic to the updated environment at once. ",
+    "A blue-green deployment switches all of the traffic to the latest environment at once. ",
+)
+
+
+def mild_structure_self_paraphrase_loop(sentences: int) -> str:
+    return "".join(_MILD_STRUCTURE_LOOP_SENTENCES[:sentences])
 
 
 class TestGeneralize:
@@ -668,6 +705,30 @@ class TestIsGeneralizationSane:
             assert _ngram_repetition_ratio(looped) > 0.08
             assert not is_generalization_sane(PROSE_ANSWER, looped)
 
+    def test_rejects_a_same_size_loop_over_a_mildly_repetitive_raw_answer(self):
+        """The baseline condition must be a comparison, not a binary gate. This
+        raw answer is a few parallel bullets inside ordinary prose, so it clears
+        the ceiling on its own (0.088) and opens the gate - after which a
+        same-size loop was exempted no matter how repetitive it was. These loops
+        sit inside the length band and under the 10x length arm, and invent
+        every 4-gram they repeat: they are 6-7x more repetitive than the answer
+        they were handed, which is the signal that rejects them."""
+        baseline_repetition = _ngram_repetition_ratio(MILD_STRUCTURE_ANSWER)
+
+        assert baseline_repetition > GENERALIZE_NGRAM_REPEAT_RATIO_MAX
+
+        for sentences in (6, 7):
+            looped = mild_structure_self_paraphrase_loop(sentences)
+            ratio = len(looped) / len(MILD_STRUCTURE_ANSWER)
+
+            assert 1 / 1.3 < ratio < 1.3
+            assert len(looped) < GENERALIZE_LENGTH_RATIO_MAX * len(MILD_STRUCTURE_ANSWER)
+            assert (
+                _ngram_repetition_ratio(looped) - baseline_repetition
+                > GENERALIZE_NGRAM_REPEAT_RATIO_MAX
+            )
+            assert not is_generalization_sane(MILD_STRUCTURE_ANSWER, looped)
+
 
 class TestGeneralizeSafetyNet:
     """Wiring tests: prove generalize() itself falls back to the raw answer
@@ -948,6 +1009,29 @@ class TestIsAdjustmentSane:
             assert 1 / 1.3 < ratio < 1.3
             assert is_topically_consistent(looped, PROSE_ANSWER)
             assert not is_adjustment_sane(PROSE_ANSWER, looped)
+
+    def test_rejects_a_same_size_loop_over_a_mildly_repetitive_cached_answer(self):
+        """The serve-time half: a cached answer repetitive enough to open the
+        baseline gate (0.088, a few parallel bullets inside prose) must not hand
+        every same-size loop over it a free pass. The loop stays inside the
+        length band and under the 10x length arm, and is caught only because its
+        own repetition runs far past what the cached answer could have supplied."""
+        baseline_repetition = _ngram_repetition_ratio(MILD_STRUCTURE_ANSWER)
+
+        assert baseline_repetition > ADJUST_NGRAM_REPEAT_RATIO_MAX
+        assert len(MILD_STRUCTURE_ANSWER) >= ADJUST_LENGTH_ABS_FLOOR
+
+        for sentences in (6, 7):
+            looped = mild_structure_self_paraphrase_loop(sentences)
+            ratio = len(looped) / len(MILD_STRUCTURE_ANSWER)
+
+            assert 1 / 1.3 < ratio < 1.3
+            assert ratio < ADJUST_LENGTH_RATIO_MAX
+            assert (
+                _ngram_repetition_ratio(looped) - baseline_repetition
+                > ADJUST_NGRAM_REPEAT_RATIO_MAX
+            )
+            assert not is_adjustment_sane(MILD_STRUCTURE_ANSWER, looped)
 
 
 class TestAdjustRunawayGuard:
