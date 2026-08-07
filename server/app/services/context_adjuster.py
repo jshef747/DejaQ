@@ -88,6 +88,7 @@ _GENERALIZE_STOP = ["\n\n\n*****"]
 
 _NGRAM_SIZE = 4
 
+
 def _ngram_repetition_ratio(text: str, n: int = _NGRAM_SIZE) -> float:
     words = _TOKEN_RE.findall(text.lower())
     if len(words) <= n:

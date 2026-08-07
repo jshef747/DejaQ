@@ -219,11 +219,13 @@ DEFAULT_MAX_TOKENS = int(_get_float("DEJAQ_DEFAULT_MAX_TOKENS", 4096))
 # every fact, so a rewrite needs room for at least the whole answer it was
 # handed: at the old 1024 the stored copy of a long answer was truncated
 # mid-sentence, and a truncated STORED answer never self-heals - it is what
-# every future cache hit serves. 8192 rather than DEFAULT_MAX_TOKENS because a
-# client may ask for more than the default; it is the ceiling client-supplied
-# max_tokens is clamped to, so a rewrite at this budget always covers the
-# largest answer that can reach it. Must stay comfortably inside OLLAMA_NUM_CTX,
-# which has to hold this generation PLUS the prompt carrying that answer.
+# every future cache hit serves. 8192 rather than DEFAULT_MAX_TOKENS to leave
+# headroom above it, since a client may ask for more than the default. Nothing
+# clamps a client-supplied max_tokens, so an answer generated above this budget
+# can still outgrow a rewrite of it; raise this - and OLLAMA_NUM_CTX with it -
+# if that population turns out to be real. Must stay comfortably inside
+# OLLAMA_NUM_CTX, which has to hold this generation PLUS the prompt carrying
+# that answer.
 REWRITE_MAX_TOKENS = int(_get_float("DEJAQ_REWRITE_MAX_TOKENS", 8192))
 
 # Below this many characters a file cannot be identified, so it is neither served
