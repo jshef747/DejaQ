@@ -24,6 +24,7 @@ from app.schemas.openai_responses import (
     ResponseContentPartAddedEvent,
     ResponseContentPartDoneEvent,
     ResponseCreatedEvent,
+    ResponseIncompleteEvent,
     ResponseOutputItemAddedEvent,
     ResponseOutputItemDoneEvent,
     ResponseOutputTextDeltaEvent,
@@ -164,6 +165,7 @@ def _build_response_body(
         created_at=_now_ts(),
         model=model,
         status=status,
+        incomplete_details={"reason": "max_output_tokens"} if status == "incomplete" else None,
         output=[
             OAIResponseOutputMessage(
                 id=item_id,
@@ -224,9 +226,16 @@ async def _stream_responses_generator(
     }
     yield f"event: response.output_item.done\ndata: {ResponseOutputItemDoneEvent(item=item_done).model_dump_json()}\n\n"
 
-    completed_response = _build_response_body(result, model, item_id, response_id)
-    completed_response["status"] = status
-    yield f"event: response.completed\ndata: {ResponseCompletedEvent(response=completed_response).model_dump_json()}\n\n"
+    final_response = _build_response_body(result, model, item_id, response_id)
+    # A truncated stream ends on its own terminal event. Sending
+    # `response.completed` with a payload that says "incomplete" tells a client
+    # that branches on the event type the opposite of what happened.
+    terminal = (
+        ResponseIncompleteEvent(response=final_response)
+        if status == "incomplete"
+        else ResponseCompletedEvent(response=final_response)
+    )
+    yield f"event: {terminal.type}\ndata: {terminal.model_dump_json()}\n\n"
 
 
 @router.post("/responses")

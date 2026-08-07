@@ -186,7 +186,7 @@ def is_generalization_sane(raw_answer: str, generalized: str) -> bool:
     generalize()'s own max_tokens was raised from 1024 to REWRITE_MAX_TOKENS so
     a long, factual answer stops truncating mid-sentence under the "Keep all
     facts" system prompt - a real raw answer can reach ~3,700 tokens
-    (openai_compat.py:667) and the stored copy is what every future cache hit
+    (openai_compat.DEFAULT_MAX_TOKENS) and the stored copy is what every future cache hit
     serves, so a truncated one never self-heals. That raise does not weaken
     this guard: the length signal is a proportion of the raw answer's own
     length and the repetition signal a proportion of the output's own n-grams,
@@ -201,10 +201,10 @@ def is_generalization_sane(raw_answer: str, generalized: str) -> bool:
     ):
         return False
     if (
-        not _inherits_baseline_repetition(
+        _ngram_repetition_ratio(generalized) > GENERALIZE_NGRAM_REPEAT_RATIO_MAX
+        and not _inherits_baseline_repetition(
             raw_answer, generalized, GENERALIZE_NGRAM_REPEAT_RATIO_MAX
         )
-        and _ngram_repetition_ratio(generalized) > GENERALIZE_NGRAM_REPEAT_RATIO_MAX
     ):
         return False
     return True
@@ -253,10 +253,10 @@ def is_adjustment_sane(cached_answer: str, adjusted: str) -> bool:
     ):
         return False
     if (
-        not _inherits_baseline_repetition(
+        _ngram_repetition_ratio(adjusted) > ADJUST_NGRAM_REPEAT_RATIO_MAX
+        and not _inherits_baseline_repetition(
             cached_answer, adjusted, ADJUST_NGRAM_REPEAT_RATIO_MAX
         )
-        and _ngram_repetition_ratio(adjusted) > ADJUST_NGRAM_REPEAT_RATIO_MAX
     ):
         return False
     return True
@@ -303,7 +303,8 @@ class ContextAdjusterService:
                 # The rewrite budget, not the request's own (see
                 # REWRITE_MAX_TOKENS in app/config.py, the same budget adjust()
                 # uses). The system prompt above says "Keep all facts"; a raw
-                # miss answer can reach ~3,700 tokens (openai_compat.py:667),
+                # miss answer can reach ~3,700 tokens
+                # (openai_compat.DEFAULT_MAX_TOKENS),
                 # so the old 1024 cap truncated the generalized rewrite of a
                 # long answer mid-sentence - and the stored copy is what every
                 # future cache hit serves, so a truncated one never self-heals.

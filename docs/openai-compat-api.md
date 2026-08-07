@@ -99,7 +99,10 @@ cache hit always reports `"stop"`.
 
 `/v1/responses` reports the same fact as `status`: `"completed"`, or `"incomplete"` when the
 answer was cut off — on the top-level response and on the output item, streaming and
-non-streaming alike.
+non-streaming alike. An incomplete response also carries
+`incomplete_details: {"reason": "max_output_tokens"}` (null when it completed), and a truncated
+stream ends on a `response.incomplete` terminal event rather than `response.completed`, so a
+client branching on the event type sees the truncation without reading the payload.
 
 A truncated answer is never stored in the cache: a stored truncation is what every later match
 would be served, and it never self-heals. The caller still receives the partial answer; it just

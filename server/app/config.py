@@ -392,7 +392,7 @@ ADJUSTER_MIN_TOPIC_OVERLAP = _get_float("DEJAQ_ADJUSTER_MIN_TOPIC_OVERLAP", 0.02
 #
 # generalize()'s max_tokens moved from 1024 to REWRITE_MAX_TOKENS so a long
 # answer stops truncating mid-sentence under the "Keep all facts" prompt (a raw
-# miss answer can reach ~3,700 tokens, openai_compat.py:667) - see
+# miss answer can reach ~3,700 tokens, openai_compat.DEFAULT_MAX_TOKENS) - see
 # is_generalization_sane's docstring for why this ratio still holds at the
 # larger budget: it is a proportion of the raw answer's own length, not tied to
 # the token budget, so a longer-running loop only pushes it further past this

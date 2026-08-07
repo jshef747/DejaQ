@@ -1478,6 +1478,7 @@ def test_truncated_miss_reports_incomplete_on_responses(monkeypatch):
     payload = response.json()
     assert payload["status"] == "incomplete"
     assert payload["output"][0]["status"] == "incomplete"
+    assert payload["incomplete_details"] == {"reason": "max_output_tokens"}
 
 
 def test_untruncated_miss_still_reports_completed_on_responses(monkeypatch):
@@ -1491,9 +1492,13 @@ def test_untruncated_miss_still_reports_completed_on_responses(monkeypatch):
     payload = response.json()
     assert payload["status"] == "completed"
     assert payload["output"][0]["status"] == "completed"
+    assert payload["incomplete_details"] is None
 
 
 def test_truncated_miss_reports_incomplete_on_streamed_responses(monkeypatch):
+    """A client that branches on the SSE event type has to see the truncation
+    there too - a `response.completed` event carrying `status: "incomplete"`
+    says the opposite of what happened."""
     client = _patch_for_truncation(monkeypatch, TruncatedStubRouter())
 
     response = client.post(
@@ -1510,10 +1515,30 @@ def test_truncated_miss_reports_incomplete_on_streamed_responses(monkeypatch):
     events = _sse_events(response)
     item_done = [e for e in events if e.get("item", {}).get("status") == "incomplete"]
     assert item_done, "no output_item.done carried the incomplete status"
-    # The terminal event still rides on `response.completed` (the Responses API
-    # has a distinct `response.incomplete` event DejaQ does not emit yet), so
-    # the payload status is what a client has to read.
+    assert "event: response.incomplete\n" in response.text
+    assert "event: response.completed\n" not in response.text
+    assert events[-1]["type"] == "response.incomplete"
     assert events[-1]["response"]["status"] == "incomplete"
+    assert events[-1]["response"]["incomplete_details"] == {"reason": "max_output_tokens"}
+
+
+def test_untruncated_miss_still_reports_completed_on_streamed_responses(monkeypatch):
+    """Control: the completed path is untouched - same terminal event, no
+    incomplete_details."""
+    client = _patch_for_truncation(monkeypatch, StubRouter())
+
+    response = client.post(
+        "/v1/responses",
+        json={"model": "gpt-4o-mini", "input": "What is the capital of France?", "stream": True},
+    )
+
+    assert response.status_code == 200
+    events = _sse_events(response)
+    assert "event: response.completed\n" in response.text
+    assert "event: response.incomplete\n" not in response.text
+    assert events[-1]["type"] == "response.completed"
+    assert events[-1]["response"]["status"] == "completed"
+    assert events[-1]["response"]["incomplete_details"] is None
 
 
 def test_hard_query_unmapped_external_model_returns_422(monkeypatch):

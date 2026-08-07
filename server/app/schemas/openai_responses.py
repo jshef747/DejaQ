@@ -74,6 +74,9 @@ class OAIResponse(BaseModel):
     # ChatPipelineResult.finish_reason) - reported honestly instead of
     # always claiming success, the Responses API's own vocabulary for this.
     status: Literal["completed", "incomplete"] = "completed"
+    # Machine-readable reason for an "incomplete" status, the Responses API's
+    # own field for it; null on a completed response.
+    incomplete_details: Optional[dict] = None
     output: list[OAIResponseOutputMessage]
     output_text: str
     usage: OAIResponseUsage
@@ -132,4 +135,15 @@ class ResponseOutputItemDoneEvent(BaseModel):
 
 class ResponseCompletedEvent(BaseModel):
     type: Literal["response.completed"] = "response.completed"
+    response: dict
+
+
+class ResponseIncompleteEvent(BaseModel):
+    """Terminal event for a stream the token budget cut off.
+
+    The Responses API's own vocabulary: a truncated stream ends on
+    `response.incomplete`, not on `response.completed` carrying a contradicting
+    status, so a client that branches on the event type sees the truncation.
+    """
+    type: Literal["response.incomplete"] = "response.incomplete"
     response: dict
