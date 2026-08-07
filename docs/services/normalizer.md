@@ -13,15 +13,9 @@ Without normalization, the cache would treat these as different questions and ca
 
 ## How it works
 
-Every query goes through two steps before hitting the cache:
+Every query goes through one gate before hitting the cache:
 
-### Step 1 — Spell correction
-
-Before anything else, obvious typos are fixed. "ukrine" becomes "ukraine", "captal" becomes "capital". This prevents a typo from producing a completely different cache key than the correctly-spelled version.
-
-The spell corrector only touches words it doesn't recognize — known words pass through untouched.
-
-### Step 2 — Opinion gate
+### Opinion gate
 
 The normalizer checks whether the question is asking for a subjective recommendation ("best", "greatest", "top-rated", "finest", etc.) or a factual question.
 
@@ -55,8 +49,6 @@ One edge case: "What's the best way to cook steak?" uses "best" but isn't asking
 ```
 User query
     ↓
-Spell correction
-    ↓
 Opinion? ──yes──> Gemma E2B rewrite ──> "best <noun>"
     │
     no
@@ -65,6 +57,13 @@ Lowercase passthrough
     ↓
 Cache key (used for lookup + storage)
 ```
+
+## Typos
+
+The normalizer does not correct spelling — deliberately, since a dictionary checker mangles jargon
+and proper nouns and poisons the cache key. Typo'd phrasings are handled downstream instead, by the
+embedding distance tiers and word-level alignment described under "Typo handling" in `CLAUDE.md` and
+measured in [lexical-match-report.md](../lexical-match-report.md).
 
 ## Source
 

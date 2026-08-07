@@ -89,6 +89,22 @@ An external call that errors falls back to the estimate along with the rest of t
 
 `/v1/responses` reports the same numbers under `input_tokens` / `output_tokens`.
 
+### `finish_reason` / `status`: truncation is reported, not hidden
+
+`choices[0].finish_reason` is `"stop"`, or `"length"` when the token budget cut the answer off
+mid-generation. It is never inferred from the shape of the text — it carries the generator's own
+signal (Ollama's `done_reason` on the local route, the provider's own stop reason on the external
+route, both collapsed to those two values). The final streaming chunk carries the same value. A
+cache hit always reports `"stop"`.
+
+`/v1/responses` reports the same fact as `status`: `"completed"`, or `"incomplete"` when the
+answer was cut off — on the top-level response and on the output item, streaming and
+non-streaming alike.
+
+A truncated answer is never stored in the cache: a stored truncation is what every later match
+would be served, and it never self-heals. The caller still receives the partial answer; it just
+leaves no cache entry. Thumbs-down escalation answers follow the same rule.
+
 Gateway headers:
 
 | Header | Meaning |
