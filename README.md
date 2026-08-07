@@ -15,6 +15,7 @@ OpenAI-compatible request
   -> ChromaDB semantic cache lookup
      -> hit: cache validator (Gemma E2B) checks coverage
         -> VALID: context adjuster re-tones cached answer
+                  (skipped when there is no tone gap to close)
         -> INVALID: treat as miss
      -> miss: difficulty classifier
         -> easy: local model (Gemma 4 E4B)

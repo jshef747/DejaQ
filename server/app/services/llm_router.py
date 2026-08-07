@@ -21,8 +21,8 @@ class LLMRouterService:
         history: list[dict] | None = None,
         max_tokens: int = 1024,
         system_prompt: str | None = None,
-    ) -> tuple[str, float]:
-        """Generate a response using the local model. Returns (text, latency_ms)."""
+    ) -> tuple[str, float, str | None]:
+        """Generate a response using the local model. Returns (text, latency_ms, done_reason)."""
         if system_prompt is None:
             system_prompt = "You are a helpful assistant. Answer the user's query concisely and accurately."
         messages = [{"role": "system", "content": system_prompt}]
@@ -40,16 +40,16 @@ class LLMRouterService:
         )
         latency_ms = (time.time() - start) * 1000
         logger.debug("Local LLM response generated in %.2f ms", latency_ms)
-        return response, latency_ms
+        return response.text, latency_ms, response.done_reason
 
     # Kept for backwards compatibility — used by tests and callers that don't need metadata.
     async def generate_response(self, query: str, complexity: str, history: list[dict] | None = None) -> str:
         logger.debug("Routing query complexity=%s", complexity)
         if not self.is_hard(complexity):
-            text, _ = await self.generate_local_response(query, history=history)
+            text, _, _ = await self.generate_local_response(query, history=history)
             return text
         # Hard queries must be handled asynchronously by the caller via ExternalLLMService.
         # This path should not be reached in normal operation after the external routing integration.
         logger.warning("generate_response called for hard query — falling back to local model. Use ExternalLLMService instead.")
-        text, _ = await self.generate_local_response(query, history=history)
+        text, _, _ = await self.generate_local_response(query, history=history)
         return text

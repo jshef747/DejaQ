@@ -13,8 +13,9 @@ class ExternalLLMRequest(BaseModel):
     temperature: float = Field(0.7, description="Sampling temperature")
     image_b64: str | None = Field(None, description="Base64 image bytes attached to the query, if any")
     image_mime: str | None = Field(None, description="MIME type of the attached image, e.g. image/jpeg")
-    # PDFs only. Markdown is inlined into `query` instead — it is already text,
-    # and no provider has a markdown part to send it as.
+    # PDFs only. Every other file kind (DOCX, Markdown, plain text, source/config
+    # files) is inlined into `query` instead — once extracted it is already text,
+    # and no provider has a native part to send it as.
     file_b64: str | None = Field(None, description="Base64 PDF bytes attached to the query, if any")
     file_mime: str | None = Field(None, description="MIME type of the attached file, e.g. application/pdf")
     file_name: str | None = Field(None, description="Original filename, sent where the provider wants one")
@@ -26,3 +27,10 @@ class ExternalLLMResponse(BaseModel):
     prompt_tokens: int = Field(0, description="Number of input tokens consumed")
     completion_tokens: int = Field(0, description="Number of output tokens generated")
     latency_ms: float = Field(0.0, description="Total request time in milliseconds")
+    # Normalized to "stop" | "length" by each provider client (see
+    # llm_providers/common.py:normalize_finish_reason) from that provider's
+    # own stop/finish reason (Anthropic stop_reason, OpenAI finish_reason,
+    # Google finish_reason) — the same truncation signal OllamaBackend
+    # captures for local generation, so the client-facing finish_reason can
+    # be honest regardless of which route answered the request.
+    finish_reason: str = Field("stop", description="'stop' if the model finished naturally, 'length' if the token budget cut it off")

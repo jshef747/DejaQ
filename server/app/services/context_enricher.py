@@ -1,6 +1,7 @@
 import logging
 import time
 
+from app.config import OLLAMA_NUM_CTX
 from app.services.model_backends import CompletionRequest, ModelBackend
 
 logger = logging.getLogger("dejaq.services.context_enricher")
@@ -57,9 +58,19 @@ class ContextEnricherService:
                 {"role": "user", "content": f"HISTORY:\n{context_block}\n\nFOLLOW-UP: {message}"},
                 ],
                 max_tokens=256,
+                # This role's own prompt is a few hundred tokens and needs
+                # nothing near this window. It is set to match adjust(), which
+                # runs on the SAME model (qwen2.5:1.5b) on the same request:
+                # Ollama treats a changed runner option as a reload, so two
+                # different windows unload and reload the model between
+                # enrich() and adjust() on every multi-turn cache hit, in front
+                # of a waiting user. Costs no extra memory - the model is
+                # already loaded at this window whenever adjust() runs.
+                num_ctx=OLLAMA_NUM_CTX,
                 temperature=0.0,
             )
         )
+        enriched = enriched.text
 
         latency = (time.time() - start) * 1000
         logger.debug(

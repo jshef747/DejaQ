@@ -3,9 +3,23 @@ import re
 
 import pytest
 
+from app.config import (
+    ADJUST_LENGTH_ABS_FLOOR,
+    ADJUST_LENGTH_RATIO_MAX,
+    ADJUST_NGRAM_REPEAT_RATIO_MAX,
+    DEFAULT_MAX_TOKENS,
+    GENERALIZE_LENGTH_RATIO_MAX,
+    GENERALIZE_NGRAM_REPEAT_RATIO_MAX,
+    OLLAMA_NUM_CTX,
+    REWRITE_MAX_TOKENS,
+)
+from app.services.model_backends import CompletionRequest, CompletionResult
+from app.services import context_adjuster
 from app.services.context_adjuster import (
     ContextAdjusterService,
     _GENERALIZE_STOP,
+    _ngram_repetition_ratio,
+    is_adjustment_sane,
     is_generalization_sane,
     is_topically_consistent,
 )
@@ -23,6 +37,110 @@ LEAKED_PHOTOSYNTHESIS_ANSWER = (
     "dioxide and water are transformed into glucose and oxygen through light-dependent "
     "and light-independent reactions within the chloroplasts."
 )
+
+# An ordinary templated answer - the shape a flat n-gram repetition ceiling
+# cannot tell apart from a loop. Every item restates one sentence frame, so the
+# answer is repetitive by construction while being a perfectly good answer to
+# "list every president with their term". Both rewrite prompts REQUIRE every
+# numbered item to survive, so a faithful rewrite inherits that repetition.
+def _templated_pass(frame: str) -> str:
+    return "\n".join(
+        frame.format(n=i + 1, start=1789 + i * 4, end=1793 + i * 4) for i in range(50)
+    )
+
+
+TEMPLATED_LIST_ANSWER = _templated_pass(
+    "{n}. Person {n} served as President of the United States from {start} to {end}."
+)
+
+# One pass per frame, each rewording the last - the incident's documented
+# runaway shape ("rewords itself each pass, so no literal line repeats") applied
+# to a templated baseline. This is the case a repetition ceiling scaled to the
+# baseline let through: every pass count stays under 1.5x the baseline's own
+# repetition while its length ratio (2.3x, 3.4x) stays far under the length
+# arm's 10x, so neither arm fired.
+_LOOP_FRAMES = (
+    "{n}. Person {n} held the office of President of the United States "
+    "between {start} and {end}.",
+    "{n}. Person {n} occupied the office of President of the United States "
+    "across {start} through {end}.",
+    "{n}. Person {n} filled the role of President of the United States "
+    "over {start} until {end}.",
+)
+
+TEMPLATED_LIST_REWRITE = _templated_pass(_LOOP_FRAMES[0])
+
+
+def templated_self_paraphrase_loop(passes: int) -> str:
+    return "\n".join(_templated_pass(frame) for frame in _LOOP_FRAMES[:passes])
+
+
+# The counter-population to the templated list above: ordinary prose with no
+# repetition of its own (0.000), paired with pure self-paraphrase loops around
+# it that happen to land at roughly its size. Nothing here may be exempted -
+# every repeated 4-gram in these outputs was invented, not inherited.
+PROSE_ANSWER = (
+    "A canary deployment routes a small share of production traffic to a new "
+    "version while everyone else stays on the current one, so failures show up "
+    "against real requests before they reach the whole user base. Teams usually "
+    "start somewhere near one percent, watch error rates and latency against the "
+    "unchanged baseline, and widen the slice in steps once the numbers hold. If "
+    "something regresses, the rollback is a routing change rather than a "
+    "redeploy, which is why the pattern is popular for services where a bad "
+    "release is expensive to undo. It costs more infrastructure than a straight "
+    "rollout, since both versions run at once for as long as the bake takes."
+)
+_PROSE_LOOP_SENTENCES = (
+    "A canary deployment sends a little of the traffic to the new version. ",
+    "A canary deployment routes a bit of the traffic to the newer version. ",
+    "A canary deployment directs some of the traffic to the fresh version. ",
+    "A canary deployment passes part of the traffic to the updated version. ",
+    "A canary deployment moves a slice of the traffic to the latest version. ",
+    "A canary deployment shifts a portion of the traffic to the newest version. ",
+    "A canary deployment hands a fraction of the traffic to the second version. ",
+    "A canary deployment gives a share of the traffic to the revised version. ",
+    "A canary deployment feeds a sliver of the traffic to the current version. ",
+    "A canary deployment steers a segment of the traffic to the added version. ",
+)
+
+
+def prose_self_paraphrase_loop(sentences: int) -> str:
+    return "".join(_PROSE_LOOP_SENTENCES[:sentences])
+
+
+# The population between the two above, and by far the most common answer shape
+# of the three: ordinary prose carrying a few parallel bullets, repetitive
+# enough to clear the ceiling (0.088) without being templated. It is what turns
+# the baseline condition into a binary gate - once it opens, a same-size loop
+# over it is exempted however repetitive it is, unless the output's own
+# repetition is also compared against the baseline's.
+MILD_STRUCTURE_ANSWER = (
+    "Blue-green deployment keeps two identical production environments and cuts "
+    "traffic from one to the other in a single switch, so a release becomes a "
+    "routing change instead of a gradual rollout. Three properties follow from "
+    "that:\n"
+    "- Speed: the standby environment is already running, so a revert costs one "
+    "routing change.\n"
+    "- Risk: the standby environment is already verified, so a revert costs one "
+    "known state.\n"
+    "- Price: the standby environment is already paid for, so a revert costs one "
+    "idle cluster.\n"
+    "Most teams accept the duplicated infrastructure for the minutes it saves "
+    "during an incident."
+)
+_MILD_STRUCTURE_LOOP_SENTENCES = (
+    "A blue-green deployment switches all of the traffic to the new environment at once. ",
+    "A blue-green deployment switches all of the traffic to the newer environment at once. ",
+    "A blue-green deployment switches all of the traffic to the fresh environment at once. ",
+    "A blue-green deployment switches all of the traffic to the second environment at once. ",
+    "A blue-green deployment switches all of the traffic to the standby environment at once. ",
+    "A blue-green deployment switches all of the traffic to the updated environment at once. ",
+    "A blue-green deployment switches all of the traffic to the latest environment at once. ",
+)
+
+
+def mild_structure_self_paraphrase_loop(sentences: int) -> str:
+    return "".join(_MILD_STRUCTURE_LOOP_SENTENCES[:sentences])
 
 
 class TestGeneralize:
@@ -91,13 +209,14 @@ class TestAdjust:
 class _FakeBackend:
     """Records every CompletionRequest it receives and returns a canned reply."""
 
-    def __init__(self, reply: str):
+    def __init__(self, reply: str, done_reason: str | None = "stop"):
         self.reply = reply
+        self.done_reason = done_reason
         self.requests = []
 
     async def complete(self, request):
         self.requests.append(request)
-        return self.reply
+        return CompletionResult(text=self.reply, done_reason=self.done_reason)
 
 
 class TestAdjustSafetyNet:
@@ -138,6 +257,113 @@ class TestAdjustSafetyNet:
         asyncio.run(service.generalize(CANARY_ANSWER))
 
         assert backend.requests[0].temperature == 0
+
+    def test_generalize_can_reproduce_a_maximally_sized_answer(self):
+        """generalize()'s system prompt says 'Keep all facts', so its output
+        budget must cover the largest answer that can reach it - not the
+        default a request runs under. A smaller cap truncates the stored
+        rewrite mid-sentence, and a truncated STORED answer never self-heals:
+        it is what every future cache hit serves."""
+        backend = _FakeBackend("The mechanism converts an input into an output.")
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        asyncio.run(service.generalize(CANARY_ANSWER))
+
+        assert backend.requests[0].max_tokens == REWRITE_MAX_TOKENS
+
+    def test_adjust_can_reproduce_a_maximally_sized_answer(self):
+        """The adjust() system prompt requires every section, bullet and named
+        entity to survive, so its output budget must cover the largest stored
+        answer that can reach it. A smaller cap truncates a long stored answer
+        mid-sentence, and nothing downstream catches it: the backend ignores
+        done_reason and the topic-overlap net passes on a truncated prefix."""
+        backend = _FakeBackend("A canary deployment ships to a small slice of traffic first.")
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        asyncio.run(service.adjust("explain that in detail", CANARY_ANSWER))
+
+        assert backend.requests[0].max_tokens == REWRITE_MAX_TOKENS
+
+    def test_the_rewrite_budget_clears_the_largest_answer_that_can_reach_it(self):
+        """DEFAULT_MAX_TOKENS is only the budget a request gets when the client
+        sends no limit of its own; a client may ask for more, up to the ceiling
+        those requests are clamped to. Rewriting under a budget smaller than
+        that ceiling truncates the stored copy mid-sentence again, which is the
+        failure this whole guard exists to prevent - so the rewrite budget must
+        stay at or above it, and inside the context window that has to hold
+        both this generation and the answer being rewritten."""
+        assert REWRITE_MAX_TOKENS >= 8192
+        assert REWRITE_MAX_TOKENS >= DEFAULT_MAX_TOKENS
+        assert REWRITE_MAX_TOKENS * 2 <= OLLAMA_NUM_CTX
+
+    def test_both_rewrite_steps_set_a_context_window(self):
+        """num_ctx bounds the prompt as well as the generation, and these two
+        prompts carry a whole answer on top of REWRITE_MAX_TOKENS of output -
+        left at Ollama's default the pair overflows and the head of the prompt
+        is dropped silently. The window has to hold both."""
+        backend = _FakeBackend("short reply")
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        asyncio.run(service.generalize(CANARY_ANSWER))
+        asyncio.run(service.adjust("explain that in detail", CANARY_ANSWER))
+
+        for request in backend.requests:
+            assert request.num_ctx == OLLAMA_NUM_CTX
+            assert request.num_ctx >= request.max_tokens * 2
+
+    def test_a_context_window_is_opt_in_per_request(self):
+        """The window stays a per-request opt-in rather than a backend-wide
+        default: only the roles sharing a model with a rewrite role send it
+        (see test_every_role_on_a_rewrite_model_sends_the_same_window below),
+        and the local answer model - gemma4:e4b, which shares with none - keeps
+        Ollama's own. Fails if the window is ever moved onto the shared
+        backend, which would apply it to that model too."""
+        assert CompletionRequest(
+            model_name="qwen_1_5b",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=32,
+            temperature=0,
+        ).num_ctx is None
+
+    def test_every_role_on_a_rewrite_model_sends_the_same_window(self):
+        """Ollama treats a changed runner option as a reload of that model, so
+        two windows on one model tag unload and reload it between consecutive
+        roles - enrich() then adjust() on qwen2.5:1.5b run back to back on
+        every multi-turn cache hit, with the user waiting. The enricher,
+        normalizer and validator therefore send the rewrite roles' window even
+        though their own prompts are a few hundred tokens; it costs nothing
+        extra, since the model is already loaded at this window whenever
+        generalize()/adjust() run."""
+        from app.services.context_enricher import ContextEnricherService
+        from app.services.normalizer import NormalizerService
+        from app.services.validator import ValidatorService
+
+        backend = _FakeBackend("best pizza")
+        asyncio.run(ContextEnricherService(backend, "qwen_1_5b").enrich(
+            "what about rome?", [{"role": "user", "content": "where should I eat?"}],
+        ))
+        asyncio.run(NormalizerService(backend, "gemma_e2b").normalize(
+            "what is the best pizza in rome?",
+        ))
+        asyncio.run(ValidatorService(backend, "gemma_e2b").validate(
+            "capital of france?", "what is the capital of france?", "Paris.",
+        ))
+
+        assert len(backend.requests) == 3
+        for request in backend.requests:
+            assert request.num_ctx == OLLAMA_NUM_CTX
+
+    def test_both_rewrite_steps_send_the_same_budget(self):
+        """One budget, not two: the same answer passes through generalize() at
+        store time and adjust() at serve time, so a gap between them truncates
+        on whichever side is smaller."""
+        backend = _FakeBackend("short reply")
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        asyncio.run(service.generalize(CANARY_ANSWER))
+        asyncio.run(service.adjust("explain that in detail", CANARY_ANSWER))
+
+        assert backend.requests[0].max_tokens == backend.requests[1].max_tokens
 
 
 class TestIsTopicallyConsistent:
@@ -376,6 +602,23 @@ class TestIsGeneralizationSane:
         assert "*****" not in self.MILD_LEAK_GENERALIZED_ANSWER
         assert not is_generalization_sane(self.MILD_RAW_ANSWER, self.MILD_LEAK_GENERALIZED_ANSWER)
 
+    def test_rejects_the_real_captured_runaway_given_more_room_to_run(self):
+        """generalize()'s max_tokens moved from 1024 to REWRITE_MAX_TOKENS
+        (8x more budget) so a long, factual answer stops truncating. This
+        proves that does not weaken the guard: take the real captured
+        incident text (which ran to completion at the OLD 1024-token cap) and
+        extend it with more passes of its own self-paraphrasing, simulating
+        the same loop given the extra room the new budget allows. Both the
+        length ratio and the n-gram repetition signal only get MORE
+        pronounced with more room to loop, never less - a longer runway makes
+        a runaway easier to catch, not harder."""
+        extended = self.RUNAWAY_GENERALIZED_ANSWER + (
+            "\n\n" + self.RUNAWAY_GENERALIZED_ANSWER[len(self.RUNAWAY_GENERALIZED_ANSWER) // 2:]
+        ) * 3
+        assert len(extended) > len(self.RUNAWAY_GENERALIZED_ANSWER) * 2
+        assert _ngram_repetition_ratio(extended) > _ngram_repetition_ratio(self.RUNAWAY_GENERALIZED_ANSWER)
+        assert not is_generalization_sane(self.RAW_ANSWER, extended)
+
     def test_accepts_a_faithful_clean_rewrite(self):
         clean = "The largest country in Europe by area is Russia."
         assert is_generalization_sane(self.RAW_ANSWER, clean)
@@ -434,6 +677,89 @@ class TestIsGeneralizationSane:
         otherwise trip an enormous ratio purely from the tiny denominator."""
         assert is_generalization_sane("Au", "The chemical symbol for gold is Au.")
 
+    def test_accepts_a_faithful_rewrite_of_an_already_templated_answer(self):
+        """The population a flat repetition ceiling cannot serve: the raw
+        answer is repetitive by construction, so a faithful rewrite of it is
+        too. Rejecting this stores the answer un-generalized, keeping the
+        asker's tone in the cache - which is what generalization exists to
+        remove."""
+        assert _ngram_repetition_ratio(TEMPLATED_LIST_ANSWER) > 0.3
+        assert _ngram_repetition_ratio(TEMPLATED_LIST_REWRITE) > 0.3
+        assert is_generalization_sane(TEMPLATED_LIST_ANSWER, TEMPLATED_LIST_REWRITE)
+
+    def test_rejects_a_loop_even_when_the_raw_answer_is_itself_templated(self):
+        """The other half of the same rule: exempting a same-size rewrite of a
+        repetitive input must not hand every loop over that input a free pass.
+        This one collapses onto a single item and restates it - shorter than
+        the raw answer (0.6x), so the length arm never fires and only the
+        repetition ceiling catches it, which it can because the collapse took
+        the output out of the exemption band."""
+        looped = "Person 1 served as President of the United States from 1789 to 1793. " * 30
+
+        assert len(looped) < len(TEMPLATED_LIST_ANSWER)
+        assert not is_generalization_sane(TEMPLATED_LIST_ANSWER, looped)
+
+    def test_rejects_a_self_paraphrasing_loop_over_a_templated_raw_answer(self):
+        """Regression guard for the fail-open band a baseline-scaled ceiling
+        opened: a loop that emits the faithful rewrite and then keeps going for
+        another pass or two, rewording its frame each time so nothing repeats
+        literally. Its repetition sits under 1.5x the raw answer's own and its
+        length (2.3x, 3.4x) under the 10x length arm, so a scaled ceiling
+        served it. Against the unmodified 0.08 ceiling - which applies because
+        the growth took it out of the exemption band - it is rejected
+        decisively."""
+        for passes in (2, 3):
+            looped = templated_self_paraphrase_loop(passes)
+            ratio = len(looped) / len(TEMPLATED_LIST_ANSWER)
+
+            assert 1.3 < ratio < GENERALIZE_LENGTH_RATIO_MAX
+            assert _ngram_repetition_ratio(looped) > 0.4
+            assert _ngram_repetition_ratio(looped) < 1.5 * _ngram_repetition_ratio(
+                TEMPLATED_LIST_ANSWER
+            )
+            assert not is_generalization_sane(TEMPLATED_LIST_ANSWER, looped)
+
+    def test_rejects_a_same_size_loop_over_a_raw_answer_with_no_repetition(self):
+        """The size exemption must not fire when there was no repetition to
+        inherit. These loops sit INSIDE the length band (0.88x, 1.10x) and
+        under the 10x length arm, so size alone would exempt them - but the raw
+        answer scores 0.000, meaning every repeated 4-gram in the output was
+        invented. This is the ordinary-prose population the 0.08 ceiling was
+        calibrated against, and it governs here exactly as it always has."""
+        assert _ngram_repetition_ratio(PROSE_ANSWER) == 0.0
+
+        for sentences in (8, 10):
+            looped = prose_self_paraphrase_loop(sentences)
+            ratio = len(looped) / len(PROSE_ANSWER)
+
+            assert 1 / 1.3 < ratio < 1.3
+            assert _ngram_repetition_ratio(looped) > 0.08
+            assert not is_generalization_sane(PROSE_ANSWER, looped)
+
+    def test_rejects_a_same_size_loop_over_a_mildly_repetitive_raw_answer(self):
+        """The baseline condition must be a comparison, not a binary gate. This
+        raw answer is a few parallel bullets inside ordinary prose, so it clears
+        the ceiling on its own (0.088) and opens the gate - after which a
+        same-size loop was exempted no matter how repetitive it was. These loops
+        sit inside the length band and under the 10x length arm, and invent
+        every 4-gram they repeat: they are 6-7x more repetitive than the answer
+        they were handed, which is the signal that rejects them."""
+        baseline_repetition = _ngram_repetition_ratio(MILD_STRUCTURE_ANSWER)
+
+        assert baseline_repetition > GENERALIZE_NGRAM_REPEAT_RATIO_MAX
+
+        for sentences in (6, 7):
+            looped = mild_structure_self_paraphrase_loop(sentences)
+            ratio = len(looped) / len(MILD_STRUCTURE_ANSWER)
+
+            assert 1 / 1.3 < ratio < 1.3
+            assert len(looped) < GENERALIZE_LENGTH_RATIO_MAX * len(MILD_STRUCTURE_ANSWER)
+            assert (
+                _ngram_repetition_ratio(looped) - baseline_repetition
+                > GENERALIZE_NGRAM_REPEAT_RATIO_MAX
+            )
+            assert not is_generalization_sane(MILD_STRUCTURE_ANSWER, looped)
+
 
 class TestGeneralizeSafetyNet:
     """Wiring tests: prove generalize() itself falls back to the raw answer
@@ -459,6 +785,26 @@ class TestGeneralizeSafetyNet:
         result = asyncio.run(service.generalize(TestIsGeneralizationSane.MILD_RAW_ANSWER))
 
         assert result == TestIsGeneralizationSane.MILD_RAW_ANSWER
+
+    def test_refuses_to_store_a_truncated_rewrite(self):
+        """A truncated rewrite is SHORTER than the raw answer with no
+        elevated repetition - exactly the profile is_generalization_sane()
+        accepts as clean, so this is the one failure mode that check cannot
+        catch. done_reason is the only signal that can: this must fall back
+        to the complete raw answer even though the truncated text itself
+        would sail through every other guard. This is the failure that
+        matters most in this file - whatever generalize() returns here is
+        what gets PERSISTED to ChromaDB, so a truncated copy never
+        self-heals; every future cache hit would serve the same cut-off
+        text forever."""
+        raw = "The mechanism has three independent stages: validate, transform, and emit."
+        truncated = "The mechanism has three independent stages: validate, trans"
+        backend = _FakeBackend(truncated, done_reason="length")
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        result = asyncio.run(service.generalize(raw))
+
+        assert result == raw
 
     def test_passes_through_a_sane_rewrite_unchanged(self):
         clean = "The capital city of Russia is Moscow."
@@ -501,3 +847,322 @@ class TestGeneralizeSafetyNet:
         assert cut == 350
         assert "ANSWER:" not in runaway[:cut]
         assert is_generalization_sane(TestIsGeneralizationSane.RAW_ANSWER, runaway[:cut])
+
+
+class TestIsAdjustmentSane:
+    """Pure unit tests for the adjust() serve-time safety net, the sibling of
+    is_generalization_sane() above. adjust() carries no stop string (its
+    few-shots are chat turns, with no separator marker to stop on) and runs at
+    REWRITE_MAX_TOKENS on the synchronous cache-hit path, so this guard is the
+    only bound on a runaway rewrite reaching a waiting user (ADJUST_TIMEOUT_
+    SECONDS bounds how long it can take to get there, not what it returns)."""
+
+    pytestmark = pytest.mark.no_model
+
+    CACHED = (
+        "A canary deployment rolls out a new version to a small subset of "
+        "traffic first, so problems are caught before a full rollout."
+    )
+
+    def test_the_shape_topic_overlap_is_blind_to_is_rejected(self):
+        """The case this guard exists for: a loop that paraphrases the CACHED
+        answer over and over. Every repetition is drawn from the cached
+        answer's own vocabulary, so is_topically_consistent() scores it at the
+        maximum and passes it clean - only the repetition signal catches it."""
+        looped = (
+            "A canary deployment rolls out a new version to a small subset of traffic first. "
+            * 12
+        )
+
+        assert is_topically_consistent(looped, self.CACHED)
+        assert not is_adjustment_sane(self.CACHED, looped)
+
+    def test_rejects_a_reworded_loop_that_never_repeats_a_literal_line(self):
+        """The runaway shape from the generalizer incident: each pass rewords
+        itself, so no line or substring repeats exactly and only the word
+        4-gram ratio sees it."""
+        reworded_loop = (
+            "A canary deployment sends a new version to a small slice of traffic first. "
+            "A canary deployment sends a new version to a small share of traffic first. "
+            "A canary deployment sends a new version to a small portion of traffic first. "
+            "A canary deployment sends a new version to a small fraction of traffic first. "
+            "A canary deployment sends a new version to a small segment of traffic first."
+        )
+
+        assert reworded_loop.count("A canary deployment sends a new version to a small slice") == 1
+        assert not is_adjustment_sane(self.CACHED, reworded_loop)
+
+    def test_rejects_a_loop_from_a_short_cached_answer(self):
+        """The length ratio is not consulted at all on a baseline this short
+        (see ADJUST_LENGTH_ABS_FLOOR), so the repetition signal is the whole
+        defence here - which is the point: a runaway is repetitive by
+        construction, whatever length it was rewriting."""
+        looped = "Acknowledged. " * 40
+
+        assert len("It's Paris!") < ADJUST_LENGTH_ABS_FLOOR
+        assert not is_adjustment_sane("It's Paris!", looped)
+
+    def test_rejects_unbounded_growth_the_repetition_signal_would_miss(self):
+        """The backstop the length ratio exists for: output long enough to be
+        a runaway but varied enough that no word 4-gram repeats at all, over a
+        cached answer past the floor. Fails if the ratio arm is ever dropped
+        or gated so tightly that it stops firing."""
+        cached = self.CACHED * 2
+        varied = " ".join(f"token{i}" for i in range(400))
+
+        assert len(cached) >= ADJUST_LENGTH_ABS_FLOOR
+        assert _ngram_repetition_ratio(varied) == 0.0
+        assert not is_adjustment_sane(cached, varied)
+
+    def test_accepts_a_multi_paragraph_expansion_of_a_one_line_cached_answer(self):
+        """A multi-turn "explain that in more detail" follow-up: history is
+        non-empty so ADJUSTER_SKIP_DISTANCE never applies and adjust() runs for
+        real. The elaboration is many times the length of the one-line cached
+        answer, which is what was asked for, not a runaway - a ratio measured
+        against a 31-character denominator says nothing."""
+        cached = "The capital of France is Paris."
+        expanded = (
+            "Paris is the capital of France, and it has held that role almost "
+            "continuously since the tenth century.\n\n"
+            "The city sits on the Seine in the north of the country, and today "
+            "it serves as the seat of government, the meeting place of both "
+            "legislative chambers, and the official residence of the "
+            "president.\n\n"
+            "It is also by far the largest urban area in France, which is why "
+            "so much of national administration, finance, and culture ended up "
+            "concentrated there rather than spread across other regions."
+        )
+
+        assert len(expanded) > ADJUST_LENGTH_RATIO_MAX * len(cached)
+        assert len(expanded) > ADJUST_LENGTH_ABS_FLOOR
+        assert is_adjustment_sane(cached, expanded)
+
+    def test_the_floor_gates_the_baseline_not_the_output(self):
+        """Regression guard for the direction of the exemption. Same ratio on
+        both sides of the floor: a short cached answer is exempt however large
+        its rewrite, a long one is not. Fails if the floor is ever moved back
+        onto len(adjusted), which exempts small rewrites and rejects exactly
+        the large, correct elaborations it is meant to protect."""
+        short_cached = "x" * 30
+        long_cached = "y " * 150
+
+        assert len(short_cached) < ADJUST_LENGTH_ABS_FLOOR
+        assert len(long_cached) >= ADJUST_LENGTH_ABS_FLOOR
+        assert is_adjustment_sane(short_cached, " ".join(f"token{i}" for i in range(100)))
+        assert not is_adjustment_sane(long_cached, " ".join(f"token{i}" for i in range(600)))
+
+    def test_rejects_empty_output(self):
+        assert not is_adjustment_sane(self.CACHED, "   \n  ")
+
+    def test_accepts_a_faithful_same_length_rewrite(self):
+        reworded = (
+            "With a canary deployment you ship the new version to just a small "
+            "slice of traffic first, which lets you catch problems before "
+            "everyone gets it."
+        )
+        assert is_adjustment_sane(self.CACHED, reworded)
+
+    def test_accepts_a_condensation_of_a_long_cached_answer(self):
+        """Shrinking is legitimate whenever the question asks for it, so the
+        length bound is one-directional. Fails if a lower bound is ever added
+        here instead of being left to ADJUSTER_MIN_TOPIC_OVERLAP."""
+        assert is_adjustment_sane(self.CACHED, "Ship it to a few users first.")
+
+    def test_accepts_the_widest_legitimate_expansion_in_this_file(self):
+        """2.8x - the largest ratio of any faithful tone rewrite recorded in
+        this file (the ELI5 gravity pair in TestIsTopicallyConsistent). Fails
+        if the ratio threshold is ever tightened below the expansions the
+        adjuster is supposed to produce."""
+        cached = "Gravity is a fundamental force of attraction between objects with mass."
+        eli5 = (
+            "Imagine you have a ball. When you throw it up, it comes back down! "
+            "That's because the Earth is really big and pulls everything toward it. "
+            "That pulling is called gravity!"
+        )
+
+        assert len(eli5) / len(cached) < 3.0
+        assert is_adjustment_sane(cached, eli5)
+
+    def test_accepts_a_structured_rewrite_that_preserves_every_section(self):
+        """The system prompt requires sections, bullets and numbered items to
+        survive, so the guard must not read ordinary structure as repetition."""
+        cached = (
+            "**Core factors:**\n"
+            "* Input variability: inputs arrive in different shapes.\n"
+            "* Sequential processing: each stage depends on the previous one.\n"
+            "* Resource constraints: excess work is queued rather than dropped.\n\n"
+            "**Steps:**\n"
+            "1. Receive an input and validate its shape.\n"
+            "2. Transform it using a fixed rule set.\n"
+            "3. Produce an output and log the transformation."
+        )
+        rewritten = (
+            "**Core factors:**\n"
+            "* Input variability: it gets inputs in all sorts of shapes.\n"
+            "* Sequential processing: every stage leans on the one before it.\n"
+            "* Resource constraints: extra work gets queued instead of dropped.\n\n"
+            "**Steps:**\n"
+            "1. It takes an input and checks its shape.\n"
+            "2. It transforms that using a fixed set of rules.\n"
+            "3. It emits an output and logs what it did."
+        )
+
+        assert is_adjustment_sane(cached, rewritten)
+
+    def test_accepts_a_faithful_rewrite_of_an_already_templated_cached_answer(self):
+        """The serve-time half of the same population. This one matters more
+        than the generalize() side: the system prompt explicitly requires every
+        numbered item of the cached answer to survive, so under a flat ceiling
+        the prompt manufactures the repetition that discards its own output -
+        adjust() becomes a silent no-op for this whole answer shape, after
+        paying its full latency in front of a waiting user."""
+        assert _ngram_repetition_ratio(TEMPLATED_LIST_ANSWER) > 0.3
+        assert is_adjustment_sane(TEMPLATED_LIST_ANSWER, TEMPLATED_LIST_REWRITE)
+
+    def test_rejects_a_loop_even_when_the_cached_answer_is_itself_templated(self):
+        """The exemption must not hand every loop over a repetitive cached
+        answer a free pass: this one collapses onto a single item and restates
+        it, stays under the length ratio, and is caught on repetition alone -
+        the collapse itself is what takes it out of the exemption band."""
+        looped = "Person 1 served as President of the United States from 1789 to 1793. " * 30
+
+        assert len(looped) < ADJUST_LENGTH_RATIO_MAX * len(TEMPLATED_LIST_ANSWER)
+        assert not is_adjustment_sane(TEMPLATED_LIST_ANSWER, looped)
+
+    def test_rejects_a_self_paraphrasing_loop_over_a_templated_cached_answer(self):
+        """The serve-time half of the same regression guard: a loop that
+        reworded its frame each pass evaded a baseline-scaled ceiling while
+        staying under the 10x length arm. The unmodified 0.08 ceiling applies
+        here because the growth left the exemption band."""
+        for passes in (2, 3):
+            looped = templated_self_paraphrase_loop(passes)
+            ratio = len(looped) / len(TEMPLATED_LIST_ANSWER)
+
+            assert 1.3 < ratio < ADJUST_LENGTH_RATIO_MAX
+            assert _ngram_repetition_ratio(looped) > 0.4
+            assert _ngram_repetition_ratio(looped) < 1.5 * _ngram_repetition_ratio(
+                TEMPLATED_LIST_ANSWER
+            )
+            assert not is_adjustment_sane(TEMPLATED_LIST_ANSWER, looped)
+
+    def test_rejects_a_same_size_loop_over_a_cached_answer_with_no_repetition(self):
+        """The serve-time half: a loop landing at the cached answer's own size
+        over a cached answer that had no repetition of its own. is_topically_
+        consistent() is blind to it - every repeated phrase is drawn from the
+        cached answer's vocabulary, so it scores near the maximum - which
+        leaves the repetition ceiling as the only thing that sees it, and the
+        size exemption must not disarm it here."""
+        assert _ngram_repetition_ratio(PROSE_ANSWER) == 0.0
+
+        for sentences in (8, 10):
+            looped = prose_self_paraphrase_loop(sentences)
+            ratio = len(looped) / len(PROSE_ANSWER)
+
+            assert 1 / 1.3 < ratio < 1.3
+            assert is_topically_consistent(looped, PROSE_ANSWER)
+            assert not is_adjustment_sane(PROSE_ANSWER, looped)
+
+    def test_rejects_a_same_size_loop_over_a_mildly_repetitive_cached_answer(self):
+        """The serve-time half: a cached answer repetitive enough to open the
+        baseline gate (0.088, a few parallel bullets inside prose) must not hand
+        every same-size loop over it a free pass. The loop stays inside the
+        length band and under the 10x length arm, and is caught only because its
+        own repetition runs far past what the cached answer could have supplied."""
+        baseline_repetition = _ngram_repetition_ratio(MILD_STRUCTURE_ANSWER)
+
+        assert baseline_repetition > ADJUST_NGRAM_REPEAT_RATIO_MAX
+        assert len(MILD_STRUCTURE_ANSWER) >= ADJUST_LENGTH_ABS_FLOOR
+
+        for sentences in (6, 7):
+            looped = mild_structure_self_paraphrase_loop(sentences)
+            ratio = len(looped) / len(MILD_STRUCTURE_ANSWER)
+
+            assert 1 / 1.3 < ratio < 1.3
+            assert ratio < ADJUST_LENGTH_RATIO_MAX
+            assert (
+                _ngram_repetition_ratio(looped) - baseline_repetition
+                > ADJUST_NGRAM_REPEAT_RATIO_MAX
+            )
+            assert not is_adjustment_sane(MILD_STRUCTURE_ANSWER, looped)
+
+
+class TestAdjustRunawayGuard:
+    """Wiring tests: prove adjust() itself falls back to the cached answer when
+    the backend returns a runaway, not just that is_adjustment_sane() would
+    reject it in isolation. Regression test for raising adjust()'s cap to
+    REWRITE_MAX_TOKENS - it fails if the guard is dropped from adjust()."""
+
+    pytestmark = pytest.mark.no_model
+
+    def test_falls_back_to_the_cached_answer_when_the_rewrite_stalls(self, monkeypatch):
+        """The one guard that does not need the generation to come back first:
+        every other check here is post-hoc, so none of them bounds how long a
+        waiting user holds the cache-hit path open."""
+
+        class _StallingBackend:
+            async def complete(self, request):
+                await asyncio.sleep(60)
+                raise AssertionError("the deadline should have fired first")
+
+        monkeypatch.setattr(context_adjuster, "ADJUST_TIMEOUT_SECONDS", 0.01)
+        backend = _StallingBackend()
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        result = asyncio.run(service.adjust("explain that in detail", CANARY_ANSWER))
+
+        assert result == CANARY_ANSWER
+
+    def test_falls_back_to_the_cached_answer_on_a_runaway(self):
+        looped = (
+            "A canary deployment rolls out a new version to a small subset of "
+            "traffic first, so problems are caught before a full rollout. "
+        ) * 12
+        backend = _FakeBackend(looped)
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        result = asyncio.run(service.adjust("explain that in detail", CANARY_ANSWER))
+
+        assert result == CANARY_ANSWER
+
+    def test_falls_back_to_the_cached_answer_on_empty_output(self):
+        backend = _FakeBackend("   ")
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        result = asyncio.run(service.adjust("explain that in detail", CANARY_ANSWER))
+
+        assert result == CANARY_ANSWER
+
+    def test_passes_through_a_sane_rewrite_unchanged(self):
+        clean = (
+            "With a canary deployment you push the new version to just a small "
+            "slice of traffic first, so problems turn up before everyone sees them."
+        )
+        backend = _FakeBackend(clean)
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        result = asyncio.run(service.adjust("explain that in detail", CANARY_ANSWER))
+
+        assert result == clean
+
+    def test_serves_a_detailed_expansion_of_a_one_line_cached_answer(self):
+        """End of the multi-turn path the guard must not break: a follow-up
+        asking for more detail on a one-line cached answer gets the
+        elaboration it asked for, not the one-line answer back."""
+        cached = "The capital of France is Paris."
+        expanded = (
+            "Paris is the capital of France, and it has held that role almost "
+            "continuously since the tenth century.\n\n"
+            "The city sits on the Seine in the north of the country, and today "
+            "it serves as the seat of government, the meeting place of both "
+            "legislative chambers, and the official residence of the "
+            "president.\n\n"
+            "It is also by far the largest urban area in France, which is why "
+            "so much of national administration, finance, and culture ended up "
+            "concentrated there rather than spread across other regions."
+        )
+        backend = _FakeBackend(expanded)
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        result = asyncio.run(service.adjust("can you explain that in more detail?", cached))
+
+        assert result == expanded

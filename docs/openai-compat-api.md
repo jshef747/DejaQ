@@ -89,6 +89,25 @@ An external call that errors falls back to the estimate along with the rest of t
 
 `/v1/responses` reports the same numbers under `input_tokens` / `output_tokens`.
 
+### `finish_reason` / `status`: truncation is reported, not hidden
+
+`choices[0].finish_reason` is `"stop"`, or `"length"` when the token budget cut the answer off
+mid-generation. It is never inferred from the shape of the text — it carries the generator's own
+signal (Ollama's `done_reason` on the local route, the provider's own stop reason on the external
+route, both collapsed to those two values). The final streaming chunk carries the same value. A
+cache hit always reports `"stop"`.
+
+`/v1/responses` reports the same fact as `status`: `"completed"`, or `"incomplete"` when the
+answer was cut off — on the top-level response and on the output item, streaming and
+non-streaming alike. An incomplete response also carries
+`incomplete_details: {"reason": "max_output_tokens"}` (null when it completed), and a truncated
+stream ends on a `response.incomplete` terminal event rather than `response.completed`, so a
+client branching on the event type sees the truncation without reading the payload.
+
+A truncated answer is never stored in the cache: a stored truncation is what every later match
+would be served, and it never self-heals. The caller still receives the partial answer; it just
+leaves no cache entry. Thumbs-down escalation answers follow the same rule.
+
 Gateway headers:
 
 | Header | Meaning |
@@ -152,7 +171,7 @@ request
   -> context enricher
   -> normalizer
   -> ChromaDB cache lookup
-     -> hit: context adjuster + return
+     -> hit: context adjuster (skipped when there is no tone gap) + return
      -> miss: difficulty classifier
         -> easy: local model
         -> hard: encrypted workspace provider credential
@@ -160,6 +179,11 @@ request
 ```
 
 - Cache hit: `x-dejaq-model-used: cache`.
+- A cache hit on a request with **no prior conversation turns** that closely matches the stored
+  question skips the adjuster and returns the stored answer verbatim, saving its latency
+  (`DEJAQ_ADJUSTER_SKIP_DISTANCE`, see CLAUDE.md). Multi-turn follow-ups always run it, because
+  the enricher has already folded a "give me the short version" ask back into the original
+  question by the time the distance is measured.
 - Easy miss: served by the configured local model backend.
 - Hard miss: served by the provider inferred from the workspace's configured model, using encrypted workspace credentials.
 - Missing hard-query credentials return `402 Payment Required`.

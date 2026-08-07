@@ -57,6 +57,7 @@ from app.services.service_factory import (
 )
 from app.tasks.cache_tasks import generalize_and_store_task
 from app.config import (
+    ADJUSTER_SKIP_DISTANCE,
     CACHE_ALIAS_ENABLED,
     CACHE_BAND_MAX_DISTANCE,
     CACHE_FILE_ENABLED,
@@ -139,6 +140,13 @@ class ChatPipelineResult:
     headers: dict[str, str]
     prompt_tokens: int
     completion_tokens: int
+    # "length" only on a miss whose generator's own signal reported
+    # truncation (see the "generate" step above). Always "stop" on a cache
+    # hit: adjust()'s own truncation guard already falls back to the
+    # complete cached answer before anything is served, so whatever a hit
+    # returns here is never a cut-off text - the default covers every hit
+    # construction without needing to touch each one.
+    finish_reason: str = "stop"
 
 
 def _request_model_profile(raw_request: Request) -> str:
@@ -178,6 +186,16 @@ def _read_effective_llm_config(workspace_slug: str, workspace_id: int | None) ->
 def _services_for_model_profile(model_profile: str) -> ModelServices:
     # Temporary developer-only weak CPU profile. Keep the default singleton path
     # unchanged so production behavior and existing tests remain stable.
+    #
+    # CAPTAIN DECISION, do not re-litigate: on this profile, normalizer/
+    # enricher/adjuster (via WEAK_CPU_MODEL_NAME) all share qwen_0_5b with
+    # llm_router below, which deliberately does not set num_ctx (see
+    # OLLAMA_NUM_CTX in config.py - the exclusion is correct on the default
+    # profile, where llm_router runs gemma4:e4b, a different, larger model
+    # with no rewrite-role sibling). On this profile that same exclusion
+    # reopens the num_ctx split on one shared tag: qwen_0_5b reloads between
+    # normalize()/adjust() and generate() on every miss. Left alone on
+    # purpose - this is a developer-only profile, not the shipped default.
     if model_profile == MODEL_PROFILE_WEAK_CPU:
         return ModelServices(
             normalizer=get_normalizer_service(model_name=WEAK_CPU_MODEL_NAME),
@@ -572,6 +590,7 @@ async def _stream_generator(
     completion_id: str,
     model: str,
     model_used: str,
+    finish_reason: str = "stop",
 ) -> AsyncGenerator[str, None]:
     """Yield SSE chunks for a list of text pieces, then [DONE]."""
     # First chunk carries role
@@ -597,7 +616,7 @@ async def _stream_generator(
         id=completion_id,
         created=_now_ts(),
         model=model,
-        choices=[OAIStreamChoice(delta=OAIStreamDelta(), finish_reason="stop")],
+        choices=[OAIStreamChoice(delta=OAIStreamDelta(), finish_reason=finish_reason)],
     )
     yield f"data: {final.model_dump_json()}\n\n"
     yield "data: [DONE]\n\n"
@@ -620,10 +639,11 @@ async def run_chat_pipeline(
     are gated on BOTH CLIP distance and dHash before a cache hit is served, and
     always routed to the (vision-capable) external provider on a miss.
 
-    `file` is (bytes, mime, filename) for a PDF/Markdown request. Files are gated
-    on an EXACT hash of their extracted text — see services/file_text.py for why
-    that is right here and approximate matching is right for images. At most one
-    attachment total: the router rejects image+file in one request.
+    `file` is (bytes, mime, filename) for a file request (PDF, DOCX, or
+    text/Markdown/code). Files are gated on an EXACT hash of their extracted
+    text — see services/file_text.py for why that is right here and approximate
+    matching is right for images. At most one attachment total: the router
+    rejects image+file in one request.
 
     Neither attachment's content enters the cache KEY. The text pipeline sees only
     the user's question, exactly as it does for images; the attachment is a side
@@ -983,12 +1003,24 @@ async def run_chat_pipeline(
                     _cache_distance, _cache_matched_query, trace.summary(),
                 )
             else:
+                # Single-turn request (no prior conversation turns) close enough
+                # to the matched question that there is no real tone/length gap
+                # for adjust() to close — skip the rewrite and serve the stored
+                # answer verbatim, same fallback path used on adjuster failure
+                # and topic drift below. `not history` is load-bearing, not a
+                # nicety: it's what rules out a genuine "give me the short
+                # version" follow-up, which the context enricher folds back into
+                # a near-duplicate of the original question (measured distance
+                # as low as 0.0000) — see ADJUSTER_SKIP_DISTANCE in config.py.
+                _skip_adjust = (not history) and _cache_distance <= ADJUSTER_SKIP_DISTANCE
                 if _attachment_anchored:
                     # Attachment answers are stored verbatim (the generalizer
                     # invents specifics it cannot see — docs/image-gate.md), so no
                     # tone was ever stripped and there is nothing to put back.
                     # Running the adjuster here would be the same blind rewrite,
                     # plus ~2.1s.
+                    answer = cached_answer
+                elif _skip_adjust:
                     answer = cached_answer
                 else:
                     try:
@@ -1097,6 +1129,10 @@ async def run_chat_pipeline(
         answer: str = ""
         model_used: str = _local_model_used(services.llm_router, model_profile)
         route = "external" if complexity == "hard" else "local"
+        # "length" only when the generator's own signal says the token budget
+        # cut the answer off (Ollama's done_reason / the provider's own stop
+        # reason, both captured below) - never inferred from length or shape.
+        finish_reason: str = "stop"
         ext_response = None  # set below only on a successful external call; real provider usage lives on it
 
         try:
@@ -1169,18 +1205,20 @@ async def run_chat_pipeline(
                     )
                     answer = ext_response.text
                     model_used = ext_response.model_used
+                    finish_reason = ext_response.finish_reason
                 else:
                     llm_system_prompt = (
                         system_prompt
                         or "You are a helpful assistant. Answer the user's query concisely and accurately."
                     )
-                    answer, _ = await services.llm_router.generate_local_response(
+                    answer, _, done_reason = await services.llm_router.generate_local_response(
                         user_query,
                         history=history,
                         max_tokens=_max_tokens,
                         system_prompt=llm_system_prompt,
                     )
                     model_used = _local_model_used(services.llm_router, model_profile)
+                    finish_reason = "length" if done_reason == "length" else "stop"
         except PipelineError:
             raise
         except ExternalLLMError as exc:
@@ -1223,6 +1261,22 @@ async def run_chat_pipeline(
             will_cache = False
             logger.warning(
                 "generation returned an empty answer (route=%s model=%s); not caching it",
+                route, model_used,
+            )
+
+        # A truncated answer is not an answer either. The client's own
+        # max_tokens (nothing clamps it) can cut a long answer off mid-sentence,
+        # and the generator's own signal is the only thing that knows: the text
+        # reads as a clean prefix. generalize()'s guard does not cover this one
+        # - it only sees whether the REWRITE was truncated, and its fallback
+        # returns this same cut-off raw answer. Stored, it never self-heals:
+        # every later match is served the same cut-off text, reported as
+        # finish_reason="stop" because a hit carries no truncation signal.
+        if finish_reason == "length":
+            will_cache = False
+            logger.warning(
+                "generation was truncated (finish_reason=length, route=%s model=%s); "
+                "not caching the cut-off answer",
                 route, model_used,
             )
 
@@ -1390,6 +1444,7 @@ async def run_chat_pipeline(
             headers=miss_headers,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
+            finish_reason=finish_reason,
         )
     finally:
         clear_request_id(request_token)
@@ -1416,7 +1471,10 @@ async def chat_completions(
 
     if oai_request.stream:
         return StreamingResponse(
-            _stream_generator(result.stream_chunks, result.completion_id, oai_request.model, result.model_used),
+            _stream_generator(
+                result.stream_chunks, result.completion_id, oai_request.model,
+                result.model_used, result.finish_reason,
+            ),
             media_type="text/event-stream",
             headers=result.headers,
         )
@@ -1425,7 +1483,7 @@ async def chat_completions(
         id=result.completion_id,
         created=_now_ts(),
         model=oai_request.model,
-        choices=[OAIChoice(message=OAIMessageResponse(content=result.answer))],
+        choices=[OAIChoice(message=OAIMessageResponse(content=result.answer), finish_reason=result.finish_reason)],
         usage=OAIUsage(
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,

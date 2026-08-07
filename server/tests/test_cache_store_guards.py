@@ -40,6 +40,15 @@ class ExplodingRouter:
         raise RuntimeError("model unavailable")
 
 
+class TruncatingRouter:
+    """Local generation hits the token budget — the answer reaches the user but
+    the cut-off text must never be stored (a stored truncation never heals: it
+    is what every later match is served, reported as finish_reason=stop)."""
+
+    async def generate_local_response(self, query, history=None, max_tokens=1024, system_prompt=None):
+        return "The capital of France is Par", 12.0, "length"
+
+
 class RecordingMemory(StubMemory):
     def __init__(self):
         self.stored: list[dict] = []
@@ -83,6 +92,29 @@ def test_failed_generation_is_not_cached(monkeypatch):
     assert response.headers["x-dejaq-model-used"] == "error"
     # The apology reached the user but must never have been stored.
     assert memory.stored == [], f"an errored generation was cached: {memory.stored}"
+    assert "x-dejaq-response-id" not in response.headers
+
+
+def test_truncated_generation_is_not_cached(monkeypatch):
+    memory = RecordingMemory()
+    _patch_common(monkeypatch, memory, TruncatingRouter())
+
+    client = TestClient(app, headers=_AUTH)
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"X-DejaQ-Routing-Mode": "easy_local"},
+        json={
+            "model": "m",
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "max_tokens": 8,
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    # The cut-off answer reached the user, honestly labelled, and was not stored.
+    assert response.json()["choices"][0]["finish_reason"] == "length"
+    assert memory.stored == [], f"a truncated generation was cached: {memory.stored}"
     assert "x-dejaq-response-id" not in response.headers
 
 

@@ -43,9 +43,29 @@ class StubAdjuster:
         return general_answer
 
 
+class MarkerAdjuster:
+    """Returns a value distinguishable from general_answer, so a test can
+    prove whether adjust() ran just by inspecting the served content -
+    StubAdjuster's passthrough can't tell a skip from a no-op rewrite."""
+
+    async def generalize(self, answer: str) -> str:
+        return answer
+
+    async def adjust(self, original_query: str, general_answer: str) -> str:
+        return "ADJUSTED: " + general_answer
+
+
 class StubRouter:
     async def generate_local_response(self, query: str, history=None, max_tokens=1024, system_prompt=None):
-        return "Paris is the capital of France.", 12.0
+        return "Paris is the capital of France.", 12.0, "stop"
+
+
+class TruncatedStubRouter:
+    """Generation that spent its whole token budget: Ollama's own signal says
+    "length", and the text itself reads as a clean prefix."""
+
+    async def generate_local_response(self, query: str, history=None, max_tokens=1024, system_prompt=None):
+        return "Paris is the capital of Fra", 12.0, "length"
 
 
 class StubClassifier:
@@ -105,6 +125,28 @@ class StubHitMemory:
 
     def check_cache(self, clean_query: str):
         return ("Cached Paris answer.", "doc123", 0.04, "capital of france")
+
+    def increment_hit_count(self, doc_id: str):
+        return None
+
+
+class StubHitMemoryBeyondAdjustSkip:
+    """Trusted-tier hit (distance well under CACHE_TRUST_DISTANCE) but past
+    ADJUSTER_SKIP_DISTANCE - adjust() must still run for this one."""
+
+    def lookup_cache(self, clean_query: str):
+        return CacheLookupResult(
+            hit=True,
+            generalized_answer="Cached Paris answer.",
+            entry_id="docfar",
+            distance=0.10,
+            matched_query="capital of france",
+            nearest_distance=0.10,
+            nearest_prompt="capital of france",
+        )
+
+    def check_cache(self, clean_query: str):
+        return None
 
     def increment_hit_count(self, doc_id: str):
         return None
@@ -341,6 +383,103 @@ def test_cache_answer_registers_interaction_and_emits_tier_headers(monkeypatch):
     assert response.headers["x-dejaq-response-id"].endswith(":doc123")
     assert registry.calls[0]["served_tier"] == "cache"
     assert registry.calls[0]["response_id"].endswith(":doc123")
+
+
+def test_adjust_skipped_for_close_single_turn_repeat(monkeypatch):
+    """ADJUSTER_SKIP_DISTANCE: a single-turn near-duplicate of a cached
+    question (distance 0.04, no prior conversation) must serve the stored
+    answer verbatim - no adjust() call, no validator call. Uses an
+    ExplodingValidator to prove the validator is never reached either (it
+    already skips below VALIDATOR_SKIP_DISTANCE independent of this change);
+    MarkerAdjuster proves adjust() specifically was skipped, since its output
+    would be distinguishable from the raw cached text."""
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", MarkerAdjuster())
+    monkeypatch.setattr(openai_compat, "_validator", ExplodingValidator())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubHitMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+
+    client = TestClient(app, headers=_AUTH)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "what is teh capitol of frnace?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["choices"][0]["message"]["content"] == "Cached Paris answer."
+
+
+def test_adjust_runs_for_single_turn_hit_beyond_skip_distance(monkeypatch):
+    """A single-turn hit past ADJUSTER_SKIP_DISTANCE (distance 0.10, still
+    inside the trusted tier) is not close enough to assume there is no tone
+    gap - adjust() must still run."""
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", MarkerAdjuster())
+    monkeypatch.setattr(openai_compat, "_validator", StubValidatorValid())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubHitMemoryBeyondAdjustSkip())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+
+    client = TestClient(app, headers=_AUTH)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "what's the capital of france anyway?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["choices"][0]["message"]["content"] == "ADJUSTED: Cached Paris answer."
+
+
+def test_adjust_runs_for_multiturn_hit_even_when_close(monkeypatch):
+    """The single-turn restriction is what protects a genuine 'give me the
+    short version' follow-up (see config.py:ADJUSTER_SKIP_DISTANCE): even at
+    a distance inside the skip window, a hit reached through prior
+    conversation history must still go through adjust(), since only the
+    conversation - not the distance - can tell a repeat from a rewrite ask."""
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", MarkerAdjuster())
+    monkeypatch.setattr(openai_compat, "_validator", ExplodingValidator())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubHitMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+
+    client = TestClient(app, headers=_AUTH)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [
+                {"role": "user", "content": "What is the capital of France?"},
+                {"role": "assistant", "content": "Cached Paris answer."},
+                {"role": "user", "content": "give me the short version"},
+            ],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["choices"][0]["message"]["content"] == "ADJUSTED: Cached Paris answer."
 
 
 def test_cache_miss_includes_difficulty_and_nearest_cache_headers(monkeypatch, caplog):
@@ -781,7 +920,7 @@ def test_weak_cpu_profile_uses_weak_local_services(monkeypatch):
         model_name = "qwen_0_5b"
 
         async def generate_local_response(self, query: str, history=None, max_tokens=1024, system_prompt=None):
-            return "weak local answer", 10.0
+            return "weak local answer", 10.0, "stop"
 
     monkeypatch.setattr(openai_compat, "get_context_enricher_service", lambda model_name=None: StubEnricher())
     monkeypatch.setattr(openai_compat, "get_normalizer_service", lambda model_name=None: StubNormalizer())
@@ -1233,6 +1372,173 @@ def test_no_alias_stored_for_trusted_hit(monkeypatch):
     assert response.status_code == 200
     assert response.headers["x-dejaq-tier"] == "cache"
     assert not alias_calls  # trusted hits don't need aliases
+
+
+def _patch_for_truncation(monkeypatch, router):
+    """Minimum wiring for a cache miss answered by `router`, no models loaded."""
+
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "_llm_router", router)
+    monkeypatch.setattr(openai_compat, "_classifier", StubClassifier())
+    monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
+    monkeypatch.setattr(openai_compat, "USE_CELERY", False)
+    return TestClient(app, headers=_AUTH)
+
+
+def _sse_events(response) -> list[dict]:
+    """Parse `data:` payloads out of an SSE body, skipping the [DONE] sentinel."""
+    import json
+
+    return [
+        json.loads(line[len("data: "):])
+        for line in response.text.splitlines()
+        if line.startswith("data: ") and line != "data: [DONE]"
+    ]
+
+
+def test_truncated_miss_reports_length_on_chat_completions(monkeypatch):
+    """The wire-level end of the truncation signal. Without it a client that
+    sends a small max_tokens gets a cut-off answer labelled finish_reason=stop,
+    i.e. told the model finished when it did not."""
+    client = _patch_for_truncation(monkeypatch, TruncatedStubRouter())
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "max_tokens": 8,
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["finish_reason"] == "length"
+
+
+def test_untruncated_miss_still_reports_stop_on_chat_completions(monkeypatch):
+    """Control for the three tests around it: honest reporting has to mean
+    "length" only when the generator said so, not "length" everywhere."""
+    client = _patch_for_truncation(monkeypatch, StubRouter())
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.json()["choices"][0]["finish_reason"] == "stop"
+
+
+def test_truncated_miss_reports_length_on_the_final_stream_chunk(monkeypatch):
+    client = _patch_for_truncation(monkeypatch, TruncatedStubRouter())
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "max_tokens": 8,
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 200
+    chunks = _sse_events(response)
+    assert chunks[-1]["choices"][0]["finish_reason"] == "length"
+
+
+def test_truncated_miss_reports_incomplete_on_responses(monkeypatch):
+    """/v1/responses carries the same signal as a status, top-level and on the
+    output item - an SDK reads either one."""
+    client = _patch_for_truncation(monkeypatch, TruncatedStubRouter())
+
+    response = client.post(
+        "/v1/responses",
+        json={
+            "model": "gpt-4o-mini",
+            "input": "What is the capital of France?",
+            "max_output_tokens": 8,
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "incomplete"
+    assert payload["output"][0]["status"] == "incomplete"
+    assert payload["incomplete_details"] == {"reason": "max_output_tokens"}
+
+
+def test_untruncated_miss_still_reports_completed_on_responses(monkeypatch):
+    client = _patch_for_truncation(monkeypatch, StubRouter())
+
+    response = client.post(
+        "/v1/responses",
+        json={"model": "gpt-4o-mini", "input": "What is the capital of France?", "stream": False},
+    )
+
+    payload = response.json()
+    assert payload["status"] == "completed"
+    assert payload["output"][0]["status"] == "completed"
+    assert payload["incomplete_details"] is None
+
+
+def test_truncated_miss_reports_incomplete_on_streamed_responses(monkeypatch):
+    """A client that branches on the SSE event type has to see the truncation
+    there too - a `response.completed` event carrying `status: "incomplete"`
+    says the opposite of what happened."""
+    client = _patch_for_truncation(monkeypatch, TruncatedStubRouter())
+
+    response = client.post(
+        "/v1/responses",
+        json={
+            "model": "gpt-4o-mini",
+            "input": "What is the capital of France?",
+            "max_output_tokens": 8,
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 200
+    events = _sse_events(response)
+    item_done = [e for e in events if e.get("item", {}).get("status") == "incomplete"]
+    assert item_done, "no output_item.done carried the incomplete status"
+    assert "event: response.incomplete\n" in response.text
+    assert "event: response.completed\n" not in response.text
+    assert events[-1]["type"] == "response.incomplete"
+    assert events[-1]["response"]["status"] == "incomplete"
+    assert events[-1]["response"]["incomplete_details"] == {"reason": "max_output_tokens"}
+
+
+def test_untruncated_miss_still_reports_completed_on_streamed_responses(monkeypatch):
+    """Control: the completed path is untouched - same terminal event, no
+    incomplete_details."""
+    client = _patch_for_truncation(monkeypatch, StubRouter())
+
+    response = client.post(
+        "/v1/responses",
+        json={"model": "gpt-4o-mini", "input": "What is the capital of France?", "stream": True},
+    )
+
+    assert response.status_code == 200
+    events = _sse_events(response)
+    assert "event: response.completed\n" in response.text
+    assert "event: response.incomplete\n" not in response.text
+    assert events[-1]["type"] == "response.completed"
+    assert events[-1]["response"]["status"] == "completed"
+    assert events[-1]["response"]["incomplete_details"] is None
 
 
 def test_hard_query_unmapped_external_model_returns_422(monkeypatch):

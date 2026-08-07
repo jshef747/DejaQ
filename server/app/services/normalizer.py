@@ -11,6 +11,7 @@ import logging
 import re
 import time
 
+from app.config import OLLAMA_NUM_CTX
 from app.services.model_backends import CompletionRequest, ModelBackend
 
 logger = logging.getLogger("dejaq.services.normalizer")
@@ -146,10 +147,17 @@ class NormalizerService:
                 model_name=self.model_name,
                 messages=messages,
                 max_tokens=8,
+                # An 8-token rewrite needs nothing near this window. It is set
+                # to match generalize(), which runs on the SAME model
+                # (gemma4:e2b): Ollama treats a changed runner option as a
+                # reload, so two different windows make it unload and reload
+                # the model between roles. Costs no extra memory - the model is
+                # already loaded at this window whenever generalize() runs.
+                num_ctx=OLLAMA_NUM_CTX,
                 temperature=0.0,
             )
         )
-        normalized = _postprocess(raw_output, raw_query)
+        normalized = _postprocess(raw_output.text, raw_query)
 
         latency = (time.time() - start) * 1000
         logger.debug(

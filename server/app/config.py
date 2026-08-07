@@ -198,11 +198,11 @@ TESSERACT_BIN = _get_text("DEJAQ_TESSERACT_BIN", "tesseract")
 TESSERACT_LANGS = _get_text("DEJAQ_TESSERACT_LANGS", "heb+eng")
 OCR_TIMEOUT_SECONDS = _get_float("DEJAQ_OCR_TIMEOUT_SECONDS", 20.0)
 
-# --- File gate (PDF, Markdown) ---
+# --- File gate (PDF, DOCX, text/Markdown/code) ---
 # Deliberately three settings and NO swept thresholds, unlike the image gate
 # above. Images need approximate identity because OCR is noisy — two reads of one
 # page disagree, so every constant up there had to be measured over ~1.85M
-# labelled pairs. PDF and Markdown hand us the text directly and deterministically:
+# labelled pairs. Files hand us the text directly and deterministically:
 # the same file always extracts the same characters, so identity is EXACT
 # (sha256 of the whitespace-normalised text) and false merges are impossible by
 # construction. There is no recall-vs-merge curve here, so there is nothing to
@@ -213,6 +213,20 @@ CACHE_FILE_ENABLED = _get_bool("DEJAQ_CACHE_FILE_ENABLED", True)
 # 1024 because 1024 truncated ordinary answers mid-sentence (done_reason=length);
 # one measured coursework answer needed ~3,700 tokens on its own.
 DEFAULT_MAX_TOKENS = int(_get_float("DEJAQ_DEFAULT_MAX_TOKENS", 4096))
+
+# Output budget for the two rewrite steps (generalize, adjust), independent of
+# whatever budget the original request ran under. Both prompts are told to keep
+# every fact, so a rewrite needs room for at least the whole answer it was
+# handed: at the old 1024 the stored copy of a long answer was truncated
+# mid-sentence, and a truncated STORED answer never self-heals - it is what
+# every future cache hit serves. 8192 rather than DEFAULT_MAX_TOKENS to leave
+# headroom above it, since a client may ask for more than the default. Nothing
+# clamps a client-supplied max_tokens, so an answer generated above this budget
+# can still outgrow a rewrite of it; raise this - and OLLAMA_NUM_CTX with it -
+# if that population turns out to be real. Must stay comfortably inside
+# OLLAMA_NUM_CTX, which has to hold this generation PLUS the prompt carrying
+# that answer.
+REWRITE_MAX_TOKENS = int(_get_float("DEJAQ_REWRITE_MAX_TOKENS", 8192))
 
 # Below this many characters a file cannot be identified, so it is neither served
 # nor stored — the same rule as the image gate's `ambiguous` class, and the reason
@@ -230,6 +244,58 @@ MAX_ATTACHMENT_BYTES = int(_get_float("DEJAQ_MAX_ATTACHMENT_BYTES", 10 * 1024 * 
 # Model backend: generation runs through Ollama (local or remote per this URL).
 OLLAMA_URL = _get_text("DEJAQ_OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_TIMEOUT_SECONDS = _get_float("DEJAQ_OLLAMA_TIMEOUT_SECONDS", 60.0)
+
+# Context window for the two REWRITE roles only (generalize, adjust) - every
+# other role keeps Ollama's own runtime default. Ollama's default is independent
+# of what a model supports and far smaller than both models here allow
+# (qwen2.5:1.5b 32768, gemma4:e2b 131072), and num_ctx bounds the PROMPT as well
+# as the generation: left unset, a REWRITE_MAX_TOKENS generation over a long
+# answer overflows the window and Ollama silently drops the head of the prompt,
+# so the rewrite never sees the tail of the answer it was told to preserve - the
+# same silently-truncated stored copy the budget exists to prevent, reached from
+# the other side. 32768 is the smaller model's own maximum, so it is safe on
+# both. Only the two rewrite roles NEED it; every other role that shares one of
+# their two models sends it anyway (enricher on qwen2.5:1.5b, normalizer and
+# validator on gemma4:e2b), because Ollama treats a changed runner option as a
+# reload of that model - two windows on one model tag unload and reload it
+# between consecutive roles on the same request, on the synchronous serve path.
+# That costs no extra memory over the rewrite roles alone: the model is already
+# loaded at this window whenever generalize()/adjust() run. gemma4:e4b, the
+# largest model in the stack, is not a rewrite role and shares one with none, so
+# it keeps Ollama's own default.
+OLLAMA_NUM_CTX = int(_get_float("DEJAQ_OLLAMA_NUM_CTX", 32768))
+
+# Deadline for adjust() alone, the one rewrite role on the synchronous
+# cache-hit path. Its budget is REWRITE_MAX_TOKENS, sized so a full-fidelity
+# rewrite of the largest stored answer fits; without a deadline of its own the
+# only bound left is OLLAMA_TIMEOUT_SECONDS, so a runaway spending that whole
+# budget makes a waiting user hold the fast path open for the full shared
+# timeout before the fallback fires. Not swept, and it does not need to be: the
+# fallback is the complete cached answer (the same one every other guard in
+# adjust() falls back to), so a deadline set too tight costs tone, never
+# content. Half OLLAMA_TIMEOUT_SECONDS, which leaves a slow but legitimate
+# large rewrite room while halving the worst case. generalize() gets no
+# equivalent - it runs in a background Celery task with nobody waiting on it.
+#
+# CAPTAIN DECISION, do not re-litigate: this deadline and REWRITE_MAX_TOKENS
+# are sized for opposite goals on the same call - the budget wide enough that
+# the largest measured rewrite (~3,700 tokens) is never cut short, the
+# deadline tight enough that a waiting user is never held past half the shared
+# timeout. They can therefore disagree: emitting the full budget on
+# qwen2.5:1.5b is plausibly 25-45s, so this deadline can fire before
+# generation would have finished on its own, on exactly the long structured
+# answers the adjust() prompt was reworked to preserve. Left as-is on purpose.
+# THE DEADLINE IS THE REAL BOUND; REWRITE_MAX_TOKENS IS A BACKSTOP, not the
+# other way around - and firing it is not a failure mode to close, because
+# is_adjustment_sane()'s own fallback and this timeout's fallback are the same
+# answer: the complete, already-validated cached text. A tighter deadline
+# never serves anything wrong, only untailored - the identical trade this
+# file's own safety nets already make. Reviewed and confirmed across several
+# review rounds on this same PR (one raised REWRITE_MAX_TOKENS/OLLAMA_NUM_CTX,
+# a later one scoped num_ctx to the rewrite roles, this one added the deadline
+# and surfaced this exact tension) - a further pass over either number needs a
+# captain decision, not another automated correction.
+ADJUST_TIMEOUT_SECONDS = _get_float("DEJAQ_ADJUST_TIMEOUT_SECONDS", 30.0)
 
 # Supabase management auth
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
@@ -276,6 +342,32 @@ VALIDATOR_MODEL_NAME = _get_text("DEJAQ_VALIDATOR_MODEL_NAME", "gemma_e2b")
 # guarantees the cached answer covers the question).
 VALIDATOR_SKIP_DISTANCE = _get_float("DEJAQ_VALIDATOR_SKIP_DISTANCE", 0.05)
 
+# Below this cosine distance, on a single-turn request only (no prior
+# conversation history - see openai_compat.py's use of `history`), skip
+# adjust() entirely and serve the stored generalized_answer verbatim. Measured
+# in a follow-up sweep over 3 cached anchor questions:
+# single-turn typo/rephrase repeats of an already-cached question - no real
+# tone or length ask - measured 0.0261-0.1687 (10 cases, 3 anchors); the
+# lowest single-turn request that DID explicitly ask for something different
+# ("explain in simple terms...") measured 0.0799. 0.075 sits inside that
+# narrow gap, covering the diagnosed incident (0.0706) with a small margin on
+# both sides. The gap is real but thin (13 samples total) and the tone side
+# has only 3 - narrower evidence than ADJUSTER_MIN_TOPIC_OVERLAP's 52-case
+# sweep, so this is a starting point to widen with more data, not a settled
+# constant.
+#
+# The single-turn restriction is load-bearing, not a nicety: a multi-turn
+# follow-up that DOES explicitly ask to shorten ("give me the short version")
+# measured distance 0.0000-0.0093 in the same sweep - indistinguishable from
+# or closer than typo noise - because the context enricher folds a
+# conversational "make that shorter" turn back into a standalone restatement
+# of the original question, discarding the length/tone request before the
+# embedding is ever computed. Distance alone cannot separate that case from a
+# meaningless typo repeat; requiring empty history rules out every case where
+# that collapse was observed, since a fresh single-turn message has no prior
+# answer for "shorter"/"like I'm 5" to refer to in the first place.
+ADJUSTER_SKIP_DISTANCE = _get_float("DEJAQ_ADJUSTER_SKIP_DISTANCE", 0.075)
+
 # Post-hoc safety net for the context adjuster: the minimum fraction of the
 # cached answer's content words that must survive into the tone-adjusted
 # answer. Below this, the adjustment is treated as a drift (e.g. the small
@@ -297,6 +389,14 @@ ADJUSTER_MIN_TOPIC_OVERLAP = _get_float("DEJAQ_ADJUSTER_MIN_TOPIC_OVERLAP", 0.02
 # case (a contained few-shot leak, not even a full runaway) was 13.0x
 # (415 characters from a 32-character raw answer). This sits inside that gap.
 # See app/services/context_adjuster.py:is_generalization_sane.
+#
+# generalize()'s max_tokens moved from 1024 to REWRITE_MAX_TOKENS so a long
+# answer stops truncating mid-sentence under the "Keep all facts" prompt (a raw
+# miss answer can reach ~3,700 tokens, openai_compat.DEFAULT_MAX_TOKENS) - see
+# is_generalization_sane's docstring for why this ratio still holds at the
+# larger budget: it is a proportion of the raw answer's own length, not tied to
+# the token budget, so a longer-running loop only pushes it further past this
+# ceiling, never back under it.
 GENERALIZE_LENGTH_RATIO_MAX = _get_float("DEJAQ_GENERALIZE_LENGTH_RATIO_MAX", 10.0)
 # Below this absolute length, never flag on ratio alone - protects a short,
 # correct rewrite of a very short raw answer (e.g. "Au") from a ratio false
@@ -307,5 +407,99 @@ GENERALIZE_LENGTH_ABS_FLOOR = _get_float("DEJAQ_GENERALIZE_LENGTH_ABS_FLOOR", 20
 # captured runaways measured 0.136-0.150 even where each loop paraphrased
 # itself differently (never a literal repeat, which is why line/substring
 # matching alone misses this shape). Threshold sits inside that gap with
-# margin both directions.
+# margin both directions. Applied unless the raw answer was itself repetitive,
+# the rewrite kept its size, and the rewrite is no more repetitive than the raw
+# answer plus this same value (see NGRAM_EXEMPT_LENGTH_RATIO below) - which is
+# the only population this value cannot serve.
 GENERALIZE_NGRAM_REPEAT_RATIO_MAX = _get_float("DEJAQ_GENERALIZE_NGRAM_REPEAT_RATIO_MAX", 0.08)
+
+# Serve-time safety net for adjust(), the same two signals the generalize()
+# block above uses and for the same underlying failure - a small instruct model
+# finishing the real rewrite and then looping through paraphrases of its own
+# few-shot turns. Three differences from the generalize() constants, which is
+# why these are separate knobs rather than a reuse:
+#   - The baseline is the CACHED answer adjust() was handed, not a raw miss
+#     answer. A tone rewrite is the same content in different words, so its
+#     length should stay in the same neighbourhood.
+#   - This runs on the synchronous cache-hit path, in front of a waiting user,
+#     where generalize() runs in a background Celery task. Since adjust()'s cap
+#     is REWRITE_MAX_TOKENS a loop now spends the full budget before returning,
+#     bounded only by ADJUST_TIMEOUT_SECONDS above.
+#   - Growth only. adjust() legitimately SHRINKS a long cached answer whenever
+#     the question asks it to ("give me the short version", "explain it
+#     simply"), so there is no lower length bound here; ADJUSTER_MIN_TOPIC_
+#     OVERLAP above is what guards that direction.
+# Not independently swept - carried over from the generalize() measurements,
+# which cover the same models and the same runaway shape (incident:
+# dejaq-generalizer-runaway). 10.0 sits in the gap those measurements found
+# between clean rewrites (highest 8.0x) and corrupted output (lowest 13.0x),
+# and the legitimate tone expansions recorded in
+# tests/test_context_adjuster.py top out around 2.8x, well inside it.
+ADJUST_LENGTH_RATIO_MAX = _get_float("DEJAQ_ADJUST_LENGTH_RATIO_MAX", 10.0)
+# Minimum length of the CACHED answer for the ratio above to apply at all.
+# Below it the denominator is too small for a ratio to mean anything: an
+# "explain that in more detail" follow-up against a one-line cached answer
+# ("The capital of France is Paris.", 31 characters) legitimately produces
+# several hundred characters, which is a 10x+ ratio and a perfectly good
+# rewrite. Note this measures the OPPOSITE side from
+# GENERALIZE_LENGTH_ABS_FLOOR, which floors the output: for generalize() the
+# output tracks the input's size (it only neutralizes tone, it never
+# elaborates), so flooring either side comes to the same thing. adjust() is
+# asked to expand, so only the baseline is a safe thing to floor - flooring the
+# output would exempt small rewrites and reject exactly the large, correct
+# elaborations this is meant to protect. Runaways on a short cached answer are
+# left to the repetition signal below, which is what actually identifies a loop.
+ADJUST_LENGTH_ABS_FLOOR = _get_float("DEJAQ_ADJUST_LENGTH_ABS_FLOOR", 200.0)
+# Fraction of word 4-grams that repeat elsewhere in the output. This is the
+# signal that actually catches the shape is_topically_consistent() is blind to:
+# a loop that paraphrases the CACHED answer over and over scores near 1.0 on
+# topic overlap and passes clean, because every repetition is drawn from the
+# very vocabulary that check is looking for. Same threshold as the generalizer,
+# measured against the same population - clean rewrites at 0.000, captured
+# runaways at 0.136-0.150 even when each pass reworded itself - and likewise
+# skipped for a rewrite of an already-repetitive cached answer that kept its
+# size and added no repetition beyond it (see NGRAM_EXEMPT_LENGTH_RATIO below,
+# which uses this same value as that headroom). That exemption matters more
+# here than on the generalize() side: adjust()'s system prompt explicitly REQUIRES the
+# rewrite to keep every bullet and numbered item of the cached answer, so
+# without it the prompt would manufacture the very repetition that discards its
+# own output - silently turning adjust() into a no-op for every templated
+# answer, after paying its full serve-time latency.
+ADJUST_NGRAM_REPEAT_RATIO_MAX = _get_float("DEJAQ_ADJUST_NGRAM_REPEAT_RATIO_MAX", 0.08)
+
+# How far an output's length may differ from the answer it was rewriting, in
+# either direction, and still be exempt from the two repetition ceilings above.
+# Shared by both guards: the exemption exists for one population and it is the
+# same population on both paths - a faithful rewrite of an answer that is
+# ALREADY repetitive (a templated list, a weekly schedule), which both prompts
+# require to keep every item and which therefore inherits its source's
+# repetition without inventing any.
+#
+# This is only one of the exemption's three conditions. The other two both
+# concern the repetition itself, and neither needs a constant of its own - the
+# ceiling being exempted serves as both:
+#   - The baseline must already exceed that ceiling, i.e. carry repetition for
+#     the rewrite to inherit at all. Size alone would also exempt a
+#     self-paraphrase loop over ordinary prose, which lands at its input's size
+#     while inventing every repetition it has (measured on a 657-character
+#     non-repetitive answer: loops at 0.877x and 1.102x scoring 0.202-0.208).
+#   - The output may exceed the baseline's own repetition by at most that
+#     ceiling. Otherwise the condition above is a binary gate and a baseline a
+#     hair over it exempts any same-size output however repetitive (measured on
+#     a mildly structured answer at 0.088: same-size loops score 0.570-0.618).
+#     The faithful templated rewrite this exemption exists for sits at +0.079.
+# See context_adjuster._inherits_baseline_repetition().
+#
+# Size is what separates the templated case from a loop, in both directions: a
+# loop repeats itself into MORE text than it was given (measured on a 50-item
+# templated list: a faithful rewrite is 1.18x, self-paraphrase loops 2.27x and
+# up), or collapses onto one item and repeats that instead (0.56x). 1.3 admits
+# the faithful rewrite with margin and leaves both loop shapes facing the
+# unmodified ceiling.
+#
+# Scaling the ceilings to the baseline's own repetition was tried instead and
+# removed: at 1.5x the baseline it opened a fail-open band on this very
+# population, where a loop running 2-3 further self-paraphrase passes scored
+# 0.508-0.526 against a 0.527 ceiling while staying far under the length arm's
+# 10x. This form leaves the measured 0.08 thresholds untouched.
+NGRAM_EXEMPT_LENGTH_RATIO = _get_float("DEJAQ_NGRAM_EXEMPT_LENGTH_RATIO", 1.3)

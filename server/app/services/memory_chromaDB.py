@@ -107,7 +107,7 @@ class CacheLookupResult:
     image_clip: str | None = None
     image_kind: str | None = None
     image_text: str | None = None
-    # File identity of the matched entry (present only for PDF/Markdown entries).
+    # File identity of the matched entry (present only for file entries).
     # One exact hash, not a fingerprint to compare approximately — file text is
     # deterministic, so the gate is equality. See services/file_text.py.
     file_sha: str | None = None

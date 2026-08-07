@@ -21,6 +21,12 @@ class CompletionRequest:
     max_tokens: int
     temperature: float
     stop: list[str] | None = None
+    # Context window for this call only. Left None, Ollama uses its own runtime
+    # default, which is what every role wants: a window is memory (the KV cache
+    # is allocated at that size per loaded model) and only a caller whose prompt
+    # plus generation can approach it has anything to gain. Set it there, not
+    # here — see generalize()/adjust() in services/context_adjuster.py.
+    num_ctx: int | None = None
 
 
 @dataclass(frozen=True)
@@ -37,8 +43,21 @@ MODEL_RUNTIME_SPECS: dict[str, ModelRuntimeSpec] = {
 }
 
 
+@dataclass(frozen=True)
+class CompletionResult:
+    text: str
+    # Ollama's own done_reason ("stop", "length", ...), passed through
+    # unchanged rather than normalized here — every caller that cares about
+    # truncation specifically checks for "length"; a caller that doesn't care
+    # can ignore the field entirely. Normalizing "was this truncated" belongs
+    # at each call site, since only the caller knows whether truncation is
+    # actionable for that role (see generalize()/adjust() in
+    # services/context_adjuster.py, the two roles that act on it).
+    done_reason: str | None = None
+
+
 class ModelBackend(Protocol):
-    async def complete(self, request: CompletionRequest) -> str:
+    async def complete(self, request: CompletionRequest) -> CompletionResult:
         ...
 
 
@@ -59,7 +78,7 @@ class OllamaBackend:
         except KeyError as exc:
             raise ValueError(f"Unknown logical model name: {logical_model_name}") from exc
 
-    async def complete(self, request: CompletionRequest) -> str:
+    async def complete(self, request: CompletionRequest) -> CompletionResult:
         ollama_model = self._resolve_model(request.model_name)
         logger.debug(
             "Model completion backend=ollama model=%s ollama_model=%s url=%s",
@@ -88,6 +107,8 @@ class OllamaBackend:
         }
         if request.stop:
             payload["options"]["stop"] = request.stop
+        if request.num_ctx is not None:
+            payload["options"]["num_ctx"] = request.num_ctx
 
         if self._client is not None:
             response = await self._client.post("/api/chat", json=payload)
@@ -104,4 +125,4 @@ class OllamaBackend:
         content = message.get("content")
         if not isinstance(content, str):
             raise ValueError("Ollama response missing assistant message content")
-        return content.strip()
+        return CompletionResult(text=content.strip(), done_reason=data.get("done_reason"))
