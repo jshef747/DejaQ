@@ -57,7 +57,7 @@ class MarkerAdjuster:
 
 class StubRouter:
     async def generate_local_response(self, query: str, history=None, max_tokens=1024, system_prompt=None):
-        return "Paris is the capital of France.", 12.0
+        return "Paris is the capital of France.", 12.0, "stop"
 
 
 class StubClassifier:
@@ -912,7 +912,7 @@ def test_weak_cpu_profile_uses_weak_local_services(monkeypatch):
         model_name = "qwen_0_5b"
 
         async def generate_local_response(self, query: str, history=None, max_tokens=1024, system_prompt=None):
-            return "weak local answer", 10.0
+            return "weak local answer", 10.0, "stop"
 
     monkeypatch.setattr(openai_compat, "get_context_enricher_service", lambda model_name=None: StubEnricher())
     monkeypatch.setattr(openai_compat, "get_normalizer_service", lambda model_name=None: StubNormalizer())

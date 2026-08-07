@@ -38,7 +38,10 @@ class OAIMessageResponse(BaseModel):
 class OAIChoice(BaseModel):
     index: int = 0
     message: OAIMessageResponse
-    finish_reason: Literal["stop"] = "stop"
+    # "length" when the token budget cut the answer off (ChatPipelineResult.
+    # finish_reason, set from the generator's own done_reason/stop_reason -
+    # never inferred), matching the OpenAI API's own vocabulary for this.
+    finish_reason: Literal["stop", "length"] = "stop"
 
 
 class OAIChatResponse(BaseModel):
@@ -60,7 +63,7 @@ class OAIStreamDelta(BaseModel):
 class OAIStreamChoice(BaseModel):
     index: int = 0
     delta: OAIStreamDelta
-    finish_reason: Optional[Literal["stop"]] = None
+    finish_reason: Optional[Literal["stop", "length"]] = None
 
 
 class OAIChatChunk(BaseModel):

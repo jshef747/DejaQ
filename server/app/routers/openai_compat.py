@@ -140,6 +140,13 @@ class ChatPipelineResult:
     headers: dict[str, str]
     prompt_tokens: int
     completion_tokens: int
+    # "length" only on a miss whose generator's own signal reported
+    # truncation (see the "generate" step above). Always "stop" on a cache
+    # hit: adjust()'s own truncation guard already falls back to the
+    # complete cached answer before anything is served, so whatever a hit
+    # returns here is never a cut-off text - the default covers every hit
+    # construction without needing to touch each one.
+    finish_reason: str = "stop"
 
 
 def _request_model_profile(raw_request: Request) -> str:
@@ -573,6 +580,7 @@ async def _stream_generator(
     completion_id: str,
     model: str,
     model_used: str,
+    finish_reason: str = "stop",
 ) -> AsyncGenerator[str, None]:
     """Yield SSE chunks for a list of text pieces, then [DONE]."""
     # First chunk carries role
@@ -598,7 +606,7 @@ async def _stream_generator(
         id=completion_id,
         created=_now_ts(),
         model=model,
-        choices=[OAIStreamChoice(delta=OAIStreamDelta(), finish_reason="stop")],
+        choices=[OAIStreamChoice(delta=OAIStreamDelta(), finish_reason=finish_reason)],
     )
     yield f"data: {final.model_dump_json()}\n\n"
     yield "data: [DONE]\n\n"
@@ -1110,6 +1118,10 @@ async def run_chat_pipeline(
         answer: str = ""
         model_used: str = _local_model_used(services.llm_router, model_profile)
         route = "external" if complexity == "hard" else "local"
+        # "length" only when the generator's own signal says the token budget
+        # cut the answer off (Ollama's done_reason / the provider's own stop
+        # reason, both captured below) - never inferred from length or shape.
+        finish_reason: str = "stop"
         ext_response = None  # set below only on a successful external call; real provider usage lives on it
 
         try:
@@ -1182,18 +1194,20 @@ async def run_chat_pipeline(
                     )
                     answer = ext_response.text
                     model_used = ext_response.model_used
+                    finish_reason = ext_response.finish_reason
                 else:
                     llm_system_prompt = (
                         system_prompt
                         or "You are a helpful assistant. Answer the user's query concisely and accurately."
                     )
-                    answer, _ = await services.llm_router.generate_local_response(
+                    answer, _, done_reason = await services.llm_router.generate_local_response(
                         user_query,
                         history=history,
                         max_tokens=_max_tokens,
                         system_prompt=llm_system_prompt,
                     )
                     model_used = _local_model_used(services.llm_router, model_profile)
+                    finish_reason = "length" if done_reason == "length" else "stop"
         except PipelineError:
             raise
         except ExternalLLMError as exc:
@@ -1403,6 +1417,7 @@ async def run_chat_pipeline(
             headers=miss_headers,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
+            finish_reason=finish_reason,
         )
     finally:
         clear_request_id(request_token)
@@ -1429,7 +1444,10 @@ async def chat_completions(
 
     if oai_request.stream:
         return StreamingResponse(
-            _stream_generator(result.stream_chunks, result.completion_id, oai_request.model, result.model_used),
+            _stream_generator(
+                result.stream_chunks, result.completion_id, oai_request.model,
+                result.model_used, result.finish_reason,
+            ),
             media_type="text/event-stream",
             headers=result.headers,
         )
@@ -1438,7 +1456,7 @@ async def chat_completions(
         id=result.completion_id,
         created=_now_ts(),
         model=oai_request.model,
-        choices=[OAIChoice(message=OAIMessageResponse(content=result.answer))],
+        choices=[OAIChoice(message=OAIMessageResponse(content=result.answer), finish_reason=result.finish_reason)],
         usage=OAIUsage(
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,

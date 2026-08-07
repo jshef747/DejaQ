@@ -158,14 +158,17 @@ def _build_response_body(
     item_id: str,
     response_id: str,
 ) -> dict:
+    status = "incomplete" if result.finish_reason == "length" else "completed"
     return OAIResponse(
         id=response_id,
         created_at=_now_ts(),
         model=model,
+        status=status,
         output=[
             OAIResponseOutputMessage(
                 id=item_id,
                 content=[OAIResponseContentPart(text=result.answer)],
+                status=status,
             )
         ],
         output_text=result.answer,
@@ -213,15 +216,16 @@ async def _stream_responses_generator(
     part_done = {"type": "output_text", "text": full_text}
     yield f"event: response.content_part.done\ndata: {ResponseContentPartDoneEvent(item_id=item_id, part=part_done).model_dump_json()}\n\n"
 
+    status = "incomplete" if result.finish_reason == "length" else "completed"
     item_done = {
         "id": item_id, "type": "message", "role": "assistant",
         "content": [{"type": "output_text", "text": full_text}],
-        "status": "completed",
+        "status": status,
     }
     yield f"event: response.output_item.done\ndata: {ResponseOutputItemDoneEvent(item=item_done).model_dump_json()}\n\n"
 
     completed_response = _build_response_body(result, model, item_id, response_id)
-    completed_response["status"] = "completed"
+    completed_response["status"] = status
     yield f"event: response.completed\ndata: {ResponseCompletedEvent(response=completed_response).model_dump_json()}\n\n"
 
 

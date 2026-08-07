@@ -59,7 +59,10 @@ class OAIResponseOutputMessage(BaseModel):
     type: Literal["message"] = "message"
     role: Literal["assistant"] = "assistant"
     content: list[OAIResponseContentPart]
-    status: Literal["completed"] = "completed"
+    # "incomplete" when the token budget cut the answer off (see
+    # ChatPipelineResult.finish_reason) - reported honestly instead of
+    # always claiming success, the Responses API's own vocabulary for this.
+    status: Literal["completed", "incomplete"] = "completed"
 
 
 class OAIResponse(BaseModel):
@@ -67,7 +70,10 @@ class OAIResponse(BaseModel):
     object: Literal["response"] = "response"
     created_at: int
     model: str
-    status: Literal["completed"] = "completed"
+    # "incomplete" when the token budget cut the answer off (see
+    # ChatPipelineResult.finish_reason) - reported honestly instead of
+    # always claiming success, the Responses API's own vocabulary for this.
+    status: Literal["completed", "incomplete"] = "completed"
     output: list[OAIResponseOutputMessage]
     output_text: str
     usage: OAIResponseUsage
