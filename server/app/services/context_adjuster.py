@@ -199,7 +199,7 @@ class ContextAdjusterService:
             CompletionRequest(
                 model_name=self.adjust_model_name,
                 messages=[
-                {"role": "system", "content": "Rewrite the ANSWER to match the tone of the QUESTION. Keep all facts. Output only the rewritten answer."},
+                {"role": "system", "content": "Rewrite the ANSWER to match the tone of the QUESTION. Preserve every fact, name, number, and detail from the ANSWER, no matter how long or how many sections or bullet points it has - only shorten or simplify if the QUESTION explicitly asks for that (e.g. \"give me the short version\", \"explain it simply\"). A QUESTION that just rephrases or repeats the same ask, even in different words, is not a request to shorten. If the ANSWER has sections, bullet points, or numbered items, your rewrite must have the same number of sections, bullet points, or numbered items, each carrying the same information as the original, just reworded - never merge, drop, or summarize any of them unless asked to. Keep every named entity from the ANSWER - every place, event, organization, and date it mentions - in your rewrite. Output only the rewritten answer."},
                 # Few-shot examples must stay inert (no real-world fact in
                 # their content): a small instruct model can pattern-match on
                 # the SHAPE of a request and regurgitate a few-shot's own
@@ -208,12 +208,63 @@ class ContextAdjusterService:
                 # shape. Any example carrying a real-world fact reintroduces
                 # this failure mode, so never add one - keep examples about a
                 # generic "mechanism" or similar inert subject.
-                # Example 1: casual/child tone
+                #
+                # Examples 1 and 2 below are deliberate, explicit requests for
+                # a simpler/shorter answer - the model needs to see that this
+                # is a legitimate reason to drop detail. Examples 3 and 4 are
+                # the opposite and equally important: a QUESTION that is
+                # merely reworded (no explicit ask for anything shorter or
+                # simpler) must keep every step of the ANSWER. Without them, a
+                # small model over-generalizes from 1 and 2 and treats ANY
+                # casual or terse-sounding QUESTION as a cue to condense -
+                # measured directly: a verbatim repeat of the original
+                # QUESTION, phrased with zero tone gap, still triggered the
+                # same aggressive compression as an explicit "short version"
+                # ask (data/dejaq-adjuster-over-condensation/report.md §4).
+                # Example 4 specifically mirrors the shape of a real, long,
+                # multi-section cached answer (headers, bullets, a numbered
+                # list) - a single short-form example (3) was not enough to
+                # override the small model's own tendency to summarize long,
+                # structured input; only a same-shape example fixed it,
+                # measured against the real diagnosed case (same report, §3).
+                # Example 1: casual/child tone (explicit ask for simple)
                 {"role": "user", "content": "QUESTION: explain it like I'm 5\nANSWER: The mechanism converts an input value into an output value by applying a fixed sequence of transformation steps."},
                 {"role": "assistant", "content": "Imagine a toy machine! You drop a ball in one side, some fun stuff happens inside, and a different toy pops out the other side! That's what this does, but with information instead of toys!"},
-                # Example 2: casual/brief tone
+                # Example 2: casual/brief tone (explicit ask for short)
                 {"role": "user", "content": "QUESTION: give me the short version\nANSWER: The mechanism converts an input value into an output value by applying a fixed sequence of transformation steps: first validating the input, then transforming it, then producing the output."},
                 {"role": "assistant", "content": "It just turns input into output in a few simple steps."},
+                # Example 3: reworded, NOT an ask for anything shorter - every
+                # step must survive, only the phrasing changes.
+                {"role": "user", "content": "QUESTION: wait, why does that even happen in the first place?\nANSWER: The mechanism converts an input value into an output value by applying a fixed sequence of transformation steps: first validating the input, then transforming it, then producing the output."},
+                {"role": "assistant", "content": "That happens because the mechanism converts an input value into an output value through a fixed sequence of transformation steps: it first validates the input, then transforms it, and finally produces the output."},
+                # Example 4: reworded, NOT an ask for anything shorter, and the
+                # ANSWER is long and structured - every factor, bullet, and
+                # numbered step must survive.
+                {"role": "user", "content": (
+                    "QUESTION: why does it end up behaving like that though?\n"
+                    "ANSWER: The mechanism exhibits this behavior for several interconnected reasons.\n\n"
+                    "**Core factors:**\n"
+                    "* **Input variability:** the mechanism receives inputs of different shapes, so it must validate each one before proceeding.\n"
+                    "* **Sequential processing:** each stage depends on the output of the previous stage, so an error early in the sequence propagates forward.\n"
+                    "* **Resource constraints:** the mechanism operates within a fixed capacity, so it queues excess work rather than dropping it.\n\n"
+                    "**Sequence of steps:**\n"
+                    "1. The mechanism receives an input and validates its shape.\n"
+                    "2. It transforms the input according to a fixed rule set.\n"
+                    "3. It produces an output and logs the transformation for later inspection.\n\n"
+                    "In short, the behavior results from how input validation, sequential dependency, and resource limits interact within the mechanism's fixed pipeline."
+                )},
+                {"role": "assistant", "content": (
+                    "That happens because of a few things working together inside the mechanism.\n\n"
+                    "**Core factors:**\n"
+                    "* **Input variability:** it gets inputs of different shapes, so it has to validate each one before moving on.\n"
+                    "* **Sequential processing:** each stage depends on the one before it, so an early error carries forward through the rest.\n"
+                    "* **Resource constraints:** it only has a fixed amount of capacity, so extra work gets queued instead of dropped.\n\n"
+                    "**Sequence of steps:**\n"
+                    "1. It receives an input and validates its shape.\n"
+                    "2. It transforms the input using a fixed set of rules.\n"
+                    "3. It produces an output and logs the transformation for later inspection.\n\n"
+                    "So basically, it's the combination of input validation, steps depending on each other in order, and limited resources that causes this."
+                )},
                 # Actual query
                 {"role": "user", "content": f"QUESTION: {original_query}\nANSWER: {general_answer}"},
                 ],
