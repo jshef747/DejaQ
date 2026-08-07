@@ -276,6 +276,25 @@ OLLAMA_NUM_CTX = int(_get_float("DEJAQ_OLLAMA_NUM_CTX", 32768))
 # content. Half OLLAMA_TIMEOUT_SECONDS, which leaves a slow but legitimate
 # large rewrite room while halving the worst case. generalize() gets no
 # equivalent - it runs in a background Celery task with nobody waiting on it.
+#
+# CAPTAIN DECISION, do not re-litigate: this deadline and REWRITE_MAX_TOKENS
+# are sized for opposite goals on the same call - the budget wide enough that
+# the largest measured rewrite (~3,700 tokens) is never cut short, the
+# deadline tight enough that a waiting user is never held past half the shared
+# timeout. They can therefore disagree: emitting the full budget on
+# qwen2.5:1.5b is plausibly 25-45s, so this deadline can fire before
+# generation would have finished on its own, on exactly the long structured
+# answers the adjust() prompt was reworked to preserve. Left as-is on purpose.
+# THE DEADLINE IS THE REAL BOUND; REWRITE_MAX_TOKENS IS A BACKSTOP, not the
+# other way around - and firing it is not a failure mode to close, because
+# is_adjustment_sane()'s own fallback and this timeout's fallback are the same
+# answer: the complete, already-validated cached text. A tighter deadline
+# never serves anything wrong, only untailored - the identical trade this
+# file's own safety nets already make. Reviewed and confirmed across several
+# review rounds on this same PR (one raised REWRITE_MAX_TOKENS/OLLAMA_NUM_CTX,
+# a later one scoped num_ctx to the rewrite roles, this one added the deadline
+# and surfaced this exact tension) - a further pass over either number needs a
+# captain decision, not another automated correction.
 ADJUST_TIMEOUT_SECONDS = _get_float("DEJAQ_ADJUST_TIMEOUT_SECONDS", 30.0)
 
 # Supabase management auth

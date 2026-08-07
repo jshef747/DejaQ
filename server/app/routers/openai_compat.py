@@ -186,6 +186,16 @@ def _read_effective_llm_config(workspace_slug: str, workspace_id: int | None) ->
 def _services_for_model_profile(model_profile: str) -> ModelServices:
     # Temporary developer-only weak CPU profile. Keep the default singleton path
     # unchanged so production behavior and existing tests remain stable.
+    #
+    # CAPTAIN DECISION, do not re-litigate: on this profile, normalizer/
+    # enricher/adjuster (via WEAK_CPU_MODEL_NAME) all share qwen_0_5b with
+    # llm_router below, which deliberately does not set num_ctx (see
+    # OLLAMA_NUM_CTX in config.py - the exclusion is correct on the default
+    # profile, where llm_router runs gemma4:e4b, a different, larger model
+    # with no rewrite-role sibling). On this profile that same exclusion
+    # reopens the num_ctx split on one shared tag: qwen_0_5b reloads between
+    # normalize()/adjust() and generate() on every miss. Left alone on
+    # purpose - this is a developer-only profile, not the shipped default.
     if model_profile == MODEL_PROFILE_WEAK_CPU:
         return ModelServices(
             normalizer=get_normalizer_service(model_name=WEAK_CPU_MODEL_NAME),
