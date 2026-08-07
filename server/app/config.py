@@ -198,11 +198,11 @@ TESSERACT_BIN = _get_text("DEJAQ_TESSERACT_BIN", "tesseract")
 TESSERACT_LANGS = _get_text("DEJAQ_TESSERACT_LANGS", "heb+eng")
 OCR_TIMEOUT_SECONDS = _get_float("DEJAQ_OCR_TIMEOUT_SECONDS", 20.0)
 
-# --- File gate (PDF, Markdown) ---
+# --- File gate (PDF, DOCX, text/Markdown/code) ---
 # Deliberately three settings and NO swept thresholds, unlike the image gate
 # above. Images need approximate identity because OCR is noisy — two reads of one
 # page disagree, so every constant up there had to be measured over ~1.85M
-# labelled pairs. PDF and Markdown hand us the text directly and deterministically:
+# labelled pairs. Files hand us the text directly and deterministically:
 # the same file always extracts the same characters, so identity is EXACT
 # (sha256 of the whitespace-normalised text) and false merges are impossible by
 # construction. There is no recall-vs-merge curve here, so there is nothing to

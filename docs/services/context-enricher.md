@@ -43,7 +43,8 @@ The fourth example is critical: if the follow-up is already a standalone questio
 
 - It does not summarize, rephrase for tone, or change the meaning
 - It does not answer the question
-- It does not correct spelling (that's the normalizer's job)
+- It does not correct spelling — nothing in the pipeline does; typos are handled downstream by
+  the distance tiers and word-level alignment (see [normalizer.md](normalizer.md))
 - It does not run when there's no history
 
 ## Where it fits in the pipeline

@@ -82,7 +82,8 @@ def generalize_and_store_task(
     cache_namespace selects the ChromaDB collection (department isolation).
     The image_* args are the scalar fingerprints for image requests (all None
     for text): photos carry dhash+clip, documents carry OCR tokens in image_text.
-    The file_* args are the exact identity of an attached PDF/Markdown file.
+    The file_* args are the exact identity of an attached file (PDF, DOCX, or
+    text/Markdown/code).
     """
     start = time.perf_counter()
     doc_id = _doc_id(clean_query, file_sha, image_text=image_text, image_dhash=image_dhash)

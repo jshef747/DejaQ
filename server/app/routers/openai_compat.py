@@ -639,10 +639,11 @@ async def run_chat_pipeline(
     are gated on BOTH CLIP distance and dHash before a cache hit is served, and
     always routed to the (vision-capable) external provider on a miss.
 
-    `file` is (bytes, mime, filename) for a PDF/Markdown request. Files are gated
-    on an EXACT hash of their extracted text — see services/file_text.py for why
-    that is right here and approximate matching is right for images. At most one
-    attachment total: the router rejects image+file in one request.
+    `file` is (bytes, mime, filename) for a file request (PDF, DOCX, or
+    text/Markdown/code). Files are gated on an EXACT hash of their extracted
+    text — see services/file_text.py for why that is right here and approximate
+    matching is right for images. At most one attachment total: the router
+    rejects image+file in one request.
 
     Neither attachment's content enters the cache KEY. The text pipeline sees only
     the user's question, exactly as it does for images; the attachment is a side
