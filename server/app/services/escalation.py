@@ -100,7 +100,23 @@ async def _cache_response_id_for_escalation(
     query: str,
     history: list[dict],
     answer: str,
+    truncated: bool,
 ) -> str | None:
+    # Same rule the miss path applies to its own generation, enforced here
+    # because this is the one place either escalation branch stores: a cut-off
+    # answer never enters the cache, since a stored truncation is what every
+    # later match is served - labelled finish_reason="stop", because a hit
+    # carries no truncation signal - and it never self-heals. The escalated
+    # answer still reaches the user who asked for it; only the store is skipped.
+    # Required rather than defaulted so a future caller has to say which it has.
+    if truncated:
+        logger.warning(
+            "feedback_escalation cache_store status=skipped reason=truncated "
+            "interaction_id=%s",
+            interaction.interaction_id,
+        )
+        return None
+
     try:
         enriched = await get_context_enricher_service().enrich(query, history)
     except Exception:
@@ -214,27 +230,14 @@ async def _escalate_to_local(
         logger.exception("Local feedback escalation failed interaction_id=%s", interaction.interaction_id)
         return EscalationResult(escalation_status="provider_error")
 
-    # Same rule the miss path applies to its own generation: a cut-off answer
-    # never enters the cache, since a stored truncation is what every later
-    # match is served and it never self-heals. The escalated answer still
-    # reaches the user who asked for it; only the store is skipped.
-    if done_reason == "length":
-        logger.warning(
-            "feedback_escalation cache_store status=skipped reason=truncated (done_reason=length) "
-            "interaction_id=%s",
-            interaction.interaction_id,
-        )
-        escalated_response_id = None
-    else:
-        escalated_response_id = await _cache_response_id_for_escalation(
+    child = await response_registry.register(
+        response_id=await _cache_response_id_for_escalation(
             interaction=interaction,
             query=query,
             history=history,
             answer=answer,
-        )
-
-    child = await response_registry.register(
-        response_id=escalated_response_id,
+            truncated=done_reason == "length",
+        ),
         workspace_id=interaction.workspace_id,
         workspace_slug=interaction.workspace_slug,
         department=interaction.department,
@@ -317,6 +320,7 @@ async def _escalate_to_external(
             query=query,
             history=history,
             answer=response.text,
+            truncated=response.finish_reason == "length",
         ),
         workspace_id=interaction.workspace_id,
         workspace_slug=interaction.workspace_slug,

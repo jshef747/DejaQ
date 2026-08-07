@@ -281,6 +281,171 @@ def test_local_tier_escalates_to_external_llm(monkeypatch):
     assert external.api_key == "sk-test"
 
 
+class _RecordingRegistry:
+    async def register(self, **kwargs):
+        from app.services.response_registry import ResponseInteraction
+
+        self.kwargs = kwargs
+        return ResponseInteraction(
+            interaction_id="int_child",
+            workspace_id=kwargs["workspace_id"],
+            workspace_slug=kwargs["workspace_slug"],
+            department=kwargs["department"],
+            cache_namespace=kwargs["cache_namespace"],
+            served_tier=kwargs["served_tier"],
+            response_id=kwargs["response_id"],
+            message_hash="hash",
+            created_at="2026-01-01T00:00:01+00:00",
+            escalation_attempted=False,
+            escalation_attempted_at=None,
+        )
+
+
+def _patch_cacheable_pipeline(monkeypatch, escalation, scheduled):
+    """Wire the real _cache_response_id_for_escalation up to a cacheable query,
+    so a test can tell a skipped store from a scheduled one."""
+
+    class Enricher:
+        async def enrich(self, query, history):
+            return query
+
+    class Normalizer:
+        async def normalize(self, enriched):
+            return "normalized current question"
+
+    monkeypatch.setattr(escalation, "get_context_enricher_service", lambda: Enricher())
+    monkeypatch.setattr(escalation, "get_normalizer_service", lambda: Normalizer())
+    monkeypatch.setattr(escalation.cache_filter, "should_cache", lambda enriched, clean, **kw: (True, "passed"))
+    monkeypatch.setattr(escalation, "_schedule_escalation_cache_store", lambda **kwargs: scheduled.append(kwargs))
+
+
+def test_truncated_local_escalation_is_answered_but_not_cached(monkeypatch):
+    from app.services import escalation
+
+    class Router:
+        async def generate_local_response(self, query, history=None, max_tokens=1024, system_prompt=None):
+            return "The capital of Fra", 11.0, "length"
+
+    scheduled = []
+    registry = _RecordingRegistry()
+    _patch_cacheable_pipeline(monkeypatch, escalation, scheduled)
+    monkeypatch.setattr(escalation, "get_llm_router_service", lambda: Router())
+    monkeypatch.setattr(escalation, "response_registry", registry)
+
+    result = asyncio.run(
+        escalation.escalate(
+            interaction=_interaction("cache"),
+            messages=[{"role": "user", "content": "Current question"}],
+        )
+    )
+
+    assert result.escalation_status == "answered"
+    assert result.escalated_response.content == "The capital of Fra"
+    assert scheduled == [], f"a truncated escalation was cached: {scheduled}"
+    assert registry.kwargs["response_id"] is None
+
+
+def test_truncated_external_escalation_is_answered_but_not_cached(monkeypatch):
+    """The sibling of the local guard above: the provider's own finish_reason
+    is the signal, and it reaches the same store decision."""
+    from app.schemas.chat import ExternalLLMResponse
+    from app.services import escalation
+
+    class External:
+        async def generate_response(self, request, provider, api_key):
+            return ExternalLLMResponse(
+                text="The capital of Fra",
+                model_used=request.model,
+                prompt_tokens=1,
+                completion_tokens=2,
+                latency_ms=3,
+                finish_reason="length",
+            )
+
+    @contextmanager
+    def fake_session():
+        yield object()
+
+    scheduled = []
+    registry = _RecordingRegistry()
+    _patch_cacheable_pipeline(monkeypatch, escalation, scheduled)
+    monkeypatch.setattr(escalation, "response_registry", registry)
+    monkeypatch.setattr(
+        escalation.llm_config_service,
+        "read_for_workspace",
+        lambda workspace_slug: type("Cfg", (), {"external_model": "gpt-5.4-mini"})(),
+    )
+    monkeypatch.setattr(escalation, "provider_for_model", lambda model: "openai")
+    monkeypatch.setattr(escalation, "get_session", fake_session)
+    monkeypatch.setattr(
+        escalation.CredentialService,
+        "get_decrypted_key",
+        lambda self, session, workspace_id, provider: "sk-test",
+    )
+    monkeypatch.setattr(escalation, "ExternalLLMService", lambda: External())
+
+    result = asyncio.run(
+        escalation.escalate(
+            interaction=_interaction("local"),
+            messages=[{"role": "user", "content": "Current question"}],
+        )
+    )
+
+    assert result.escalation_status == "answered"
+    assert result.escalated_response.content == "The capital of Fra"
+    assert scheduled == [], f"a truncated escalation was cached: {scheduled}"
+    assert registry.kwargs["response_id"] is None
+
+
+def test_untruncated_external_escalation_is_still_cached(monkeypatch):
+    """Control: the guard must key on the provider's signal, not refuse every
+    external escalation."""
+    from app.schemas.chat import ExternalLLMResponse
+    from app.services import escalation
+
+    class External:
+        async def generate_response(self, request, provider, api_key):
+            return ExternalLLMResponse(
+                text="external better answer",
+                model_used=request.model,
+                prompt_tokens=1,
+                completion_tokens=2,
+                latency_ms=3,
+            )
+
+    @contextmanager
+    def fake_session():
+        yield object()
+
+    scheduled = []
+    registry = _RecordingRegistry()
+    _patch_cacheable_pipeline(monkeypatch, escalation, scheduled)
+    monkeypatch.setattr(escalation, "response_registry", registry)
+    monkeypatch.setattr(
+        escalation.llm_config_service,
+        "read_for_workspace",
+        lambda workspace_slug: type("Cfg", (), {"external_model": "gpt-5.4-mini"})(),
+    )
+    monkeypatch.setattr(escalation, "provider_for_model", lambda model: "openai")
+    monkeypatch.setattr(escalation, "get_session", fake_session)
+    monkeypatch.setattr(
+        escalation.CredentialService,
+        "get_decrypted_key",
+        lambda self, session, workspace_id, provider: "sk-test",
+    )
+    monkeypatch.setattr(escalation, "ExternalLLMService", lambda: External())
+
+    asyncio.run(
+        escalation.escalate(
+            interaction=_interaction("local"),
+            messages=[{"role": "user", "content": "Current question"}],
+        )
+    )
+
+    assert [entry["answer"] for entry in scheduled] == ["external better answer"]
+    assert registry.kwargs["response_id"] is not None
+
+
 @pytest.mark.parametrize(
     ("raised", "expected"),
     [
@@ -356,6 +521,7 @@ def test_cache_helper_returns_response_id_and_schedules_store_when_cacheable(mon
             query="Current question",
             history=[{"role": "user", "content": "Old question"}],
             answer="better answer",
+            truncated=False,
         )
     )
 
@@ -398,6 +564,41 @@ def test_cache_helper_returns_none_when_not_cacheable(monkeypatch):
             query="Hi",
             history=[],
             answer="hello",
+            truncated=False,
+        )
+    )
+
+    assert response_id is None
+    assert scheduled == []
+
+
+def test_cache_helper_refuses_to_store_a_truncated_answer(monkeypatch):
+    """Both escalation branches store through this helper, so the truncation
+    rule lives here rather than twice at the call sites: a cut-off answer is
+    what every later match would be served, labelled finish_reason="stop"."""
+    from app.services import escalation
+
+    class Enricher:
+        async def enrich(self, query, history):
+            return query
+
+    class Normalizer:
+        async def normalize(self, enriched):
+            return "normalized current question"
+
+    scheduled = []
+    monkeypatch.setattr(escalation, "get_context_enricher_service", lambda: Enricher())
+    monkeypatch.setattr(escalation, "get_normalizer_service", lambda: Normalizer())
+    monkeypatch.setattr(escalation.cache_filter, "should_cache", lambda enriched, clean, **kw: (True, "passed"))
+    monkeypatch.setattr(escalation, "_schedule_escalation_cache_store", lambda **kwargs: scheduled.append(kwargs))
+
+    response_id = asyncio.run(
+        escalation._cache_response_id_for_escalation(
+            interaction=_interaction("cache"),
+            query="Current question",
+            history=[],
+            answer="The capital of Fra",
+            truncated=True,
         )
     )
 
