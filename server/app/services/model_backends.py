@@ -6,6 +6,8 @@ from typing import Protocol, TypedDict
 
 import httpx
 
+from app.config import OLLAMA_NUM_CTX
+
 logger = logging.getLogger("dejaq.services.model_backends")
 
 
@@ -84,6 +86,14 @@ class OllamaBackend:
             "options": {
                 "temperature": request.temperature,
                 "num_predict": request.max_tokens,
+                # num_ctx bounds the prompt as well as the generation, and
+                # Ollama's runtime default is set independently of what the
+                # model supports — far below it for both models here. Left
+                # unset, a large num_predict over a long prompt overflows the
+                # window and Ollama silently drops the head of the prompt, so
+                # the model never sees the answer it was handed. See
+                # OLLAMA_NUM_CTX in app/config.py.
+                "num_ctx": OLLAMA_NUM_CTX,
             },
         }
         if request.stop:

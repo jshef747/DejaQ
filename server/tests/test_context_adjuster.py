@@ -7,6 +7,9 @@ from app.config import (
     ADJUST_LENGTH_ABS_FLOOR,
     ADJUST_LENGTH_RATIO_MAX,
     DEFAULT_MAX_TOKENS,
+    GENERALIZE_LENGTH_RATIO_MAX,
+    OLLAMA_NUM_CTX,
+    REWRITE_MAX_TOKENS,
 )
 from app.services.context_adjuster import (
     ContextAdjusterService,
@@ -36,16 +39,36 @@ LEAKED_PHOTOSYNTHESIS_ANSWER = (
 # answer is repetitive by construction while being a perfectly good answer to
 # "list every president with their term". Both rewrite prompts REQUIRE every
 # numbered item to survive, so a faithful rewrite inherits that repetition.
-TEMPLATED_LIST_ANSWER = "\n".join(
-    f"{i + 1}. Person {i + 1} served as President of the United States from "
-    f"{1789 + i * 4} to {1793 + i * 4}."
-    for i in range(50)
+def _templated_pass(frame: str) -> str:
+    return "\n".join(
+        frame.format(n=i + 1, start=1789 + i * 4, end=1793 + i * 4) for i in range(50)
+    )
+
+
+TEMPLATED_LIST_ANSWER = _templated_pass(
+    "{n}. Person {n} served as President of the United States from {start} to {end}."
 )
-TEMPLATED_LIST_REWRITE = "\n".join(
-    f"{i + 1}. Person {i + 1} held the office of President of the United States "
-    f"between {1789 + i * 4} and {1793 + i * 4}."
-    for i in range(50)
+
+# One pass per frame, each rewording the last - the incident's documented
+# runaway shape ("rewords itself each pass, so no literal line repeats") applied
+# to a templated baseline. This is the case a repetition ceiling scaled to the
+# baseline let through: every pass count stays under 1.5x the baseline's own
+# repetition while its length ratio (2.3x, 3.4x) stays far under the length
+# arm's 10x, so neither arm fired.
+_LOOP_FRAMES = (
+    "{n}. Person {n} held the office of President of the United States "
+    "between {start} and {end}.",
+    "{n}. Person {n} occupied the office of President of the United States "
+    "across {start} through {end}.",
+    "{n}. Person {n} filled the role of President of the United States "
+    "over {start} until {end}.",
 )
+
+TEMPLATED_LIST_REWRITE = _templated_pass(_LOOP_FRAMES[0])
+
+
+def templated_self_paraphrase_loop(passes: int) -> str:
+    return "\n".join(_templated_pass(frame) for frame in _LOOP_FRAMES[:passes])
 
 
 class TestGeneralize:
@@ -164,8 +187,8 @@ class TestAdjustSafetyNet:
 
     def test_generalize_can_reproduce_a_maximally_sized_answer(self):
         """generalize()'s system prompt says 'Keep all facts', so its output
-        budget must match what a raw miss answer can reach (~3,700 tokens
-        measured, openai_compat.py:667) - a smaller cap truncates the stored
+        budget must cover the largest answer that can reach it - not the
+        default a request runs under. A smaller cap truncates the stored
         rewrite mid-sentence, and a truncated STORED answer never self-heals:
         it is what every future cache hit serves."""
         backend = _FakeBackend("The mechanism converts an input into an output.")
@@ -173,52 +196,44 @@ class TestAdjustSafetyNet:
 
         asyncio.run(service.generalize(CANARY_ANSWER))
 
-        assert backend.requests[0].max_tokens == DEFAULT_MAX_TOKENS
+        assert backend.requests[0].max_tokens == REWRITE_MAX_TOKENS
 
     def test_adjust_can_reproduce_a_maximally_sized_answer(self):
         """The adjust() system prompt requires every section, bullet and named
-        entity to survive, so its output budget must match the one the raw
-        answer was generated under. A smaller cap truncates a long stored
-        answer mid-sentence, and nothing downstream catches it: the backend
-        ignores done_reason and the topic-overlap net passes on a truncated
-        prefix."""
+        entity to survive, so its output budget must cover the largest stored
+        answer that can reach it. A smaller cap truncates a long stored answer
+        mid-sentence, and nothing downstream catches it: the backend ignores
+        done_reason and the topic-overlap net passes on a truncated prefix."""
         backend = _FakeBackend("A canary deployment ships to a small slice of traffic first.")
         service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
 
         asyncio.run(service.adjust("explain that in detail", CANARY_ANSWER))
 
-        assert backend.requests[0].max_tokens == DEFAULT_MAX_TOKENS
+        assert backend.requests[0].max_tokens == REWRITE_MAX_TOKENS
 
-    def test_generalize_budget_covers_an_answer_larger_than_the_default_cap(self):
-        """DEFAULT_MAX_TOKENS is only the ceiling a request gets when the
-        client sends no limit of its own - openai_compat.py applies no upper
-        clamp to a client-supplied max_tokens, so a request asking for 8192
-        tokens produces a raw answer a fixed 4096-token rewrite budget would
-        truncate mid-sentence again, and the truncated copy is what every
-        future cache hit serves. The budget has to track the answer in hand."""
-        oversized = "The mechanism converts an input into an output. " * 1200
+    def test_the_rewrite_budget_clears_the_largest_answer_that_can_reach_it(self):
+        """DEFAULT_MAX_TOKENS is only the budget a request gets when the client
+        sends no limit of its own; a client may ask for more, up to the ceiling
+        those requests are clamped to. Rewriting under a budget smaller than
+        that ceiling truncates the stored copy mid-sentence again, which is the
+        failure this whole guard exists to prevent - so the rewrite budget must
+        stay at or above it, and inside the context window that has to hold
+        both this generation and the answer being rewritten."""
+        assert REWRITE_MAX_TOKENS >= 8192
+        assert REWRITE_MAX_TOKENS >= DEFAULT_MAX_TOKENS
+        assert REWRITE_MAX_TOKENS * 2 <= OLLAMA_NUM_CTX
+
+    def test_both_rewrite_steps_send_the_same_budget(self):
+        """One budget, not two: the same answer passes through generalize() at
+        store time and adjust() at serve time, so a gap between them truncates
+        on whichever side is smaller."""
         backend = _FakeBackend("short reply")
         service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
 
-        asyncio.run(service.generalize(oversized))
+        asyncio.run(service.generalize(CANARY_ANSWER))
+        asyncio.run(service.adjust("explain that in detail", CANARY_ANSWER))
 
-        budget = backend.requests[0].max_tokens
-        assert budget > DEFAULT_MAX_TOKENS
-        assert budget >= len(oversized) / 4
-
-    def test_adjust_budget_covers_a_cached_answer_larger_than_the_default_cap(self):
-        """The identical gap on the serve-time side: a stored answer can
-        exceed DEFAULT_MAX_TOKENS whenever the request that produced it asked
-        for more, and adjust() must be able to reproduce all of it."""
-        oversized = "The mechanism converts an input into an output. " * 1200
-        backend = _FakeBackend("short reply")
-        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
-
-        asyncio.run(service.adjust("explain that in detail", oversized))
-
-        budget = backend.requests[0].max_tokens
-        assert budget > DEFAULT_MAX_TOKENS
-        assert budget >= len(oversized) / 4
+        assert backend.requests[0].max_tokens == backend.requests[1].max_tokens
 
 
 class TestIsTopicallyConsistent:
@@ -458,12 +473,12 @@ class TestIsGeneralizationSane:
         assert not is_generalization_sane(self.MILD_RAW_ANSWER, self.MILD_LEAK_GENERALIZED_ANSWER)
 
     def test_rejects_the_real_captured_runaway_given_more_room_to_run(self):
-        """generalize()'s max_tokens moved from 1024 to DEFAULT_MAX_TOKENS
-        (~4x more budget) so a long, factual answer stops truncating. This
+        """generalize()'s max_tokens moved from 1024 to REWRITE_MAX_TOKENS
+        (8x more budget) so a long, factual answer stops truncating. This
         proves that does not weaken the guard: take the real captured
         incident text (which ran to completion at the OLD 1024-token cap) and
         extend it with more passes of its own self-paraphrasing, simulating
-        the same loop given the extra room the new cap allows. Both the
+        the same loop given the extra room the new budget allows. Both the
         length ratio and the n-gram repetition signal only get MORE
         pronounced with more room to loop, never less - a longer runway makes
         a runaway easier to catch, not harder."""
@@ -543,14 +558,36 @@ class TestIsGeneralizationSane:
         assert is_generalization_sane(TEMPLATED_LIST_ANSWER, TEMPLATED_LIST_REWRITE)
 
     def test_rejects_a_loop_even_when_the_raw_answer_is_itself_templated(self):
-        """The other half of the same rule: scaling the ceiling to the raw
-        answer must not hand a repetitive input a free pass. This loop restates
-        one item of the list over and over - under the length ratio (0.6x) and
-        past the scaled ceiling on repetition alone."""
+        """The other half of the same rule: exempting a same-size rewrite of a
+        repetitive input must not hand every loop over that input a free pass.
+        This one collapses onto a single item and restates it - shorter than
+        the raw answer (0.6x), so the length arm never fires and only the
+        repetition ceiling catches it, which it can because the collapse took
+        the output out of the exemption band."""
         looped = "Person 1 served as President of the United States from 1789 to 1793. " * 30
 
         assert len(looped) < len(TEMPLATED_LIST_ANSWER)
         assert not is_generalization_sane(TEMPLATED_LIST_ANSWER, looped)
+
+    def test_rejects_a_self_paraphrasing_loop_over_a_templated_raw_answer(self):
+        """Regression guard for the fail-open band a baseline-scaled ceiling
+        opened: a loop that emits the faithful rewrite and then keeps going for
+        another pass or two, rewording its frame each time so nothing repeats
+        literally. Its repetition sits under 1.5x the raw answer's own and its
+        length (2.3x, 3.4x) under the 10x length arm, so a scaled ceiling
+        served it. Against the unmodified 0.08 ceiling - which applies because
+        the growth took it out of the exemption band - it is rejected
+        decisively."""
+        for passes in (2, 3):
+            looped = templated_self_paraphrase_loop(passes)
+            ratio = len(looped) / len(TEMPLATED_LIST_ANSWER)
+
+            assert 1.3 < ratio < GENERALIZE_LENGTH_RATIO_MAX
+            assert _ngram_repetition_ratio(looped) > 0.4
+            assert _ngram_repetition_ratio(looped) < 1.5 * _ngram_repetition_ratio(
+                TEMPLATED_LIST_ANSWER
+            )
+            assert not is_generalization_sane(TEMPLATED_LIST_ANSWER, looped)
 
 
 class TestGeneralizeSafetyNet:
@@ -791,13 +828,30 @@ class TestIsAdjustmentSane:
         assert is_adjustment_sane(TEMPLATED_LIST_ANSWER, TEMPLATED_LIST_REWRITE)
 
     def test_rejects_a_loop_even_when_the_cached_answer_is_itself_templated(self):
-        """Scaling the ceiling to the cached answer must not hand a repetitive
-        cached answer a free pass: this loop restates one item over and over,
-        stays under the length ratio, and is caught on repetition alone."""
+        """The exemption must not hand every loop over a repetitive cached
+        answer a free pass: this one collapses onto a single item and restates
+        it, stays under the length ratio, and is caught on repetition alone -
+        the collapse itself is what takes it out of the exemption band."""
         looped = "Person 1 served as President of the United States from 1789 to 1793. " * 30
 
         assert len(looped) < ADJUST_LENGTH_RATIO_MAX * len(TEMPLATED_LIST_ANSWER)
         assert not is_adjustment_sane(TEMPLATED_LIST_ANSWER, looped)
+
+    def test_rejects_a_self_paraphrasing_loop_over_a_templated_cached_answer(self):
+        """The serve-time half of the same regression guard: a loop that
+        reworded its frame each pass evaded a baseline-scaled ceiling while
+        staying under the 10x length arm. The unmodified 0.08 ceiling applies
+        here because the growth left the exemption band."""
+        for passes in (2, 3):
+            looped = templated_self_paraphrase_loop(passes)
+            ratio = len(looped) / len(TEMPLATED_LIST_ANSWER)
+
+            assert 1.3 < ratio < ADJUST_LENGTH_RATIO_MAX
+            assert _ngram_repetition_ratio(looped) > 0.4
+            assert _ngram_repetition_ratio(looped) < 1.5 * _ngram_repetition_ratio(
+                TEMPLATED_LIST_ANSWER
+            )
+            assert not is_adjustment_sane(TEMPLATED_LIST_ANSWER, looped)
 
 
 class TestAdjustRunawayGuard:
