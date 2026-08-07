@@ -144,11 +144,16 @@ def is_adjustment_sane(cached_answer: str, adjusted: str) -> bool:
     the CACHED answer's vocabulary survives into the output, so a loop that
     paraphrases the cached answer over and over scores near 1.0 and passes
     clean. The two signals here read the output's own shape instead:
-      - a blown length ratio against the cached answer adjust() was handed
-        (the correct baseline for a rewrite: same content, different words),
-        or
       - an elevated word n-gram repetition ratio, which catches a loop that
-        rewords itself each pass and so never repeats a literal line.
+        rewords itself each pass and so never repeats a literal line. This is
+        the signal that does the real work: a runaway is repetitive by
+        construction, whatever it was rewriting.
+      - a blown length ratio against the cached answer adjust() was handed,
+        as a backstop for a loop varied enough to stay under that ratio. It
+        applies only once the cached answer clears ADJUST_LENGTH_ABS_FLOOR,
+        because a short cached answer is a denominator too small to read
+        anything into: "explain that in more detail" against a one-line
+        cached answer legitimately returns many times its length.
 
     Length is bounded in one direction only. A tone rewrite legitimately
     shrinks a long cached answer whenever the question asks it to ("give me
@@ -158,8 +163,8 @@ def is_adjustment_sane(cached_answer: str, adjusted: str) -> bool:
     if not adjusted.strip():
         return False
     if (
-        len(adjusted) > ADJUST_LENGTH_RATIO_MAX * max(len(cached_answer), 1)
-        and len(adjusted) > ADJUST_LENGTH_ABS_FLOOR
+        len(cached_answer) >= ADJUST_LENGTH_ABS_FLOOR
+        and len(adjusted) > ADJUST_LENGTH_RATIO_MAX * len(cached_answer)
     ):
         return False
     if _ngram_repetition_ratio(adjusted) > ADJUST_NGRAM_REPEAT_RATIO_MAX:

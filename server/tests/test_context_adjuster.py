@@ -3,10 +3,15 @@ import re
 
 import pytest
 
-from app.config import DEFAULT_MAX_TOKENS
+from app.config import (
+    ADJUST_LENGTH_ABS_FLOOR,
+    ADJUST_LENGTH_RATIO_MAX,
+    DEFAULT_MAX_TOKENS,
+)
 from app.services.context_adjuster import (
     ContextAdjusterService,
     _GENERALIZE_STOP,
+    _ngram_repetition_ratio,
     is_adjustment_sane,
     is_generalization_sane,
     is_topically_consistent,
@@ -561,8 +566,64 @@ class TestIsAdjustmentSane:
         assert reworded_loop.count("A canary deployment sends a new version to a small slice") == 1
         assert not is_adjustment_sane(self.CACHED, reworded_loop)
 
-    def test_rejects_unbounded_growth_from_a_short_cached_answer(self):
-        assert not is_adjustment_sane("It's Paris!", "Acknowledged. " * 40)
+    def test_rejects_a_loop_from_a_short_cached_answer(self):
+        """The length ratio is not consulted at all on a baseline this short
+        (see ADJUST_LENGTH_ABS_FLOOR), so the repetition signal is the whole
+        defence here - which is the point: a runaway is repetitive by
+        construction, whatever length it was rewriting."""
+        looped = "Acknowledged. " * 40
+
+        assert len("It's Paris!") < ADJUST_LENGTH_ABS_FLOOR
+        assert not is_adjustment_sane("It's Paris!", looped)
+
+    def test_rejects_unbounded_growth_the_repetition_signal_would_miss(self):
+        """The backstop the length ratio exists for: output long enough to be
+        a runaway but varied enough that no word 4-gram repeats at all, over a
+        cached answer past the floor. Fails if the ratio arm is ever dropped
+        or gated so tightly that it stops firing."""
+        cached = self.CACHED * 2
+        varied = " ".join(f"token{i}" for i in range(400))
+
+        assert len(cached) >= ADJUST_LENGTH_ABS_FLOOR
+        assert _ngram_repetition_ratio(varied) == 0.0
+        assert not is_adjustment_sane(cached, varied)
+
+    def test_accepts_a_multi_paragraph_expansion_of_a_one_line_cached_answer(self):
+        """A multi-turn "explain that in more detail" follow-up: history is
+        non-empty so ADJUSTER_SKIP_DISTANCE never applies and adjust() runs for
+        real. The elaboration is many times the length of the one-line cached
+        answer, which is what was asked for, not a runaway - a ratio measured
+        against a 31-character denominator says nothing."""
+        cached = "The capital of France is Paris."
+        expanded = (
+            "Paris is the capital of France, and it has held that role almost "
+            "continuously since the tenth century.\n\n"
+            "The city sits on the Seine in the north of the country, and today "
+            "it serves as the seat of government, the meeting place of both "
+            "legislative chambers, and the official residence of the "
+            "president.\n\n"
+            "It is also by far the largest urban area in France, which is why "
+            "so much of national administration, finance, and culture ended up "
+            "concentrated there rather than spread across other regions."
+        )
+
+        assert len(expanded) > ADJUST_LENGTH_RATIO_MAX * len(cached)
+        assert len(expanded) > ADJUST_LENGTH_ABS_FLOOR
+        assert is_adjustment_sane(cached, expanded)
+
+    def test_the_floor_gates_the_baseline_not_the_output(self):
+        """Regression guard for the direction of the exemption. Same ratio on
+        both sides of the floor: a short cached answer is exempt however large
+        its rewrite, a long one is not. Fails if the floor is ever moved back
+        onto len(adjusted), which exempts small rewrites and rejects exactly
+        the large, correct elaborations it is meant to protect."""
+        short_cached = "x" * 30
+        long_cached = "y " * 150
+
+        assert len(short_cached) < ADJUST_LENGTH_ABS_FLOOR
+        assert len(long_cached) >= ADJUST_LENGTH_ABS_FLOOR
+        assert is_adjustment_sane(short_cached, " ".join(f"token{i}" for i in range(100)))
+        assert not is_adjustment_sane(long_cached, " ".join(f"token{i}" for i in range(600)))
 
     def test_rejects_empty_output(self):
         assert not is_adjustment_sane(self.CACHED, "   \n  ")
@@ -662,3 +723,26 @@ class TestAdjustRunawayGuard:
         result = asyncio.run(service.adjust("explain that in detail", CANARY_ANSWER))
 
         assert result == clean
+
+    def test_serves_a_detailed_expansion_of_a_one_line_cached_answer(self):
+        """End of the multi-turn path the guard must not break: a follow-up
+        asking for more detail on a one-line cached answer gets the
+        elaboration it asked for, not the one-line answer back."""
+        cached = "The capital of France is Paris."
+        expanded = (
+            "Paris is the capital of France, and it has held that role almost "
+            "continuously since the tenth century.\n\n"
+            "The city sits on the Seine in the north of the country, and today "
+            "it serves as the seat of government, the meeting place of both "
+            "legislative chambers, and the official residence of the "
+            "president.\n\n"
+            "It is also by far the largest urban area in France, which is why "
+            "so much of national administration, finance, and culture ended up "
+            "concentrated there rather than spread across other regions."
+        )
+        backend = _FakeBackend(expanded)
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        result = asyncio.run(service.adjust("can you explain that in more detail?", cached))
+
+        assert result == expanded

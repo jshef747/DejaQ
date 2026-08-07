@@ -358,10 +358,19 @@ GENERALIZE_NGRAM_REPEAT_RATIO_MAX = _get_float("DEJAQ_GENERALIZE_NGRAM_REPEAT_RA
 # and the legitimate tone expansions recorded in
 # tests/test_context_adjuster.py top out around 2.8x, well inside it.
 ADJUST_LENGTH_RATIO_MAX = _get_float("DEJAQ_ADJUST_LENGTH_RATIO_MAX", 10.0)
-# Below this absolute length, never flag on ratio alone - a legitimate ELI5 or
-# "explain in detail" rewrite of a one-line cached answer would otherwise trip
-# an enormous ratio purely from the tiny denominator. Same value and same
-# reasoning as GENERALIZE_LENGTH_ABS_FLOOR.
+# Minimum length of the CACHED answer for the ratio above to apply at all.
+# Below it the denominator is too small for a ratio to mean anything: an
+# "explain that in more detail" follow-up against a one-line cached answer
+# ("The capital of France is Paris.", 31 characters) legitimately produces
+# several hundred characters, which is a 10x+ ratio and a perfectly good
+# rewrite. Note this measures the OPPOSITE side from
+# GENERALIZE_LENGTH_ABS_FLOOR, which floors the output: for generalize() the
+# output tracks the input's size (it only neutralizes tone, it never
+# elaborates), so flooring either side comes to the same thing. adjust() is
+# asked to expand, so only the baseline is a safe thing to floor - flooring the
+# output would exempt small rewrites and reject exactly the large, correct
+# elaborations this is meant to protect. Runaways on a short cached answer are
+# left to the repetition signal below, which is what actually identifies a loop.
 ADJUST_LENGTH_ABS_FLOOR = _get_float("DEJAQ_ADJUST_LENGTH_ABS_FLOOR", 200.0)
 # Fraction of word 4-grams that repeat elsewhere in the output. This is the
 # signal that actually catches the shape is_topically_consistent() is blind to:
