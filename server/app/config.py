@@ -335,3 +335,39 @@ GENERALIZE_LENGTH_ABS_FLOOR = _get_float("DEJAQ_GENERALIZE_LENGTH_ABS_FLOOR", 20
 # matching alone misses this shape). Threshold sits inside that gap with
 # margin both directions.
 GENERALIZE_NGRAM_REPEAT_RATIO_MAX = _get_float("DEJAQ_GENERALIZE_NGRAM_REPEAT_RATIO_MAX", 0.08)
+
+# Serve-time safety net for adjust(), the same two signals the generalize()
+# block above uses and for the same underlying failure - a small instruct model
+# finishing the real rewrite and then looping through paraphrases of its own
+# few-shot turns. Three differences from the generalize() constants, which is
+# why these are separate knobs rather than a reuse:
+#   - The baseline is the CACHED answer adjust() was handed, not a raw miss
+#     answer. A tone rewrite is the same content in different words, so its
+#     length should stay in the same neighbourhood.
+#   - This runs on the synchronous cache-hit path, in front of a waiting user,
+#     where generalize() runs in a background Celery task. Since adjust()'s cap
+#     is DEFAULT_MAX_TOKENS a loop now spends the full budget before returning.
+#   - Growth only. adjust() legitimately SHRINKS a long cached answer whenever
+#     the question asks it to ("give me the short version", "explain it
+#     simply"), so there is no lower length bound here; ADJUSTER_MIN_TOPIC_
+#     OVERLAP above is what guards that direction.
+# Not independently swept - carried over from the generalize() measurements,
+# which cover the same models and the same runaway shape (incident:
+# dejaq-generalizer-runaway). 10.0 sits in the gap those measurements found
+# between clean rewrites (highest 8.0x) and corrupted output (lowest 13.0x),
+# and the legitimate tone expansions recorded in
+# tests/test_context_adjuster.py top out around 2.8x, well inside it.
+ADJUST_LENGTH_RATIO_MAX = _get_float("DEJAQ_ADJUST_LENGTH_RATIO_MAX", 10.0)
+# Below this absolute length, never flag on ratio alone - a legitimate ELI5 or
+# "explain in detail" rewrite of a one-line cached answer would otherwise trip
+# an enormous ratio purely from the tiny denominator. Same value and same
+# reasoning as GENERALIZE_LENGTH_ABS_FLOOR.
+ADJUST_LENGTH_ABS_FLOOR = _get_float("DEJAQ_ADJUST_LENGTH_ABS_FLOOR", 200.0)
+# Fraction of word 4-grams that repeat elsewhere in the output. This is the
+# signal that actually catches the shape is_topically_consistent() is blind to:
+# a loop that paraphrases the CACHED answer over and over scores near 1.0 on
+# topic overlap and passes clean, because every repetition is drawn from the
+# very vocabulary that check is looking for. Same threshold as the generalizer,
+# measured against the same population - clean rewrites at 0.000, captured
+# runaways at 0.136-0.150 even when each pass reworded itself.
+ADJUST_NGRAM_REPEAT_RATIO_MAX = _get_float("DEJAQ_ADJUST_NGRAM_REPEAT_RATIO_MAX", 0.08)

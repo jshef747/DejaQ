@@ -7,6 +7,7 @@ from app.config import DEFAULT_MAX_TOKENS
 from app.services.context_adjuster import (
     ContextAdjusterService,
     _GENERALIZE_STOP,
+    is_adjustment_sane,
     is_generalization_sane,
     is_topically_consistent,
 )
@@ -516,3 +517,148 @@ class TestGeneralizeSafetyNet:
         assert cut == 350
         assert "ANSWER:" not in runaway[:cut]
         assert is_generalization_sane(TestIsGeneralizationSane.RAW_ANSWER, runaway[:cut])
+
+
+class TestIsAdjustmentSane:
+    """Pure unit tests for the adjust() serve-time safety net, the sibling of
+    is_generalization_sane() above. adjust() carries no stop string (its
+    few-shots are chat turns, with no separator marker to stop on) and runs at
+    DEFAULT_MAX_TOKENS on the synchronous cache-hit path, so this guard is the
+    only bound on a runaway rewrite reaching a waiting user."""
+
+    pytestmark = pytest.mark.no_model
+
+    CACHED = (
+        "A canary deployment rolls out a new version to a small subset of "
+        "traffic first, so problems are caught before a full rollout."
+    )
+
+    def test_the_shape_topic_overlap_is_blind_to_is_rejected(self):
+        """The case this guard exists for: a loop that paraphrases the CACHED
+        answer over and over. Every repetition is drawn from the cached
+        answer's own vocabulary, so is_topically_consistent() scores it at the
+        maximum and passes it clean - only the repetition signal catches it."""
+        looped = (
+            "A canary deployment rolls out a new version to a small subset of traffic first. "
+            * 12
+        )
+
+        assert is_topically_consistent(looped, self.CACHED)
+        assert not is_adjustment_sane(self.CACHED, looped)
+
+    def test_rejects_a_reworded_loop_that_never_repeats_a_literal_line(self):
+        """The runaway shape from the generalizer incident: each pass rewords
+        itself, so no line or substring repeats exactly and only the word
+        4-gram ratio sees it."""
+        reworded_loop = (
+            "A canary deployment sends a new version to a small slice of traffic first. "
+            "A canary deployment sends a new version to a small share of traffic first. "
+            "A canary deployment sends a new version to a small portion of traffic first. "
+            "A canary deployment sends a new version to a small fraction of traffic first. "
+            "A canary deployment sends a new version to a small segment of traffic first."
+        )
+
+        assert reworded_loop.count("A canary deployment sends a new version to a small slice") == 1
+        assert not is_adjustment_sane(self.CACHED, reworded_loop)
+
+    def test_rejects_unbounded_growth_from_a_short_cached_answer(self):
+        assert not is_adjustment_sane("It's Paris!", "Acknowledged. " * 40)
+
+    def test_rejects_empty_output(self):
+        assert not is_adjustment_sane(self.CACHED, "   \n  ")
+
+    def test_accepts_a_faithful_same_length_rewrite(self):
+        reworded = (
+            "With a canary deployment you ship the new version to just a small "
+            "slice of traffic first, which lets you catch problems before "
+            "everyone gets it."
+        )
+        assert is_adjustment_sane(self.CACHED, reworded)
+
+    def test_accepts_a_condensation_of_a_long_cached_answer(self):
+        """Shrinking is legitimate whenever the question asks for it, so the
+        length bound is one-directional. Fails if a lower bound is ever added
+        here instead of being left to ADJUSTER_MIN_TOPIC_OVERLAP."""
+        assert is_adjustment_sane(self.CACHED, "Ship it to a few users first.")
+
+    def test_accepts_the_widest_legitimate_expansion_in_this_file(self):
+        """2.8x - the largest ratio of any faithful tone rewrite recorded in
+        this file (the ELI5 gravity pair in TestIsTopicallyConsistent). Fails
+        if the ratio threshold is ever tightened below the expansions the
+        adjuster is supposed to produce."""
+        cached = "Gravity is a fundamental force of attraction between objects with mass."
+        eli5 = (
+            "Imagine you have a ball. When you throw it up, it comes back down! "
+            "That's because the Earth is really big and pulls everything toward it. "
+            "That pulling is called gravity!"
+        )
+
+        assert len(eli5) / len(cached) < 3.0
+        assert is_adjustment_sane(cached, eli5)
+
+    def test_accepts_a_structured_rewrite_that_preserves_every_section(self):
+        """The system prompt requires sections, bullets and numbered items to
+        survive, so the guard must not read ordinary structure as repetition."""
+        cached = (
+            "**Core factors:**\n"
+            "* Input variability: inputs arrive in different shapes.\n"
+            "* Sequential processing: each stage depends on the previous one.\n"
+            "* Resource constraints: excess work is queued rather than dropped.\n\n"
+            "**Steps:**\n"
+            "1. Receive an input and validate its shape.\n"
+            "2. Transform it using a fixed rule set.\n"
+            "3. Produce an output and log the transformation."
+        )
+        rewritten = (
+            "**Core factors:**\n"
+            "* Input variability: it gets inputs in all sorts of shapes.\n"
+            "* Sequential processing: every stage leans on the one before it.\n"
+            "* Resource constraints: extra work gets queued instead of dropped.\n\n"
+            "**Steps:**\n"
+            "1. It takes an input and checks its shape.\n"
+            "2. It transforms that using a fixed set of rules.\n"
+            "3. It emits an output and logs what it did."
+        )
+
+        assert is_adjustment_sane(cached, rewritten)
+
+
+class TestAdjustRunawayGuard:
+    """Wiring tests: prove adjust() itself falls back to the cached answer when
+    the backend returns a runaway, not just that is_adjustment_sane() would
+    reject it in isolation. Regression test for raising adjust()'s cap to
+    DEFAULT_MAX_TOKENS - it fails if the guard is dropped from adjust()."""
+
+    pytestmark = pytest.mark.no_model
+
+    def test_falls_back_to_the_cached_answer_on_a_runaway(self):
+        looped = (
+            "A canary deployment rolls out a new version to a small subset of "
+            "traffic first, so problems are caught before a full rollout. "
+        ) * 12
+        backend = _FakeBackend(looped)
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        result = asyncio.run(service.adjust("explain that in detail", CANARY_ANSWER))
+
+        assert result == CANARY_ANSWER
+
+    def test_falls_back_to_the_cached_answer_on_empty_output(self):
+        backend = _FakeBackend("   ")
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        result = asyncio.run(service.adjust("explain that in detail", CANARY_ANSWER))
+
+        assert result == CANARY_ANSWER
+
+    def test_passes_through_a_sane_rewrite_unchanged(self):
+        clean = (
+            "With a canary deployment you push the new version to just a small "
+            "slice of traffic first, so problems turn up before everyone sees them."
+        )
+        backend = _FakeBackend(clean)
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        result = asyncio.run(service.adjust("explain that in detail", CANARY_ANSWER))
+
+        assert result == clean

@@ -4,6 +4,9 @@ import time
 from collections import Counter
 
 from app.config import (
+    ADJUST_LENGTH_ABS_FLOOR,
+    ADJUST_LENGTH_RATIO_MAX,
+    ADJUST_NGRAM_REPEAT_RATIO_MAX,
     ADJUSTER_MIN_TOPIC_OVERLAP,
     DEFAULT_MAX_TOKENS,
     GENERALIZE_LENGTH_ABS_FLOOR,
@@ -127,6 +130,39 @@ def is_generalization_sane(raw_answer: str, generalized: str) -> bool:
     ):
         return False
     if _ngram_repetition_ratio(generalized) > GENERALIZE_NGRAM_REPEAT_RATIO_MAX:
+        return False
+    return True
+
+
+def is_adjustment_sane(cached_answer: str, adjusted: str) -> bool:
+    """Serve-time safety net for adjust()'s own output.
+
+    The sibling of is_generalization_sane() above, guarding the same failure
+    (the model finishing its rewrite and then looping through paraphrases
+    until it hits the token cap) on the synchronous cache-hit path, where
+    is_topically_consistent() cannot see it: that check measures how much of
+    the CACHED answer's vocabulary survives into the output, so a loop that
+    paraphrases the cached answer over and over scores near 1.0 and passes
+    clean. The two signals here read the output's own shape instead:
+      - a blown length ratio against the cached answer adjust() was handed
+        (the correct baseline for a rewrite: same content, different words),
+        or
+      - an elevated word n-gram repetition ratio, which catches a loop that
+        rewords itself each pass and so never repeats a literal line.
+
+    Length is bounded in one direction only. A tone rewrite legitimately
+    shrinks a long cached answer whenever the question asks it to ("give me
+    the short version"), and ADJUSTER_MIN_TOPIC_OVERLAP already guards that
+    direction; only unbounded growth indicates a runaway.
+    """
+    if not adjusted.strip():
+        return False
+    if (
+        len(adjusted) > ADJUST_LENGTH_RATIO_MAX * max(len(cached_answer), 1)
+        and len(adjusted) > ADJUST_LENGTH_ABS_FLOOR
+    ):
+        return False
+    if _ngram_repetition_ratio(adjusted) > ADJUST_NGRAM_REPEAT_RATIO_MAX:
         return False
     return True
 
@@ -288,6 +324,14 @@ class ContextAdjusterService:
 
         latency = (time.time() - start) * 1000
         logger.debug("Context adjustment completed in %.2f ms", latency)
+
+        if not is_adjustment_sane(general_answer, adjusted):
+            logger.warning(
+                "Context adjuster output failed sanity check (cached_len=%d, "
+                "adjusted_len=%d); serving the cached answer verbatim instead",
+                len(general_answer), len(adjusted),
+            )
+            return general_answer
 
         if not is_topically_consistent(adjusted, general_answer):
             logger.warning(
