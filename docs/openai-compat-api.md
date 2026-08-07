@@ -152,7 +152,7 @@ request
   -> context enricher
   -> normalizer
   -> ChromaDB cache lookup
-     -> hit: context adjuster + return
+     -> hit: context adjuster (skipped when there is no tone gap) + return
      -> miss: difficulty classifier
         -> easy: local model
         -> hard: encrypted workspace provider credential
@@ -160,6 +160,11 @@ request
 ```
 
 - Cache hit: `x-dejaq-model-used: cache`.
+- A cache hit on a request with **no prior conversation turns** that closely matches the stored
+  question skips the adjuster and returns the stored answer verbatim, saving its latency
+  (`DEJAQ_ADJUSTER_SKIP_DISTANCE`, see CLAUDE.md). Multi-turn follow-ups always run it, because
+  the enricher has already folded a "give me the short version" ask back into the original
+  question by the time the distance is measured.
 - Easy miss: served by the configured local model backend.
 - Hard miss: served by the provider inferred from the workspace's configured model, using encrypted workspace credentials.
 - Missing hard-query credentials return `402 Payment Required`.
