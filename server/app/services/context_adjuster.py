@@ -5,6 +5,7 @@ from collections import Counter
 
 from app.config import (
     ADJUSTER_MIN_TOPIC_OVERLAP,
+    DEFAULT_MAX_TOKENS,
     GENERALIZE_LENGTH_ABS_FLOOR,
     GENERALIZE_LENGTH_RATIO_MAX,
     GENERALIZE_NGRAM_REPEAT_RATIO_MAX,
@@ -217,16 +218,19 @@ class ContextAdjusterService:
                 # simpler) must keep every step of the ANSWER. Without them, a
                 # small model over-generalizes from 1 and 2 and treats ANY
                 # casual or terse-sounding QUESTION as a cue to condense -
-                # measured directly: a verbatim repeat of the original
-                # QUESTION, phrased with zero tone gap, still triggered the
-                # same aggressive compression as an explicit "short version"
-                # ask (data/dejaq-adjuster-over-condensation/report.md §4).
-                # Example 4 specifically mirrors the shape of a real, long,
-                # multi-section cached answer (headers, bullets, a numbered
-                # list) - a single short-form example (3) was not enough to
-                # override the small model's own tendency to summarize long,
-                # structured input; only a same-shape example fixed it,
-                # measured against the real diagnosed case (same report, §3).
+                # measured directly: with only examples 1 and 2 present, a
+                # verbatim repeat of the original QUESTION, phrased with zero
+                # tone gap, still triggered the same aggressive compression as
+                # an explicit "short version" ask - a real 1757-character
+                # cached answer came back at 242 characters with named events
+                # dropped. Example 4 specifically mirrors the shape of that
+                # answer (headers, bullets, a numbered list): a single
+                # short-form example (3) was not enough to override the small
+                # model's own tendency to summarize long, structured input,
+                # and only adding the same-shape example moved the measured
+                # content-word overlap on that case from 0.052 to 0.463. Two
+                # minor named entities and one event name are still dropped
+                # there - a real remaining gap, not full parity.
                 # Example 1: casual/child tone (explicit ask for simple)
                 {"role": "user", "content": "QUESTION: explain it like I'm 5\nANSWER: The mechanism converts an input value into an output value by applying a fixed sequence of transformation steps."},
                 {"role": "assistant", "content": "Imagine a toy machine! You drop a ball in one side, some fun stuff happens inside, and a different toy pops out the other side! That's what this does, but with information instead of toys!"},
@@ -268,7 +272,13 @@ class ContextAdjusterService:
                 # Actual query
                 {"role": "user", "content": f"QUESTION: {original_query}\nANSWER: {general_answer}"},
                 ],
-                max_tokens=1024,
+                # Same ceiling the raw answer was generated under: the system
+                # prompt above requires every section, bullet and named entity
+                # to survive, so a full-fidelity rewrite of a maximally-sized
+                # stored answer needs the same budget the original had. A
+                # smaller cap truncates it mid-sentence, and nothing downstream
+                # notices - the topic-overlap net passes on a truncated prefix.
+                max_tokens=DEFAULT_MAX_TOKENS,
                 # Deterministic: this is a faithful rewrite, not creative
                 # generation, so temperature buys nothing here and only made the
                 # regurgitation failure above intermittent and hard to reproduce.

@@ -3,6 +3,7 @@ import re
 
 import pytest
 
+from app.config import DEFAULT_MAX_TOKENS
 from app.services.context_adjuster import (
     ContextAdjusterService,
     _GENERALIZE_STOP,
@@ -138,6 +139,20 @@ class TestAdjustSafetyNet:
         asyncio.run(service.generalize(CANARY_ANSWER))
 
         assert backend.requests[0].temperature == 0
+
+    def test_adjust_can_reproduce_a_maximally_sized_answer(self):
+        """The adjust() system prompt requires every section, bullet and named
+        entity to survive, so its output budget must match the one the raw
+        answer was generated under. A smaller cap truncates a long stored
+        answer mid-sentence, and nothing downstream catches it: the backend
+        ignores done_reason and the topic-overlap net passes on a truncated
+        prefix."""
+        backend = _FakeBackend("A canary deployment ships to a small slice of traffic first.")
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        asyncio.run(service.adjust("explain that in detail", CANARY_ANSWER))
+
+        assert backend.requests[0].max_tokens == DEFAULT_MAX_TOKENS
 
 
 class TestIsTopicallyConsistent:

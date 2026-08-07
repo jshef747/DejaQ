@@ -166,6 +166,7 @@ Generation always runs through Ollama (`DEJAQ_OLLAMA_URL`); there is no per-role
 | `DEJAQ_GENERALIZE_NGRAM_REPEAT_RATIO_MAX` | `0.08` | Store-time safety net: maximum word 4-gram repetition ratio in a generalized rewrite; above it the output is a loop and the raw answer is stored instead (`app/config.py`) |
 | `DEJAQ_VALIDATOR_MODEL_NAME` | `gemma_e2b` | Logical model label for cache-answer validator (→ Ollama tag) |
 | `DEJAQ_VALIDATOR_SKIP_DISTANCE` | `0.05` | Cache hits at or below this cosine distance skip the validator |
+| `DEJAQ_ADJUSTER_SKIP_DISTANCE` | `0.075` | **Single-turn requests only** (no prior conversation history): cache hits at or below this cosine distance skip the context adjuster and serve the stored answer verbatim, since there is no tone gap to close. Never applies to a multi-turn follow-up - the enricher folds a genuine "give me the short version" turn back into a restatement of the original question, so distance alone cannot tell that apart from a typo'd repeat (`app/config.py`) |
 | `DEJAQ_CACHE_TRUST_DISTANCE` | `0.15` | Trusted-zone cosine ceiling; hits at or below are served directly |
 | `DEJAQ_CACHE_BAND_MAX_DISTANCE` | `0.20` | Upper bound of the validator-guarded band; hits in `(trust, band_max]` need validator approval. Set at or below trust distance to disable |
 | `DEJAQ_CACHE_RESCUE_ENABLED` | `true` | Lexical-rescue tier: candidates past the band are eligible when `lexical_match.align` confirms a typo'd variant; always validator-gated |

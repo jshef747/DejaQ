@@ -279,7 +279,7 @@ VALIDATOR_SKIP_DISTANCE = _get_float("DEJAQ_VALIDATOR_SKIP_DISTANCE", 0.05)
 # Below this cosine distance, on a single-turn request only (no prior
 # conversation history - see openai_compat.py's use of `history`), skip
 # adjust() entirely and serve the stored generalized_answer verbatim. Measured
-# (data/dejaq-adjuster-over-condensation/report.md, follow-up sweep):
+# in a follow-up sweep over 3 cached anchor questions:
 # single-turn typo/rephrase repeats of an already-cached question - no real
 # tone or length ask - measured 0.0261-0.1687 (10 cases, 3 anchors); the
 # lowest single-turn request that DID explicitly ask for something different
