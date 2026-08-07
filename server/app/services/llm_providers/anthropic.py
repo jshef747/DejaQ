@@ -5,7 +5,7 @@ from functools import lru_cache
 import anthropic
 
 from app.schemas.chat import ExternalLLMRequest, ExternalLLMResponse
-from app.services.llm_providers.common import elapsed_ms, ensure_query, redact_api_key
+from app.services.llm_providers.common import elapsed_ms, ensure_query, normalize_finish_reason, redact_api_key
 from app.utils.exceptions import ExternalLLMAuthError, ExternalLLMError, ExternalLLMTimeoutError
 
 logger = logging.getLogger("dejaq.services.llm_providers.anthropic")
@@ -93,4 +93,5 @@ class AnthropicProviderClient:
             prompt_tokens=response.usage.input_tokens,
             completion_tokens=response.usage.output_tokens,
             latency_ms=latency_ms,
+            finish_reason=normalize_finish_reason(response.stop_reason),
         )

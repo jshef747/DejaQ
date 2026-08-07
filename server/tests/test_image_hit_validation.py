@@ -17,6 +17,7 @@ from app.main import app
 from app.routers import openai_compat
 from app.services.image_text import OcrResult
 from app.services.memory_chromaDB import CacheLookupResult
+from app.services.model_backends import CompletionResult
 from app.services.validator import ValidatorService
 from tests.test_openai_compat_smoke import (
     _AUTH,
@@ -48,7 +49,7 @@ class CapturingBackend:
 
     async def complete(self, request):
         self.messages = request.messages
-        return self.reply
+        return CompletionResult(text=self.reply, done_reason="stop")
 
 
 class ImageHitMemory:

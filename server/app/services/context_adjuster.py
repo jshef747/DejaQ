@@ -324,15 +324,33 @@ class ContextAdjusterService:
         latency = (time.time() - start) * 1000
         logger.debug("Generalization completed in %.2f ms", latency)
 
-        if not is_generalization_sane(answer, generalized):
+        # Ollama's own signal, not inferred: is_generalization_sane() cannot
+        # see a truncation, since a truncated rewrite is SHORTER than the raw
+        # answer with no elevated repetition - exactly the profile of a clean
+        # rewrite. This matters more here than anywhere else in the pipeline:
+        # whatever generalize() returns is what gets PERSISTED to ChromaDB,
+        # so a truncated copy never self-heals - every future cache hit would
+        # serve the same cut-off answer. Falls back to the complete raw
+        # answer, the same target every other guard in this function falls
+        # back to.
+        if generalized.done_reason == "length":
             logger.warning(
-                "Generalizer output failed sanity check (raw_len=%d, "
+                "Generalizer output was truncated (done_reason=length, raw_len=%d, "
                 "generalized_len=%d); storing the raw answer un-generalized instead",
-                len(answer), len(generalized),
+                len(answer), len(generalized.text),
             )
             return answer
 
-        return generalized
+        generalized_text = generalized.text
+        if not is_generalization_sane(answer, generalized_text):
+            logger.warning(
+                "Generalizer output failed sanity check (raw_len=%d, "
+                "generalized_len=%d); storing the raw answer un-generalized instead",
+                len(answer), len(generalized_text),
+            )
+            return answer
+
+        return generalized_text
 
     async def adjust(self, original_query: str, general_answer: str) -> str:
         logger.debug(f"Adjusting response for original query: {original_query}")
@@ -437,19 +455,35 @@ class ContextAdjusterService:
         latency = (time.time() - start) * 1000
         logger.debug("Context adjustment completed in %.2f ms", latency)
 
-        if not is_adjustment_sane(general_answer, adjusted):
+        # Same signal generalize() acts on above, for the same reason
+        # is_adjustment_sane() below cannot see it: a truncated rewrite is
+        # shorter than the cached answer with no elevated repetition. Lower
+        # stakes here than in generalize() - this path is per-request, not
+        # persisted - but a truncated rewrite is still a worse answer than
+        # the complete cached one it would replace, so the same fallback
+        # applies.
+        if adjusted.done_reason == "length":
             logger.warning(
-                "Context adjuster output failed sanity check (cached_len=%d, "
-                "adjusted_len=%d); serving the cached answer verbatim instead",
-                len(general_answer), len(adjusted),
+                "Context adjuster output was truncated (done_reason=length, "
+                "cached_len=%d, adjusted_len=%d); serving the cached answer verbatim instead",
+                len(general_answer), len(adjusted.text),
             )
             return general_answer
 
-        if not is_topically_consistent(adjusted, general_answer):
+        adjusted_text = adjusted.text
+        if not is_adjustment_sane(general_answer, adjusted_text):
+            logger.warning(
+                "Context adjuster output failed sanity check (cached_len=%d, "
+                "adjusted_len=%d); serving the cached answer verbatim instead",
+                len(general_answer), len(adjusted_text),
+            )
+            return general_answer
+
+        if not is_topically_consistent(adjusted_text, general_answer):
             logger.warning(
                 "Context adjuster output failed topic-consistency check; "
                 "serving cached answer verbatim instead of the drifted rewrite"
             )
             return general_answer
 
-        return adjusted
+        return adjusted_text

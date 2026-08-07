@@ -9,7 +9,7 @@ from google.genai import errors as genai_errors
 from google.genai import types
 
 from app.schemas.chat import ExternalLLMRequest, ExternalLLMResponse
-from app.services.llm_providers.common import elapsed_ms, ensure_query, redact_api_key
+from app.services.llm_providers.common import elapsed_ms, ensure_query, normalize_finish_reason, redact_api_key
 from app.utils.exceptions import ExternalLLMAuthError, ExternalLLMError, ExternalLLMTimeoutError
 
 logger = logging.getLogger("dejaq.services.llm_providers.google")
@@ -93,10 +93,14 @@ class GoogleProviderClient:
             usage.prompt_token_count if usage else 0,
             usage.candidates_token_count if usage else 0,
         )
+        candidate_finish_reason = (
+            response.candidates[0].finish_reason if response.candidates else None
+        )
         return ExternalLLMResponse(
             text=response.text or "",
             model_used=request.model,
             prompt_tokens=usage.prompt_token_count if usage else 0,
             completion_tokens=usage.candidates_token_count if usage else 0,
             latency_ms=latency_ms,
+            finish_reason=normalize_finish_reason(candidate_finish_reason),
         )

@@ -46,7 +46,7 @@ def test_cache_tier_escalates_to_local_llm(monkeypatch):
             self.query = query
             self.history = history
             self.system_prompt = system_prompt
-            return "local better answer", 11.0
+            return "local better answer", 11.0, "stop"
 
     class Registry:
         async def register(self, **kwargs):
@@ -123,7 +123,7 @@ def test_escalation_log_failure_does_not_fail_answer(monkeypatch):
 
     class Router:
         async def generate_local_response(self, query, history=None, max_tokens=1024, system_prompt=None):
-            return "local better answer", 11.0
+            return "local better answer", 11.0, "stop"
 
     class Registry:
         async def register(self, **kwargs):

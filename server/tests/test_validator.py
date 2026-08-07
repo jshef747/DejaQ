@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 
+from app.services.model_backends import CompletionResult
 from app.services.validator import ValidatorService
 
 pytestmark = pytest.mark.no_model
@@ -13,8 +14,8 @@ class _Backend:
     def __init__(self, reply: str) -> None:
         self.reply = reply
 
-    async def complete(self, request) -> str:
-        return self.reply
+    async def complete(self, request) -> CompletionResult:
+        return CompletionResult(text=self.reply, done_reason="stop")
 
 
 def _validate(reply: str):
@@ -54,9 +55,9 @@ class _CapturingBackend:
         self.reply = reply
         self.messages = None
 
-    async def complete(self, request) -> str:
+    async def complete(self, request) -> CompletionResult:
         self.messages = request.messages
-        return self.reply
+        return CompletionResult(text=self.reply, done_reason="stop")
 
 
 def test_mismatch_hint_appended_to_prompt():

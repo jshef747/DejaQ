@@ -198,7 +198,7 @@ async def _escalate_to_local(
     system_prompt: str | None,
 ) -> EscalationResult:
     try:
-        answer, latency = await asyncio.wait_for(
+        answer, latency, _ = await asyncio.wait_for(
             get_llm_router_service().generate_local_response(
                 query,
                 history=history,

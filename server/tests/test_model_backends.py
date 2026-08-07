@@ -7,7 +7,7 @@ import httpx
 from app.services.context_adjuster import ContextAdjusterService
 from app.services.context_enricher import ContextEnricherService
 from app.services.llm_router import LLMRouterService
-from app.services.model_backends import CompletionRequest, OllamaBackend
+from app.services.model_backends import CompletionRequest, CompletionResult, OllamaBackend
 from app.services.normalizer import NormalizerService
 
 
@@ -16,9 +16,9 @@ class FakeBackend:
         self.response = response
         self.requests: list[CompletionRequest] = []
 
-    async def complete(self, request: CompletionRequest) -> str:
+    async def complete(self, request: CompletionRequest) -> CompletionResult:
         self.requests.append(request)
-        return self.response
+        return CompletionResult(text=self.response, done_reason="stop")
 
 
 def _post_and_capture_options(request: CompletionRequest) -> dict:
@@ -115,9 +115,43 @@ def test_ollama_backend_posts_chat_request():
     finally:
         asyncio.run(client.aclose())
 
-    assert result == "from ollama"
+    assert result.text == "from ollama"
+    assert result.done_reason is None
     assert captured["url"] == "http://ollama.test/api/chat"
     assert '"model":"qwen2.5:1.5b"' in captured["payload"]
+
+
+def test_ollama_backend_captures_done_reason():
+    """The signal every caller used to discard: Ollama reports "length" when
+    num_predict cut generation off, "stop" when it finished naturally. This
+    must survive the round trip so a truncated rewrite is detectable instead
+    of looking identical to a clean, complete one."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "message": {"role": "assistant", "content": "cut off mid-sent"},
+                "done_reason": "length",
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://ollama.test")
+    backend = OllamaBackend(base_url="http://ollama.test", timeout_seconds=5.0, client=client)
+    try:
+        result = asyncio.run(
+            backend.complete(
+                CompletionRequest(
+                    model_name="qwen_1_5b",
+                    messages=[{"role": "user", "content": "hello"}],
+                    max_tokens=4,
+                    temperature=0.0,
+                )
+            )
+        )
+    finally:
+        asyncio.run(client.aclose())
+
+    assert result.done_reason == "length"
 
 
 def test_services_send_logical_model_names_to_backend():
@@ -190,8 +224,8 @@ def test_llm_router_uses_ollama_backend(monkeypatch):
             self.base_url = base_url
             self.timeout_seconds = timeout_seconds
 
-        async def complete(self, request: CompletionRequest) -> str:
-            return f"ollama:{request.model_name}"
+        async def complete(self, request: CompletionRequest) -> CompletionResult:
+            return CompletionResult(text=f"ollama:{request.model_name}", done_reason="stop")
 
     monkeypatch.setattr(config, "LOCAL_LLM_MODEL_NAME", "gemma_local")
     monkeypatch.setattr(config, "OLLAMA_URL", "http://ollama.test")

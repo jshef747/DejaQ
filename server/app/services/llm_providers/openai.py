@@ -5,7 +5,7 @@ from functools import lru_cache
 import openai
 
 from app.schemas.chat import ExternalLLMRequest, ExternalLLMResponse
-from app.services.llm_providers.common import elapsed_ms, ensure_query, redact_api_key
+from app.services.llm_providers.common import elapsed_ms, ensure_query, normalize_finish_reason, redact_api_key
 from app.utils.exceptions import ExternalLLMAuthError, ExternalLLMError, ExternalLLMTimeoutError
 
 logger = logging.getLogger("dejaq.services.llm_providers.openai")
@@ -81,7 +81,8 @@ class OpenAIProviderClient:
 
         latency_ms = elapsed_ms(start)
         usage = response.usage
-        content = response.choices[0].message.content or ""
+        choice = response.choices[0]
+        content = choice.message.content or ""
         logger.debug(
             "OpenAI request successful (model=%s, latency=%.2f ms, prompt_tokens=%d, completion_tokens=%d)",
             request.model,
@@ -95,4 +96,5 @@ class OpenAIProviderClient:
             prompt_tokens=usage.prompt_tokens if usage else 0,
             completion_tokens=usage.completion_tokens if usage else 0,
             latency_ms=latency_ms,
+            finish_reason=normalize_finish_reason(choice.finish_reason),
         )

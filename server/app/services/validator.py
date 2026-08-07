@@ -238,14 +238,14 @@ class ValidatorService:
         was_truncated = len(cached_answer.split()) >= _MAX_ANSWER_WORDS
 
         start = time.time()
-        raw = await self.backend.complete(
+        raw = (await self.backend.complete(
             CompletionRequest(
                 model_name=self.model_name,
                 messages=messages,
                 max_tokens=8,
                 temperature=0.0,
             )
-        )
+        )).text
         latency_ms = (time.time() - start) * 1000
 
         first_token = raw.strip().split()[0].upper() if raw.strip() else ""

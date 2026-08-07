@@ -149,7 +149,7 @@ class NormalizerService:
                 temperature=0.0,
             )
         )
-        normalized = _postprocess(raw_output, raw_query)
+        normalized = _postprocess(raw_output.text, raw_query)
 
         latency = (time.time() - start) * 1000
         logger.debug(

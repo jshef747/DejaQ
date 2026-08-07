@@ -26,3 +26,10 @@ class ExternalLLMResponse(BaseModel):
     prompt_tokens: int = Field(0, description="Number of input tokens consumed")
     completion_tokens: int = Field(0, description="Number of output tokens generated")
     latency_ms: float = Field(0.0, description="Total request time in milliseconds")
+    # Normalized to "stop" | "length" by each provider client (see
+    # llm_providers/common.py:normalize_finish_reason) from that provider's
+    # own stop/finish reason (Anthropic stop_reason, OpenAI finish_reason,
+    # Google finish_reason) — the same truncation signal OllamaBackend
+    # captures for local generation, so the client-facing finish_reason can
+    # be honest regardless of which route answered the request.
+    finish_reason: str = Field("stop", description="'stop' if the model finished naturally, 'length' if the token budget cut it off")

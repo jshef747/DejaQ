@@ -13,7 +13,7 @@ from app.config import (
     OLLAMA_NUM_CTX,
     REWRITE_MAX_TOKENS,
 )
-from app.services.model_backends import CompletionRequest
+from app.services.model_backends import CompletionRequest, CompletionResult
 from app.services.context_adjuster import (
     ContextAdjusterService,
     _GENERALIZE_STOP,
@@ -208,13 +208,14 @@ class TestAdjust:
 class _FakeBackend:
     """Records every CompletionRequest it receives and returns a canned reply."""
 
-    def __init__(self, reply: str):
+    def __init__(self, reply: str, done_reason: str | None = "stop"):
         self.reply = reply
+        self.done_reason = done_reason
         self.requests = []
 
     async def complete(self, request):
         self.requests.append(request)
-        return self.reply
+        return CompletionResult(text=self.reply, done_reason=self.done_reason)
 
 
 class TestAdjustSafetyNet:
@@ -754,6 +755,26 @@ class TestGeneralizeSafetyNet:
         result = asyncio.run(service.generalize(TestIsGeneralizationSane.MILD_RAW_ANSWER))
 
         assert result == TestIsGeneralizationSane.MILD_RAW_ANSWER
+
+    def test_refuses_to_store_a_truncated_rewrite(self):
+        """A truncated rewrite is SHORTER than the raw answer with no
+        elevated repetition - exactly the profile is_generalization_sane()
+        accepts as clean, so this is the one failure mode that check cannot
+        catch. done_reason is the only signal that can: this must fall back
+        to the complete raw answer even though the truncated text itself
+        would sail through every other guard. This is the failure that
+        matters most in this file - whatever generalize() returns here is
+        what gets PERSISTED to ChromaDB, so a truncated copy never
+        self-heals; every future cache hit would serve the same cut-off
+        text forever."""
+        raw = "The mechanism has three independent stages: validate, transform, and emit."
+        truncated = "The mechanism has three independent stages: validate, trans"
+        backend = _FakeBackend(truncated, done_reason="length")
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        result = asyncio.run(service.generalize(raw))
+
+        assert result == raw
 
     def test_passes_through_a_sane_rewrite_unchanged(self):
         clean = "The capital city of Russia is Moscow."

@@ -43,8 +43,21 @@ MODEL_RUNTIME_SPECS: dict[str, ModelRuntimeSpec] = {
 }
 
 
+@dataclass(frozen=True)
+class CompletionResult:
+    text: str
+    # Ollama's own done_reason ("stop", "length", ...), passed through
+    # unchanged rather than normalized here — every caller that cares about
+    # truncation specifically checks for "length"; a caller that doesn't care
+    # can ignore the field entirely. Normalizing "was this truncated" belongs
+    # at each call site, since only the caller knows whether truncation is
+    # actionable for that role (see generalize()/adjust() in
+    # services/context_adjuster.py, the two roles that act on it).
+    done_reason: str | None = None
+
+
 class ModelBackend(Protocol):
-    async def complete(self, request: CompletionRequest) -> str:
+    async def complete(self, request: CompletionRequest) -> CompletionResult:
         ...
 
 
@@ -65,7 +78,7 @@ class OllamaBackend:
         except KeyError as exc:
             raise ValueError(f"Unknown logical model name: {logical_model_name}") from exc
 
-    async def complete(self, request: CompletionRequest) -> str:
+    async def complete(self, request: CompletionRequest) -> CompletionResult:
         ollama_model = self._resolve_model(request.model_name)
         logger.debug(
             "Model completion backend=ollama model=%s ollama_model=%s url=%s",
@@ -112,4 +125,4 @@ class OllamaBackend:
         content = message.get("content")
         if not isinstance(content, str):
             raise ValueError("Ollama response missing assistant message content")
-        return content.strip()
+        return CompletionResult(text=content.strip(), done_reason=data.get("done_reason"))

@@ -60,6 +60,7 @@ class ContextEnricherService:
                 temperature=0.0,
             )
         )
+        enriched = enriched.text
 
         latency = (time.time() - start) * 1000
         logger.debug(
