@@ -324,13 +324,15 @@ ADJUSTER_MIN_TOPIC_OVERLAP = _get_float("DEJAQ_ADJUSTER_MIN_TOPIC_OVERLAP", 0.02
 # (415 characters from a 32-character raw answer). This sits inside that gap.
 # See app/services/context_adjuster.py:is_generalization_sane.
 #
-# generalize()'s max_tokens moved from 1024 to DEFAULT_MAX_TOKENS so a long
-# answer stops truncating mid-sentence under the "Keep all facts" prompt (a
-# raw miss answer can reach ~3,700 tokens, openai_compat.py:667) - see
-# is_generalization_sane's docstring for why this ratio still holds at the
-# larger cap: it is a proportion of the raw answer's own length, not tied to
-# the token budget, so a longer-running loop only pushes it further past
-# this ceiling, never back under it.
+# generalize()'s max_tokens moved from 1024 to a budget sized off the raw
+# answer itself (context_adjuster._rewrite_token_budget) so a long answer stops
+# truncating mid-sentence under the "Keep all facts" prompt (a raw miss answer
+# can reach ~3,700 tokens, openai_compat.py:667, and more when the client asks
+# for a larger budget - openai_compat.py:670 does not clamp a client-supplied
+# max_tokens) - see is_generalization_sane's docstring for why this ratio still
+# holds at the larger budget: it is a proportion of the raw answer's own
+# length, not tied to the token budget, so a longer-running loop only pushes it
+# further past this ceiling, never back under it.
 GENERALIZE_LENGTH_RATIO_MAX = _get_float("DEJAQ_GENERALIZE_LENGTH_RATIO_MAX", 10.0)
 # Below this absolute length, never flag on ratio alone - protects a short,
 # correct rewrite of a very short raw answer (e.g. "Au") from a ratio false
@@ -342,6 +344,18 @@ GENERALIZE_LENGTH_ABS_FLOOR = _get_float("DEJAQ_GENERALIZE_LENGTH_ABS_FLOOR", 20
 # itself differently (never a literal repeat, which is why line/substring
 # matching alone misses this shape). Threshold sits inside that gap with
 # margin both directions.
+#
+# This is the FLOOR of the real ceiling, not the whole rule: an absolute limit
+# alone cannot separate the two populations, because an ordinary templated
+# answer is repetitive by construction (a 50-item "N. <name> served as
+# President from X to Y" list measures 0.35-0.48, a 14-week course schedule
+# 0.338),
+# so any limit low enough to catch a runaway also rejects a faithful rewrite of
+# one - which stores the answer un-generalized, keeping the asker's tone in the
+# cache. context_adjuster._repetition_ceiling() therefore scales this against
+# the raw answer's own repetition and uses this value as the floor, which is
+# what every captured runaway was measured against (their raw answers repeat
+# nothing at all).
 GENERALIZE_NGRAM_REPEAT_RATIO_MAX = _get_float("DEJAQ_GENERALIZE_NGRAM_REPEAT_RATIO_MAX", 0.08)
 
 # Serve-time safety net for adjust(), the same two signals the generalize()
@@ -386,5 +400,12 @@ ADJUST_LENGTH_ABS_FLOOR = _get_float("DEJAQ_ADJUST_LENGTH_ABS_FLOOR", 200.0)
 # topic overlap and passes clean, because every repetition is drawn from the
 # very vocabulary that check is looking for. Same threshold as the generalizer,
 # measured against the same population - clean rewrites at 0.000, captured
-# runaways at 0.136-0.150 even when each pass reworded itself.
+# runaways at 0.136-0.150 even when each pass reworded itself - and likewise
+# the floor of a ceiling scaled against the cached answer's own repetition
+# (see GENERALIZE_NGRAM_REPEAT_RATIO_MAX above). That scaling matters more here
+# than there: adjust()'s system prompt explicitly REQUIRES the rewrite to keep
+# every bullet and numbered item of the cached answer, so against a flat limit
+# the prompt would manufacture the very repetition that discards its own output
+# - silently turning adjust() into a no-op for every templated answer, after
+# paying its full serve-time latency.
 ADJUST_NGRAM_REPEAT_RATIO_MAX = _get_float("DEJAQ_ADJUST_NGRAM_REPEAT_RATIO_MAX", 0.08)

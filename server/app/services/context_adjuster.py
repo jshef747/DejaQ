@@ -86,6 +86,27 @@ _GENERALIZE_STOP = ["\n\n\n*****"]
 
 _NGRAM_SIZE = 4
 
+# Both rewrite steps size their output budget off the text they were handed,
+# not off a fixed constant. DEFAULT_MAX_TOKENS is only the ceiling a request
+# gets when the client sends no limit of its own; openai_compat.py applies no
+# upper clamp to a client-supplied max_tokens, so a request asking for 8192
+# tokens produces a raw answer that a fixed 4096-token rewrite budget would
+# truncate mid-sentence - the exact failure raising that cap was meant to end.
+# Sized off the specific text in hand, the budget covers it whatever the
+# original request asked for. //3 is a deliberately conservative
+# chars-per-token estimate (English averages ~4 characters per token, so this
+# over-provisions), and the margin covers a faithful rewrite that runs mildly
+# longer in different phrasing.
+_CHARS_PER_TOKEN = 3
+_REWRITE_TOKEN_MARGIN = 512
+
+
+def _rewrite_token_budget(baseline: str) -> int:
+    return max(
+        DEFAULT_MAX_TOKENS,
+        len(baseline) // _CHARS_PER_TOKEN + _REWRITE_TOKEN_MARGIN,
+    )
+
 
 def _ngram_repetition_ratio(text: str, n: int = _NGRAM_SIZE) -> float:
     words = _TOKEN_RE.findall(text.lower())
@@ -95,6 +116,39 @@ def _ngram_repetition_ratio(text: str, n: int = _NGRAM_SIZE) -> float:
     counts = Counter(grams)
     repeated = sum(c - 1 for c in counts.values() if c > 1)
     return repeated / len(grams)
+
+
+# How much more repetitive than its own input a faithful rewrite may be before
+# the repetition reads as a loop. Multiplicative rather than a fixed offset:
+# the wordier a rewrite's repeated frame is, the more repetition it inherits in
+# absolute terms, and a measured faithful rewrite of a 50-item list ("... served
+# as President of the United States from X to Y" restated as "... held the
+# office of President of the United States between X and Y") lands 0.079 above
+# its source - already at any offset small enough to still catch the captured
+# runaways. Against the same pair the ceiling below sits at 0.528, with the
+# rewrite at 0.430 and a loop of that same list at 0.783-0.966.
+_NGRAM_BASELINE_GROWTH_MAX = 1.5
+
+
+def _repetition_ceiling(baseline: str, absolute_max: float) -> float:
+    """Highest repetition ratio an output rewriting `baseline` may carry.
+
+    Baseline-relative, with the absolute threshold as a floor. An absolute
+    ceiling alone cannot separate the two populations: a legitimately templated
+    answer is repetitive by construction (a 50-item numbered list of one
+    sentence frame measures 0.35-0.48 depending on how much of each item is
+    boilerplate, a 14-week course schedule 0.338), and both
+    rewrite prompts REQUIRE every item of it to survive, so any ceiling low
+    enough to catch a runaway also discards faithful rewrites of that whole
+    answer shape. A faithful rewrite inherits its input's repetition; a runaway
+    invents repetition the input never had.
+
+    The floor is what keeps the measured incident detection intact: every
+    captured runaway rewrote a raw answer with no repetition of its own
+    (0.000), so on that population this is exactly the absolute check it
+    replaces, and a near-zero baseline cannot scale the ceiling down below it.
+    """
+    return max(absolute_max, _ngram_repetition_ratio(baseline) * _NGRAM_BASELINE_GROWTH_MAX)
 
 
 def is_generalization_sane(raw_answer: str, generalized: str) -> bool:
@@ -111,10 +165,16 @@ def is_generalization_sane(raw_answer: str, generalized: str) -> bool:
     behind each threshold):
       - a blown length ratio against the raw answer (measured: 104.9x on the
         full runaway, 13.0x on the shorter contained leak), or
-      - an elevated word n-gram repetition ratio (measured 0.150 on the
-        runaway; catches loops that reword slightly each pass, so no exact
-        line or substring repeats - e.g. restating a continent count with a
-        different number every loop).
+      - a word n-gram repetition ratio past _repetition_ceiling() for the raw
+        answer (measured 0.150 on the runaway against a raw answer at 0.000;
+        catches loops that reword slightly each pass, so no exact line or
+        substring repeats - e.g. restating a continent count with a different
+        number every loop).
+
+    Both signals are proportions of the raw answer's own shape rather than
+    absolute limits, for the same reason: a faithful rewrite inherits what it
+    was rewriting. See _repetition_ceiling() for why an absolute repetition
+    limit alone cannot separate a templated answer from a loop.
 
     A third signal - an exact verbatim-repeated line - was tried and removed:
     it fired on neither captured incident (both separator lines are 5 chars,
@@ -122,14 +182,15 @@ def is_generalization_sane(raw_answer: str, generalized: str) -> bool:
     answers such as two markdown tables sharing a column-separator row,
     silently disabling generalization for the answer shapes LLMs emit most.
 
-    generalize()'s own max_tokens was raised from 1024 to DEFAULT_MAX_TOKENS so
-    a long, factual answer stops truncating mid-sentence under the "Keep all
-    facts" system prompt - a real raw answer can reach ~3,700 tokens
-    (openai_compat.py:667) and the stored copy is what every future cache hit
-    serves, so a truncated one never self-heals. That raise does not weaken
-    this guard: both signals are scale-invariant ratios, not tied to the token
-    cap - a longer runway for a loop to run only pushes its length ratio and
-    n-gram repetition further past these thresholds, never back under them.
+    generalize()'s own max_tokens was raised from 1024 to a budget sized off
+    the raw answer (_rewrite_token_budget) so a long, factual answer stops
+    truncating mid-sentence under the "Keep all facts" system prompt - a real
+    raw answer can reach ~3,700 tokens (openai_compat.py:667) and the stored
+    copy is what every future cache hit serves, so a truncated one never
+    self-heals. That raise does not weaken this guard: both signals are
+    proportions of the raw answer's own shape, not tied to the token budget -
+    a longer runway for a loop to run only pushes its length ratio and n-gram
+    repetition further past these thresholds, never back under them.
     """
     if not generalized.strip():
         return False
@@ -138,7 +199,9 @@ def is_generalization_sane(raw_answer: str, generalized: str) -> bool:
         and len(generalized) > GENERALIZE_LENGTH_ABS_FLOOR
     ):
         return False
-    if _ngram_repetition_ratio(generalized) > GENERALIZE_NGRAM_REPEAT_RATIO_MAX:
+    if _ngram_repetition_ratio(generalized) > _repetition_ceiling(
+        raw_answer, GENERALIZE_NGRAM_REPEAT_RATIO_MAX
+    ):
         return False
     return True
 
@@ -152,17 +215,24 @@ def is_adjustment_sane(cached_answer: str, adjusted: str) -> bool:
     is_topically_consistent() cannot see it: that check measures how much of
     the CACHED answer's vocabulary survives into the output, so a loop that
     paraphrases the cached answer over and over scores near 1.0 and passes
-    clean. The two signals here read the output's own shape instead:
-      - an elevated word n-gram repetition ratio, which catches a loop that
-        rewords itself each pass and so never repeats a literal line. This is
-        the signal that does the real work: a runaway is repetitive by
-        construction, whatever it was rewriting.
-      - a blown length ratio against the cached answer adjust() was handed,
-        as a backstop for a loop varied enough to stay under that ratio. It
-        applies only once the cached answer clears ADJUST_LENGTH_ABS_FLOOR,
-        because a short cached answer is a denominator too small to read
-        anything into: "explain that in more detail" against a one-line
-        cached answer legitimately returns many times its length.
+    clean. Both signals here measure the output against the cached answer
+    adjust() was handed:
+      - a word n-gram repetition ratio past _repetition_ceiling() for that
+        cached answer, which catches a loop that rewords itself each pass and
+        so never repeats a literal line. This is the signal that does the real
+        work: a runaway invents repetition its input never had, whatever it
+        was rewriting. Measured against the cached answer rather than as an
+        absolute limit because the system prompt above REQUIRES every bullet
+        and numbered item to survive, so a faithful rewrite of a templated
+        answer reproduces that template's own repetition (a 50-item list
+        measures 0.35-0.48) - against an absolute ceiling the prompt would
+        manufacture the very signal that discards its output.
+      - a blown length ratio against that same cached answer, as a backstop
+        for a loop varied enough to stay under the repetition bar. It applies
+        only once the cached answer clears ADJUST_LENGTH_ABS_FLOOR, because a
+        short cached answer is a denominator too small to read anything into:
+        "explain that in more detail" against a one-line cached answer
+        legitimately returns many times its length.
 
     Length is bounded in one direction only. A tone rewrite legitimately
     shrinks a long cached answer whenever the question asks it to ("give me
@@ -176,7 +246,9 @@ def is_adjustment_sane(cached_answer: str, adjusted: str) -> bool:
         and len(adjusted) > ADJUST_LENGTH_RATIO_MAX * len(cached_answer)
     ):
         return False
-    if _ngram_repetition_ratio(adjusted) > ADJUST_NGRAM_REPEAT_RATIO_MAX:
+    if _ngram_repetition_ratio(adjusted) > _repetition_ceiling(
+        cached_answer, ADJUST_NGRAM_REPEAT_RATIO_MAX
+    ):
         return False
     return True
 
@@ -219,14 +291,16 @@ class ContextAdjusterService:
                 # Actual answer
                 {"role": "user", "content": f"ANSWER: {answer}"},
                 ],
-                # Same ceiling the raw answer was generated under (see adjust()
-                # below for the identical reasoning). The system prompt above
-                # says "Keep all facts"; a raw miss answer can reach ~3,700
-                # tokens (openai_compat.py:667), so a 1024 cap truncated the
-                # generalized rewrite of a long answer mid-sentence before this
-                # was raised - and the stored copy is what every future cache
-                # hit serves, so a truncated one never self-heals.
-                max_tokens=DEFAULT_MAX_TOKENS,
+                # Sized to comfortably cover THIS answer (see
+                # _rewrite_token_budget above for the identical reasoning
+                # adjust() uses). The system prompt above says "Keep all
+                # facts"; a raw miss answer can reach ~3,700 tokens
+                # (openai_compat.py:667) and more when the client asked for a
+                # larger budget, so a fixed cap truncated the generalized
+                # rewrite of a long answer mid-sentence - and the stored copy
+                # is what every future cache hit serves, so a truncated one
+                # never self-heals.
+                max_tokens=_rewrite_token_budget(answer),
                 # Deterministic: this is a faithful tone-neutralization
                 # rewrite, not creative generation, so temperature buys
                 # nothing here (see adjust() below for the same reasoning).
@@ -329,13 +403,13 @@ class ContextAdjusterService:
                 # Actual query
                 {"role": "user", "content": f"QUESTION: {original_query}\nANSWER: {general_answer}"},
                 ],
-                # Same ceiling the raw answer was generated under: the system
+                # Sized to comfortably cover THIS cached answer: the system
                 # prompt above requires every section, bullet and named entity
-                # to survive, so a full-fidelity rewrite of a maximally-sized
-                # stored answer needs the same budget the original had. A
-                # smaller cap truncates it mid-sentence, and nothing downstream
-                # notices - the topic-overlap net passes on a truncated prefix.
-                max_tokens=DEFAULT_MAX_TOKENS,
+                # to survive, so a full-fidelity rewrite needs at least the
+                # budget the stored answer itself occupies. A smaller cap
+                # truncates it mid-sentence, and nothing downstream notices -
+                # the topic-overlap net passes on a truncated prefix.
+                max_tokens=_rewrite_token_budget(general_answer),
                 # Deterministic: this is a faithful rewrite, not creative
                 # generation, so temperature buys nothing here and only made the
                 # regurgitation failure above intermittent and hard to reproduce.

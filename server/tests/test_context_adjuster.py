@@ -31,6 +31,22 @@ LEAKED_PHOTOSYNTHESIS_ANSWER = (
     "and light-independent reactions within the chloroplasts."
 )
 
+# An ordinary templated answer - the shape a flat n-gram repetition ceiling
+# cannot tell apart from a loop. Every item restates one sentence frame, so the
+# answer is repetitive by construction while being a perfectly good answer to
+# "list every president with their term". Both rewrite prompts REQUIRE every
+# numbered item to survive, so a faithful rewrite inherits that repetition.
+TEMPLATED_LIST_ANSWER = "\n".join(
+    f"{i + 1}. Person {i + 1} served as President of the United States from "
+    f"{1789 + i * 4} to {1793 + i * 4}."
+    for i in range(50)
+)
+TEMPLATED_LIST_REWRITE = "\n".join(
+    f"{i + 1}. Person {i + 1} held the office of President of the United States "
+    f"between {1789 + i * 4} and {1793 + i * 4}."
+    for i in range(50)
+)
+
 
 class TestGeneralize:
     pytestmark = pytest.mark.gemma_e2b
@@ -172,6 +188,37 @@ class TestAdjustSafetyNet:
         asyncio.run(service.adjust("explain that in detail", CANARY_ANSWER))
 
         assert backend.requests[0].max_tokens == DEFAULT_MAX_TOKENS
+
+    def test_generalize_budget_covers_an_answer_larger_than_the_default_cap(self):
+        """DEFAULT_MAX_TOKENS is only the ceiling a request gets when the
+        client sends no limit of its own - openai_compat.py applies no upper
+        clamp to a client-supplied max_tokens, so a request asking for 8192
+        tokens produces a raw answer a fixed 4096-token rewrite budget would
+        truncate mid-sentence again, and the truncated copy is what every
+        future cache hit serves. The budget has to track the answer in hand."""
+        oversized = "The mechanism converts an input into an output. " * 1200
+        backend = _FakeBackend("short reply")
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        asyncio.run(service.generalize(oversized))
+
+        budget = backend.requests[0].max_tokens
+        assert budget > DEFAULT_MAX_TOKENS
+        assert budget >= len(oversized) / 4
+
+    def test_adjust_budget_covers_a_cached_answer_larger_than_the_default_cap(self):
+        """The identical gap on the serve-time side: a stored answer can
+        exceed DEFAULT_MAX_TOKENS whenever the request that produced it asked
+        for more, and adjust() must be able to reproduce all of it."""
+        oversized = "The mechanism converts an input into an output. " * 1200
+        backend = _FakeBackend("short reply")
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        asyncio.run(service.adjust("explain that in detail", oversized))
+
+        budget = backend.requests[0].max_tokens
+        assert budget > DEFAULT_MAX_TOKENS
+        assert budget >= len(oversized) / 4
 
 
 class TestIsTopicallyConsistent:
@@ -485,6 +532,26 @@ class TestIsGeneralizationSane:
         otherwise trip an enormous ratio purely from the tiny denominator."""
         assert is_generalization_sane("Au", "The chemical symbol for gold is Au.")
 
+    def test_accepts_a_faithful_rewrite_of_an_already_templated_answer(self):
+        """The population a flat repetition ceiling cannot serve: the raw
+        answer is repetitive by construction, so a faithful rewrite of it is
+        too. Rejecting this stores the answer un-generalized, keeping the
+        asker's tone in the cache - which is what generalization exists to
+        remove."""
+        assert _ngram_repetition_ratio(TEMPLATED_LIST_ANSWER) > 0.3
+        assert _ngram_repetition_ratio(TEMPLATED_LIST_REWRITE) > 0.3
+        assert is_generalization_sane(TEMPLATED_LIST_ANSWER, TEMPLATED_LIST_REWRITE)
+
+    def test_rejects_a_loop_even_when_the_raw_answer_is_itself_templated(self):
+        """The other half of the same rule: scaling the ceiling to the raw
+        answer must not hand a repetitive input a free pass. This loop restates
+        one item of the list over and over - under the length ratio (0.6x) and
+        past the scaled ceiling on repetition alone."""
+        looped = "Person 1 served as President of the United States from 1789 to 1793. " * 30
+
+        assert len(looped) < len(TEMPLATED_LIST_ANSWER)
+        assert not is_generalization_sane(TEMPLATED_LIST_ANSWER, looped)
+
 
 class TestGeneralizeSafetyNet:
     """Wiring tests: prove generalize() itself falls back to the raw answer
@@ -712,6 +779,25 @@ class TestIsAdjustmentSane:
         )
 
         assert is_adjustment_sane(cached, rewritten)
+
+    def test_accepts_a_faithful_rewrite_of_an_already_templated_cached_answer(self):
+        """The serve-time half of the same population. This one matters more
+        than the generalize() side: the system prompt explicitly requires every
+        numbered item of the cached answer to survive, so under a flat ceiling
+        the prompt manufactures the repetition that discards its own output -
+        adjust() becomes a silent no-op for this whole answer shape, after
+        paying its full latency in front of a waiting user."""
+        assert _ngram_repetition_ratio(TEMPLATED_LIST_ANSWER) > 0.3
+        assert is_adjustment_sane(TEMPLATED_LIST_ANSWER, TEMPLATED_LIST_REWRITE)
+
+    def test_rejects_a_loop_even_when_the_cached_answer_is_itself_templated(self):
+        """Scaling the ceiling to the cached answer must not hand a repetitive
+        cached answer a free pass: this loop restates one item over and over,
+        stays under the length ratio, and is caught on repetition alone."""
+        looped = "Person 1 served as President of the United States from 1789 to 1793. " * 30
+
+        assert len(looped) < ADJUST_LENGTH_RATIO_MAX * len(TEMPLATED_LIST_ANSWER)
+        assert not is_adjustment_sane(TEMPLATED_LIST_ANSWER, looped)
 
 
 class TestAdjustRunawayGuard:
