@@ -12,12 +12,15 @@ interface DejaQConfig {
   apiKey: string;
 }
 
+function defaultBaseUrl(): string {
+  return (process.env.DEJAQ_API_BASE_URL ?? "http://127.0.0.1:8000").trim().replace(/\/$/, "");
+}
+
 // Resolve the DejaQ backend URL. A client-supplied override (X-DejaQ-Server,
 // set from the chat Settings modal so users can target a server on another
 // machine) wins when it is a valid http(s) URL; otherwise fall back to the
 // server-side default. Invalid overrides are ignored rather than erroring.
 function resolveBaseUrl(override?: string | null): string {
-  const fallback = process.env.DEJAQ_API_BASE_URL ?? "http://127.0.0.1:8000";
   const candidate = (override ?? "").trim();
   if (candidate) {
     try {
@@ -29,23 +32,45 @@ function resolveBaseUrl(override?: string | null): string {
       // fall through to the default
     }
   }
-  return fallback.trim().replace(/\/$/, "");
+  return defaultBaseUrl();
+}
+
+// Scheme/host/port equality, ignoring path/trailing-slash - two URLs point at
+// the same server even if one is written with a trailing slash or a path suffix.
+function isDefaultServer(baseUrl: string): boolean {
+  try {
+    const target = new URL(baseUrl);
+    const fallback = new URL(defaultBaseUrl());
+    return (
+      target.protocol === fallback.protocol &&
+      target.hostname === fallback.hostname &&
+      target.port === fallback.port
+    );
+  } catch {
+    return false;
+  }
 }
 
 // Resolve the workspace API key. A client-supplied override (X-DejaQ-Key, set
 // from the chat Settings modal so a workspace created during dev testing can
-// be used without a restart) wins when non-empty; otherwise fall back to
-// DEJAQ_API_KEY in chat/.env.local.
-function resolveApiKey(override?: string | null): string {
+// be used without a restart) wins when non-empty. Otherwise the env
+// DEJAQ_API_KEY only applies when the request targets the configured default
+// server - never forward the operator's key to a client-supplied server, or a
+// LAN caller could point X-DejaQ-Server at a listener they control and
+// harvest it.
+function resolveApiKey(apiBaseUrl: string, override?: string | null): string {
   const candidate = (override ?? "").trim();
-  return candidate || (process.env.DEJAQ_API_KEY?.trim() ?? "");
+  if (candidate) return candidate;
+  if (!isDefaultServer(apiBaseUrl)) return "";
+  return process.env.DEJAQ_API_KEY?.trim() ?? "";
 }
 
 export function getDejaQConfig(
   serverOverride?: string | null,
   keyOverride?: string | null,
 ): DejaQConfig | NextResponse {
-  const apiKey = resolveApiKey(keyOverride);
+  const apiBaseUrl = resolveBaseUrl(serverOverride);
+  const apiKey = resolveApiKey(apiBaseUrl, keyOverride);
   if (!apiKey) {
     return NextResponse.json(
       {
@@ -56,8 +81,6 @@ export function getDejaQConfig(
       { status: 424 },
     );
   }
-
-  const apiBaseUrl = resolveBaseUrl(serverOverride);
 
   return { apiBaseUrl, apiKey };
 }
