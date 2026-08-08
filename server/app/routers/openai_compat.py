@@ -480,6 +480,24 @@ def _cache_lookup(memory: object, clean_query: str) -> CacheLookupResult:
     return _legacy_cache_lookup(check_cache(clean_query))
 
 
+def _cache_lookup_pool(
+    memory: object, clean_query: str
+) -> tuple[list[CacheLookupResult], float | None, str | None]:
+    """Every same-tier candidate, best score first, plus nearest — for
+    attachment-gate fallthrough (see `_evaluate_image_gate`/`_evaluate_file_gate`
+    callers below). Falls back to a single-item list (or empty) for a legacy
+    memory backend that only implements `check_cache`, so the caller's loop
+    works either way.
+    """
+    lookup_pool = getattr(memory, "lookup_cache_pool", None)
+    if callable(lookup_pool):
+        return lookup_pool(clean_query)
+    single = _cache_lookup(memory, clean_query)
+    if single.hit:
+        return [single], single.nearest_distance, single.nearest_prompt
+    return [], single.nearest_distance, single.nearest_prompt
+
+
 def _bg_generalize_and_store(
     clean_query: str,
     answer: str,
@@ -723,11 +741,21 @@ async def run_chat_pipeline(
             logger.exception("Normalizer failed")
             clean_query = enriched
 
-        # 3. Cache lookup
+        # 3. Cache lookup — the full same-tier pool, not just the top score, so an
+        # attachment-gate REJECT below can fall through to the next candidate
+        # instead of becoming a full miss (see _cache_lookup_pool).
         cache_lookup = CacheLookupResult(hit=False)
+        _candidate_pool: list[CacheLookupResult] = []
+        _pool_nearest_distance: float | None = None
+        _pool_nearest_prompt: str | None = None
         try:
             with trace.step("cache"):
-                cache_lookup = _cache_lookup(get_memory_service(cache_namespace), clean_query)
+                _candidate_pool, _pool_nearest_distance, _pool_nearest_prompt = _cache_lookup_pool(
+                    get_memory_service(cache_namespace), clean_query
+                )
+                cache_lookup = _candidate_pool[0] if _candidate_pool else CacheLookupResult(
+                    hit=False, nearest_distance=_pool_nearest_distance, nearest_prompt=_pool_nearest_prompt
+                )
         except Exception:
             logger.exception("Cache check failed")
 
@@ -818,11 +846,22 @@ async def run_chat_pipeline(
                 hide_content(user_query),
             )
 
-        # Image gate. Kinds must agree (a photo never matches a document entry,
-        # and a text request never matches either), then the matching kind's rule
-        # decides.
-        if cache_lookup.hit:
-            _entry_kind = _entry_image_kind(cache_lookup)
+        # Image + file gates, evaluated per pool candidate in score order. A
+        # REJECT (kind mismatch, different attachment, ...) tries the next
+        # candidate instead of becoming a full miss — a validly cached sibling
+        # entry for THIS attachment must not be skipped just because a
+        # different attachment's entry tied or won the initial ranking. A
+        # different attachment's entry is still never served: the gates
+        # themselves are unchanged, only what happens after a REJECT does.
+        for _candidate in _candidate_pool:
+            _cand_passed = True
+            _cand_image_anchored = False
+            _cand_file_anchored = False
+
+            # Image gate. Kinds must agree (a photo never matches a document
+            # entry, and a text request never matches either), then the
+            # matching kind's rule decides.
+            _entry_kind = _entry_image_kind(_candidate)
             _request_kind = _image_kind(image_ocr) if _request_has_image else "text"
             if _request_has_image or _entry_kind != "text":
                 verdict, reason, detail = _evaluate_image_gate(
@@ -830,7 +869,7 @@ async def run_chat_pipeline(
                     entry_kind=_entry_kind,
                     fingerprint=image_fp,
                     ocr=image_ocr,
-                    lookup=cache_lookup,
+                    lookup=_candidate,
                 )
                 _image_clip_distance = detail.get("clip_distance")
                 _image_hamming = detail.get("hamming")
@@ -853,18 +892,54 @@ async def run_chat_pipeline(
                     "matched_prompt=%s entry=%s",
                     "ACCEPT" if verdict else "REJECT",
                     _request_kind, _entry_kind, _measured,
-                    float(cache_lookup.distance or 0.0),
-                    _diagnostic_prompt(cache_lookup.matched_query) or "",
-                    cache_lookup.entry_id or "?",
+                    float(_candidate.distance or 0.0),
+                    _diagnostic_prompt(_candidate.matched_query) or "",
+                    _candidate.entry_id or "?",
                 )
                 if not verdict:
-                    cache_lookup = CacheLookupResult(
-                        hit=False,
-                        nearest_distance=cache_lookup.distance,
-                        nearest_prompt=cache_lookup.matched_query,
-                    )
+                    _cand_passed = False
                 else:
-                    _image_anchored = _request_has_image
+                    _cand_image_anchored = _request_has_image
+
+            # File gate. Exact hash equality, so there is nothing to tune and no
+            # near-miss tier. It runs whenever EITHER side carries a file: a
+            # request without the file must never be served a file-anchored
+            # answer, because that answer is about a document the asker did
+            # not attach.
+            if _cand_passed and (_request_has_file or _candidate.file_sha):
+                verdict, _fwhy = _evaluate_file_gate(
+                    file_doc, _candidate.file_sha, _candidate.file_kind
+                )
+                _file_gate_logged = True
+                logger.info(
+                    "file_gate %s — this=%s cached=%s %s | text_distance=%.4f "
+                    "matched_prompt=%s entry=%s",
+                    "ACCEPT" if verdict else "REJECT",
+                    _file_side(file_doc),
+                    _file_side_stored(_candidate.file_kind, _candidate.file_sha),
+                    _fwhy,
+                    float(_candidate.distance or 0.0),
+                    _diagnostic_prompt(_candidate.matched_query) or "",
+                    _candidate.entry_id or "?",
+                )
+                if not verdict:
+                    _cand_passed = False
+                else:
+                    _cand_file_anchored = True
+
+            if _cand_passed:
+                cache_lookup = _candidate
+                _image_anchored = _cand_image_anchored
+                _file_anchored = _cand_file_anchored
+                break
+        else:
+            # No pool candidate passed both gates (or the pool was empty) —
+            # a full miss, with the nearest text match preserved for diagnostics.
+            cache_lookup = CacheLookupResult(
+                hit=False,
+                nearest_distance=_pool_nearest_distance,
+                nearest_prompt=_pool_nearest_prompt,
+            )
 
         # The text lookup found no candidate to gate at all, so the image was never
         # compared. Report how close the TEXT got and to what, because that — not
@@ -881,35 +956,6 @@ async def run_chat_pipeline(
                 "image_gate NOT REACHED — kind=%s, the image was never compared: %s | prompt=%s",
                 _image_kind(image_ocr), _detail, hide_content(user_query),
             )
-
-        # File gate. Exact hash equality, so there is nothing to tune and no
-        # near-miss tier. It runs whenever EITHER side carries a file: a request
-        # without the file must never be served a file-anchored answer, because
-        # that answer is about a document the asker did not attach.
-        if cache_lookup.hit and (_request_has_file or cache_lookup.file_sha):
-            verdict, _fwhy = _evaluate_file_gate(
-                file_doc, cache_lookup.file_sha, cache_lookup.file_kind
-            )
-            _file_gate_logged = True
-            logger.info(
-                "file_gate %s — this=%s cached=%s %s | text_distance=%.4f "
-                "matched_prompt=%s entry=%s",
-                "ACCEPT" if verdict else "REJECT",
-                _file_side(file_doc),
-                _file_side_stored(cache_lookup.file_kind, cache_lookup.file_sha),
-                _fwhy,
-                float(cache_lookup.distance or 0.0),
-                _diagnostic_prompt(cache_lookup.matched_query) or "",
-                cache_lookup.entry_id or "?",
-            )
-            if not verdict:
-                cache_lookup = CacheLookupResult(
-                    hit=False,
-                    nearest_distance=cache_lookup.distance,
-                    nearest_prompt=cache_lookup.matched_query,
-                )
-            else:
-                _file_anchored = True
 
         # The text lookup produced no candidate, so the file was never compared.
         # Say whether we hold this exact file anyway — otherwise this line hides

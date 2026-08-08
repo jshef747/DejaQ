@@ -129,15 +129,23 @@ class MemoryService:
         )
         logger.info("ChromaDB ready — %d documents in collection '%s'", self._collection.count(), collection_name)
 
-    def lookup_cache(self, normalized_query: str) -> CacheLookupResult:
-        """Return cache hit details plus nearest Chroma prompt/distance.
+    def _lookup_candidates(
+        self, normalized_query: str
+    ) -> tuple[list[CacheLookupResult], float | None, str | None]:
+        """Build every same-tier candidate for a query, best score first.
 
         Three tiers, in priority order:
         - trusted (distance ≤ CACHE_TRUST_DISTANCE): served directly,
         - band (≤ CACHE_BAND_MAX_DISTANCE): served only if the validator accepts,
         - lexical rescue (≤ CACHE_RESCUE_MAX_DISTANCE and word-aligned with the
           stored query — a heavily typo'd variant): validator-gated as well.
-        Within a tier, highest score wins (absent score treated as 0.0).
+        Only the highest-priority non-empty tier is returned — never a mix — so
+        every candidate in the list shares one requires_validation/rescued verdict.
+        Within that tier, highest score wins (absent score treated as 0.0).
+
+        Callers that need an attachment gate to pick among candidates (rather
+        than trust the top score) use the full list; `lookup_cache` keeps the
+        prior single-winner contract by taking element 0.
         """
         start = time.time()
         query_embedding = _embed(normalized_query)
@@ -153,7 +161,7 @@ class MemoryService:
 
         if not (results["distances"] and results["distances"][0] and results["ids"] and results["ids"][0]):
             logger.debug("Cache MISS empty_collection latency=%.1fms", latency_ms)
-            return CacheLookupResult(hit=False)
+            return [], None, None
 
         nearest_dist = float(results["distances"][0][0])
         nearest_prompt = None
@@ -185,58 +193,81 @@ class MemoryService:
 
         if not trusted and not band and not rescue:
             logger.debug("Cache MISS distance=%.4f latency=%.1fms", nearest_dist, latency_ms)
-            return CacheLookupResult(
-                hit=False,
-                nearest_distance=nearest_dist,
-                nearest_prompt=nearest_prompt,
-            )
+            return [], nearest_dist, nearest_prompt
 
         pool = trusted or band or rescue
         requires_validation = not trusted
         rescued = not trusted and not band
         pool.sort(key=lambda r: r[0], reverse=True)
-        best_score, best_dist, best_id, best_meta, matched_query = pool[0]
-        answer = best_meta["generalized_answer"]
 
-        # Word-level mismatches vs the chosen entry — validator hint for the
-        # single-word-swap trap (list/string). Only informative when the words
-        # DIDN'T align; rescued hits aligned by construction.
-        mismatches: tuple[tuple[str, str], ...] | None = None
-        if not rescued and matched_query:
-            align_result = align(normalized_query, matched_query)
-            if not align_result.aligned and align_result.mismatches:
-                mismatches = align_result.mismatches
+        candidates: list[CacheLookupResult] = []
+        for score, dist, entry_id, meta, matched_query in pool:
+            # Word-level mismatches vs this entry — validator hint for the
+            # single-word-swap trap (list/string). Only informative when the
+            # words DIDN'T align; rescued hits aligned by construction.
+            mismatches: tuple[tuple[str, str], ...] | None = None
+            if not rescued and matched_query:
+                align_result = align(normalized_query, matched_query)
+                if not align_result.aligned and align_result.mismatches:
+                    mismatches = align_result.mismatches
+            candidates.append(CacheLookupResult(
+                hit=True,
+                generalized_answer=meta["generalized_answer"],
+                entry_id=entry_id,
+                distance=dist,
+                matched_query=matched_query,
+                nearest_distance=nearest_dist,
+                nearest_prompt=nearest_prompt,
+                requires_validation=requires_validation,
+                rescued=rescued,
+                mismatches=mismatches,
+                image_dhash=meta.get("image_dhash"),
+                image_clip=meta.get("image_clip"),
+                image_kind=meta.get("image_kind"),
+                image_text=meta.get("image_text"),
+                file_sha=meta.get("file_sha"),
+                file_kind=meta.get("file_kind"),
+            ))
 
         logger.debug(
-            "Cache HIT distance=%.4f score=%.1f trust=%.2f band_max=%.2f "
+            "Cache HIT candidates=%d top_distance=%.4f trust=%.2f band_max=%.2f "
             "requires_validation=%s rescued=%s latency=%.1fms entry_id=%s",
-            best_dist,
-            best_score,
+            len(candidates),
+            candidates[0].distance,
             CACHE_TRUST_DISTANCE,
             CACHE_BAND_MAX_DISTANCE,
             requires_validation,
             rescued,
             latency_ms,
-            best_id,
+            candidates[0].entry_id,
         )
-        return CacheLookupResult(
-            hit=True,
-            generalized_answer=answer,
-            entry_id=best_id,
-            distance=best_dist,
-            matched_query=matched_query,
-            nearest_distance=nearest_dist,
-            nearest_prompt=nearest_prompt,
-            requires_validation=requires_validation,
-            rescued=rescued,
-            mismatches=mismatches,
-            image_dhash=best_meta.get("image_dhash"),
-            image_clip=best_meta.get("image_clip"),
-            image_kind=best_meta.get("image_kind"),
-            image_text=best_meta.get("image_text"),
-            file_sha=best_meta.get("file_sha"),
-            file_kind=best_meta.get("file_kind"),
-        )
+        return candidates, nearest_dist, nearest_prompt
+
+    def lookup_cache(self, normalized_query: str) -> CacheLookupResult:
+        """Return the single best cache hit plus nearest Chroma prompt/distance.
+
+        See `lookup_cache_pool` when an attachment gate needs to fall through to
+        the next candidate instead of missing on the top one alone.
+        """
+        candidates, nearest_dist, nearest_prompt = self._lookup_candidates(normalized_query)
+        if candidates:
+            return candidates[0]
+        return CacheLookupResult(hit=False, nearest_distance=nearest_dist, nearest_prompt=nearest_prompt)
+
+    def lookup_cache_pool(
+        self, normalized_query: str
+    ) -> tuple[list[CacheLookupResult], float | None, str | None]:
+        """Return every same-tier cache candidate, best score first, plus the nearest.
+
+        Same tier selection and ranking as `lookup_cache`, but the full ranked
+        list rather than just the winner — for callers whose gate can reject a
+        top candidate (e.g. a different attachment) yet must still consider the
+        next entry rather than treat that as a full miss. The candidate list is
+        empty when there is no candidate in any tier; nearest_distance/prompt
+        (the closest text match regardless of tier) are still returned for
+        diagnostics in that case.
+        """
+        return self._lookup_candidates(normalized_query)
 
     def check_cache(self, normalized_query: str) -> Optional[tuple[str, str, float, str]]:
         """Return (generalized_answer, entry_id, distance, matched_query) on cache hit, None on miss.
