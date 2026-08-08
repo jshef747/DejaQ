@@ -753,9 +753,6 @@ async def run_chat_pipeline(
                 _candidate_pool, _pool_nearest_distance, _pool_nearest_prompt = _cache_lookup_pool(
                     get_memory_service(cache_namespace), clean_query
                 )
-                cache_lookup = _candidate_pool[0] if _candidate_pool else CacheLookupResult(
-                    hit=False, nearest_distance=_pool_nearest_distance, nearest_prompt=_pool_nearest_prompt
-                )
         except Exception:
             logger.exception("Cache check failed")
 

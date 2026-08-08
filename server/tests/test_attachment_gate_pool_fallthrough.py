@@ -20,6 +20,7 @@ from app.routers import openai_compat
 from app.services import file_text
 from app.services.memory_chromaDB import CacheLookupResult
 from tests.test_file_gate import make_pdf
+from tests.test_file_hit_pipeline import _patch_external_provider
 from tests.test_openai_compat_smoke import (
     _AUTH,
     StubAdjuster,
@@ -98,6 +99,7 @@ def _patch_pipeline(monkeypatch, *, memory):
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: memory)
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
+    _patch_external_provider(monkeypatch, "a fresh answer generated for this document")
 
 
 def _post(pdf: bytes):
