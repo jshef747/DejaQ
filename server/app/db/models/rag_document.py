@@ -1,0 +1,54 @@
+from datetime import datetime
+
+from sqlalchemy import DateTime, ForeignKey, Integer, String, UniqueConstraint, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db.base import Base
+
+
+class RagDocument(Base):
+    """A catalog row for one piece of workspace knowledge ("Rug" / RAG).
+
+    This is only the CATALOG: the row records what was ingested (title, kind,
+    identity hash, how many chunks it produced) so an admin can list and delete
+    it. The retrievable text lives as chunks in the workspace's ChromaDB
+    collection ("{workspace_slug}__rag"), keyed back here by `rag_document_id`.
+    Deleting the row must also delete those chunks — see rag_admin_service.
+
+    `sha` is the sha256 of the whitespace-normalised extracted text, reused from
+    services/file_text.py semantics. It is the identity: re-adding the same
+    document (same words) is a replace, not a duplicate — hence the
+    (workspace_id, sha) unique constraint.
+    """
+
+    __tablename__ = "rag_documents"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "sha", name="uq_rag_workspace_sha"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    workspace_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False
+    )
+    # Human-facing name shown in the dashboard list.
+    title: Mapped[str] = mapped_column(String, nullable=False)
+    # What the content is: text | pdf | docx | markdown | url | image.
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    # Where it came from: paste | upload | url | ocr.
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    # Original filename or URL, for display/debugging. Null for pasted text.
+    source_ref: Mapped[str | None] = mapped_column(String, nullable=True)
+    # sha256 of the normalised extracted text — the document's identity.
+    sha: Mapped[str] = mapped_column(String, nullable=False)
+    char_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    chunk_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    workspace: Mapped["Workspace"] = relationship(  # noqa: F821
+        "Workspace", back_populates="rag_documents"
+    )

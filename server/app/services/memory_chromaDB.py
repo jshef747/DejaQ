@@ -43,6 +43,16 @@ def _embed(text: str) -> list[float]:
     return _get_embedder().encode(text, normalize_embeddings=True).tolist()
 
 
+def embed_text(text: str) -> list[float]:
+    """Public BGE embedding, cosine-normalized, shared with the RAG layer.
+
+    Same model and normalization the cache uses, so RAG chunk vectors and cache
+    vectors live in the same space — a query embedded once could be compared
+    against either. Import THIS rather than the private `_embed`.
+    """
+    return _embed(text)
+
+
 def derive_doc_id(
     normalized_query: str,
     file_sha: str | None = None,

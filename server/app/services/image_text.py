@@ -151,6 +151,43 @@ def extract(image_bytes: bytes) -> OcrResult:
     return _parse_tsv(proc.stdout.decode("utf-8", errors="replace"))
 
 
+def ocr_plaintext(image_bytes: bytes) -> str:
+    """OCR an image to READABLE prose, preserving word order.
+
+    Separate from `extract`: that function reads TSV to derive per-word confidence
+    and a token BAG for the image gate, which throws word order away. The RAG
+    knowledge layer ingests an image's text to ground an answer, so it wants the
+    text as written. Reuses the same binary/languages/timeout config. Never raises
+    — a failure (missing binary, timeout, bad exit) returns "".
+    """
+    global _missing_binary_warned
+    try:
+        proc = subprocess.run(
+            [TESSERACT_BIN, "stdin", "stdout", "-l", TESSERACT_LANGS, "--psm", "3"],
+            input=image_bytes,
+            capture_output=True,
+            timeout=OCR_TIMEOUT_SECONDS,
+        )
+    except FileNotFoundError:
+        if not _missing_binary_warned:
+            logger.warning(
+                "tesseract binary %r not found — image knowledge cannot be OCR'd.",
+                TESSERACT_BIN,
+            )
+            _missing_binary_warned = True
+        return ""
+    except subprocess.TimeoutExpired:
+        logger.warning("OCR timed out after %.1fs", OCR_TIMEOUT_SECONDS)
+        return ""
+    except Exception:
+        logger.exception("OCR failed")
+        return ""
+    if proc.returncode != 0:
+        logger.warning("tesseract exited %d", proc.returncode)
+        return ""
+    return proc.stdout.decode("utf-8", errors="replace").strip()
+
+
 def _parse_tsv(tsv: str) -> OcrResult:
     """Pure/testable: TSV rows -> tokens + confidence stats."""
     confidences: list[float] = []

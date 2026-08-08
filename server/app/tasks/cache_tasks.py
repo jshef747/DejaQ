@@ -9,6 +9,7 @@ from app.celery_app import celery_app
 from app.config import REDIS_URL, EVICTION_FLOOR
 from app.services.context_adjuster import ContextAdjusterService
 from app.services.memory_chromaDB import derive_doc_id, get_memory_service, list_namespaces, _pool
+from app.services import rag_service
 from app.services.service_factory import get_context_adjuster_service
 
 logger = logging.getLogger("dejaq.tasks.cache")
@@ -151,6 +152,11 @@ def evict_low_score_entries() -> dict:
         )
         namespaces = list(_pool.keys())
     for namespace in namespaces:
+        # RAG (Rug) knowledge collections ("{workspace}__rag") are curated by
+        # admins, carry no score, and must never be score-evicted like the Q→A
+        # cache — that is the whole reason they live in a separate collection.
+        if rag_service.is_rag_namespace(namespace):
+            continue
         try:
             memory = get_memory_service(namespace)
             deleted = memory.evict_below_floor(EVICTION_FLOOR)

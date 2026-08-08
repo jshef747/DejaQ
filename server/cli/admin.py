@@ -402,3 +402,135 @@ def cache_purge_images(workspace_slug: str, dept_slug: str | None, yes: bool, dr
 def stats_cmd() -> None:
     """Show usage stats: cache hit rates, latency, and model routing per department."""
     _run_stats()
+
+
+# ---------------------------------------------------------------------------
+# rag (Rug) commands — per-workspace knowledge base
+# ---------------------------------------------------------------------------
+
+@cli.group()
+def rag() -> None:
+    """Manage a workspace's RAG (Rug) knowledge base."""
+
+
+def _rag_service():
+    # Imported lazily: pulls in the embedder module, which is heavy to import.
+    from app.services import rag_admin_service
+
+    return rag_admin_service
+
+
+def _print_rag_item(item, title: str) -> None:
+    content = Text()
+    content.append("  id           ", style="dim")
+    content.append(f"{item.id}\n", style="bright_white")
+    content.append("  title        ", style="dim")
+    content.append(f"{item.title}\n", style="bright_white")
+    content.append("  kind         ", style="dim")
+    content.append(f"{item.kind} ({item.source})\n", style="bright_white")
+    content.append("  chars/chunks ", style="dim")
+    content.append(f"{item.char_count:,} / {item.chunk_count}", style="bright_cyan")
+    console.print(Panel(content, title=f"[green]{title}[/green]", border_style="green", padding=(0, 2)))
+
+
+@rag.command("list")
+@click.option("--workspace", "workspace_slug", required=True, help="Workspace slug.")
+def rag_list(workspace_slug: str) -> None:
+    """List knowledge-base documents for a workspace."""
+    svc = _rag_service()
+    try:
+        docs = svc.list_documents(workspace_slug, ctx=_SYSTEM_CTX)
+    except (admin_service.WorkspaceNotFound, admin_service.WorkspaceForbidden) as e:
+        print_error(str(e))
+        sys.exit(1)
+    print_table(
+        f"Knowledge Base — {workspace_slug}",
+        ["ID", "Title", "Kind", "Source", "Chars", "Chunks", "Created"],
+        [
+            [
+                str(d.id),
+                d.title[:40],
+                d.kind,
+                d.source,
+                f"{d.char_count:,}",
+                str(d.chunk_count),
+                d.created_at.strftime("%Y-%m-%d %H:%M"),
+            ]
+            for d in docs
+        ],
+    )
+
+
+@rag.command("add-text")
+@click.option("--workspace", "workspace_slug", required=True, help="Workspace slug.")
+@click.option("--title", required=True, help="Title for the knowledge document.")
+@click.option("--content", required=True, help="The text to store.")
+def rag_add_text(workspace_slug: str, title: str, content: str) -> None:
+    """Add a pasted-text knowledge document."""
+    svc = _rag_service()
+    with console.status("[cyan]Indexing…[/cyan]", spinner="dots"):
+        try:
+            item = svc.add_text(workspace_slug, title, content, ctx=_SYSTEM_CTX)
+        except (admin_service.WorkspaceNotFound, admin_service.WorkspaceForbidden, svc.RagIngestError) as e:
+            print_error(str(e))
+            sys.exit(1)
+    _print_rag_item(item, "Knowledge added")
+
+
+@rag.command("add-file")
+@click.option("--workspace", "workspace_slug", required=True, help="Workspace slug.")
+@click.option("--path", "file_path", required=True, type=click.Path(exists=True, dir_okay=False),
+              help="Path to a PDF/DOCX/text/image file.")
+@click.option("--title", default=None, help="Override title (defaults to the filename).")
+def rag_add_file(workspace_slug: str, file_path: str, title: str | None) -> None:
+    """Ingest a file (PDF, DOCX, text/code, or an image to OCR)."""
+    import mimetypes
+    import os
+
+    svc = _rag_service()
+    with open(file_path, "rb") as fh:
+        data = fh.read()
+    filename = title or os.path.basename(file_path)
+    mime = mimetypes.guess_type(file_path)[0]
+    with console.status("[cyan]Extracting + indexing…[/cyan]", spinner="dots"):
+        try:
+            item = svc.add_upload(workspace_slug, filename, data, mime, ctx=_SYSTEM_CTX)
+        except (admin_service.WorkspaceNotFound, admin_service.WorkspaceForbidden, svc.RagIngestError) as e:
+            print_error(str(e))
+            sys.exit(1)
+    _print_rag_item(item, "Knowledge added")
+
+
+@rag.command("add-url")
+@click.option("--workspace", "workspace_slug", required=True, help="Workspace slug.")
+@click.option("--url", required=True, help="Web page URL to ingest.")
+@click.option("--title", default=None, help="Override title (defaults to the page title).")
+def rag_add_url(workspace_slug: str, url: str, title: str | None) -> None:
+    """Ingest the readable text of a web page."""
+    svc = _rag_service()
+    with console.status("[cyan]Fetching + indexing…[/cyan]", spinner="dots"):
+        try:
+            item = svc.add_url(workspace_slug, url, title, ctx=_SYSTEM_CTX)
+        except (admin_service.WorkspaceNotFound, admin_service.WorkspaceForbidden, svc.RagIngestError) as e:
+            print_error(str(e))
+            sys.exit(1)
+    _print_rag_item(item, "Knowledge added")
+
+
+@rag.command("delete")
+@click.option("--workspace", "workspace_slug", required=True, help="Workspace slug.")
+@click.option("--id", "doc_id", required=True, type=int, help="Document id to delete.")
+@click.option("--yes", is_flag=True, default=False, help="Skip the confirmation prompt.")
+def rag_delete(workspace_slug: str, doc_id: int, yes: bool) -> None:
+    """Delete a knowledge document and its chunks."""
+    svc = _rag_service()
+    if not yes and not Confirm.ask(f"[yellow]Delete knowledge document [bold]{doc_id}[/bold]?[/yellow]"):
+        print_warning("Aborted.")
+        sys.exit(0)
+    with console.status("[cyan]Deleting…[/cyan]", spinner="dots"):
+        try:
+            svc.delete_document(workspace_slug, doc_id, ctx=_SYSTEM_CTX)
+        except (admin_service.WorkspaceNotFound, admin_service.WorkspaceForbidden, svc.RagDocumentNotFound) as e:
+            print_error(str(e))
+            sys.exit(1)
+    print_success(f"Deleted knowledge document [bold]{doc_id}[/bold].")
