@@ -412,6 +412,23 @@ check_ollama() {
   fi
 }
 
+# Warn (don't fail) when tesseract is missing: image *documents* then fall back
+# to the photo gate, which cannot tell two template documents apart. Photos and
+# the whole text pipeline are unaffected.
+check_tesseract() {
+  if ! command -v tesseract &>/dev/null; then
+    echo -e "  ${YELLOW}Warning: tesseract not found — image document caching is disabled${NC}"
+    echo -e "  ${YELLOW}  (macOS: brew install tesseract; Linux: apt install tesseract-ocr tesseract-ocr-heb)${NC}"
+    return
+  fi
+  if ! tesseract --list-langs 2>/dev/null | grep -qx "heb"; then
+    echo -e "  ${YELLOW}Warning: tesseract has no 'heb' language data — Hebrew documents will OCR poorly.${NC}"
+    echo -e "  ${YELLOW}  (macOS: curl -sL -o \"\$(brew --prefix)/share/tessdata/heb.traineddata\" https://github.com/tesseract-ocr/tessdata_fast/raw/main/heb.traineddata)${NC}"
+  else
+    echo -e "  ${GREEN}tesseract ready (image document caching enabled)${NC}"
+  fi
+}
+
 # Best-effort LAN IPv4 detection for printing reachable URLs in --lan mode.
 detect_lan_ip() {
   local ip=""
@@ -573,6 +590,7 @@ if [[ "$RUN_BACKEND" == "true" ]]; then
   echo -e "  DEJAQ_OLLAMA_URL=${DEJAQ_OLLAMA_URL}"
   echo -e "  DEJAQ_VALIDATOR_ENABLED=${DEJAQ_VALIDATOR_ENABLED}"
   check_ollama "${DEJAQ_OLLAMA_URL}"
+  check_tesseract
 fi
 
 if [[ "$DRY_RUN" == "true" ]]; then

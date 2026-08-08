@@ -78,6 +78,16 @@ class _KeyCache:
         if self._is_stale():
             self._refresh()
 
+    def invalidate(self) -> None:
+        """Force a DB re-read on the next request.
+
+        Called by admin mutations (workspace/department/key create-delete) so a
+        freshly created department or API key resolves immediately instead of
+        after the TTL — otherwise the first requests silently fall back to the
+        default namespace or 401.
+        """
+        self._loaded_at = 0.0
+
     def resolve(self, token: str) -> tuple[str, int] | None:
         """Return (workspace_slug, workspace_id) for an active token, or None if unknown."""
         self._ensure_fresh()

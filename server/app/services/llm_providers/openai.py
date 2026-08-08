@@ -5,7 +5,7 @@ from functools import lru_cache
 import openai
 
 from app.schemas.chat import ExternalLLMRequest, ExternalLLMResponse
-from app.services.llm_providers.common import elapsed_ms, ensure_query, redact_api_key
+from app.services.llm_providers.common import elapsed_ms, ensure_query, normalize_finish_reason, redact_api_key
 from app.utils.exceptions import ExternalLLMAuthError, ExternalLLMError, ExternalLLMTimeoutError
 
 logger = logging.getLogger("dejaq.services.llm_providers.openai")
@@ -34,7 +34,28 @@ class OpenAIProviderClient:
         client = _get_client(api_key)
         messages = [{"role": "system", "content": request.system_prompt}]
         messages.extend(request.history)
-        messages.append({"role": "user", "content": request.query})
+        if request.image_b64:
+            user_content = [
+                {"type": "text", "text": request.query},
+                {"type": "image_url", "image_url": {
+                    "url": f"data:{request.image_mime or 'image/jpeg'};base64,{request.image_b64}"
+                }},
+            ]
+        elif request.file_b64:
+            # Chat Completions takes a PDF as an `file` part carrying a data URL.
+            # A `file_id` from the Files API would avoid re-uploading the same
+            # document every turn, but that needs an upload+lifecycle of its own;
+            # inline is correct while requests stay one-shot and under the size cap.
+            user_content = [
+                {"type": "text", "text": request.query},
+                {"type": "file", "file": {
+                    "filename": request.file_name or "document.pdf",
+                    "file_data": f"data:{request.file_mime or 'application/pdf'};base64,{request.file_b64}",
+                }},
+            ]
+        else:
+            user_content = request.query
+        messages.append({"role": "user", "content": user_content})
 
         logger.debug("Sending hard query to OpenAI model=%s history_turns=%d", request.model, len(request.history))
         start = time.perf_counter()
@@ -60,7 +81,8 @@ class OpenAIProviderClient:
 
         latency_ms = elapsed_ms(start)
         usage = response.usage
-        content = response.choices[0].message.content or ""
+        choice = response.choices[0]
+        content = choice.message.content or ""
         logger.debug(
             "OpenAI request successful (model=%s, latency=%.2f ms, prompt_tokens=%d, completion_tokens=%d)",
             request.model,
@@ -74,4 +96,5 @@ class OpenAIProviderClient:
             prompt_tokens=usage.prompt_tokens if usage else 0,
             completion_tokens=usage.completion_tokens if usage else 0,
             latency_ms=latency_ms,
+            finish_reason=normalize_finish_reason(choice.finish_reason),
         )

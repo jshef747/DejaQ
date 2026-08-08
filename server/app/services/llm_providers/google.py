@@ -1,3 +1,4 @@
+import base64
 import logging
 import time
 from functools import lru_cache
@@ -8,7 +9,7 @@ from google.genai import errors as genai_errors
 from google.genai import types
 
 from app.schemas.chat import ExternalLLMRequest, ExternalLLMResponse
-from app.services.llm_providers.common import elapsed_ms, ensure_query, redact_api_key
+from app.services.llm_providers.common import elapsed_ms, ensure_query, normalize_finish_reason, redact_api_key
 from app.utils.exceptions import ExternalLLMAuthError, ExternalLLMError, ExternalLLMTimeoutError
 
 logger = logging.getLogger("dejaq.services.llm_providers.google")
@@ -39,7 +40,19 @@ class GoogleProviderClient:
         for msg in request.history:
             role = "model" if msg["role"] == "assistant" else msg["role"]
             contents.append(types.Content(role=role, parts=[types.Part(text=msg["content"])]))
-        contents.append(types.Content(role="user", parts=[types.Part(text=request.query)]))
+        user_parts = [types.Part(text=request.query)]
+        if request.image_b64:
+            user_parts.insert(0, types.Part.from_bytes(
+                data=base64.b64decode(request.image_b64),
+                mime_type=request.image_mime or "image/jpeg",
+            ))
+        # A PDF is the same call with a different mime type — Gemini parses it natively.
+        if request.file_b64:
+            user_parts.insert(0, types.Part.from_bytes(
+                data=base64.b64decode(request.file_b64),
+                mime_type=request.file_mime or "application/pdf",
+            ))
+        contents.append(types.Content(role="user", parts=user_parts))
 
         config = types.GenerateContentConfig(
             system_instruction=request.system_prompt,
@@ -80,10 +93,14 @@ class GoogleProviderClient:
             usage.prompt_token_count if usage else 0,
             usage.candidates_token_count if usage else 0,
         )
+        candidate_finish_reason = (
+            response.candidates[0].finish_reason if response.candidates else None
+        )
         return ExternalLLMResponse(
             text=response.text or "",
             model_used=request.model,
             prompt_tokens=usage.prompt_token_count if usage else 0,
             completion_tokens=usage.candidates_token_count if usage else 0,
             latency_ms=latency_ms,
+            finish_reason=normalize_finish_reason(candidate_finish_reason),
         )

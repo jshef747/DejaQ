@@ -1,0 +1,414 @@
+# Image gate — evidence and threshold rationale
+
+The shipped rule is in `CLAUDE.md`; this file holds the measurements behind it. Implementation: `server/app/services/image_text.py` (documents) and `server/app/services/image_fingerprint.py` (photos). Harness: [evals/image_similarity/](../evals/image_similarity/).
+
+## Two paths, because one signal cannot do both
+
+An image is compared **by its words if OCR finds confident text, otherwise by its pixels**. This is not a preference — pixel similarity is measurably *inverted* for documents:
+
+| | CLIP | dHash hamming | pixel gate would… |
+|---|---|---|---|
+| **Same** syllabus, two screenshots | 0.089 ✅ | 10–19 ❌ | **miss** (wrong) |
+| **Different courses**, same template | **0.027** ✅ | **0** ✅ | **serve** (wrong, and dangerous) |
+
+Two different courses (142180 Complex Analysis, 142241 Cloud/AWS) scored *closer together* than two screenshots of one document. A template document is ~95% identical boilerplate; the few words that distinguish it are invisible to any whole-image measure.
+
+dHash cannot be rescued by resolution — at every size the same document scored **worse** than two genuinely different photos:
+
+| hash size | same syllabus | two different photos |
+|---|---|---|
+| 8×8 | 15.6% bits differ | **12.5%** |
+| 16×16 | 24.2% | **19.9%** |
+| 32×32 | 39.9% | **33.7%** |
+
+A magnitude-preserving grayscale comparison failed the same way (0.62 same-document vs 0.25 different-photo).
+
+## Routing: OCR confidence, not pixel statistics
+
+A pixel-based "is this a document?" detector was tried and **rejected**: a real photo of a screen full of text measured 0.3% near-white and saturation 8.3 — statistically a photo — yet contained 155 readable words. The OCR result itself is the classifier.
+
+Both criteria must hold (`mean confidence ≥ 60` **and** `≥ 6 words at conf ≥ 60`). The
+original table below was built against a floor of 80 and 45 words:
+
+| group | mean confidence | confident words |
+|---|---|---|
+| Documents (4 rendered pages + close photo of a screen) | **83.3 – 92.2** | **54 – 373** |
+| Unreadable photos of screens (far/angled) | 34.6 – 45.2 | 1 – 60 |
+| Real photos (12 sampled) | 0 – 93.6 | **0 – 38** |
+
+An unreadable screen photo reached 60 confident words but only ~35 confidence; the wordiest real photo reached 87.7 confidence but only 38 words.
+
+### Both routing floors were set too high, and both cost real misses
+
+The confidence floor of 80 sat **inside** the range real screenshots produce. One user's
+images measured 86.8, 84.8, 80.5 and 77.5 — so whether a screenshot was cacheable at all came
+down to OCR noise. At 77.5 it was refused on every request.
+
+Swept 50–80 over both corpora: **0 false merges at every level**. The floor does not carry
+safety — the 0.80 token threshold does — it only routes. Lowering it moves images from
+"refused entirely" into "compared by words", which measured zero merges.
+
+The cost is photo recall: of 480 real photo files, 42 route to the document path at a floor of
+80 and 69 at 60, and those lose pixel matching. The worst overlap between any two of them is
+**0.041** at every level, so they cannot merge — they simply miss. Documents are the workload
+that matters here, so the trade favours them. Floor is now **60**.
+
+### The word floor was 45, then 25, and it cost real misses
+
+A **cropped exercise snippet** — two lines of a Hebrew complexity-theory question — OCR'd to **34 words at 84.8 confidence**. Confident, unambiguously a document, but under the 45-word floor, so it fell to the photo path and missed at **hamming 36** — while its token overlap with a re-cropped upload of the same snippet was **0.833**. Cropped snippets are a normal way to ask about a worksheet, so this was a whole class of misses.
+
+Swept the floor over the 60 real photos (conf floor held at 80):
+
+| word floor | photos routed to the document path | false merges among them | max cross-photo token overlap |
+|---|---|---|---|
+| 20 – 35 | 5 / 60 | **0** | 0.038 |
+| 40 – 45 | 4 / 60 | **0** | 0.038 |
+
+The **confidence floor does nearly all the filtering** — dropping the word floor from 45 to 25 misroutes exactly one extra photo (src032, the 38-word one above), and no floor produces a false merge: the worst cross-photo overlap is 0.038 against a 0.35 threshold, a ~10× margin. The cost is that src032's variants split across kinds (`logo` 23 words, `resized` 9, `rot3` 21 stay photos while the rest become documents), losing some of that one photo's own recall. A lost hit, never a wrong answer.
+
+Note the three text-heavy photos that route to the document path at *any* floor (92–198 words, conf 80–86) are photos **of documents** — the routing is correct, not a misclassification.
+
+## Document matching: one threshold at 0.85
+
+**Serve when OCR token overlap ≥ 0.85.** Nothing else — no identifier rule, no zones.
+
+It was 0.80 until round 3. The reasoning for 0.80 was that over 69,411 pairs of genuinely
+different documents the highest overlap reached was 0.798 — two exam papers for one course
+differing only by a date, a time and one letter. That was true of the corpus, and the corpus
+was missing a population: **two receipts from one shop**. Measured on real scanned receipts,
+two from one restaurant with the same items and the same total, differing only in invoice
+number (1054250 vs 1032236) and date, reach **0.848**.
+
+0.85 is the zero-merge point over all seven corpora (~1.85M labelled pairs). The lesson is the
+one this document already ends on: a threshold is only as safe as the failure modes its corpus
+contains.
+
+### What this replaced, and why
+
+The previous rule (token ≥ 0.35 AND digit-token ≥ 0.30, with 0.70 as a no-digit fallback) was
+derived from **three syllabi**. Measured properly it produced **234 false merges**. A joint
+sweep of all three parameters found that **every configuration retaining the digit rule
+admitted merges**; the only clean point was a single threshold with the middle zone always
+rejecting.
+
+The digit rule failed three separate ways:
+
+1. It cost **10.7 points of recall** for no safety gain.
+2. It fired on OCR junk. A mangled formula (`E[time_M(x)] ≤ p(|x|)`) produced the
+   "identifiers" `קאס6ר` and `6087`, which agreed on nothing and vetoed a **true** match at
+   0.736 overlap — a photo of a screen and a screenshot of the same homework question.
+3. On real receipts it was actively harmful: a document's numbers are a bag of many values,
+   and OCR captures a different subset in each photo.
+
+### The cost, stated plainly
+
+Recall among document-routed pairs, per threshold, with merges in brackets:
+
+| threshold | round 1 | round 2 | receipts | screenshots |
+|---|---|---|---|---|
+| 0.70 | 82.6% (570) | 54.4% (0) | 43.3% (49) | 70.3% (31) |
+| 0.75 | 60.6% (215) | 44.9% (0) | 31.3% (10) | 63.3% (20) |
+| 0.80 | 44.4% (0) | 36.7% (0) | 20.5% (**2**) | 55.5% (10) |
+| **0.85** | **33.8% (0)** | **27.2% (0)** | **12.1% (0)** | **47.4% (8)** |
+| 0.95 | 19.9% (0) | 8.9% (0) | 1.9% (0) | 29.4% (0) |
+
+End to end — counting images the router refuses as misses — moving 0.80 → 0.85 cost round 1
+32.4% → 24.7%, receipts 19.4% → 11.5%, screenshots 48.2% → 41.4%, recaptures 76.9% → 67.2%.
+That is roughly a quarter of all image cache hits, given up to remove two merges. It is the
+trade this project has taken from the start: a miss costs one API call, a merge serves an
+answer about a different document.
+
+The screenshot column never reaches zero until 0.95, and that number should not be acted on:
+inspected by eye, those pairs are one screen with a modal open or with different chips
+selected — the same content in a different state, not somebody else's document.
+
+### Why not something smarter
+
+Four approaches were measured against the same 286,000 labelled pairs
+([evals/image_similarity/](../evals/image_similarity/)): word order, page layout, structured
+field extraction, and noise-robust text. Three lost to the plain threshold. All four
+converged on the same explanation — the difference between two near-duplicate documents is a
+**small localised edit** (one word and a date in ~300 tokens), and every one of these methods
+reduces a document pair to a single global ratio, in which that edit is indistinguishable from
+ordinary OCR noise.
+
+The structured-field veto did reach 90.6%, and is **deliberately not shipped**: it wins only
+where documents share a template (round 1 coursework 50.4% → 98.5%) and *loses* where they do
+not (round 2: 91.4% against the baseline's 97.3%). It also wrongly rejected 8 of 124 arXiv
+v1/v2 pairs because the revision changed a date — it breaks any document that gets updated.
+
+## The pixel fallback was the biggest leak of all
+
+Bigger than the document rule ever was. An image whose OCR finds text but misses the document
+bar used to fall through to CLIP+dHash, where two different pages of text look near-identical.
+That produced **1,712 false merges** in round 1 and **204** in round 2.
+
+It mattered so much because the routing bar is high relative to real-world scans:
+
+| source | routed as "document" | median OCR confidence |
+|---|---|---|
+| clean PDF renders (arXiv) | 78% | 91.0 |
+| **real scanned business forms (FUNSD)** | **11%** | **60.3** |
+
+So 89% of genuine scanned forms took the unsafe path. The confidence floor of 80 was
+calibrated on clean renders and does not describe real scans.
+
+**Fix:** an image with ≥ `CACHE_IMAGE_AMBIGUOUS_MIN_WORDS` (4) tokens read *below* the
+confidence floor is classified `ambiguous` — never served, never stored, no pixel fingerprint
+computed. It becomes a cache miss, which regenerates.
+
+The test is **OCR quality, not amount of text**, and getting that wrong caused a live
+regression. The first version keyed on "below the document bar", which also caught a short
+crop of a question — 9 words at 86.8 confidence, read perfectly — and made it permanently
+un-cacheable. An unreliable read of a lot of text is garbage; a confident read of a little
+text is a small document.
+
+That also exposed the word floor as dead weight. Swept 6/8/10/15/25 over both corpora: **0
+false merges at every level**, with under a point of recall between them, because the
+confidence floor does the separating. On 60 real photos a floor of 6 reclassifies only 2, and
+the worst overlap between any two text-bearing photos is 0.038 against a 0.85 threshold. The
+floor has been 45, then 25, now **6**; each reduction fixed real misses and cost nothing
+measurable.
+
+A minimum of `CACHE_IMAGE_TEXT_MIN_SHARED_TOKENS` (4) shared tokens is also required before an
+overlap ratio counts at all — two images with three tokens each that happen to share them
+would otherwise score a perfect 1.0. No such pair appears in the corpora; this guards an edge
+the data does not cover.
+
+Separately, near-uniform images (a mostly-blank page is a white rectangle, and CLIP sees all
+white rectangles as identical) are refused by `tile_variety()`: distinct dHashes over a 4×4
+grid, floor 10. Measured, 60 real photos scored 13–16 while the merging blank renders scored
+below 10.
+
+> **Correction to an earlier claim in this document.** The near-blank guard was described as
+> costing nothing. It blocks 0 of 60 real photos — that part holds — but its recall cost on the
+> pixel path was never measured at the time. On round 1 it reduces served pixel-path pairs from
+> 316 to 32, and on round 2 it removes only 7 of 204 merges, because scanned forms are not
+> blank, they merely look alike. The ambiguous-image rule, not this guard, is what closes the
+> leak.
+
+## Photo matching: CLIP at 0.08, and why both thresholds stay load-bearing
+
+The CLIP ceiling is **0.08**, lowered from 0.10 in round 3. On 812 real photographs (INRIA
+Holidays, 300 scenes, 325,930 different-scene pairs) a daylight rocky beach and a sunset over
+water were served as the same image at **CLIP 0.0929 / hamming 6** — both are portrait
+seascapes split by a horizon, which is the degenerate-dHash case described below. 0.08 is the
+highest ceiling admitting none of them. It costs the re-upload corpus 69.5% → 66.3%.
+
+The original 480-image validation still holds at the new ceiling: **0 false merges**, with
+per-variant acceptance of 100% (brightness), 100% (logo), 100% (resize), 98.3% (recompress),
+95% (crop), 76.7% (rotation).
+
+There is no unguarded trusted tier, and hamming is not the one to loosen. Two **different**
+photographs of one terraced hillside measured CLIP **0.027** — inside any usable semantic
+ceiling — and were refused by hamming 29 alone. dHash gates every photo hit (~0.24 ms,
+deterministic) and buying photo recall by relaxing it would open that class immediately.
+
+A proposed "structural tier" — accept strong dHash agreement (hamming ≤ 10) under a looser CLIP ceiling — was measured and **rejected**: 39 false accepts. dHash degenerates on low-structure images; two unrelated 4K photos with a left-right brightness split each hash to a repeating `0f0f…` and land at hamming 8.
+
+## Rejected: trimming blank borders
+
+`trim_border()` was implemented and then **removed**. Its entire benefit came from a synthetic "padded" variant added to the eval set; on realistic variants it was neutral to harmful:
+
+| variant | no trim | trim |
+|---|---|---|
+| pad (synthetic) | 15% | 98.3% |
+| logo | **100%** | 98.3% |
+| all realistic variants | **96.1%** | 95.8% |
+
+It also could not fix the real case it was written for: on the actual screenshots it made hamming *worse* (10 → 14), because their content sits at different scales and offsets. Re-framed documents are handled by OCR instead.
+
+## Known limits, by design
+
+- **Far or angled photos of a screen never match** — OCR returns garbage (the same document scored 0.000 against itself). They fail as a cache *miss*, which regenerates, never as a false merge. A *square-on* camera photo of a screen does match, via the photo path: 76.9% of 134 UHDM pairs, no merges.
+- **A scan that OCR cannot read at all** (0–2 tokens) misses the ambiguous rule, which needs 4 tokens, and falls to the pixel path where two blank-looking forms merge (measured: two FUNSD forms at CLIP 0.0648 / hamming 14). This is the one leak left standing, and closing it needs a "failed document scan" signal rather than a threshold.
+- Heavy photo edits (print/scan, paint, blur, rotation) fail the photo gate and become a miss.
+- A photo never matches a document entry and vice-versa; a text request matches neither.
+- Hebrew OCR quality drives document results; Tesseract `heb` is strong on clean renders, poor on skewed photos.
+- **Latency:** OCR adds ~0.3 s (sparse page) to ~1.9 s (dense page or photo) versus 0.24 ms for the photo gate. Accepted against a rejected 4.5 s VLM-caption alternative and the external-provider call that a miss triggers anyway.
+
+## Three storage bugs found in production logs (fixed)
+
+The first two were found while investigating a wrong cached answer, and neither was in the gate itself — the gate matched the correct image; the *stored text* was already wrong. The third explains why images kept missing even once the gate was right.
+
+1. **Errored generations were cached.** A request logged `route=error model=error store=queued`: generation failed, the user got the apology text, and that apology was stored as a real answer with an image fingerprint attached, ready to be served to every later match. Now `route == "error"` skips the store entirely (`tests/test_cache_store_guards.py`).
+
+2. **Image answers were passed through the generalizer.** `generalize()` strips tone so a *text* answer survives rephrasing, but it only ever sees the answer — never the image — so on image answers it invents specifics. Observed live: an answer about the **Complex Analysis** syllabus was stored as *"(Statistics or Data Analysis Course)"*. Image-anchored answers are now stored verbatim; the image gate already pins the answer to one image, so there is nothing to generalize across and the rewrite was pure risk. Text answers still generalize as before.
+
+3. **Image requests were never stored at all.** The cache filter drops queries under 3 words as "too short" — but with an image attached the text is not the query. `"solve it"` (2 words) is the *normal* way to ask about an image, so every image request logged `store=skipped`, no entry was ever written, and a perfectly correct gate produced an endless run of misses. Image requests now bypass the text-length rules (`cache_filter.should_cache(..., has_image=True)`); the fingerprint guard that follows still refuses to store an image it cannot fingerprint, so a thin query can never leak an entry to an unrelated ask.
+
+> Note: the generalizer's few-shot examples contain "Paris … the capital of France". That made few-shot leakage a suspect for an unrelated France-flavoured answer, but three reproduction runs on a syllabus answer showed **no leakage**, so it remains unconfirmed.
+
+## Serving an image hit: three blind models, one family of bugs
+
+The gate proves *same image*. Everything downstream is text-only and **cannot see the image**, so each stage that reasons about the answer was wrong in the same way:
+
+| stage | what it was asked | outcome |
+|---|---|---|
+| generalizer (store) | rewrite this answer | invented "Statistics or Data Analysis Course" — **fixed**, stored verbatim |
+| validator (serve) | does this ANSWER cover this QUESTION? | rejected `how to solve?` against `how to solve this?` at distance 0.0753 — **fixed**, see below |
+| adjuster (serve) | rewrite this answer in the question's tone | same blind rewrite; nothing was generalized away to restore — **fixed**, skipped |
+
+**Image hits now validate question-vs-question.** The cached answer is not sent at all; the validator is asked only whether the two questions ask for the same thing about the (already-verified identical) image. `_IMAGE_SYSTEM_PROMPT` / `_IMAGE_FEW_SHOTS` in `services/validator.py`.
+
+The embedding cannot do this job alone — the two distance ranges **overlap**:
+
+| class | BGE distance range | tier |
+|---|---|---|
+| paraphrases (must hit) | 0.0753 – 0.1094 | all trusted |
+| numbered-item siblings (must miss) | **0.0867** – 0.1351 | all trusted |
+
+`solve q1`/`solve q2` (0.0867) and `solve part a`/`solve part b` (0.0898) sit *closer together* than the legitimate paraphrase `what is this document about?`/`what is the topic of this document?` (0.1094). No threshold separates them; BGE treats `1`/`2`/`a`/`b` as near-interchangeable. Lowering the trusted ceiling would kill real hits and still serve the worksheet. The closest sibling (0.0867) is above `VALIDATOR_SKIP_DISTANCE` (0.05), so none of them bypasses the validator.
+
+Measured on `gemma4:e2b` (`evals/validator/scripts/image_intent_check.py`, 25 pairs):
+
+| | result |
+|---|---|
+| paraphrases served | **9/9** |
+| siblings rejected | **15/16**, 0 of them reachable by the cache |
+| validator latency | **577 ms median** (was 6,468 ms in answer mode) |
+| hit latency end-to-end | ~1 s (was **9,490 ms** — slower than the 6,261 ms miss it replaced) |
+
+The single miss is `what does this say?` vs `translate this to english` at distance **0.2497** — past `DEJAQ_CACHE_BAND_MAX_DISTANCE` (0.20), so the validator is never called on it in production. Worth recording anyway: that pair is a **verbatim few-shot** in the prompt and the model still answered VALID, which is a fair measure of how much `gemma4:e2b` can be pushed on read-vs-translate. Reachable phrasings of the same trap (`transcribe`/`translate` 0.1603, `what is written here?`/`translate what is written here` 0.1359) are rejected only after the prompt gained an explicit containment rule: extra words about *tone or depth* keep it VALID, extra words changing *output language or form* make it INVALID.
+
+## Round 3: the populations rounds 1 and 2 never contained
+
+Rounds 1 and 2 were both documents, and the photo path had only ever been measured on
+synthetic variants of 60 source images. Round 3 adds real photographs, real receipts, real
+screenshots and real camera photos of screens — 1.85M labelled pairs in total, scored by
+`evals/image_similarity/gate_report.py`, which runs the application's own predicates rather
+than a copy of them.
+
+| corpus | recall | false merges | wrong answers per cache hit |
+|---|---|---|---|
+| round 1 — coursework + DocUNet | 32.4% | 0 | 0% |
+| round 2 — FUNSD + arXiv | 13.2% | 1 | 0.8% |
+| receipts — SROIE | 19.4% | **2** | 0.8% |
+| screenshots — Rico | 48.2% | 19 | 3.2% |
+| photos — INRIA Holidays | 7.0% | **1** | 1.5% |
+| augmentations — the original 480 | 44.6% | 0 | 0% |
+| recaptures — UHDM photos of screens | 76.9% | 0 | 0% |
+
+Recall here is lower than the figures quoted earlier in this document because it is measured
+**end to end**: an image the router refuses is counted as a miss. `protocol.py` measures
+recall among document-routed images only. Both are correct; they answer different questions.
+
+### 0.80 is not the zero-merge point after all
+
+Two SROIE receipts from one restaurant — same items, same total, differing only in invoice
+number (1054250 vs 1032236) and date — reach token overlap **0.848**. The claim that 0.798
+was the ceiling held only because no earlier corpus contained same-vendor receipts.
+
+Zero merges needs **0.85** on receipts. It needs 0.95 on Rico screenshots, but that number is
+soft: those pairs are one screen with a dialog open, or with different chips selected — the
+same content in a different state, not somebody else's document. The receipt pair is the one
+that matters, because answering "what is the invoice number?" from it is simply wrong.
+
+Cost of moving 0.80 → 0.85, as document-routed recall: round 1 44.4% → 33.8%, round 2 36.7%
+→ 27.2%, receipts 20.5% → 12.1%, screenshots 55.5% → 47.4%.
+
+### The photo path has one real merge, and dHash is what prevents the rest
+
+A daylight rocky beach and a sunset over water (`hol01008` / `hol01268`) are served as the
+same image: CLIP **0.0929**, hamming **6**. Both are portrait seascapes split by a horizon,
+which is exactly the degenerate-hash failure the comment in `image_fingerprint.py` warns
+about. A CLIP ceiling of 0.08 removes it, costing the re-upload corpus 69.5% → 66.3%.
+
+The opposite result argues for keeping hamming exactly where it is: two different photographs
+of one terraced hillside measured CLIP **0.027** and were refused only by hamming 29. CLIP
+alone cannot tell two photos of a scene apart from the same photo twice.
+
+### Resolution, not framing, is what breaks the document path
+
+Round 1 pairs, by what changed between two captures of one page:
+
+| change | served |
+|---|---|
+| same resolution, any crop change | 63–78% |
+| different resolution, same crop | 3–35% |
+
+This is why a re-screenshot at a different zoom misses.
+
+### Rejected: normalising image size before OCR
+
+Investigated properly and **not adopted**. Three variants, all in `features_rich.py` behind
+env knobs so the result can be reproduced:
+
+1. **Normalise page height** (`CANON_HEIGHT`). Fixes the axis it targets and costs as much
+   where resolution already matched, because a *cropped* page is shorter and therefore gets a
+   different factor than the full page it should match.
+2. **Normalise by text size** (`CANON_WORD_HEIGHT`, `CANON_QUANT`) — measure the median OCR
+   word, scale so it hits a target, snap the factor to a geometric ladder so near-identical
+   images get an identical factor. Swept over targets 24/30/36 and ladders 1.25/1.5: best was
+   +4.7 points, under the +5 bar set in advance, and the ranking was unstable (target 30 with
+   snapping scored *worse* than without it). Costs **+1,038 ms** per request: two OCR passes,
+   the second on an enlarged image.
+3. **Flat 2× upscale** (`CANON_FIXED_SCALE`) — the control, run to test whether resampling
+   itself was the problem. It is not: a uniform factor leaves same-resolution pairs untouched
+   (69.4% → 71.6%). It beat both adaptive schemes on the coursework subset, +12 points.
+
+Variant 3 looked like the answer and is the one that must not ship. Measured on the wider
+corpora at the shipped 0.85 threshold:
+
+| corpus | shipped | flat 2× | routing-only hybrid |
+|---|---|---|---|
+| coursework | 23.8% / **0** merges | 31.7% / **4** | 23.8% / 0 |
+| round 2 | 9.9% / 1 | 29.8% / 0 | 11.1% / 0 |
+| receipts | 11.5% / **0** | 13.5% / **16** | 11.4% / 0 |
+| screenshots | 41.4% / 15 | 45.7% / 20 | 41.5% / 18 |
+
+**The mechanism that produces the recall also produces the merges.** Reading a page more
+completely reads the shared boilerplate of two near-duplicate documents more completely too:
+two different receipts went from 0.848 overlap to **0.983**. Better OCR moves the whole
+distribution up, it does not improve the separation. No threshold rescues it — zero merges on
+the upscaled receipts needs 0.99, where recall is 1.2%, far below the 11.5% available without
+upscaling at all.
+
+Variant 4, the **routing-only hybrid**: take the *kind* from an upscaled read (document /
+ambiguous / photo) but keep matching on the original tokens. Routing cannot cause a merge, so
+this is safe by construction — and it gains almost nothing, 0 to 1.2 points. Round 2's large
+gain under flat upscaling came from better *matching*, not better routing.
+
+One narrow use survives: routing on an upscaled read closes the "scan OCR cannot read at all"
+pixel leak (round 2, 1 merge → 0) at no recall cost. Only worth its latency if that leak
+matters.
+
+Cost, for completeness: flat 2× is **+263 ms** on screenshots and **+432 ms** on page renders,
+one pass. On a 3024×4032 phone photo it is seconds — the upscale makes it a 48-megapixel page.
+
+### End to end through the API
+
+`evals/image_similarity/e2e_gate.py` drives the running server over eleven scenarios;
+9 of 11 behave as specified. The two deviations:
+
+- **A 4% crop of one render misses** (token overlap 0.597). The document path serves
+  essentially only near-identical re-uploads.
+- **A camera photo of a screen HITS**, which was not expected — the complaint that started
+  this work. The photo path serves 76.9% of UHDM recapture pairs with no false merges.
+  Caveat: UHDM captures are aligned with their source; a handheld photo at an angle is harder.
+
+## What the evidence does not cover
+
+Re-derivable with `evals/image_similarity/`. The remaining gaps:
+
+- **Hebrew is one person's coursework**, from one university's templates. Tesseract's Hebrew
+  behaviour differs from its English behaviour and nothing else probes it.
+- **The photo path's positives are still weak at the middle.** Holidays pairs are different
+  photographs of one scene (refused by design); the augmentation corpus is variants of a
+  single shot. The realistic case — the same object photographed twice a second apart — is
+  measured by neither.
+- **Screenshot ground truth counts a UI state change as different content.** Those merge
+  counts need eyes on them before they justify a threshold move.
+- **Nothing measures whether a served answer was useful**, only whether it concerned the same
+  image.
+
+An earlier version of this document derived the document thresholds from **three syllabi** and
+described the resulting separation as roughly 10×. Measured against a proper corpus, that rule
+turned out to produce 234 false merges. Treat any number here as provisional until it has been
+swept over a corpus that contains the failure mode you care about.
+
+## Cache threshold rationale (text path)
+
+- **`DEJAQ_CACHE_BAND_MAX_DISTANCE` = 0.20** is the empirically safe ceiling. The validator's first false-accept appears at ~0.21, where sibling questions (freezing/boiling, hamlet/macbeth) cluster with heavier typos. Set it at or below `DEJAQ_CACHE_TRUST_DISTANCE` to disable the band; raise it only alongside a stronger validator.
+- **`DEJAQ_CACHE_RESCUE_MAX_DISTANCE` = 0.60** — the heaviest real typo observed live sits at 0.52.
+- **`DEJAQ_VALIDATOR_SKIP_DISTANCE` = 0.05** — at this distance the embedding already guarantees correctness, so the validator adds latency and no safety.

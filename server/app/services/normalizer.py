@@ -11,50 +11,8 @@ import logging
 import re
 import time
 
-from spellchecker import SpellChecker
-
+from app.config import OLLAMA_NUM_CTX
 from app.services.model_backends import CompletionRequest, ModelBackend
-
-_spell = SpellChecker()
-# Common proper nouns the base dictionary lacks.
-# Load at high frequency so they're preferred over phonetically similar common words
-# (e.g., "ukrine" → "ukraine" not "urine").
-_PROPER_NOUNS = [
-    # Geopolitics
-    "ukraine", "ukrainian", "russia", "russian", "israel", "israeli", "palestine",
-    "palestinian", "iran", "iranian", "china", "chinese", "taiwan", "taiwanese",
-    "korean", "korea", "japan", "japanese", "nato", "biden", "putin", "zelensky",
-    # Cities / places
-    "aviv", "tel", "beijing", "shanghai", "tokyo", "seoul", "dubai", "cairo",
-    "paris", "berlin", "london", "rome", "madrid", "lisbon", "amsterdam",
-    "stockholm", "oslo", "helsinki", "warsaw", "prague", "budapest", "vienna",
-    "zurich", "geneva", "brussels", "athens", "istanbul", "moscow", "kyiv",
-    "riyadh", "doha", "tehran", "kabul", "nairobi", "lagos", "accra", "dakar",
-    "mumbai", "delhi", "bangalore", "karachi", "dhaka", "colombo", "kathmandu",
-    "singapore", "jakarta", "manila", "hanoi", "bangkok", "kuala",
-    "sydney", "melbourne", "auckland", "toronto", "montreal", "vancouver",
-    "chicago", "houston", "phoenix", "dallas", "seattle", "boston", "miami",
-    "denver", "atlanta", "detroit", "portland", "nashville", "austin",
-    # Tech / AI
-    "elon", "musk", "openai", "chatgpt", "llm", "api", "gpu", "cpu",
-    "golang", "kotlin", "rust", "typescript", "javascript", "python",
-    "nodejs", "django", "fastapi", "flask", "react", "nextjs", "vuejs",
-    "angular", "svelte", "tailwind", "webpack", "vite", "docker", "kubernetes",
-    "postgres", "postgresql", "mongodb", "redis", "sqlite", "mysql",
-    "graphql", "grpc", "kafka", "rabbitmq", "nginx", "apache",
-    "github", "gitlab", "bitbucket", "jira", "confluence", "slack",
-    "linux", "ubuntu", "debian", "fedora", "macos", "windows",
-    "tensorflow", "pytorch", "numpy", "pandas", "sklearn", "scipy",
-    "gemini", "claude", "anthropic", "mistral", "llama", "gemma",
-    "huggingface", "langchain", "chromadb", "pinecone", "weaviate",
-    "celery", "uvicorn", "pydantic", "sqlalchemy",
-    # People / companies
-    "google", "microsoft", "amazon", "netflix", "nvidia", "intel", "apple",
-    "meta", "bytedance", "alibaba", "tencent", "baidu", "samsung",
-    "zuckerberg", "bezos", "altman", "pichai", "nadella", "huang",
-]
-_spell.word_frequency.load_words(_PROPER_NOUNS * 10_000)
-_WORD_RE = re.compile(r"([a-zA-Z'-]+|[^a-zA-Z'-]+)")
 
 logger = logging.getLogger("dejaq.services.normalizer")
 
@@ -133,41 +91,6 @@ _FEW_SHOTS: list[tuple[str, str]] = [
 ]
 
 
-def _spell_correct(query: str) -> str:
-    """Correct misspelled words in the query.
-
-    Tokenizes on word/non-word boundaries so punctuation isn't swallowed into
-    tokens. Only fixes unknown alphabetic tokens ≥ 4 chars; leaves proper nouns
-    in the custom word list, short tokens, and non-alpha tokens unchanged.
-    """
-    tokens = _WORD_RE.findall(query)
-    # Collect alphabetic tokens to batch-check
-    alpha_tokens = [t for t in tokens if t.isalpha() and len(t) >= 4]
-    unknown = _spell.unknown(alpha_tokens)
-    if not unknown:
-        return query
-
-    changed = []
-    result = []
-    for token in tokens:
-        low = token.lower()
-        # Skip capitalized tokens — proper nouns (cities, names, brands) are
-        # capitalized in natural input and must not be "corrected".
-        if token.isalpha() and len(token) >= 4 and low in unknown and not token[0].isupper():
-            fix = _spell.correction(low)
-            if fix and fix != low:
-                result.append(fix)
-                changed.append(f"{token!r}→{fix!r}")
-            else:
-                result.append(token)
-        else:
-            result.append(token)
-
-    if changed:
-        logger.debug("Spell corrections: %s", ", ".join(changed))
-    return "".join(result)
-
-
 def _is_opinion(query: str) -> bool:
     return bool(_OPINION_GATE.search(query) and not _HOWTO_ADVERBIAL.search(query))
 
@@ -198,18 +121,18 @@ class NormalizerService:
         self.model_name = model_name
 
     async def normalize(self, raw_query: str) -> str:
+        """Return the cache key for a query.
+
+        No spell correction anywhere: a dictionary checker mangles jargon and
+        proper nouns ("frnce"→"fence", "itly"→"idly"), poisoning cache keys.
+        Typo tolerance is handled downstream by the semantic cache — BGE
+        embeddings absorb most single typos, and the validator-guarded distance
+        band (CACHE_TRUST_DISTANCE..CACHE_BAND_MAX_DISTANCE) catches the rest.
+        """
         logger.debug("Normalizing query: %s", raw_query)
         start = time.time()
 
-        # Spell-correction is only used on the opinion path. Cache matching is
-        # semantic (BGE embeddings + cosine distance), which already absorbs typos
-        # — "...segfult..." matches "...segfault..." without correction. The generic
-        # spell checker cannot tell unknown-but-correct jargon (malloc, sudo, struct)
-        # from a real typo, so running it on general queries mangles technical terms.
-        # We compute it only to gate opinion detection; passthrough stays uncorrected.
-        corrected = _spell_correct(raw_query)
-
-        if not _is_opinion(corrected):
+        if not _is_opinion(raw_query):
             normalized = raw_query.strip().lower()
             latency = (time.time() - start) * 1000
             logger.debug(
@@ -218,16 +141,23 @@ class NormalizerService:
             )
             return normalized
 
-        messages = _build_opinion_messages(corrected)
+        messages = _build_opinion_messages(raw_query)
         raw_output = await self.backend.complete(
             CompletionRequest(
                 model_name=self.model_name,
                 messages=messages,
                 max_tokens=8,
+                # An 8-token rewrite needs nothing near this window. It is set
+                # to match generalize(), which runs on the SAME model
+                # (gemma4:e2b): Ollama treats a changed runner option as a
+                # reload, so two different windows make it unload and reload
+                # the model between roles. Costs no extra memory - the model is
+                # already loaded at this window whenever generalize() runs.
+                num_ctx=OLLAMA_NUM_CTX,
                 temperature=0.0,
             )
         )
-        normalized = _postprocess(raw_output, raw_query)
+        normalized = _postprocess(raw_output.text, raw_query)
 
         latency = (time.time() - start) * 1000
         logger.debug(

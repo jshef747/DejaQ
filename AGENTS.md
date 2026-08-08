@@ -7,3 +7,17 @@
 ## Project Guidance
 
 Use `CLAUDE.md` as the canonical project guide for architecture, commands, environment variables, endpoints, coding conventions, and current status. Keep this file intentionally small so agent-specific rules do not drift from the main project documentation.
+
+## Running the test suite
+
+From `server/`, `uv run --group test pytest`. Two things bite on a fresh worktree and are not visible from the test files:
+
+- Run `uv run alembic upgrade head` first. Without it ~39 tests fail with `no such table: workspaces`.
+- The suite reads the repo's real `server/dejaq.db`, so leftover local workspaces change results - a workspace with id 1 (`demo`) makes routing tests take the configured-LLM path instead of the defaults branch they assert. Start from a freshly migrated DB when tests fail in ways the diff cannot explain.
+
+## Maintaining this file
+
+Keep this file for knowledge useful to almost every future agent session in this project.
+Do not repeat what the codebase already shows; point to the authoritative file or command instead.
+Prefer rewriting or pruning existing entries over appending new ones.
+When updating this file, preserve this bar for all agents and keep entries concise.

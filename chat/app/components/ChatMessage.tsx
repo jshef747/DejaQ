@@ -14,6 +14,15 @@ export interface AppMessage {
   content: string;
   ts: number;
   sourceLabel?: string;
+  // Data URL of an image the user attached to this message (user messages only).
+  imageUrl?: string | null;
+  // A non-image attachment (PDF/Markdown) has nothing to preview, so the bubble
+  // shows a named chip instead.
+  fileName?: string | null;
+  // True when the attachment was carried over from an earlier turn rather than
+  // picked for this one. The transcript shows both, but reuse is drawn smaller
+  // so the turn that actually uploaded stays identifiable at a glance.
+  attachmentSticky?: boolean;
   // Assistant-only fields:
   modelUsed?: string | null;
   interactionId?: string | null;
@@ -164,11 +173,66 @@ export default function ChatMessage({ message, onFeedback, onInspect, inspected 
             wordBreak: "break-word",
           }}
         >
-          {isUser ? message.content : <MarkdownContent content={message.content} />}
+          {isUser ? (
+            <>
+              {message.imageUrl && !message.attachmentSticky && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={message.imageUrl}
+                  alt="Attached"
+                  style={{
+                    borderRadius: "8px",
+                    display: "block",
+                    marginBottom: message.content ? "8px" : 0,
+                    maxHeight: "240px",
+                    maxWidth: "100%",
+                    objectFit: "contain",
+                  }}
+                />
+              )}
+              {(message.fileName || (message.imageUrl && message.attachmentSticky)) && (
+                <span
+                  style={{
+                    alignItems: "center",
+                    background: message.attachmentSticky ? "transparent" : "rgba(0,0,0,0.15)",
+                    border: message.attachmentSticky ? "1px dashed var(--accent-border)" : "none",
+                    borderRadius: "6px",
+                    display: "inline-flex",
+                    fontSize: message.attachmentSticky ? "11px" : "12px",
+                    gap: "6px",
+                    marginBottom: message.content ? "8px" : 0,
+                    maxWidth: "100%",
+                    opacity: message.attachmentSticky ? 0.75 : 1,
+                    overflow: "hidden",
+                    padding: "4px 8px",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {message.attachmentSticky ? (
+                    // Reuse, not upload — a recycle glyph rather than the file icon.
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
+                      <path d="M2.5 8a5.5 5.5 0 0 1 9.4-3.9M13.5 8a5.5 5.5 0 0 1-9.4 3.9" strokeLinecap="round" />
+                      <path d="M12 1.5v3h-3M4 14.5v-3h3" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  ) : (
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
+                      <path d="M9.5 1.5H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V5l-3.5-3.5z" strokeLinejoin="round" />
+                      <path d="M9.5 1.5V5H13" strokeLinejoin="round" />
+                    </svg>
+                  )}
+                  {message.fileName ?? "same image"}
+                </span>
+              )}
+              {message.content}
+            </>
+          ) : (
+            <MarkdownContent content={message.content} />
+          )}
         </div>
       </div>
 
-      {/* Metadata row — color-coded model badge + token count + timestamp */}
+      {/* Metadata row — color-coded model badge + timestamp */}
       {!isUser && (
         <div
           style={{
@@ -186,11 +250,6 @@ export default function ChatMessage({ message, onFeedback, onInspect, inspected 
           {message.sourceLabel && (
             <span style={{ color: "var(--fg-dimmer)", fontSize: "10px" }}>
               {message.sourceLabel}
-            </span>
-          )}
-          {(message.promptTokens !== undefined || message.completionTokens !== undefined) && (
-            <span style={{ color: "var(--fg-dimmer)", fontFamily: "var(--font-mono)", fontSize: "10px" }}>
-              {(message.promptTokens ?? 0) + (message.completionTokens ?? 0)} tok
             </span>
           )}
           <span style={{ color: "var(--fg-dimmer)", fontSize: "10px" }}>

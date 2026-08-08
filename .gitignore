@@ -15,10 +15,13 @@ server/celerybeat-schedule*
 docs/dejaq-presentation-brief.md
 docs/*.docx
 docs/*.pdf
+presentation/
 
 # Generated eval / load-test output
 evals/**/reports/
 evals/load-test-reports/
+evals/image_similarity/dataset/
+evals/image_similarity/dataset_copydays/
 
 # Python defaults
 __pycache__/
@@ -30,3 +33,4 @@ venv/
 
 # VS Code
 .vscode/
+docs/typo-resilience-report.md

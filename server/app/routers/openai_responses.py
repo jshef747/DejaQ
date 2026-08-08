@@ -1,10 +1,15 @@
+import base64
+import binascii
 import logging
 import time
 import uuid
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, BackgroundTasks, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+
+from app.config import MAX_ATTACHMENT_BYTES
+from app.dependencies.auth import ResolvedWorkspace, require_org_key
 
 from app.schemas.openai_compat import OAIMessage
 from app.schemas.openai_responses import (
@@ -19,12 +24,14 @@ from app.schemas.openai_responses import (
     ResponseContentPartAddedEvent,
     ResponseContentPartDoneEvent,
     ResponseCreatedEvent,
+    ResponseIncompleteEvent,
     ResponseOutputItemAddedEvent,
     ResponseOutputItemDoneEvent,
     ResponseOutputTextDeltaEvent,
     ResponseOutputTextDoneEvent,
 )
 from app.routers.openai_compat import ChatPipelineResult, PipelineError, run_chat_pipeline
+from app.services.file_text import kind_for as file_kind_for
 
 logger = logging.getLogger("dejaq.router.openai_responses")
 
@@ -43,9 +50,65 @@ def _new_item_id() -> str:
     return "msg-" + uuid.uuid4().hex[:16]
 
 
-def _responses_request_to_messages(req: OAIResponsesRequest) -> list[OAIMessage]:
-    """Convert Responses API input + instructions into a flat OAIMessage list."""
+def _parse_data_url(url: str, what: str = "image", default_mime: str = "image/jpeg") -> tuple[bytes, str]:
+    """Decode a `data:<mime>;base64,<payload>` URL into (bytes, mime).
+
+    v1 supports data URLs only (the common upload path). Remote http(s) URLs are
+    rejected — fetching them server-side is an SSRF risk not worth it here.
+    """
+    if not url.startswith("data:"):
+        raise PipelineError(400, f"Only data: {what} URLs are supported (base64-encode the {what}).")
+    try:
+        header, payload = url[len("data:"):].split(",", 1)
+        mime = header.split(";", 1)[0] or default_mime
+        data = base64.b64decode(payload)
+    except (ValueError, binascii.Error) as exc:
+        raise PipelineError(400, f"Malformed data {what} URL: {exc}") from exc
+    # A client-side size check is not a limit; anything speaking the API directly
+    # bypasses it. This is the one that holds.
+    if len(data) > MAX_ATTACHMENT_BYTES:
+        raise PipelineError(
+            400,
+            f"Attached {what} is too large ({len(data) / 1048576:.1f} MB); "
+            f"the limit is {MAX_ATTACHMENT_BYTES / 1048576:.0f} MB.",
+        )
+    return data, mime
+
+
+def _unsupported_file_detail(mime: str, filename: str | None) -> str:
+    """Message for an attachment we have no extractor for.
+
+    Same shape as the other attachment 400s: name what arrived, then name what is
+    accepted. This is a check on the TYPE, never on the bytes - a PDF we recognise
+    but cannot read (a scan, a corrupt file, an encrypted one) is still answered
+    normally and is only refused a cache entry. See services/file_text.py.
+    """
+    described = f"'{mime}'" if mime else "(no type given)"
+    if filename:
+        described += f" ({filename})"
+    return (
+        f"Unsupported file type {described}; attach a PDF (.pdf), a Word "
+        "document (.docx), or a Markdown/text/code file (any UTF-8 encoded "
+        "file, e.g. .md, .txt, .py, .json)."
+    )
+
+
+def _responses_request_to_messages(
+    req: OAIResponsesRequest,
+) -> tuple[list[OAIMessage], tuple[bytes, str] | None, tuple[bytes, str, str] | None]:
+    """Convert Responses API input + instructions into a flat OAIMessage list,
+    plus the single attached image as (bytes, mime) and the single attached file
+    as (bytes, mime, filename), if present.
+
+    v1 accepts at most ONE attachment across the whole request — one image or one
+    file, not several and not both. More than one raises HTTP 400. The single-slot
+    rule exists because the cache gate compares one attachment against one stored
+    fingerprint; several would need a combined identity that nothing downstream
+    understands yet.
+    """
     msgs: list[OAIMessage] = []
+    image: tuple[bytes, str] | None = None
+    file: tuple[bytes, str, str] | None = None
 
     if req.instructions:
         msgs.append(OAIMessage(role="system", content=req.instructions))
@@ -62,10 +125,32 @@ def _responses_request_to_messages(req: OAIResponsesRequest) -> list[OAIMessage]
                     for p in item.content
                     if p.type in ("input_text", "output_text") and p.text
                 ]
-                content = " ".join(text_parts)
-                msgs.append(OAIMessage(role=item.role, content=content))
+                for p in item.content:
+                    if p.type == "input_image" and p.image_url:
+                        if image is not None:
+                            raise PipelineError(400, "At most one image per request is supported.")
+                        image = _parse_data_url(p.image_url, "image", "image/jpeg")
+                    elif p.type == "input_file" and p.file_data:
+                        if file is not None:
+                            raise PipelineError(400, "At most one file per request is supported.")
+                        # No default MIME. Assuming application/pdf here handed
+                        # untyped bytes to pypdf while file_text read the same
+                        # empty MIME as Markdown; now both call an absent MIME
+                        # unknown and the filename decides.
+                        data, mime = _parse_data_url(p.file_data, "file", "")
+                        # A type we have no extractor for used to be decoded,
+                        # logged and then dropped, and the request answered 200
+                        # as if nothing had been attached. Reject it like every
+                        # other unusable attachment shape instead.
+                        if not file_kind_for(data, mime, p.filename):
+                            raise PipelineError(400, _unsupported_file_detail(mime, p.filename))
+                        file = (data, mime, p.filename or "")
+                msgs.append(OAIMessage(role=item.role, content=" ".join(text_parts)))
 
-    return msgs
+    if image is not None and file is not None:
+        raise PipelineError(400, "Attach either an image or a file, not both.")
+
+    return msgs, image, file
 
 
 def _build_response_body(
@@ -74,14 +159,18 @@ def _build_response_body(
     item_id: str,
     response_id: str,
 ) -> dict:
+    status = "incomplete" if result.finish_reason == "length" else "completed"
     return OAIResponse(
         id=response_id,
         created_at=_now_ts(),
         model=model,
+        status=status,
+        incomplete_details={"reason": "max_output_tokens"} if status == "incomplete" else None,
         output=[
             OAIResponseOutputMessage(
                 id=item_id,
                 content=[OAIResponseContentPart(text=result.answer)],
+                status=status,
             )
         ],
         output_text=result.answer,
@@ -129,16 +218,24 @@ async def _stream_responses_generator(
     part_done = {"type": "output_text", "text": full_text}
     yield f"event: response.content_part.done\ndata: {ResponseContentPartDoneEvent(item_id=item_id, part=part_done).model_dump_json()}\n\n"
 
+    status = "incomplete" if result.finish_reason == "length" else "completed"
     item_done = {
         "id": item_id, "type": "message", "role": "assistant",
         "content": [{"type": "output_text", "text": full_text}],
-        "status": "completed",
+        "status": status,
     }
     yield f"event: response.output_item.done\ndata: {ResponseOutputItemDoneEvent(item=item_done).model_dump_json()}\n\n"
 
-    completed_response = _build_response_body(result, model, item_id, response_id)
-    completed_response["status"] = "completed"
-    yield f"event: response.completed\ndata: {ResponseCompletedEvent(response=completed_response).model_dump_json()}\n\n"
+    final_response = _build_response_body(result, model, item_id, response_id)
+    # A truncated stream ends on its own terminal event. Sending
+    # `response.completed` with a payload that says "incomplete" tells a client
+    # that branches on the event type the opposite of what happened.
+    terminal = (
+        ResponseIncompleteEvent(response=final_response)
+        if status == "incomplete"
+        else ResponseCompletedEvent(response=final_response)
+    )
+    yield f"event: {terminal.type}\ndata: {terminal.model_dump_json()}\n\n"
 
 
 @router.post("/responses")
@@ -146,10 +243,10 @@ async def responses(
     oai_request: OAIResponsesRequest,
     raw_request: Request,
     background_tasks: BackgroundTasks,
+    resolved_workspace: ResolvedWorkspace = Depends(require_org_key),
 ):
-    messages = _responses_request_to_messages(oai_request)
-
     try:
+        messages, image, file = _responses_request_to_messages(oai_request)
         result = await run_chat_pipeline(
             messages=messages,
             model=oai_request.model,
@@ -157,6 +254,8 @@ async def responses(
             max_tokens=oai_request.max_output_tokens,
             raw_request=raw_request,
             background_tasks=background_tasks,
+            image=image,
+            file=file,
         )
     except PipelineError as exc:
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})

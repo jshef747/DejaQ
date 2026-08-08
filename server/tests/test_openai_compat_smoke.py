@@ -1,8 +1,23 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
 from app.routers import openai_compat
 from app.services.memory_chromaDB import CacheLookupResult
+
+# /v1/chat/completions requires a valid workspace API key (401 otherwise).
+# Every test client sends this token; the autouse fixture below makes the key
+# cache accept it. Tests that stub _KEY_CACHE.resolve themselves override it.
+_AUTH = {"Authorization": "Bearer test-key"}
+
+
+@pytest.fixture(autouse=True)
+def _stub_api_key(monkeypatch):
+    from app.middleware.api_key import _KEY_CACHE
+
+    monkeypatch.setattr(
+        _KEY_CACHE, "resolve", lambda token: ("demo", 1) if token == "test-key" else None
+    )
 
 
 class StubEnricher:
@@ -28,9 +43,29 @@ class StubAdjuster:
         return general_answer
 
 
+class MarkerAdjuster:
+    """Returns a value distinguishable from general_answer, so a test can
+    prove whether adjust() ran just by inspecting the served content -
+    StubAdjuster's passthrough can't tell a skip from a no-op rewrite."""
+
+    async def generalize(self, answer: str) -> str:
+        return answer
+
+    async def adjust(self, original_query: str, general_answer: str) -> str:
+        return "ADJUSTED: " + general_answer
+
+
 class StubRouter:
     async def generate_local_response(self, query: str, history=None, max_tokens=1024, system_prompt=None):
-        return "Paris is the capital of France.", 12.0
+        return "Paris is the capital of France.", 12.0, "stop"
+
+
+class TruncatedStubRouter:
+    """Generation that spent its whole token budget: Ollama's own signal says
+    "length", and the text itself reads as a clean prefix."""
+
+    async def generate_local_response(self, query: str, history=None, max_tokens=1024, system_prompt=None):
+        return "Paris is the capital of Fra", 12.0, "length"
 
 
 class StubClassifier:
@@ -95,6 +130,140 @@ class StubHitMemory:
         return None
 
 
+class StubHitMemoryBeyondAdjustSkip:
+    """Trusted-tier hit (distance well under CACHE_TRUST_DISTANCE) but past
+    ADJUSTER_SKIP_DISTANCE - adjust() must still run for this one."""
+
+    def lookup_cache(self, clean_query: str):
+        return CacheLookupResult(
+            hit=True,
+            generalized_answer="Cached Paris answer.",
+            entry_id="docfar",
+            distance=0.10,
+            matched_query="capital of france",
+            nearest_distance=0.10,
+            nearest_prompt="capital of france",
+        )
+
+    def check_cache(self, clean_query: str):
+        return None
+
+    def increment_hit_count(self, doc_id: str):
+        return None
+
+
+class StubBandMemory:
+    """Cache hit in the validator-guarded band (requires_validation=True)."""
+
+    def lookup_cache(self, clean_query: str):
+        return CacheLookupResult(
+            hit=True,
+            generalized_answer="Cached Paris answer.",
+            entry_id="docband",
+            distance=0.18,
+            matched_query="capital of france",
+            nearest_distance=0.18,
+            nearest_prompt="capital of france",
+            requires_validation=True,
+        )
+
+    def check_cache(self, clean_query: str):
+        return None
+
+    def increment_hit_count(self, doc_id: str):
+        return None
+
+
+class StubRescueMemory:
+    """Cache hit from the lexical-rescue tier (past band, word-aligned)."""
+
+    def lookup_cache(self, clean_query: str):
+        return CacheLookupResult(
+            hit=True,
+            generalized_answer="Cached Moscow answer.",
+            entry_id="docrescue",
+            distance=0.40,
+            matched_query="what is the capital of russia?",
+            nearest_distance=0.40,
+            nearest_prompt="what is the capital of russia?",
+            requires_validation=True,
+            rescued=True,
+        )
+
+    def check_cache(self, clean_query: str):
+        return None
+
+    def increment_hit_count(self, doc_id: str):
+        return None
+
+
+class StubMismatchBandMemory:
+    """Band hit whose stored query differs by one word (list vs string)."""
+
+    def lookup_cache(self, clean_query: str):
+        return CacheLookupResult(
+            hit=True,
+            generalized_answer="Use s[::-1].",
+            entry_id="docswap",
+            distance=0.11,
+            matched_query="how do i reverse a string in python?",
+            nearest_distance=0.11,
+            nearest_prompt="how do i reverse a string in python?",
+            requires_validation=False,
+            mismatches=(("list", "string"),),
+        )
+
+    def check_cache(self, clean_query: str):
+        return None
+
+    def increment_hit_count(self, doc_id: str):
+        return None
+
+
+class HintCapturingValidator:
+    def __init__(self) -> None:
+        self.hint = "UNSET"
+
+    async def validate(self, new_query, cached_query, cached_answer, mismatch_hint=None):
+        self.hint = mismatch_hint
+        return True, "VALID"
+
+
+class StubValidatorValid:
+    async def validate(self, new_query, cached_query, cached_answer):
+        return True, "VALID"
+
+
+class StubValidatorInvalid:
+    async def validate(self, new_query, cached_query, cached_answer):
+        return False, "INVALID"
+
+
+class ExplodingValidator:
+    async def validate(self, *args, **kwargs):
+        raise AssertionError("validator should not be called")
+
+
+def no_stored_credential(session, workspace_id, provider):
+    """Stub credential lookup: this workspace has none, and none is not an error.
+
+    Replaces the router's get_workspace_provider_key, which reads the row before
+    it needs an encryption key - so a test needs neither.
+    """
+    return None
+
+
+def stored_credential(key: str, providers: tuple[str, ...] | None = None):
+    """Stub credential lookup that hands back `key` (for `providers`, if given)."""
+
+    def _lookup(session, workspace_id, provider):
+        if providers is not None and provider not in providers:
+            return None
+        return key
+
+    return _lookup
+
+
 class CapturingRegistry:
     def __init__(self, interaction_id: str = "int_test") -> None:
         self.interaction_id = interaction_id
@@ -131,10 +300,10 @@ def test_chat_completions_smoke_preserves_response_shape(monkeypatch):
     monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
-    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
 
-    client = TestClient(app)
+    client = TestClient(app, headers=_AUTH)
     response = client.post(
         "/v1/chat/completions",
         json={
@@ -164,11 +333,11 @@ def test_local_answer_registers_interaction_and_emits_tier_headers(monkeypatch):
     monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
-    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
     monkeypatch.setattr(openai_compat, "response_registry", registry, raising=False)
 
-    client = TestClient(app)
+    client = TestClient(app, headers=_AUTH)
     response = client.post(
         "/v1/chat/completions",
         json={
@@ -198,7 +367,7 @@ def test_cache_answer_registers_interaction_and_emits_tier_headers(monkeypatch):
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
     monkeypatch.setattr(openai_compat, "response_registry", registry, raising=False)
 
-    client = TestClient(app)
+    client = TestClient(app, headers=_AUTH)
     response = client.post(
         "/v1/chat/completions",
         json={
@@ -214,6 +383,103 @@ def test_cache_answer_registers_interaction_and_emits_tier_headers(monkeypatch):
     assert response.headers["x-dejaq-response-id"].endswith(":doc123")
     assert registry.calls[0]["served_tier"] == "cache"
     assert registry.calls[0]["response_id"].endswith(":doc123")
+
+
+def test_adjust_skipped_for_close_single_turn_repeat(monkeypatch):
+    """ADJUSTER_SKIP_DISTANCE: a single-turn near-duplicate of a cached
+    question (distance 0.04, no prior conversation) must serve the stored
+    answer verbatim - no adjust() call, no validator call. Uses an
+    ExplodingValidator to prove the validator is never reached either (it
+    already skips below VALIDATOR_SKIP_DISTANCE independent of this change);
+    MarkerAdjuster proves adjust() specifically was skipped, since its output
+    would be distinguishable from the raw cached text."""
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", MarkerAdjuster())
+    monkeypatch.setattr(openai_compat, "_validator", ExplodingValidator())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubHitMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+
+    client = TestClient(app, headers=_AUTH)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "what is teh capitol of frnace?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["choices"][0]["message"]["content"] == "Cached Paris answer."
+
+
+def test_adjust_runs_for_single_turn_hit_beyond_skip_distance(monkeypatch):
+    """A single-turn hit past ADJUSTER_SKIP_DISTANCE (distance 0.10, still
+    inside the trusted tier) is not close enough to assume there is no tone
+    gap - adjust() must still run."""
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", MarkerAdjuster())
+    monkeypatch.setattr(openai_compat, "_validator", StubValidatorValid())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubHitMemoryBeyondAdjustSkip())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+
+    client = TestClient(app, headers=_AUTH)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "what's the capital of france anyway?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["choices"][0]["message"]["content"] == "ADJUSTED: Cached Paris answer."
+
+
+def test_adjust_runs_for_multiturn_hit_even_when_close(monkeypatch):
+    """The single-turn restriction is what protects a genuine 'give me the
+    short version' follow-up (see config.py:ADJUSTER_SKIP_DISTANCE): even at
+    a distance inside the skip window, a hit reached through prior
+    conversation history must still go through adjust(), since only the
+    conversation - not the distance - can tell a repeat from a rewrite ask."""
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", MarkerAdjuster())
+    monkeypatch.setattr(openai_compat, "_validator", ExplodingValidator())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubHitMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+
+    client = TestClient(app, headers=_AUTH)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [
+                {"role": "user", "content": "What is the capital of France?"},
+                {"role": "assistant", "content": "Cached Paris answer."},
+                {"role": "user", "content": "give me the short version"},
+            ],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["choices"][0]["message"]["content"] == "ADJUSTED: Cached Paris answer."
 
 
 def test_cache_miss_includes_difficulty_and_nearest_cache_headers(monkeypatch, caplog):
@@ -240,10 +506,10 @@ def test_cache_miss_includes_difficulty_and_nearest_cache_headers(monkeypatch, c
         ),
     )
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
-    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
 
-    client = TestClient(app)
+    client = TestClient(app, headers=_AUTH)
 
     with caplog.at_level("INFO", logger="dejaq.router.openai_compat"):
         response = client.post(
@@ -282,10 +548,10 @@ def test_cache_miss_logs_enriched_prompt_when_enricher_succeeds(monkeypatch, cap
     monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
-    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
 
-    client = TestClient(app)
+    client = TestClient(app, headers=_AUTH)
 
     with caplog.at_level("INFO", logger="dejaq.router.openai_compat"):
         response = client.post(
@@ -318,10 +584,10 @@ def test_cache_miss_omits_nearest_cache_headers_when_collection_empty(monkeypatc
     monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
-    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
 
-    client = TestClient(app)
+    client = TestClient(app, headers=_AUTH)
     response = client.post(
         "/v1/chat/completions",
         json={
@@ -346,7 +612,7 @@ def test_cache_hit_includes_nearest_cache_headers_without_difficulty_score(monke
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubHitMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
 
-    client = TestClient(app)
+    client = TestClient(app, headers=_AUTH)
 
     with caplog.at_level("INFO", logger="dejaq.router.openai_compat"):
         response = client.post(
@@ -391,10 +657,10 @@ def test_force_easy_local_header_skips_classifier(monkeypatch):
     monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
-    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
 
-    client = TestClient(app)
+    client = TestClient(app, headers=_AUTH)
     response = client.post(
         "/v1/chat/completions",
         headers={"X-DejaQ-Routing-Mode": "easy_local"},
@@ -422,9 +688,10 @@ def test_force_hard_external_header_skips_classifier(monkeypatch):
     monkeypatch.setattr(openai_compat, "_classifier", ExplodingClassifier())
     monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
+    monkeypatch.setattr(openai_compat, "get_workspace_provider_key", no_stored_credential)
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
 
-    client = TestClient(app)
+    client = TestClient(app, headers=_AUTH)
     response = client.post(
         "/v1/chat/completions",
         headers={"X-DejaQ-Routing-Mode": "hard_external"},
@@ -466,7 +733,7 @@ def test_auto_routing_uses_org_threshold_zero_to_route_external(monkeypatch):
     monkeypatch.setattr(openai_compat, "_external_llm", external)
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
-    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
     monkeypatch.setattr(
         openai_compat,
@@ -476,17 +743,18 @@ def test_auto_routing_uses_org_threshold_zero_to_route_external(monkeypatch):
             routing_threshold=0.0,
         ),
     )
+    from cryptography.fernet import Fernet
+
+    monkeypatch.setattr("app.config.CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.setattr(
-        openai_compat.CredentialService,
-        "get_decrypted_key",
-        lambda self, session, workspace_id, provider: "sk-openai-live",
+        openai_compat, "get_workspace_provider_key", stored_credential("sk-openai-live")
     )
 
     from app.middleware.api_key import _KEY_CACHE
 
     monkeypatch.setattr(_KEY_CACHE, "resolve", lambda token: ("acme", 123))
 
-    client = TestClient(app)
+    client = TestClient(app, headers=_AUTH)
     response = client.post(
         "/v1/chat/completions",
         headers={"Authorization": "Bearer org-key"},
@@ -504,6 +772,69 @@ def test_auto_routing_uses_org_threshold_zero_to_route_external(monkeypatch):
     assert external.provider == "openai"
     assert external.api_key == "sk-openai-live"
     assert external.request.model == "gpt-5.4-mini"
+
+
+def test_external_route_reports_real_provider_usage_not_heuristic(monkeypatch):
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    class CapturingExternalLLM:
+        async def generate_response(self, request, provider=None, api_key=None):
+            from app.schemas.chat import ExternalLLMResponse
+
+            # Real provider counts (as Anthropic returns them) deliberately far
+            # from what len(text.split()) * 1.3 would compute for this short
+            # query/answer pair - if the route falls back to the heuristic,
+            # these assertions fail.
+            return ExternalLLMResponse(
+                text="short answer",
+                model_used=request.model,
+                prompt_tokens=44,
+                completion_tokens=300,
+                latency_ms=10.0,
+            )
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_classifier", HardClassifier())
+    monkeypatch.setattr(openai_compat, "_external_llm", CapturingExternalLLM())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
+    monkeypatch.setattr(
+        openai_compat,
+        "get_workspace_provider_key",
+        stored_credential("sk-ant-live", providers=("anthropic",)),
+    )
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
+    monkeypatch.setattr(openai_compat, "USE_CELERY", False)
+    monkeypatch.setattr(
+        openai_compat,
+        "_read_effective_llm_config",
+        lambda workspace_slug, workspace_id: openai_compat.EffectiveLlmConfig(
+            external_model="claude-sonnet-4-6",
+            routing_threshold=0.75,
+        ),
+    )
+
+    from cryptography.fernet import Fernet
+
+    monkeypatch.setattr("app.config.CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode())
+
+    client = TestClient(app, headers=_AUTH)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "Explain a hard thing."}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    usage = response.json()["usage"]
+    assert usage["prompt_tokens"] == 44
+    assert usage["completion_tokens"] == 300
+    assert usage["total_tokens"] == 344
 
 
 def test_force_hard_external_uses_org_external_model_provider(monkeypatch):
@@ -537,7 +868,7 @@ def test_force_hard_external_uses_org_external_model_provider(monkeypatch):
     monkeypatch.setattr(openai_compat, "_external_llm", external)
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
-    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
     monkeypatch.setattr(
         openai_compat,
@@ -547,17 +878,20 @@ def test_force_hard_external_uses_org_external_model_provider(monkeypatch):
             routing_threshold=0.75,
         ),
     )
+    from cryptography.fernet import Fernet
+
+    monkeypatch.setattr("app.config.CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.setattr(
-        openai_compat.CredentialService,
-        "get_decrypted_key",
-        lambda self, session, workspace_id, provider: "sk-ant-live" if provider == "anthropic" else None,
+        openai_compat,
+        "get_workspace_provider_key",
+        stored_credential("sk-ant-live", providers=("anthropic",)),
     )
 
     from app.middleware.api_key import _KEY_CACHE
 
     monkeypatch.setattr(_KEY_CACHE, "resolve", lambda token: ("acme", 123))
 
-    client = TestClient(app)
+    client = TestClient(app, headers=_AUTH)
     response = client.post(
         "/v1/chat/completions",
         headers={
@@ -586,7 +920,7 @@ def test_weak_cpu_profile_uses_weak_local_services(monkeypatch):
         model_name = "qwen_0_5b"
 
         async def generate_local_response(self, query: str, history=None, max_tokens=1024, system_prompt=None):
-            return "weak local answer", 10.0
+            return "weak local answer", 10.0, "stop"
 
     monkeypatch.setattr(openai_compat, "get_context_enricher_service", lambda model_name=None: StubEnricher())
     monkeypatch.setattr(openai_compat, "get_normalizer_service", lambda model_name=None: StubNormalizer())
@@ -596,10 +930,10 @@ def test_weak_cpu_profile_uses_weak_local_services(monkeypatch):
     monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
-    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
 
-    client = TestClient(app)
+    client = TestClient(app, headers=_AUTH)
     response = client.post(
         "/v1/chat/completions",
         headers={
@@ -636,10 +970,10 @@ def test_celery_store_keeps_legacy_args_and_sends_profile_header(monkeypatch):
     monkeypatch.setattr(openai_compat, "generalize_and_store_task", FakeTask())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
-    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (True, "test"))
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (True, "test"))
     monkeypatch.setattr(openai_compat, "USE_CELERY", True)
 
-    client = TestClient(app)
+    client = TestClient(app, headers=_AUTH)
     response = client.post(
         "/v1/chat/completions",
         headers={
@@ -655,6 +989,8 @@ def test_celery_store_keeps_legacy_args_and_sends_profile_header(monkeypatch):
 
     assert response.status_code == 200
     assert len(captured["args"]) == 5
+    # Stored under the raw normalized query — no spell correction anywhere.
+    assert captured["args"][0] == "what is the capital of france?"
     assert captured["headers"] == {"dejaq_model_profile": "weak_cpu"}
 
 
@@ -670,10 +1006,10 @@ def test_chat_completions_logs_compact_miss_summary(monkeypatch, caplog):
     monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
-    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
 
-    client = TestClient(app)
+    client = TestClient(app, headers=_AUTH)
 
     with caplog.at_level("INFO", logger="dejaq.router.openai_compat"):
         response = client.post(
@@ -709,7 +1045,7 @@ def test_chat_completions_logs_compact_hit_summary(monkeypatch, caplog):
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubHitMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
 
-    client = TestClient(app)
+    client = TestClient(app, headers=_AUTH)
 
     with caplog.at_level("INFO", logger="dejaq.router.openai_compat"):
         response = client.post(
@@ -749,10 +1085,10 @@ def test_chat_completions_logs_summary_when_enricher_fails(monkeypatch, caplog):
     monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
-    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean: (False, "test"))
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
 
-    client = TestClient(app)
+    client = TestClient(app, headers=_AUTH)
 
     with caplog.at_level("INFO", logger="dejaq.router.openai_compat"):
         response = client.post(
@@ -788,9 +1124,10 @@ def test_hard_query_without_org_credential_returns_402_without_env_fallback(monk
     monkeypatch.setattr(openai_compat, "_classifier", HardClassifier())
     monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
+    monkeypatch.setattr(openai_compat, "get_workspace_provider_key", no_stored_credential)
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
 
-    client = TestClient(app)
+    client = TestClient(app, headers=_AUTH)
     response = client.post(
         "/v1/chat/completions",
         json={
@@ -802,6 +1139,406 @@ def test_hard_query_without_org_credential_returns_402_without_env_fallback(monk
 
     assert response.status_code == 402
     assert response.json()["detail"].startswith("No google API key configured")
+
+
+def test_band_hit_served_when_validator_valid(monkeypatch):
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    registry = CapturingRegistry("int_band")
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "_validator", StubValidatorValid())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubBandMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+    monkeypatch.setattr(openai_compat, "response_registry", registry, raising=False)
+
+    client = TestClient(app, headers=_AUTH)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == "Cached Paris answer."
+    assert response.headers["x-dejaq-tier"] == "cache"
+    assert response.headers["x-dejaq-validator-verdict"] == "valid"
+
+
+def test_band_hit_falls_through_to_miss_when_validator_invalid(monkeypatch):
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "_llm_router", StubRouter())
+    monkeypatch.setattr(openai_compat, "_classifier", StubClassifier())
+    monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
+    monkeypatch.setattr(openai_compat, "_validator", StubValidatorInvalid())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubBandMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
+    monkeypatch.setattr(openai_compat, "USE_CELERY", False)
+
+    client = TestClient(app, headers=_AUTH)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == "Paris is the capital of France."
+    assert response.headers["x-dejaq-tier"] == "local"
+    assert response.headers["x-dejaq-validator-verdict"] == "invalid"
+
+
+def test_missing_api_key_returns_401():
+    client = TestClient(app)  # no Authorization header
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "stream": False,
+        },
+    )
+    assert response.status_code == 401
+
+
+def test_invalid_api_key_returns_401():
+    client = TestClient(app, headers={"Authorization": "Bearer not-a-real-key"})
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "stream": False,
+        },
+    )
+    assert response.status_code == 401
+
+
+def test_responses_endpoint_requires_api_key():
+    client = TestClient(app)  # no Authorization header
+    response = client.post(
+        "/v1/responses",
+        json={"model": "gpt-4o-mini", "input": "What is the capital of France?"},
+    )
+    assert response.status_code == 401
+
+
+def test_rescued_hit_served_when_validator_valid(monkeypatch):
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    alias_calls: list[tuple] = []
+
+    def _noop_alias(namespace, alias_query, source_entry_id):
+        # record synchronously at call time; return a no-op coroutine for create_task
+        alias_calls.append((namespace, alias_query, source_entry_id))
+
+        async def _done():
+            return None
+
+        return _done()
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "_validator", StubValidatorValid())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubRescueMemory())
+    monkeypatch.setattr(openai_compat, "_store_alias_bg", _noop_alias)
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+    monkeypatch.setattr(openai_compat, "CACHE_ALIAS_ENABLED", True)
+
+    client = TestClient(app, headers=_AUTH)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "what is teh captial of rusia?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == "Cached Moscow answer."
+    assert response.headers["x-dejaq-tier"] == "cache"
+    assert response.headers["x-dejaq-validator-verdict"] == "valid"
+    # Alias learning fired for the validated rescue hit
+    assert alias_calls and alias_calls[0][2] == "docrescue"
+
+
+def test_rescued_hit_misses_when_validator_invalid(monkeypatch):
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "_llm_router", StubRouter())
+    monkeypatch.setattr(openai_compat, "_classifier", StubClassifier())
+    monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
+    monkeypatch.setattr(openai_compat, "_validator", StubValidatorInvalid())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubRescueMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
+    monkeypatch.setattr(openai_compat, "USE_CELERY", False)
+
+    client = TestClient(app, headers=_AUTH)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "what is teh captial of rusia?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-dejaq-tier"] == "local"
+    assert response.headers["x-dejaq-validator-verdict"] == "invalid"
+
+
+def test_mismatch_hint_reaches_validator(monkeypatch):
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    validator = HintCapturingValidator()
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "_validator", validator)
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMismatchBandMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+
+    client = TestClient(app, headers=_AUTH)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "how do i reverse a list in python?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert validator.hint == "'list' vs 'string'"
+
+
+def test_no_alias_stored_for_trusted_hit(monkeypatch):
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    alias_calls: list[tuple] = []
+
+    def _noop_alias(namespace, alias_query, source_entry_id):
+        # record synchronously at call time; return a no-op coroutine for create_task
+        alias_calls.append((namespace, alias_query, source_entry_id))
+
+        async def _done():
+            return None
+
+        return _done()
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubHitMemory())
+    monkeypatch.setattr(openai_compat, "_store_alias_bg", _noop_alias)
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+    monkeypatch.setattr(openai_compat, "CACHE_ALIAS_ENABLED", True)
+
+    client = TestClient(app, headers=_AUTH)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-dejaq-tier"] == "cache"
+    assert not alias_calls  # trusted hits don't need aliases
+
+
+def _patch_for_truncation(monkeypatch, router):
+    """Minimum wiring for a cache miss answered by `router`, no models loaded."""
+
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "_llm_router", router)
+    monkeypatch.setattr(openai_compat, "_classifier", StubClassifier())
+    monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
+    monkeypatch.setattr(openai_compat, "USE_CELERY", False)
+    return TestClient(app, headers=_AUTH)
+
+
+def _sse_events(response) -> list[dict]:
+    """Parse `data:` payloads out of an SSE body, skipping the [DONE] sentinel."""
+    import json
+
+    return [
+        json.loads(line[len("data: "):])
+        for line in response.text.splitlines()
+        if line.startswith("data: ") and line != "data: [DONE]"
+    ]
+
+
+def test_truncated_miss_reports_length_on_chat_completions(monkeypatch):
+    """The wire-level end of the truncation signal. Without it a client that
+    sends a small max_tokens gets a cut-off answer labelled finish_reason=stop,
+    i.e. told the model finished when it did not."""
+    client = _patch_for_truncation(monkeypatch, TruncatedStubRouter())
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "max_tokens": 8,
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["finish_reason"] == "length"
+
+
+def test_untruncated_miss_still_reports_stop_on_chat_completions(monkeypatch):
+    """Control for the three tests around it: honest reporting has to mean
+    "length" only when the generator said so, not "length" everywhere."""
+    client = _patch_for_truncation(monkeypatch, StubRouter())
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.json()["choices"][0]["finish_reason"] == "stop"
+
+
+def test_truncated_miss_reports_length_on_the_final_stream_chunk(monkeypatch):
+    client = _patch_for_truncation(monkeypatch, TruncatedStubRouter())
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "max_tokens": 8,
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 200
+    chunks = _sse_events(response)
+    assert chunks[-1]["choices"][0]["finish_reason"] == "length"
+
+
+def test_truncated_miss_reports_incomplete_on_responses(monkeypatch):
+    """/v1/responses carries the same signal as a status, top-level and on the
+    output item - an SDK reads either one."""
+    client = _patch_for_truncation(monkeypatch, TruncatedStubRouter())
+
+    response = client.post(
+        "/v1/responses",
+        json={
+            "model": "gpt-4o-mini",
+            "input": "What is the capital of France?",
+            "max_output_tokens": 8,
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "incomplete"
+    assert payload["output"][0]["status"] == "incomplete"
+    assert payload["incomplete_details"] == {"reason": "max_output_tokens"}
+
+
+def test_untruncated_miss_still_reports_completed_on_responses(monkeypatch):
+    client = _patch_for_truncation(monkeypatch, StubRouter())
+
+    response = client.post(
+        "/v1/responses",
+        json={"model": "gpt-4o-mini", "input": "What is the capital of France?", "stream": False},
+    )
+
+    payload = response.json()
+    assert payload["status"] == "completed"
+    assert payload["output"][0]["status"] == "completed"
+    assert payload["incomplete_details"] is None
+
+
+def test_truncated_miss_reports_incomplete_on_streamed_responses(monkeypatch):
+    """A client that branches on the SSE event type has to see the truncation
+    there too - a `response.completed` event carrying `status: "incomplete"`
+    says the opposite of what happened."""
+    client = _patch_for_truncation(monkeypatch, TruncatedStubRouter())
+
+    response = client.post(
+        "/v1/responses",
+        json={
+            "model": "gpt-4o-mini",
+            "input": "What is the capital of France?",
+            "max_output_tokens": 8,
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 200
+    events = _sse_events(response)
+    item_done = [e for e in events if e.get("item", {}).get("status") == "incomplete"]
+    assert item_done, "no output_item.done carried the incomplete status"
+    assert "event: response.incomplete\n" in response.text
+    assert "event: response.completed\n" not in response.text
+    assert events[-1]["type"] == "response.incomplete"
+    assert events[-1]["response"]["status"] == "incomplete"
+    assert events[-1]["response"]["incomplete_details"] == {"reason": "max_output_tokens"}
+
+
+def test_untruncated_miss_still_reports_completed_on_streamed_responses(monkeypatch):
+    """Control: the completed path is untouched - same terminal event, no
+    incomplete_details."""
+    client = _patch_for_truncation(monkeypatch, StubRouter())
+
+    response = client.post(
+        "/v1/responses",
+        json={"model": "gpt-4o-mini", "input": "What is the capital of France?", "stream": True},
+    )
+
+    assert response.status_code == 200
+    events = _sse_events(response)
+    assert "event: response.completed\n" in response.text
+    assert "event: response.incomplete\n" not in response.text
+    assert events[-1]["type"] == "response.completed"
+    assert events[-1]["response"]["status"] == "completed"
+    assert events[-1]["response"]["incomplete_details"] is None
 
 
 def test_hard_query_unmapped_external_model_returns_422(monkeypatch):
@@ -816,7 +1553,7 @@ def test_hard_query_unmapped_external_model_returns_422(monkeypatch):
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
 
-    client = TestClient(app)
+    client = TestClient(app, headers=_AUTH)
     response = client.post(
         "/v1/chat/completions",
         json={

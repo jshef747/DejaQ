@@ -5,9 +5,13 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class OAIResponsesContentPart(BaseModel):
-    type: Literal["input_text", "input_image", "output_text"]
+    type: Literal["input_text", "input_image", "input_file", "output_text"]
     text: Optional[str] = None
     image_url: Optional[str] = None
+    # input_file, matching OpenAI's shape. `file_data` is a data: URL, same as
+    # image_url — DejaQ takes no remote URLs and no file ids.
+    filename: Optional[str] = None
+    file_data: Optional[str] = None
 
 
 class OAIResponsesInputItem(BaseModel):
@@ -55,7 +59,10 @@ class OAIResponseOutputMessage(BaseModel):
     type: Literal["message"] = "message"
     role: Literal["assistant"] = "assistant"
     content: list[OAIResponseContentPart]
-    status: Literal["completed"] = "completed"
+    # "incomplete" when the token budget cut the answer off (see
+    # ChatPipelineResult.finish_reason) - reported honestly instead of
+    # always claiming success, the Responses API's own vocabulary for this.
+    status: Literal["completed", "incomplete"] = "completed"
 
 
 class OAIResponse(BaseModel):
@@ -63,7 +70,13 @@ class OAIResponse(BaseModel):
     object: Literal["response"] = "response"
     created_at: int
     model: str
-    status: Literal["completed"] = "completed"
+    # "incomplete" when the token budget cut the answer off (see
+    # ChatPipelineResult.finish_reason) - reported honestly instead of
+    # always claiming success, the Responses API's own vocabulary for this.
+    status: Literal["completed", "incomplete"] = "completed"
+    # Machine-readable reason for an "incomplete" status, the Responses API's
+    # own field for it; null on a completed response.
+    incomplete_details: Optional[dict] = None
     output: list[OAIResponseOutputMessage]
     output_text: str
     usage: OAIResponseUsage
@@ -122,4 +135,15 @@ class ResponseOutputItemDoneEvent(BaseModel):
 
 class ResponseCompletedEvent(BaseModel):
     type: Literal["response.completed"] = "response.completed"
+    response: dict
+
+
+class ResponseIncompleteEvent(BaseModel):
+    """Terminal event for a stream the token budget cut off.
+
+    The Responses API's own vocabulary: a truncated stream ends on
+    `response.incomplete`, not on `response.completed` carrying a contradicting
+    status, so a client that branches on the event type sees the truncation.
+    """
+    type: Literal["response.incomplete"] = "response.incomplete"
     response: dict

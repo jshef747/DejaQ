@@ -32,13 +32,26 @@ function resolveBaseUrl(override?: string | null): string {
   return fallback.trim().replace(/\/$/, "");
 }
 
-export function getDejaQConfig(serverOverride?: string | null): DejaQConfig | NextResponse {
-  const apiKey = process.env.DEJAQ_API_KEY?.trim();
+// Resolve the workspace API key. A client-supplied override (X-DejaQ-Key, set
+// from the chat Settings modal so a workspace created during dev testing can
+// be used without a restart) wins when non-empty; otherwise fall back to
+// DEJAQ_API_KEY in chat/.env.local.
+function resolveApiKey(override?: string | null): string {
+  const candidate = (override ?? "").trim();
+  return candidate || (process.env.DEJAQ_API_KEY?.trim() ?? "");
+}
+
+export function getDejaQConfig(
+  serverOverride?: string | null,
+  keyOverride?: string | null,
+): DejaQConfig | NextResponse {
+  const apiKey = resolveApiKey(keyOverride);
   if (!apiKey) {
     return NextResponse.json(
       {
         code: "missing_dejaq_api_key",
-        message: "Chat app is missing DEJAQ_API_KEY in chat/.env.local.",
+        message:
+          "No DejaQ API key configured. Paste one into Settings, or set DEJAQ_API_KEY in chat/.env.local.",
       },
       { status: 424 },
     );
@@ -58,6 +71,9 @@ export function buildGatewayHeaders(
   deptSlug?: string,
   modelProfile: ModelProfile = "default",
   routingMode: RoutingMode = "auto",
+  // True when the attachment was carried over from an earlier turn rather than
+  // freshly picked. Diagnostic only — the server logs it and changes nothing.
+  attachmentSticky = false,
 ): HeadersInit {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -68,6 +84,7 @@ export function buildGatewayHeaders(
 
   const dept = deptSlug?.trim();
   if (dept) headers["X-DejaQ-Department"] = dept;
+  if (attachmentSticky) headers["X-DejaQ-Attachment-Sticky"] = "true";
 
   return headers;
 }

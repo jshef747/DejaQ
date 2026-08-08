@@ -1,15 +1,21 @@
 // Browser-side API utility for the standalone chat app.
-// It only calls this Next.js app's /api/* routes; DejaQ credentials stay
-// server-side in chat/.env.local.
+// It only calls this Next.js app's /api/* routes. The workspace API key
+// comes from Settings (localStorage) when set, otherwise the /api/* routes
+// fall back to DEJAQ_API_KEY in chat/.env.local server-side.
 
-import { loadServerBaseUrl, type ModelProfile, type RoutingMode } from "./chat-store";
+import { loadApiKey, loadServerBaseUrl, type Attachment, type ModelProfile, type RoutingMode } from "./chat-store";
 
-// Attach the user-selected DejaQ server as a header the /api/* routes read.
-// `override` lets the Settings modal test an unsaved value; otherwise use the
-// saved setting. Empty = omit the header so routes use their server-side default.
-function serverHeader(override?: string): Record<string, string> {
-  const url = (override ?? loadServerBaseUrl()).trim();
-  return url ? { "X-DejaQ-Server": url } : {};
+// Attach the user-selected DejaQ server + API key as headers the /api/*
+// routes read. `overrides` lets the Settings modal test unsaved values;
+// otherwise the saved settings are used. Empty values omit their header so
+// routes fall back to their server-side default.
+function dejaqHeaders(overrides?: { server?: string; apiKey?: string }): Record<string, string> {
+  const server = (overrides?.server ?? loadServerBaseUrl()).trim();
+  const apiKey = (overrides?.apiKey ?? loadApiKey()).trim();
+  const headers: Record<string, string> = {};
+  if (server) headers["X-DejaQ-Server"] = server;
+  if (apiKey) headers["X-DejaQ-Key"] = apiKey;
+  return headers;
 }
 
 export interface ChatApiMessage {
@@ -45,7 +51,7 @@ export function isApiError(v: unknown): v is ApiError {
 }
 
 const HTTP_MESSAGES: Record<number, string> = {
-  401: "The server-side DejaQ API key was rejected. Check DEJAQ_API_KEY in chat/.env.local.",
+  401: "The DejaQ API key was rejected. Check the key in Settings, or DEJAQ_API_KEY in chat/.env.local.",
   402: "No external LLM credential configured for this organization. Add a provider key in the DejaQ dashboard.",
   403: "Access denied to this organization.",
   404: "Endpoint not found. Verify the chat app API routes and backend URL.",
@@ -76,14 +82,15 @@ export async function sendChatMessage(
   deptSlug: string,
   modelProfile: ModelProfile = "default",
   routingMode: RoutingMode = "auto",
+  attachment: Attachment | null = null,
   onDelta?: (chunk: string) => void,
 ): Promise<ChatResult> {
   let response: Response;
   try {
     response = await fetch("/api/chat", {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...serverHeader() },
-      body: JSON.stringify({ messages, deptSlug, modelProfile, routingMode }),
+      headers: { "Content-Type": "application/json", ...dejaqHeaders() },
+      body: JSON.stringify({ messages, deptSlug, modelProfile, routingMode, attachment }),
     });
   } catch {
     return { kind: "error", status: 0, message: "Network error. Could not reach the chat server." };
@@ -126,7 +133,11 @@ export async function sendChatMessage(
         if (raw === "[DONE]") break outer;
         try {
           const chunk = JSON.parse(raw);
-          const delta: string = chunk?.choices?.[0]?.delta?.content ?? "";
+          // chat/completions chunk, or Responses API text delta (image requests
+          // go through /v1/responses, whose stream uses response.output_text.delta).
+          const delta: string =
+            chunk?.choices?.[0]?.delta?.content ??
+            (chunk?.type === "response.output_text.delta" ? chunk?.delta ?? "" : "");
           if (delta) {
             text += delta;
             onDelta?.(delta);
@@ -197,7 +208,7 @@ export async function sendFeedback(
   try {
     response = await fetch("/api/feedback", {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...serverHeader() },
+      headers: { "Content-Type": "application/json", ...dejaqHeaders() },
       body: JSON.stringify({ responseId, interactionId, messages, rating, comment, deptSlug }),
     });
   } catch {
@@ -227,10 +238,12 @@ export interface Department {
 
 export type DepartmentsResult = Department[] | ApiError;
 
-export async function fetchDepartments(serverOverride?: string): Promise<DepartmentsResult> {
+export async function fetchDepartments(
+  overrides?: { server?: string; apiKey?: string },
+): Promise<DepartmentsResult> {
   try {
     const response = await fetch("/api/departments", {
-      headers: serverHeader(serverOverride),
+      headers: dejaqHeaders(overrides),
       signal: AbortSignal.timeout(5000),
     });
     if (!response.ok) {
@@ -244,11 +257,11 @@ export async function fetchDepartments(serverOverride?: string): Promise<Departm
 }
 
 export async function checkServerHealth(
-  serverOverride?: string,
+  overrides?: { server?: string; apiKey?: string },
 ): Promise<{ reachable: boolean; celery: string; message?: string }> {
   try {
     const response = await fetch("/api/health", {
-      headers: serverHeader(serverOverride),
+      headers: dejaqHeaders(overrides),
       signal: AbortSignal.timeout(5000),
     });
     if (!response.ok) {

@@ -100,7 +100,23 @@ async def _cache_response_id_for_escalation(
     query: str,
     history: list[dict],
     answer: str,
+    truncated: bool,
 ) -> str | None:
+    # Same rule the miss path applies to its own generation, enforced here
+    # because this is the one place either escalation branch stores: a cut-off
+    # answer never enters the cache, since a stored truncation is what every
+    # later match is served - labelled finish_reason="stop", because a hit
+    # carries no truncation signal - and it never self-heals. The escalated
+    # answer still reaches the user who asked for it; only the store is skipped.
+    # Required rather than defaulted so a future caller has to say which it has.
+    if truncated:
+        logger.warning(
+            "feedback_escalation cache_store status=skipped reason=truncated "
+            "interaction_id=%s",
+            interaction.interaction_id,
+        )
+        return None
+
     try:
         enriched = await get_context_enricher_service().enrich(query, history)
     except Exception:
@@ -198,7 +214,7 @@ async def _escalate_to_local(
     system_prompt: str | None,
 ) -> EscalationResult:
     try:
-        answer, latency = await asyncio.wait_for(
+        answer, latency, done_reason = await asyncio.wait_for(
             get_llm_router_service().generate_local_response(
                 query,
                 history=history,
@@ -220,6 +236,7 @@ async def _escalate_to_local(
             query=query,
             history=history,
             answer=answer,
+            truncated=done_reason == "length",
         ),
         workspace_id=interaction.workspace_id,
         workspace_slug=interaction.workspace_slug,
@@ -303,6 +320,7 @@ async def _escalate_to_external(
             query=query,
             history=history,
             answer=response.text,
+            truncated=response.finish_reason == "length",
         ),
         workspace_id=interaction.workspace_id,
         workspace_slug=interaction.workspace_slug,

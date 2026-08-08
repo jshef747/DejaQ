@@ -154,7 +154,7 @@ The system SHALL expose `DELETE /admin/v1/orgs/{org_slug}/credentials/{provider}
 The system SHALL derive the target provider from the configured external model name via a `provider_for_model(model_name)` helper. The mapping SHALL cover at minimum:
 
 - `gemini-*` -> `google`
-- `gpt-*`, `o1-*`, `o3-*`, `chatgpt-*` -> `openai`
+- `gpt-*`, `o1-*`, `o3-*`, `o4-*`, `chatgpt-*` -> `openai`
 - `claude-*` -> `anthropic`
 
 For each request, the system SHALL look up the calling org's encrypted credential for the derived provider and dispatch to the matching provider client. The lookup SHALL decrypt the key using `DEJAQ_CREDENTIAL_ENCRYPTION_KEY`. The system SHALL NOT fall back to any environment variable (`GEMINI_API_KEY` or equivalent) during request processing.

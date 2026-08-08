@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 
 import httpx
@@ -6,7 +7,7 @@ import httpx
 from app.services.context_adjuster import ContextAdjusterService
 from app.services.context_enricher import ContextEnricherService
 from app.services.llm_router import LLMRouterService
-from app.services.model_backends import CompletionRequest, OllamaBackend
+from app.services.model_backends import CompletionRequest, CompletionResult, OllamaBackend
 from app.services.normalizer import NormalizerService
 
 
@@ -15,9 +16,67 @@ class FakeBackend:
         self.response = response
         self.requests: list[CompletionRequest] = []
 
-    async def complete(self, request: CompletionRequest) -> str:
+    async def complete(self, request: CompletionRequest) -> CompletionResult:
         self.requests.append(request)
-        return self.response
+        return CompletionResult(text=self.response, done_reason="stop")
+
+
+def _post_and_capture_options(request: CompletionRequest) -> dict:
+    captured: dict[str, object] = {}
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        captured["payload"] = json.loads(http_request.read())
+        return httpx.Response(
+            200,
+            json={"message": {"role": "assistant", "content": "ok"}},
+        )
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="http://ollama.test",
+    )
+    backend = OllamaBackend(
+        base_url="http://ollama.test",
+        timeout_seconds=5.0,
+        client=client,
+    )
+    try:
+        asyncio.run(backend.complete(request))
+    finally:
+        asyncio.run(client.aclose())
+
+    return captured["payload"]["options"]
+
+
+def test_num_ctx_is_omitted_unless_the_caller_asks_for_one():
+    """A context window is memory: Ollama allocates a KV cache at that size per
+    loaded model. Only the two rewrite roles send prompts large enough to need
+    one, so every other role must leave the window at Ollama's own default."""
+    options = _post_and_capture_options(
+        CompletionRequest(
+            model_name="qwen_1_5b",
+            messages=[{"role": "user", "content": "hello"}],
+            max_tokens=32,
+            temperature=0.0,
+        )
+    )
+
+    assert "num_ctx" not in options
+    assert options["num_predict"] == 32
+
+
+def test_num_ctx_is_sent_when_the_caller_sets_one():
+    options = _post_and_capture_options(
+        CompletionRequest(
+            model_name="qwen_1_5b",
+            messages=[{"role": "user", "content": "hello"}],
+            max_tokens=8192,
+            temperature=0.0,
+            num_ctx=32768,
+        )
+    )
+
+    assert options["num_ctx"] == 32768
 
 
 def test_ollama_backend_posts_chat_request():
@@ -56,9 +115,43 @@ def test_ollama_backend_posts_chat_request():
     finally:
         asyncio.run(client.aclose())
 
-    assert result == "from ollama"
+    assert result.text == "from ollama"
+    assert result.done_reason is None
     assert captured["url"] == "http://ollama.test/api/chat"
     assert '"model":"qwen2.5:1.5b"' in captured["payload"]
+
+
+def test_ollama_backend_captures_done_reason():
+    """The signal every caller used to discard: Ollama reports "length" when
+    num_predict cut generation off, "stop" when it finished naturally. This
+    must survive the round trip so a truncated rewrite is detectable instead
+    of looking identical to a clean, complete one."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "message": {"role": "assistant", "content": "cut off mid-sent"},
+                "done_reason": "length",
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://ollama.test")
+    backend = OllamaBackend(base_url="http://ollama.test", timeout_seconds=5.0, client=client)
+    try:
+        result = asyncio.run(
+            backend.complete(
+                CompletionRequest(
+                    model_name="qwen_1_5b",
+                    messages=[{"role": "user", "content": "hello"}],
+                    max_tokens=4,
+                    temperature=0.0,
+                )
+            )
+        )
+    finally:
+        asyncio.run(client.aclose())
+
+    assert result.done_reason == "length"
 
 
 def test_services_send_logical_model_names_to_backend():
@@ -77,7 +170,11 @@ def test_services_send_logical_model_names_to_backend():
     assert asyncio.run(normalizer.normalize("What is gravity?")) == "what is gravity?"
     assert asyncio.run(llm_router.generate_response("Hi", "easy")) == "backend output"
     assert asyncio.run(adjuster.generalize("Hello")) == "backend output"
-    assert asyncio.run(adjuster.adjust("Hi", "Hello")) == "backend output"
+    # "output" shares a content word with the fake reply "backend output" so
+    # the adjuster's topic-consistency safety net (tested separately in
+    # test_context_adjuster.py) doesn't swap in the cached answer here — this
+    # test only cares about model-name routing.
+    assert asyncio.run(adjuster.adjust("Hi", "output")) == "backend output"
 
     assert backend.requests[0].model_name == "qwen_1_5b"
     assert backend.requests[1].model_name == "gemma_local"
@@ -127,8 +224,8 @@ def test_llm_router_uses_ollama_backend(monkeypatch):
             self.base_url = base_url
             self.timeout_seconds = timeout_seconds
 
-        async def complete(self, request: CompletionRequest) -> str:
-            return f"ollama:{request.model_name}"
+        async def complete(self, request: CompletionRequest) -> CompletionResult:
+            return CompletionResult(text=f"ollama:{request.model_name}", done_reason="stop")
 
     monkeypatch.setattr(config, "LOCAL_LLM_MODEL_NAME", "gemma_local")
     monkeypatch.setattr(config, "OLLAMA_URL", "http://ollama.test")

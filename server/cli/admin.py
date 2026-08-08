@@ -328,6 +328,73 @@ def key_revoke(key_id: int) -> None:
 
 
 # ---------------------------------------------------------------------------
+# cache commands
+# ---------------------------------------------------------------------------
+
+@cli.group()
+def cache() -> None:
+    """Maintain cached entries."""
+
+
+@cache.command("purge-images")
+@click.option("--workspace", "workspace_slug", required=True, help="Workspace slug to purge.")
+@click.option("--department", "dept_slug", default=None, help="Limit to one department.")
+@click.option("--yes", is_flag=True, default=False, help="Skip the confirmation prompt.")
+@click.option("--dry-run/--no-dry-run", default=True, show_default=True,
+              help="Report what would be deleted without deleting it.")
+def cache_purge_images(workspace_slug: str, dept_slug: str | None, yes: bool, dry_run: bool) -> None:
+    """Delete image-anchored cache entries.
+
+    Run this after a gate rule change: entries stored under the old rules may
+    carry fingerprints the current rules would never have accepted. Each purged
+    entry simply regenerates on its next request. Text entries are untouched.
+    """
+    from app.services.memory_chromaDB import get_memory_service
+
+    try:
+        departments = admin_service.list_departments(workspace_slug=workspace_slug, ctx=_SYSTEM_CTX)
+    except admin_service.WorkspaceNotFound:
+        print_error(f"Workspace '{workspace_slug}' not found.")
+        sys.exit(1)
+
+    if dept_slug:
+        departments = [d for d in departments if d.slug == dept_slug]
+        if not departments:
+            print_error(f"Department '{dept_slug}' not found under workspace '{workspace_slug}'.")
+            sys.exit(1)
+
+    namespaces = [d.cache_namespace for d in departments] or [f"{workspace_slug}--default"]
+    found: list[tuple[str, int]] = []
+    for namespace in namespaces:
+        try:
+            found.append((namespace, len(get_memory_service(namespace).image_entry_ids())))
+        except Exception as exc:
+            print_error(f"Could not read namespace '{namespace}': {exc}")
+
+    total = sum(count for _, count in found)
+    print_table(
+        "Image entries",
+        ["Namespace", "Image entries"],
+        [[namespace, str(count)] for namespace, count in found],
+    )
+    if total == 0:
+        print_success("No image entries to purge.")
+        return
+    if dry_run:
+        print_warning(f"Dry run — {total} entr(ies) would be deleted. Re-run with --no-dry-run.")
+        return
+    if not yes and not Confirm.ask(f"[yellow]Delete [bold]{total}[/bold] image entr(ies)?[/yellow]"):
+        print_warning("Aborted.")
+        sys.exit(0)
+
+    deleted = 0
+    with console.status("[cyan]Purging…[/cyan]", spinner="dots"):
+        for namespace, _ in found:
+            deleted += get_memory_service(namespace).purge_image_entries()
+    print_success(f"Purged {deleted} image entr(ies). They regenerate on the next request.")
+
+
+# ---------------------------------------------------------------------------
 # stats command
 # ---------------------------------------------------------------------------
 

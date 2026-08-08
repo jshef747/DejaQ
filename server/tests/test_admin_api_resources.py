@@ -604,3 +604,28 @@ def test_llm_config_unknown_org_returns_404(isolated_org_db, authed_admin_client
     resp = client.get("/admin/v1/workspaces/does-not-exist/llm-config", headers=headers)
 
     assert resp.status_code == 404
+
+
+def test_admin_mutations_invalidate_api_key_cache(isolated_org_db, authed_admin_client):
+    """A freshly created department/key must resolve on the very next data-plane
+    request — admin mutations bust the middleware key cache instead of waiting
+    out the TTL (the old behavior silently routed new departments to the
+    default namespace for up to 60s)."""
+    from app.middleware.api_key import _KEY_CACHE
+
+    client, headers = authed_admin_client
+    client.post("/admin/v1/workspaces", json={"name": "Acme"}, headers=headers)
+
+    # mark the cache as freshly loaded, then mutate
+    _KEY_CACHE._loaded_at = 10**12
+    client.post("/admin/v1/workspaces/acme/departments", json={"name": "Support"}, headers=headers)
+    assert _KEY_CACHE._loaded_at == 0.0, "create_department must invalidate the key cache"
+
+    _KEY_CACHE._loaded_at = 10**12
+    key = client.post("/admin/v1/workspaces/acme/keys", headers=headers)
+    assert key.status_code == 201
+    assert _KEY_CACHE._loaded_at == 0.0, "generate_key must invalidate the key cache"
+
+    _KEY_CACHE._loaded_at = 10**12
+    client.delete(f"/admin/v1/keys/{key.json()['id']}", headers=headers)
+    assert _KEY_CACHE._loaded_at == 0.0, "revoke_key must invalidate the key cache"

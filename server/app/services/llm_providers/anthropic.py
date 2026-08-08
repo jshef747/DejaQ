@@ -5,7 +5,7 @@ from functools import lru_cache
 import anthropic
 
 from app.schemas.chat import ExternalLLMRequest, ExternalLLMResponse
-from app.services.llm_providers.common import elapsed_ms, ensure_query, redact_api_key
+from app.services.llm_providers.common import elapsed_ms, ensure_query, normalize_finish_reason, redact_api_key
 from app.utils.exceptions import ExternalLLMAuthError, ExternalLLMError, ExternalLLMTimeoutError
 
 logger = logging.getLogger("dejaq.services.llm_providers.anthropic")
@@ -33,7 +33,27 @@ class AnthropicProviderClient:
         _clear_client_cache_if_factory_changed()
         client = _get_client(api_key)
         messages = [msg for msg in request.history if msg["role"] in {"user", "assistant"}]
-        messages.append({"role": "user", "content": request.query})
+        if request.image_b64:
+            messages.append({"role": "user", "content": [
+                {"type": "image", "source": {
+                    "type": "base64",
+                    "media_type": request.image_mime or "image/jpeg",
+                    "data": request.image_b64,
+                }},
+                {"type": "text", "text": request.query},
+            ]})
+        elif request.file_b64:
+            # Same source block as the image above, different part type.
+            messages.append({"role": "user", "content": [
+                {"type": "document", "source": {
+                    "type": "base64",
+                    "media_type": request.file_mime or "application/pdf",
+                    "data": request.file_b64,
+                }},
+                {"type": "text", "text": request.query},
+            ]})
+        else:
+            messages.append({"role": "user", "content": request.query})
 
         logger.debug("Sending hard query to Anthropic model=%s history_turns=%d", request.model, len(request.history))
         start = time.perf_counter()
@@ -73,4 +93,5 @@ class AnthropicProviderClient:
             prompt_tokens=response.usage.input_tokens,
             completion_tokens=response.usage.output_tokens,
             latency_ms=latency_ms,
+            finish_reason=normalize_finish_reason(response.stop_reason),
         )

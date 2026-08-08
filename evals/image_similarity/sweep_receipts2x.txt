@@ -1,0 +1,19 @@
+[feat_receipts_2x.jsonl] collapsed 2 label groups holding identical images
+761 document-routed images, 1141 same-content pairs above the 4-shared-token floor, 280332 different-content
+
+ threshold   recall   merges   (shipped = 0.85)
+      0.60    72.0%      364
+      0.70    50.7%      130
+      0.75    36.7%       31
+      0.80    24.6%       18
+      0.85    14.2%       16 <-- shipped
+      0.90     8.2%       16
+      0.95     3.9%        5
+      0.99     1.2%        0
+
+highest-scoring different-content pairs (the ones a threshold must clear):
+  0.983  sroie0179__small_tight.jpg <-> sroie0180__small_tight.jpg
+  0.966  sroie0179__small_tight.jpg <-> sroie0180__full_whole.jpg
+  0.966  sroie0179__small_tight.jpg <-> sroie0180__full_tight.jpg
+  0.950  sroie0179__full_whole.jpg <-> sroie0180__small_whole.jpg
+  0.950  sroie0179__full_tight.jpg <-> sroie0180__small_whole.jpg

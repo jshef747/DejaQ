@@ -16,6 +16,8 @@ The feedback response SHALL use `status` for feedback/cache mutation and `escala
 
 When escalation returns an answer, the system SHALL evaluate the original query with the normal cache policy. If the answer is cacheable, the system SHALL store the escalated answer in the interaction's cache namespace and include the cache `response_id` on the escalated response.
 
+The system SHALL NOT store an escalated answer whose generator reported truncation (the local backend's `done_reason` or the provider's normalized `finish_reason` is `length`), at either tier. Such an answer is still returned to the caller, with no cache `response_id`.
+
 Valid escalation statuses are:
 
 - `answered`

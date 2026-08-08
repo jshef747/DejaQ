@@ -6,9 +6,44 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 DejaQ is an LLM cost-optimization platform that reduces API costs through semantic caching, query classification, and hybrid model routing.
 
-**Cache miss pipeline:** User Query → Context Enricher (Qwen 1.5B + regex gate, makes query standalone) → Normalizer (Qwen 2.5, produces cache key) → Cache Filter (heuristics) → LLM gets **original query + history** (preserves tone) → Response to user → Background: Generalize response (Phi-3.5 Mini) → Store in ChromaDB (if filter passes)
+**Cache miss pipeline:** User Query → Context Enricher (Qwen 1.5B, makes query standalone; skipped only when there is no history) → Normalizer (produces cache key; lowercase-and-strip with no model call, except opinion queries which Gemma 4 E2B rewrites to "best \<noun\>") → Cache Filter (heuristics) → LLM gets **original query + history** (preserves tone) → Response to user → Background: Generalize response (Gemma 4 E2B) → Store in ChromaDB (if the filter passes and the generator did not report truncation — see [docs/openai-compat-api.md](docs/openai-compat-api.md))
 
-**Cache hit pipeline:** User Query → Context Enricher → Normalizer → ChromaDB returns tone-neutral response (cosine ≤ 0.15) → **Cache Validator** (Gemma E2B checks cached answer covers the new query; INVALID → treat as miss) → Context Adjuster adds tone → Response to user
+**Cache hit pipeline:** User Query → Context Enricher → Normalizer → ChromaDB lookup → **trusted hit** (cosine ≤ `DEJAQ_CACHE_TRUST_DISTANCE`, 0.15) served directly, or **band hit** (0.15–`DEJAQ_CACHE_BAND_MAX_DISTANCE`, 0.20), or **lexical rescue** (≤ `DEJAQ_CACHE_RESCUE_MAX_DISTANCE`, 0.60, when word-level alignment confirms a typo'd variant) — band/rescue hits served only if the **Cache Validator** (Gemma E2B checks cached answer covers the new query, aided by a word-mismatch hint) accepts → INVALID → treat as miss → Context Adjuster adds tone (skipped on a **single-turn** request at or under `DEJAQ_ADJUSTER_SKIP_DISTANCE`, 0.075 - no tone gap to close, so the stored answer is served verbatim) → Response to user. Validated band/rescue hits store the typo'd phrasing as an **alias** entry (`alias_of` metadata) so the same typo becomes an instant trusted hit next time; deleting an entry cascades to its aliases. Never for an attachment-anchored hit: `store_alias` copies only the answer, `original_query`, and `user_id`, dropping `file_sha`/`file_kind`/`image_*`, so an alias of one would be an ungated text entry reachable without the attachment ever being sent.
+
+> **Image gate (`/v1/responses` only):** when a request carries an image, the text pipeline runs as usual, but a cache hit is served only if the **image gate** also passes. The gate has two paths, chosen by what the image actually contains:
+>
+> - **Document** (OCR returns confident text — `mean confidence ≥ 60` AND `≥ 6 words at conf ≥ 60`): compared **by its words**. The word floor is low on purpose: confidence is what separates a document from a photo, and a short crop read well (measured: 9 words at 86.8) is a small document, not something to refuse. Served only when `token overlap ≥ DEJAQ_CACHE_IMAGE_TEXT_MIN_JACCARD (0.85)` against the entry's stored `image_text` **AND** at least `DEJAQ_CACHE_IMAGE_TEXT_MIN_SHARED_TOKENS` (4) shared tokens (`image_text.py:215-216`) — a ratio over a handful of tokens is noise. No identifier rule. It was 0.80, on the evidence that no two different documents exceeded 0.798; that held only until the corpus contained two receipts from one shop, which reach **0.848** (same items, same total, different invoice number and date). 0.85 is the measured zero-merge point over ~1.85M labelled pairs. End-to-end recall is ~10–42% depending on the population and that is the accepted trade. `services/image_text.py`, engine = the `tesseract` binary.
+> - **Ambiguous** (≥ `DEJAQ_CACHE_IMAGE_AMBIGUOUS_MIN_WORDS` (4) tokens found but read *below* the confidence floor): **never served and never stored.** These used to fall through to the pixel path, which was the largest single source of wrong answers (1,712 + 204 false merges measured) because two different pages of text look near-identical to CLIP. It matters because only ~11% of real scanned business forms clear the confidence floor. The test is OCR quality, not amount of text — an unreliable read of a lot of text is garbage, a confident read of a little text is a document.
+> - **Photo** (little or no readable text): compared **by its pixels** — `CLIP distance ≤ DEJAQ_CACHE_IMAGE_MAX_DISTANCE (0.08)` **AND** `dHash hamming ≤ DEJAQ_CACHE_IMAGE_MAX_HAMMING (15)` against `image_dhash`/`image_clip`. No unguarded trusted tier; both thresholds load-bearing. 0.08 rather than 0.10 because on 812 real photographs a daylight rocky beach and a sunset over water were served as the same image at CLIP 0.0929 / hamming 6. Hamming is what stops the rest: two *different* photographs of one hillside measured CLIP 0.027 and were refused by hamming alone. A near-uniform image (under `DEJAQ_CACHE_IMAGE_MIN_TILE_VARIETY` (10) distinct dHashes over a 4×4 grid) is refused outright — every blank page is the same white rectangle to CLIP. `services/image_fingerprint.py`.
+>
+>   One leak remains, measured and knowingly left: a scanned form that OCR cannot read *at all* (0–2 tokens) misses the ambiguous rule, which needs 4, and falls to the pixel path — two such FUNSD forms merge at CLIP 0.0648 / hamming 14. Fixing it needs a "looks like a failed document scan" signal, not a threshold.
+>
+> Once the gate passes, the hit is served differently from a text hit, because every downstream model is blind to the image: the **validator compares question-to-question** (the cached answer is never sent — it is asked only whether both questions ask for the same thing about the verified-identical image) and the **context adjuster is skipped** (image answers are stored verbatim, so no tone was stripped to restore). This is not the same as trusting the distance: numbered-item siblings (`solve part a`/`part b`, 0.0898) sit *closer* than legitimate paraphrases (0.1094), so the embedding cannot separate them and the validator stays load-bearing. Measured 9/9 paraphrases served, 0 reachable false serves, validator 6,468 ms → 577 ms.
+>
+> Kinds never mix: a photo cannot match a document entry, and a text request matches neither. Raw image bytes are never stored — only fingerprints. On a miss, image requests bypass the difficulty classifier and route straight to the workspace's external (vision-capable) provider. Without `tesseract` installed, documents degrade to the photo path (a warning is logged; `start.sh` warns at boot). Separate paths exist because pixel similarity is *inverted* for documents: two different courses on one template measured CLIP 0.027 / hamming 0 (would have been served as the same image) while two screenshots of the same syllabus measured hamming 10–19 (would have missed). Border trimming and a digit-token identifier rule were both implemented and **removed** — each helped only the small sample it was derived from. Every threshold here is swept over 286,000 labelled pairs; do not hand-tune them. Measurements: [docs/image-gate.md](docs/image-gate.md); harness: [evals/image_similarity/](evals/image_similarity/). After changing any of them, run `dejaq-admin cache purge-images --workspace <slug>` — entries stored under the old rules may carry fingerprints the new ones would never accept.
+
+> **File gate (`/v1/responses` only):** a request may carry **one** PDF, DOCX, or text/Markdown/code file (`input_file`, data URL only; one attachment total, so image+file is a 400). The text pipeline runs as usual — the file's content never enters the cache key — and a hit is served only if the **file gate** also passes.
+>
+> The gate is **exact**, and this is the whole design: `sha256` of the whitespace-normalised extracted text, compared with `==`. Do not reach for the image gate's machinery here. That gate needs CLIP, dHash, confidence floors and a swept token-overlap threshold *because OCR is noisy* — two reads of one page disagree, so identity can only be approximated, which is why its constants took ~1.85M labelled pairs to pin down. PDF, DOCX, and text files hand us the text deterministically, so identity is exact, **false merges are impossible by construction**, and there is nothing to sweep: no thresholds, no `evals/document_similarity/`, no `purge-files` command (a sha256 cannot go stale the way a swept threshold can). Normalisation collapses whitespace only — so the same document re-saved by a different producer still matches — and deliberately does *not* fold case. `services/file_text.py`, extraction = `pypdf` for PDF, `python-docx` for DOCX (paragraphs + tables only — headers/footers/comments/tracked-changes/properties are excluded so they don't churn the hash on every re-save), UTF-8 content sniff for everything else (Markdown, plain text, source/config files — no maintained extension list; `.docx` is checked first since it is a ZIP and would otherwise fail the sniff). `DEJAQ_CACHE_FILE_MIN_CHARS` applies only to PDF/DOCX, where extraction can fail silently; text/Markdown/code files have no floor beyond "non-empty after normalisation".
+>
+> A file whose normalised text is under `DEJAQ_CACHE_FILE_MIN_CHARS` (200) is **never served and never stored** — the same rule as the image gate's `ambiguous` class. This is the **scanned PDF** case: no text layer means no identity, so it is refused rather than guessed at (rasterising to the pixel path would inherit the image gate's measured worst leak). The answer still comes back; there is just no cache entry. Corrupt and encrypted PDFs land here too.
+>
+> Entry ids for file requests key on `normalized_query + "|file:" + file_sha`. Without the suffix two **different** documents asked the **same** question ("summarise this document" — the question people actually ask) would share one id and overwrite each other. Text entries keep their existing ids.
+>
+> Serving a file hit follows the image rules exactly, because every downstream model is blind to the attachment: the **validator compares question-to-question** (`attachment_anchored`, shared with the image path — the hash proves the *file* matches, not that the two *questions* want the same thing) and the **context adjuster is skipped** (answers stored verbatim). On a miss, files bypass the difficulty classifier and route external: PDFs go as a native document part (Google/OpenAI/Anthropic all accept one), Markdown is inlined into the prompt inside a delimiter that labels it as data, not instructions. Kinds never mix — a Markdown request cannot match a PDF entry, and neither matches an image or text entry. Raw file bytes are never stored, only the hash. Measurements and rationale: [docs/file-gate.md](docs/file-gate.md).
+
+> **Typo handling:** there is deliberately **no spell correction** anywhere in the pipeline — a dictionary checker mangles jargon and proper nouns ("frnce"→"fence", "itly"→"idly") and poisons cache keys. Instead: *typos change letters, different questions change words*. `services/lexical_match.py::align()` does word-level fuzzy alignment (exact words cancel, leftovers must fuzzy-match, question words never satisfy each other) — 99.1% typo recall / 99.9% sibling rejection ([docs/lexical-match-report.md](docs/lexical-match-report.md)). BGE embeddings absorb single typos in the trusted zone; heavier typos land in the band or the align-gated rescue tier, always behind the validator. The validator prompt carries word-swap few-shots plus the gate's mismatch hint ("'list' vs 'string'"). Phonetic spellings ("duz"→"does") intentionally miss — LLM answers.
+
+## Branching
+
+`staging` is the integration branch: feature branches merge into `staging` first for review and end-to-end testing, and only `staging` merges into `master`. Do not merge feature branches directly into `master`.
+
+**Feature branch workflow:**
+1. Create feature branch from `staging` (e.g., `git checkout -b feat/my-feature staging`)
+2. Work on the feature and push to the feature branch
+3. When ready, request approval (code review, testing, etc.)
+4. After approval, merge the feature branch into `staging` and delete the branch
+5. Later, `staging` merges into `master` when ready for release
 
 ## Commands
 
@@ -31,7 +66,7 @@ uv sync
 Generation runs through **Ollama** (local or remote). Start Ollama and pull the model tags first:
 ```bash
 ollama serve
-ollama pull qwen2.5:0.5b qwen2.5:1.5b gemma4:e2b gemma4:e4b phi3.5:latest
+ollama pull qwen2.5:0.5b qwen2.5:1.5b gemma4:e2b gemma4:e4b
 ```
 
 ```bash
@@ -120,19 +155,53 @@ Generation always runs through Ollama (`DEJAQ_OLLAMA_URL`); there is no per-role
 | `DEJAQ_CHROMA_PORT` | `8001` | ChromaDB HTTP server port |
 | `DEJAQ_OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama HTTP endpoint for all generation roles (local or remote) |
 | `DEJAQ_OLLAMA_TIMEOUT_SECONDS` | `60.0` | Timeout for Ollama backend requests |
+| `DEJAQ_OLLAMA_NUM_CTX` | `32768` | Context window for every role that runs on `qwen2.5:1.5b` or `gemma4:e2b` (generalize, adjust, enricher, normalizer, validator). Only the two rewrite roles need it - it bounds the prompt as well as the generation, so it must hold `DEJAQ_REWRITE_MAX_TOKENS` of output plus the answer being rewritten, and left unset Ollama silently drops the head of an oversized prompt. Their sibling roles send it because Ollama reloads a model whenever a runner option changes, so two windows on one model tag thrash it between consecutive calls on the serve path; it costs no extra memory, since the model is already loaded at this window whenever the rewrite roles run. `gemma4:e4b` shares with no rewrite role and keeps Ollama's own default. 32768 is the smaller model's (qwen2.5:1.5b) own maximum, so it is safe on both (`app/config.py`) |
+| `DEJAQ_ADJUST_TIMEOUT_SECONDS` | `30.0` | Deadline for adjust() alone, the one rewrite role on the synchronous cache-hit path; on timeout the cached answer is served verbatim (the same fallback its other guards use), so a rewrite that stalls does not hold the fast path open for the whole `DEJAQ_OLLAMA_TIMEOUT_SECONDS`. generalize() needs no equivalent - it runs in a background Celery task (`app/config.py`) |
+| `DEJAQ_DEFAULT_MAX_TOKENS` | `4096` | Generation ceiling applied when the client sends no `max_tokens` / `max_output_tokens` of its own. 4096 rather than 1024 because 1024 truncated ordinary answers mid-sentence; one measured coursework answer needed ~3,700 tokens (`app/config.py`) |
+| `DEJAQ_REWRITE_MAX_TOKENS` | `8192` | Output budget for generalize() and adjust(), independent of the request's own `max_tokens`. Both prompts must keep every fact, so a rewrite needs room for the whole answer it was handed - a smaller budget truncates the STORED copy, which never self-heals. Set at double `DEJAQ_DEFAULT_MAX_TOKENS` for headroom above it; a client-supplied `max_tokens` is not clamped, so an answer generated above this budget can still outgrow the rewrite of it (`app/config.py`) |
 | `DEJAQ_ENRICHER_MODEL_NAME` | `qwen_1_5b` | Logical model label for context enricher (→ Ollama tag) |
 | `DEJAQ_NORMALIZER_MODEL_NAME` | `gemma_e2b` | Logical model label for normalizer (→ Ollama tag) |
 | `DEJAQ_LOCAL_LLM_MODEL_NAME` | `gemma_local` | Logical model label for local generation (→ Ollama tag) |
-| `DEJAQ_GENERALIZER_MODEL_NAME` | `phi_generalizer` | Logical model label for background generalizer (→ Ollama tag) |
+| `DEJAQ_GENERALIZER_MODEL_NAME` | `gemma_e2b` | Logical model label for background generalizer (→ Ollama tag) |
 | `DEJAQ_CONTEXT_ADJUSTER_MODEL_NAME` | `qwen_1_5b` | Logical model label for context adjuster (→ Ollama tag) |
+| `DEJAQ_ADJUSTER_MIN_TOPIC_OVERLAP` | `0.02` | Post-hoc safety net: minimum fraction of the cached answer's content words that must survive a tone adjustment; below it, the adjuster's output is discarded and the cached answer is served verbatim instead |
+| `DEJAQ_GENERALIZE_LENGTH_RATIO_MAX` | `10.0` | Store-time safety net: how many times longer than the raw answer a generalized rewrite may be before it is discarded and the raw answer stored un-generalized. Calibrated against the measured runaway, not guessed — rationale in `app/config.py` |
+| `DEJAQ_GENERALIZE_LENGTH_ABS_FLOOR` | `200.0` | Characters below which the length ratio is not applied, so a correct one-sentence rewrite of a two-character answer isn't rejected purely by its tiny denominator (`app/config.py`) |
+| `DEJAQ_GENERALIZE_NGRAM_REPEAT_RATIO_MAX` | `0.08` | Store-time safety net: maximum word 4-gram repetition ratio allowed in a generalized rewrite; above it the output is a loop and the raw answer is stored instead. Skipped only when the raw answer *itself* exceeds this ratio, the rewrite kept its size, and the rewrite exceeds the raw answer's own repetition by no more than this same ratio (see `DEJAQ_NGRAM_EXEMPT_LENGTH_RATIO`) (`app/config.py`) |
+| `DEJAQ_ADJUST_LENGTH_RATIO_MAX` | `10.0` | Serve-time safety net: how many times longer than the cached answer a tone adjustment may be before it is discarded and the cached answer served verbatim. Growth only - a rewrite that legitimately shortens is left to `DEJAQ_ADJUSTER_MIN_TOPIC_OVERLAP` (`app/config.py`) |
+| `DEJAQ_ADJUST_LENGTH_ABS_FLOOR` | `200.0` | Minimum **cached-answer** length for the adjust length ratio to apply at all, so an "explain that in more detail" follow-up against a one-line cached answer isn't rejected purely by its tiny denominator. Floors the opposite side from `DEJAQ_GENERALIZE_LENGTH_ABS_FLOOR` because adjust() is asked to expand and generalize() never is (`app/config.py`) |
+| `DEJAQ_ADJUST_NGRAM_REPEAT_RATIO_MAX` | `0.08` | Serve-time safety net: maximum word 4-gram repetition ratio allowed in a tone adjustment; above it the output is a loop and the cached answer is served verbatim. This is the signal the topic-overlap check is blind to - a loop paraphrasing the cached answer scores near-perfect overlap. Skipped only when the cached answer *itself* exceeds this ratio, the rewrite kept its size, and the rewrite exceeds the cached answer's own repetition by no more than this same ratio (see `DEJAQ_NGRAM_EXEMPT_LENGTH_RATIO`) (`app/config.py`) |
+| `DEJAQ_NGRAM_EXEMPT_LENGTH_RATIO` | `1.3` | How far a rewrite's length may differ from the answer it was rewriting, in either direction, and still skip the two repetition ceilings above - and only when the answer it was rewriting *itself* exceeds that ceiling (so there is repetition to inherit rather than invent) **and** the rewrite adds no more than one ceiling's worth of repetition on top of it (so a barely-repetitive answer cannot exempt an arbitrarily repetitive rewrite). Exists for one population: a faithful rewrite of an answer that is *already* repetitive (a templated list, a weekly schedule), which both prompts require to keep every item. A loop leaves the band by growing (measured 2.45x and up) or by collapsing onto one item (0.56x); a loop over ordinary prose never enters it, whatever its size, and a same-size loop over a mildly structured answer is caught by the repetition delta (0.570-0.618 against a 0.088 baseline) (`app/config.py`) |
 | `DEJAQ_VALIDATOR_MODEL_NAME` | `gemma_e2b` | Logical model label for cache-answer validator (→ Ollama tag) |
-| `DEJAQ_VALIDATOR_ENABLED` | `true` | Validator is on by default; set `false` to disable (kill switch) |
-| `DEJAQ_VALIDATOR_SKIP_DISTANCE` | `0.05` | Cache hits at or below this cosine distance skip the validator (near-identical match; embedding already guarantees correctness) |
+| `DEJAQ_VALIDATOR_SKIP_DISTANCE` | `0.05` | Cache hits at or below this cosine distance skip the validator |
+| `DEJAQ_ADJUSTER_SKIP_DISTANCE` | `0.075` | **Single-turn requests only** (no prior conversation history): cache hits at or below this cosine distance skip the context adjuster and serve the stored answer verbatim, since there is no tone gap to close. Never applies to a multi-turn follow-up - the enricher folds a genuine "give me the short version" turn back into a restatement of the original question, so distance alone cannot tell that apart from a typo'd repeat (`app/config.py`) |
+| `DEJAQ_CACHE_TRUST_DISTANCE` | `0.15` | Trusted-zone cosine ceiling; hits at or below are served directly |
+| `DEJAQ_CACHE_BAND_MAX_DISTANCE` | `0.20` | Upper bound of the validator-guarded band; hits in `(trust, band_max]` need validator approval. Set at or below trust distance to disable |
+| `DEJAQ_CACHE_RESCUE_ENABLED` | `true` | Lexical-rescue tier: candidates past the band are eligible when `lexical_match.align` confirms a typo'd variant; always validator-gated |
+| `DEJAQ_CACHE_RESCUE_MAX_DISTANCE` | `0.60` | Distance ceiling for the rescue tier |
+| `DEJAQ_CACHE_ALIAS_ENABLED` | `true` | Alias learning: validated band/rescue hits store the typo'd phrasing as an alias pointing at the same answer |
+| `DEJAQ_CACHE_IMAGE_MAX_DISTANCE` | `0.08` | Photo-path CLIP cosine ceiling. 0.10 merged a beach with a sunset (measured 0.0929) |
+| `DEJAQ_CACHE_IMAGE_MAX_HAMMING` | `15` | Photo-path dHash hamming ceiling; both this AND the CLIP distance must pass |
+| `DEJAQ_CACHE_IMAGE_OCR_ENABLED` | `true` | Route text-bearing images to the OCR document path; `false` sends every image to the photo path |
+| `DEJAQ_CACHE_IMAGE_OCR_MIN_CONFIDENCE` | `60.0` | Mean OCR word confidence required to treat an image as a document. Swept 50–80: 0 false merges at every level, so this only routes — the token threshold carries the safety |
+| `DEJAQ_CACHE_IMAGE_OCR_MIN_WORDS` | `6` | Words at confidence ≥ 60 required to treat an image as a document; the confidence floor does the real separating, so this stays low — a short crop read well is still a document |
+| `DEJAQ_CACHE_IMAGE_TEXT_MIN_JACCARD` | `0.85` | Document path: the only matching threshold. Measured zero-false-merge point once real receipts are in the corpus (two from one shop reach 0.848); lower it for recall (0.80 buys ~10 points at 2 measured merges) |
+| `DEJAQ_CACHE_IMAGE_AMBIGUOUS_MIN_WORDS` | `4` | Tokens at which a text-bearing image read BELOW the confidence floor becomes un-cacheable instead of falling to the photo path |
+| `DEJAQ_CACHE_IMAGE_TEXT_MIN_SHARED_TOKENS` | `4` | Shared tokens required before an overlap ratio counts as evidence at all |
+| `DEJAQ_CACHE_IMAGE_MIN_TILE_VARIETY` | `10` | Distinct dHashes over a 4×4 grid required to fingerprint by pixels; below it the image is too uniform to identify |
+| `DEJAQ_CACHE_FILE_ENABLED` | `true` | Kill switch for PDF/DOCX/text file **attachments**, not just their caching: `false` means an attached file is never extracted and never sent to the provider, so the request is answered as if nothing were attached. Images have no equivalent switch |
+| `DEJAQ_CACHE_FILE_MIN_CHARS` | `200` | Below this many extracted characters a file has no identity, so it is neither served nor stored (scanned PDFs land here). Not a swept threshold — the populations it separates are nowhere near the line |
+| `DEJAQ_MAX_ATTACHMENT_BYTES` | `10485760` | Server-side attachment size cap, applied to files **and** images |
+| `DEJAQ_TESSERACT_BIN` | `tesseract` | OCR binary path (`brew install tesseract` / `apt install tesseract-ocr tesseract-ocr-heb`) |
+| `DEJAQ_TESSERACT_LANGS` | `heb+eng` | OCR languages; needs the matching `traineddata` installed |
+| `DEJAQ_OCR_TIMEOUT_SECONDS` | `20.0` | Per-image OCR timeout; on timeout the image is treated as un-cacheable |
+
+Threshold rationale (why 0.20, 0.60, 0.05, and why images get no trusted tier): [docs/image-gate.md](docs/image-gate.md).
 
 ### Endpoints
 - `GET /health` — health check; also reports Celery worker status
-- `POST /v1/chat/completions` — OpenAI Chat Completions-compatible chat (streaming + non-streaming); requires `Authorization: Bearer <workspace-api-key>` and optional `X-DejaQ-Department` header; response includes `X-DejaQ-Response-Id` header when cached or stored. Hard queries return HTTP 402 when the workspace has no credential for the configured external provider.
-- `POST /v1/responses` — OpenAI Responses API endpoint (newer recommended format). Same auth and `X-DejaQ-*` headers. Body: `{model, input: string | [{role, content}...], instructions?, stream?, temperature?, max_output_tokens?}`. Non-streaming: `{id, object:"response", output:[...], output_text, usage:{input_tokens, output_tokens, total_tokens}}`. Streaming: typed SSE events (`response.created`, `response.output_text.delta`, `response.completed`, etc.). `previous_response_id` / `conversation` rejected with HTTP 400 — DejaQ is stateless; clients send full history in `input`. The `chat/` Next.js app is the reference client.
+- `POST /v1/chat/completions` — OpenAI Chat Completions-compatible chat (streaming + non-streaming); **requires** `Authorization: Bearer <workspace-api-key>` (401 when missing/invalid — no anonymous fallback) and optional `X-DejaQ-Department` header; response includes `X-DejaQ-Response-Id` header when cached or stored. Hard queries return HTTP 402 when the workspace has no credential for the configured external provider.
+- `POST /v1/responses` — OpenAI Responses API endpoint (newer recommended format). Same auth (401 without a valid workspace API key) and `X-DejaQ-*` headers. Body: `{model, input: string | [{role, content}...], instructions?, stream?, temperature?, max_output_tokens?}`. Non-streaming: `{id, object:"response", output:[...], output_text, usage:{input_tokens, output_tokens, total_tokens}}`. Streaming: typed SSE events (`response.created`, `response.output_text.delta`, `response.completed`, etc.). `previous_response_id` / `conversation` rejected with HTTP 400 — DejaQ is stateless; clients send full history in `input`. The `chat/` Next.js app is the reference client. **Images:** an `input_image` content part (data URL only; remote URLs rejected 400) attaches one image (>1 image → 400). Image requests bypass the difficulty classifier and always route to the workspace's external (vision-capable) provider on a miss; the cache serves an image hit only when the text pipeline hits AND the image fingerprint gate passes (see below). **Files:** an `input_file` content part (data URL only) attaches one PDF, DOCX, or text/Markdown/code file; one attachment total, so >1 file or image+file is a 400, and an attachment over `DEJAQ_MAX_ATTACHMENT_BYTES` is a 400. PDF and DOCX are recognised by MIME or extension; anything else is recognised by attempting a strict UTF-8 decode of its bytes — no maintained MIME or extension list, so a `.py`/`.json`/`Dockerfile`/etc. attachment is accepted regardless of what MIME the client sent. A type `file_text.kind_for` cannot identify this way (not PDF/DOCX by MIME-or-extension, and not valid UTF-8) is a 400 naming what arrived and what's accepted — checked at parse time, so a recognised-but-unreadable file (scanned/corrupt PDF, corrupt DOCX) is unaffected and still answered without a cache entry. File requests also bypass the classifier and route external on a miss (PDF as a native document part, everything else inlined into the prompt behind the same delimiter Markdown always used); the cache serves a file hit only when the text pipeline hits AND the file's exact hash matches. Only `/v1/responses` accepts attachments — `/v1/chat/completions` stays text-only. **Sticky attachments:** an attachment must be re-sent on every turn it is relevant to. The `chat/` app therefore keeps one **pinned** until the user unpins it, and sets `X-DejaQ-Attachment-Sticky: true` on the carried turns. A follow-up sent *without* the attachment is a plain text request: the model answers from history alone, and its answer is stored as an ungated text entry that a different document could later match — the gates only protect the turns that actually carry the file. The header itself is diagnostic (it appears in the `file kind=` / `image kind=` logs as `carried-over` vs `freshly-attached`); nothing branches on it.
 - `POST /v1/feedback` — thumbs-up/down feedback on a cached response; requires `Authorization: Bearer <workspace-api-key>`; body: `{"response_id": "<X-DejaQ-Response-Id value>", "rating": "positive"|"negative", "comment": "<optional>"}`; first negative deletes entry, subsequent negatives decrement score by 2.0; positive increments score by 1.0
 - `/admin/v1/*` management endpoints — **loopback-only** (127.0.0.1); auth via `local` dev-admin (default) or Supabase JWT when `SUPABASE_URL` is set. In local mode no token is required:
   - `GET /admin/v1/whoami`
@@ -146,73 +215,23 @@ Generation always runs through Ollama (`DEJAQ_OLLAMA_URL`); there is no per-role
   - `DELETE /admin/v1/workspaces/{workspace_slug}/credentials/{provider}`
   - `POST /admin/v1/workspaces/{workspace_slug}/test-provider`
   - `GET|POST /admin/v1/feedback`
+- `dejaq-admin cache purge-images --workspace <slug> [--department <slug>] [--no-dry-run]` — delete image-anchored cache entries after a gate rule change; text entries untouched, defaults to a dry run
 
 ## Architecture
 
-```
-app/
-├── main.py              # FastAPI init, CORS, startup/shutdown, health check
-├── config.py            # Centralized settings (Redis URL, credential encryption key, ChromaDB host/port, feature flags)
-├── celery_app.py        # Celery configuration (broker, queues, serialization)
-├── db/
-│   ├── base.py          # SQLAlchemy declarative base
-│   ├── session.py       # Sync session factory (SQLite via Alembic)
-│   ├── org_repo.py      # Org CRUD
-│   ├── dept_repo.py     # Department CRUD
-│   ├── api_key_repo.py  # API key lookup + caching
-│   ├── llm_config_repo.py # Per-org LLM config CRUD
-│   ├── credential_repo.py # Per-org provider credential CRUD
-│   └── models/
-│       ├── org.py       # Organization ORM model
-│       ├── department.py # Department ORM model (cache_namespace, org FK)
-│       ├── api_key.py   # ApiKey ORM model
-│       ├── org_llm_config.py # Org-level LLM routing config
-│       └── org_provider_credentials.py # Encrypted org provider API keys
-├── dependencies/
-│   └── auth.py          # FastAPI dependency: resolve org/dept from Bearer token
-├── middleware/
-│   └── api_key.py       # Bearer token → org/department resolution; sets request.state
-├── routers/
-│   ├── admin/           # Management REST API (/admin/v1/*)
-│   ├── openai_compat.py # Sole chat endpoint (POST /v1/chat/completions), stateless, OpenAI-compatible
-│   ├── departments.py   # Org/department CRUD
-│   └── feedback.py      # POST /v1/feedback — score-based cache feedback
-├── tasks/
-│   └── cache_tasks.py   # Celery task: generalize_and_store_task (Phi-3.5 + ChromaDB)
-├── services/
-│   ├── model_backends.py # OllamaBackend + MODEL_RUNTIME_SPECS (logical name → Ollama tag)
-│   ├── service_factory.py # Builds pipeline services on the shared Ollama backend
-│   ├── admin_service.py # Shared org/dept/API-key management business logic
-│   ├── stats_service.py # Shared request-log aggregate queries for CLI + admin API
-│   ├── llm_config_service.py # Per-org LLM config defaults/update logic
-│   ├── feedback_service.py # Shared cache feedback score/logging behavior
-│   ├── normalizer.py    # Query cleaning via Qwen 2.5-0.5B
-│   ├── llm_router.py    # Routes "easy"→Gemma 4 E4B local; hard queries go through provider clients
-│   ├── credential_service.py # Fernet encryption/decryption and masked credential responses
-│   ├── provider_inference.py # External model name → provider mapping
-│   ├── external_llm.py  # External provider dispatcher
-│   ├── llm_providers/   # Google, OpenAI, Anthropic provider clients
-│   ├── context_adjuster.py # generalize() strips tone via Phi-3.5 Mini, adjust() adds tone via Qwen 2.5-1.5B
-│   ├── context_enricher.py # Rewrites context-dependent queries into standalone ones (Qwen 1.5B + regex gate, v5)
-│   ├── validator.py     # Cache-answer validator (Gemma E2B): VALID/INVALID judge on cache hits; INVALID → treat as miss
-│   ├── cache_filter.py  # Smart heuristic filter: skips non-cacheable prompts (too short, filler, vague)
-│   ├── classifier.py    # NVIDIA DeBERTa-based prompt complexity classifier (easy/hard routing)
-│   ├── memory_chromaDB.py # ChromaDB semantic cache (HttpClient, cosine ≤ 0.15); score-based eviction
-│   └── request_logger.py  # Async SQLite request log (org, dept, latency, cache hit/miss, model, feedback)
-├── schemas/
-│   ├── chat.py          # ExternalLLMRequest/Response only
-│   ├── openai_compat.py # OpenAI-compatible request/response schemas
-│   ├── feedback.py      # FeedbackRequest schema
-│   ├── org.py           # Org schemas
-│   └── department.py    # Department schemas
-└── utils/
-    ├── logger.py        # Centralized logging config
-    └── exceptions.py    # ExternalLLMError, ExternalLLMAuthError, ExternalLLMTimeoutError
-cli/
-├── admin.py             # dejaq-admin CLI (org, dept, key, stats subcommands)
-├── stats.py             # Stats queries + Rich table rendering
-└── ui.py                # Shared Rich console helpers
-```
+Layering: `routers/` (endpoints) → `services/` (business logic) → `schemas/` (Pydantic models) → `db/models/` (ORM) → `db/*_repo.py` (DB access). Grep for a filename rather than expecting a per-file index here.
+
+| Directory | Holds |
+|---|---|
+| `app/main.py`, `config.py`, `celery_app.py` | FastAPI init + CORS + health, centralized settings, Celery broker/queue config |
+| `app/routers/` | `openai_compat.py` (`/v1/chat/completions`, plus the shared `run_chat_pipeline`), `feedback.py`, `departments.py`, `admin/` (`/admin/v1/*`) |
+| `app/routers/openai_responses.py` | `/v1/responses` — its own router (`openai_responses.py:199`, mounted at `main.py:90`); parses `input`/attachments, then delegates into `openai_compat.run_chat_pipeline` |
+| `app/services/` | The pipeline: `normalizer`, `context_enricher`, `context_adjuster`, `validator`, `cache_filter`, `classifier`, `lexical_match`, `memory_chromaDB` (semantic cache), `image_fingerprint` + `image_text` (image gate), `file_text` (PDF/DOCX/text file gate). Plus infra: `model_backends` (OllamaBackend + `MODEL_RUNTIME_SPECS`), `service_factory`, `llm_router`, `external_llm` + `llm_providers/` (Google/OpenAI/Anthropic), `credential_service`, `provider_inference`, `admin_service`, `stats_service`, `llm_config_service`, `feedback_service`, `request_logger` |
+| `app/tasks/cache_tasks.py` | Celery `generalize_and_store_task` (Gemma 4 E2B + ChromaDB) |
+| `app/db/` | SQLAlchemy base/session, repos, and `models/` (org, department, api_key, org_llm_config, org_provider_credentials) |
+| `app/middleware/`, `app/dependencies/` | Bearer token → org/department resolution onto `request.state` |
+| `app/utils/` | `logger.py`, `exceptions.py` (`ExternalLLMError` / `…AuthError` / `…TimeoutError`) |
+| `cli/` | `dejaq-admin` (org, dept, key, stats) + Rich rendering helpers |
 
 **Key patterns:**
 - All generation runs through Ollama (`OllamaBackend`); `service_factory` builds one shared backend from `DEJAQ_OLLAMA_URL` (local or remote)
@@ -231,7 +250,7 @@ cli/
 
 ### Management API
 
-`/admin/v1/*` is a separate operator surface from the OpenAI-compatible `/v1/*` gateway. It requires Supabase JWT authentication; system access is reserved for configured service paths such as demo seeding.
+`/admin/v1/*` is a separate operator surface from the OpenAI-compatible `/v1/*` gateway. Its authentication follows `config.AUTH_MODE` (`config.py:242-245`): **`local` by default** — an unauthenticated dev-admin context — whenever `SUPABASE_URL` is blank, and Supabase JWT validation otherwise. In `local` mode the surface is protected by loopback binding, not by a credential. See [Management auth modes](#management-auth-modes-adminv1) above.
 
 The org API-key middleware skips `/admin/v1/*` before parsing or logging `Authorization`, so admin tokens are never treated as customer API keys.
 
@@ -248,103 +267,32 @@ The org API-key middleware skips `/admin/v1/*` before parsing or logging `Author
 | Role | Model | Ollama tag |
 |------|-------|-----------|
 | Context Enricher (v5) | Qwen 2.5-1.5B-Instruct | `qwen2.5:1.5b` |
-| Normalizer (cleaning) | Qwen 2.5-0.5B-Instruct | `qwen2.5:0.5b` |
 | Normalizer (opinion rewrite, v22) | Gemma 4 E2B-Instruct | `gemma4:e2b` |
 | Cache Validator | Gemma 4 E2B-Instruct | `gemma4:e2b` |
 | Context Adjuster (adjust) | Qwen 2.5-1.5B-Instruct | `qwen2.5:1.5b` |
-| Generalizer (strip tone) | Phi-3.5-Mini-Instruct | `phi3.5:latest` |
+| Generalizer (strip tone) | Gemma 4 E2B-Instruct | `gemma4:e2b` |
 | Local LLM (generation) | Gemma 4 E4B-Instruct | `gemma4:e4b` |
 | Difficulty Classifier | NVIDIA DeBERTa-v3-base | in-process torch (not Ollama) |
 | Cache embeddings | BAAI/bge-small-en-v1.5 | in-process torch (not Ollama) |
+| Image fingerprint (CLIP) | clip-ViT-B-32 | in-process torch (not Ollama) |
+| Image OCR (documents) | Tesseract `heb+eng` | external `tesseract` binary (not Ollama) |
+| File text (PDF) | pypdf | pure-Python, no model |
 
 ## Deployment Modes (Ollama local / remote)
 
-All generation runs through Ollama. The DeBERTa classifier and BGE cache embeddings still load in-process (torch) on first request. ChromaDB starts with the app stack; Redis backs Celery (or set `DEJAQ_USE_CELERY=false` to run background storage in-process).
-
-Pull the model tags once (anywhere Ollama runs):
-
-```bash
-ollama pull qwen2.5:0.5b qwen2.5:1.5b gemma4:e2b gemma4:e4b phi3.5:latest
-```
-
-**local** — Ollama on the same host (default `http://127.0.0.1:11434`):
-
-```bash
-ollama serve
-./start.sh --stack=all --mode=local
-```
-
-**remote** — Ollama on a LAN/cloud host (private networking, VPN, or an authenticated proxy):
-
-```bash
-export DEJAQ_OLLAMA_URL=http://<host>:11434   # or https://<endpoint>
-./start.sh --stack=server --mode=remote --ollama-url="$DEJAQ_OLLAMA_URL"
-```
+All generation runs through Ollama — `--mode=local` uses `http://127.0.0.1:11434`, `--mode=remote` takes `--ollama-url` (see the Run section for both invocations). The DeBERTa classifier and BGE cache embeddings still load in-process (torch) on first request. ChromaDB starts with the app stack; Redis backs Celery (or set `DEJAQ_USE_CELERY=false` to run background storage in-process).
 
 FastAPI stays lightweight and sends independent async HTTP requests to Ollama; total throughput is bounded by the Ollama host. For external (hard-query) provider credentials set `DEJAQ_CREDENTIAL_ENCRYPTION_KEY` (back it up; losing it is unrecoverable).
 
 ## Test Harnesses
 
-Offline eval harnesses live under `evals/` (`enricher`, `normalizer`, `adjuster`, `validator`). Run from each directory with `uv`. Generated `reports/` are gitignored.
-
-### evals/enricher/ — Context Enricher eval
-
-```bash
-cd evals/enricher
-
-# Run all configs against all 5 datasets
-uv run python -m harness.runner --all-datasets
-
-# Run specific configs only
-uv run python -m harness.runner --configs v2_regex_gate,v3_improved_fewshots --all-datasets
-
-# Single dataset
-uv run python -m harness.runner --configs baseline_qwen_0_5b --dataset dataset/conversations.json
-
-# Recompute metrics from cached raw outputs (no inference)
-uv run python -m harness.runner --metrics-only --raw-from reports/20260413-111941/conversations
-```
-
-**Metric:** Fidelity — cosine distance between embed(enriched) and embed(expected_standalone). Lower = better.
-- `fidelity@0.15` = production cache similarity threshold
-- `fidelity@0.20` = trusted entry threshold
-- `passthrough rate` = % of `passthrough` category rows where enriched ≈ original (dist < 0.05)
-
-**Datasets** (5 files, `dataset/conversations*.json`): `conversations` (general, 60 scenarios), `conversations_coding` (54), `conversations_science` (51), `conversations_culture` (49), `conversations_practical` (49). Each scenario has 3 phrasings × 5 categories: `pronoun_resolution`, `topic_continuation`, `multi_reference`, `passthrough`, `deep_chain`.
-
-**Configs** (`configs/`):
-| Config | Description | Key result |
-|--------|-------------|------------|
-| `baseline_qwen_0_5b` | Production enricher, no gate | ~85% @0.20, 60% passthrough |
-| `v2_regex_gate` | Regex gate skips LLM on standalone queries | ~92% @0.20, 100% passthrough, −30ms |
-| `v3_improved_fewshots` | v2 gate + `\bones?\b` fix + 8 few-shots | +3pp coding, neutral elsewhere |
-
-**Known ceiling:** Qwen 0.5B cannot inject subject nouns into bare "which" comparatives ("Which is cheaper?" from gym vs home history) without domain-specific few-shots. Needs 1.5B or subject-extraction preprocessing to fix.
-
-### evals/normalizer/ — Normalizer eval
-
-```bash
-cd evals/normalizer
-uv run python -m harness.runner
-```
-
-Best config: `v22` (BGE-small embedder + opinion LLM gate) — 81% Hit@0.20.
-
-### evals/adjuster/ — Context Adjuster eval
-
-```bash
-cd evals/adjuster
-uv run python -m harness.runner
-uv run python -m harness.runner --configs baseline_qwen_1_5b
-uv run python -m harness.runner --metrics-only
-```
-
-Uses an LLM judge (requires `ANTHROPIC_API_KEY`) for scoring. Configs in `configs/`, datasets in `dataset/`.
+Offline eval harnesses live under `evals/` (`enricher`, `normalizer`, `adjuster`, `validator`, `image_similarity`). There is deliberately **no** file/document harness — the file gate matches on an exact hash, so it has no threshold to sweep ([docs/file-gate.md](docs/file-gate.md)). Image-gate thresholds are derived by `evals/image_similarity/protocol.py` over a labelled corpus — never by hand. Invocations, metrics, datasets, and per-config results: [evals/README.md](evals/README.md). Generated `reports/` are gitignored.
 
 ## Current Status
 
-**Working:** FastAPI HTTP, Normalizer (Qwen 0.5B, v22), LLM Router (Gemma 4 E4B local → provider-backed external LLMs), Context Adjuster (generalize via Phi-3.5 + adjust via Qwen 1.5B), Semantic cache (ChromaDB, cosine ≤ 0.15), Background generalize+store on cache miss, Context Enricher v5 (Qwen 1.5B + regex gate, 88.7% @0.15 across 5 datasets), Smart Cache Filter (skip non-cacheable prompts), Difficulty Classifier (NVIDIA DeBERTa — routes easy→local, hard→org credential backed provider), Celery + Redis task queue (non-blocking generalize+store), OpenAI-compatible endpoint with API-key auth + per-department cache namespacing, Org/department/API-key/credential management (SQLAlchemy + Alembic SQLite + `dejaq-admin` CLI), Stats tracking (SQLite + Rich CLI — `dejaq-admin stats`), Score-based cache eviction (Celery beat), Feedback API (score adjustments + delete on first negative), Web dashboard (Next.js) with local dev-bypass auth (Supabase JWT in deployment), Ollama-only generation (local or remote via `OllamaBackend`/service_factory — decouples inference from FastAPI for multi-user parallelism). DeBERTa classifier + BGE cache embeddings run in-process (torch). Hard-query runtime credentials come from encrypted `org_provider_credentials`.
-**Planned:** File & image support (multimodal input pipeline), RAG within organizations (per-org document retrieval), PostgreSQL migration, Subject-extraction preprocessing for bare comparative failures ("Which is cheaper?" — 1.5B model not sufficient)
+**Working:** FastAPI HTTP, Normalizer (v22 — lowercase-and-strip passthrough, Gemma 4 E2B on the opinion path only), LLM Router (Gemma 4 E4B local → provider-backed external LLMs), Context Adjuster (generalize via Gemma 4 E2B + adjust via Qwen 1.5B, each behind a sanity guard against runaway/looping generation - store-time for generalize, serve-time for adjust; adjust is skipped altogether on a near-identical single-turn cache hit), Semantic cache (ChromaDB — trusted tier at cosine ≤ 0.15, validator-guarded band 0.15–0.20, align-gated lexical rescue ≤ 0.60, and alias learning that stores a validated band/rescue phrasing as an `alias_of` entry so it becomes an instant trusted hit next time), Background generalize+store on cache miss, Context Enricher v5 (Qwen 1.5B, 88.7% @0.15 across 5 datasets; the regex gate is an eval-only variant in `evals/enricher/configs/v2_regex_gate` and was never promoted into `context_enricher.py`), Smart Cache Filter (skip non-cacheable prompts), Difficulty Classifier (NVIDIA DeBERTa — routes easy→local, hard→org credential backed provider), Celery + Redis task queue (non-blocking generalize+store), OpenAI-compatible endpoint with API-key auth + per-department cache namespacing, Org/department/API-key/credential management (SQLAlchemy + Alembic SQLite + `dejaq-admin` CLI), Stats tracking (SQLite + Rich CLI — `dejaq-admin stats`), Score-based cache eviction (Celery beat), Feedback API (score adjustments + delete on first negative), Web dashboard (Next.js) with local dev-bypass auth (Supabase JWT in deployment), Ollama-only generation (local or remote via `OllamaBackend`/service_factory — decouples inference from FastAPI for multi-user parallelism). DeBERTa classifier + BGE cache embeddings run in-process (torch). Hard-query runtime credentials come from encrypted `org_provider_credentials`. Image caching on `/v1/responses` (one image per request, external vision provider on miss): documents matched by OCR text (Tesseract) on a swept token-overlap threshold plus a shared-token floor, photos by CLIP+dHash, and text-bearing images that miss the document bar refused outright — CLIP embedder runs in-process (torch), OCR shells out to `tesseract`. Thresholds derived over ~1.85M labelled pairs across seven corpora (coursework, DocUNet, FUNSD, arXiv, SROIE receipts, Rico screenshots, INRIA Holidays photos, UHDM screen recaptures); expect roughly 10–42% end-to-end recall depending on the population, which is the measured ceiling for this approach.
+File caching on `/v1/responses` (one PDF, DOCX, or text/Markdown/code file per request): identity is an exact sha256 of the extracted text, so there are no thresholds, no eval harness and no false merges; PDF/DOCX files without a readable text layer (scanned PDFs, corrupt DOCX) are refused rather than guessed at, while text/Markdown/code files have no such floor since decoding them is exact. PDFs reach the provider as a native document part; everything else is inlined behind a data delimiter.
+**Planned:** Scanned-PDF support (needs a "failed document scan" signal, not a threshold), local vision-model generation + per-workspace image routing config (customizable local-vs-external for images — needs a local VLM answer-quality eval first), multi-image / PDF / file support, image alias learning, RAG within organizations (per-org document retrieval), PostgreSQL migration, Subject-extraction preprocessing for bare comparative failures ("Which is cheaper?" — 1.5B model not sufficient)
 
 ## Active Technologies
 

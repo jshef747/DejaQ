@@ -16,6 +16,7 @@ def test_provider_clients_do_not_log_api_key_on_success(monkeypatch, caplog, pro
                 return SimpleNamespace(
                     text="ok",
                     usage_metadata=SimpleNamespace(prompt_token_count=1, candidates_token_count=1),
+                    candidates=[SimpleNamespace(finish_reason="STOP")],
                 )
 
         class FakeClient:
@@ -30,7 +31,10 @@ def test_provider_clients_do_not_log_api_key_on_success(monkeypatch, caplog, pro
         class FakeCompletions:
             async def create(self, **kwargs):
                 return SimpleNamespace(
-                    choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))],
+                    choices=[SimpleNamespace(
+                        message=SimpleNamespace(content="ok"),
+                        finish_reason="stop",
+                    )],
                     usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
                 )
 
@@ -48,6 +52,7 @@ def test_provider_clients_do_not_log_api_key_on_success(monkeypatch, caplog, pro
                 return SimpleNamespace(
                     content=[SimpleNamespace(text="ok")],
                     usage=SimpleNamespace(input_tokens=1, output_tokens=1),
+                    stop_reason="end_turn",
                 )
 
         class FakeClient:
