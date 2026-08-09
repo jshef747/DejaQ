@@ -65,6 +65,20 @@ export default function MessageInput({
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }, [value]);
 
+  // A drop that lands outside the dropzone below hits the browser default:
+  // navigate the tab to the file, wiping unsent input and any unsaved
+  // conversation. Block that everywhere; the dropzone's own onDrop still
+  // runs first (native bubble order) and does the real attach handling.
+  useEffect(() => {
+    const preventDefault = (e: DragEvent) => e.preventDefault();
+    window.addEventListener("dragover", preventDefault);
+    window.addEventListener("drop", preventDefault);
+    return () => {
+      window.removeEventListener("dragover", preventDefault);
+      window.removeEventListener("drop", preventDefault);
+    };
+  }, []);
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     // Enter alone sends; Shift+Enter inserts a newline.
     if (e.key === "Enter" && !e.shiftKey) {

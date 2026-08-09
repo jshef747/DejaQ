@@ -674,15 +674,25 @@ export default function ChatApp() {
   }
 
   async function handleFeedback(msgId: string, rating: FeedbackRating, comment: string) {
-    const msg = messagesRef.current.find((m) => m.id === msgId);
+    const messages = messagesRef.current;
+    const msgIndex = messages.findIndex((m) => m.id === msgId);
+    const msg = msgIndex >= 0 ? messages[msgIndex] : undefined;
     if (!msg?.responseId && !msg?.interactionId) return;
+
+    // An escalation replay re-answers from requestMessages alone - role/content
+    // history, never the attachment - so a blind re-answer to a document/image
+    // question would get cached as an ungated text entry. Withhold the replay
+    // for a turn whose preceding user message carried an attachment; feedback
+    // (score adjustment / delete) is still recorded either way.
+    const precedingUserMsg = [...messages.slice(0, msgIndex)].reverse().find((m) => m.role === "user");
+    const isAttachmentAnchored = Boolean(precedingUserMsg?.imageUrl || precedingUserMsg?.fileName);
 
     updateFeedbackPhase(msgId, "submitting");
 
     const result = await sendFeedback(
       msg.responseId ?? null,
       msg.interactionId ?? null,
-      msg.requestMessages ?? null,
+      isAttachmentAnchored ? null : msg.requestMessages ?? null,
       rating,
       comment,
       settings.deptSlug,
