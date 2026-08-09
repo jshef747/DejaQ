@@ -44,9 +44,15 @@ retrieval distances are comparable to cache distances.
 admin adds text / file / URL / image
    → extract readable text   (services/rag_ingest.py)
    → chunk (~1000 chars, 150 overlap)   (services/rag_service.chunk_text)
-   → embed each chunk (BGE) → upsert into "{workspace}__rag_kb"   (rag_service.index_document)
+   → embed each chunk (BGE)   (rag_service.embed_chunks) — before the DB session opens
    → write a catalog row into SQLite  rag_documents  (title, kind, sha, chunk_count…)
+   → upsert the chunks into "{workspace}__rag_kb"   (rag_service.index_document)
 ```
+
+Embedding runs *outside* the transaction on purpose: it is the slow step, SQLite
+serialises writers, and holding the write lock for the length of a large document
+would fail every concurrent admin write with "database is locked". The upsert then
+runs *inside* the session, so a Chroma failure rolls the catalog row back.
 
 The **catalog** (`rag_documents` table) records *what* was ingested so the admin
 can list and delete it; the retrievable **text** lives as chunks in Chroma, keyed
@@ -121,7 +127,7 @@ From that page an admin can:
 - **Delete** — the trash icon removes a document; its chunks are dropped from the
   knowledge base and it stops grounding answers (a confirm dialog guards it).
 
-> **Editing:** there is no in-place "edit" — knowledge is immutable-by-content. To
+> **Editing:** there is no "edit" action — knowledge is immutable-by-content. To
 > change a document, **delete it and add the corrected version**, or simply re-add
 > the corrected text: because identity is a hash of the content, re-adding the same
 > document **replaces** it, and adding a changed version creates a new one. (You can

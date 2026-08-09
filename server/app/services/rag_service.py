@@ -156,8 +156,10 @@ def index_document(
     """Embed and upsert a document's chunks. Returns the number of chunks stored.
 
     Ids are deterministic ("{doc_id}:{i}"), so calling this again for the same
-    document replaces its chunks in place. Callers that re-index an already-seen
-    document should delete_document_chunks first to clear a now-shorter tail.
+    document replaces its chunks in place. A re-index that produced FEWER chunks
+    than last time leaves the old tail behind: clear it with `delete_chunk_tail`
+    AFTER this call, never with `delete_document_chunks` before it — deleting
+    first would drop chunks with nothing written yet if the index then failed.
     `embeddings` may carry vectors already computed by `embed_chunks`; they are
     recomputed here when absent or out of step with `chunks`.
     """

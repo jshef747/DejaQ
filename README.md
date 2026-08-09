@@ -1,6 +1,6 @@
 # DejaQ
 
-DejaQ is an LLM gateway that reduces cost and latency with semantic caching, local routing, and workspace-scoped provider credentials. Existing clients can use the OpenAI-compatible API while operators manage workspaces, API keys, credentials, stats, and feedback through the management API, CLI, TUI, or dashboard.
+DejaQ is an LLM gateway that reduces cost and latency with semantic caching, local routing, workspace-scoped provider credentials, and a per-workspace knowledge base that grounds answers in the organisation's own documents. Existing clients can use the OpenAI-compatible API while operators manage workspaces, API keys, credentials, stats, and feedback through the management API, CLI, TUI, or dashboard.
 
 ## Project Document
 
@@ -20,6 +20,8 @@ OpenAI-compatible request
      -> miss: difficulty classifier
         -> easy: local model (Gemma 4 E4B)
         -> hard: workspace provider credential (OpenAI / Anthropic / Google)
+        -> either way: relevant chunks from the workspace knowledge base (Rug)
+           are injected into the prompt as grounding, when any are close enough
   -> response
   -> background generalize + store when cacheable
 ```
@@ -115,7 +117,7 @@ Fill `DEJAQ_API_KEY` in `chat/.env.local`, or leave it blank and paste a key int
 - `POST /v1/responses` — OpenAI Responses API (newer recommended format), same auth, stateless (`previous_response_id` rejected)
 - `POST /v1/feedback` — cache feedback with optional thumbs-down escalation to the next serving tier (cache → local → external), authenticated by DejaQ workspace API key
 - `/admin/v1/*` — management API; Supabase JWT in deployment, dev-admin context in local mode
-- `dejaq-admin` — workspace, department, key, and stats CLI (headless/server-only bootstrap)
+- `dejaq-admin` — workspace, department, key, stats, and knowledge-base CLI (headless/server-only bootstrap)
 
 Responses include `X-DejaQ-Interaction-Id`, `X-DejaQ-Tier` (`cache`|`local`|`external`), and (when cached) `X-DejaQ-Response-Id` headers. See [docs/getting-started.md](docs/getting-started.md), [docs/openai-compat-api.md](docs/openai-compat-api.md), [docs/cli-instructions.md](docs/cli-instructions.md), [server/README.md](server/README.md), and [dashboard/README.md](dashboard/README.md).
 
@@ -149,6 +151,16 @@ difficulty classifier and route straight to the workspace's external provider.
 
 Thresholds and their measured derivations: [docs/image-gate.md](docs/image-gate.md) and
 [docs/file-gate.md](docs/file-gate.md). Every setting is listed in `.env.example`.
+
+## Knowledge base (Rug)
+
+Each workspace has an admin-curated knowledge base — a third answer source alongside the
+semantic cache and the model. Admins add pasted text, uploaded files (PDF / DOCX / text /
+code / OCR'd images), or web pages through the dashboard's **Knowledge Base** page,
+`dejaq-admin rag`, or `/admin/v1/workspaces/{slug}/rag-documents`. On a cache miss the
+closest chunks are injected into the prompt as grounding, so answers come from the
+organisation's own facts; the retrieved text never enters the cache key. Setup, tuning, and
+safety rules: [docs/rag-layer.md](docs/rag-layer.md).
 
 ## Bootstrap a workspace + key
 

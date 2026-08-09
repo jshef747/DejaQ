@@ -259,6 +259,9 @@ MAX_ATTACHMENT_BYTES = int(_get_float("DEJAQ_MAX_ATTACHMENT_BYTES", 10 * 1024 * 
 # injected into the prompt as grounding, so the answer comes from the org's own
 # information — synthesised by whichever model (local/external) the query routes
 # to. See services/rag_service.py and the retrieval step in openai_compat.py.
+# Off switches BOTH retrieval and ingestion: every add path (dashboard, API, CLI)
+# is refused in rag_admin_service, so a server that will never read knowledge
+# cannot accumulate it. Listing and deleting stay open so an operator can clean up.
 RAG_ENABLED = _get_bool("DEJAQ_RAG_ENABLED", True)
 # How many chunks to pull per query, and the cosine-distance ceiling a chunk must
 # clear to count as relevant. 0.35 is deliberately looser than the cache trust
