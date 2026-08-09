@@ -483,11 +483,12 @@ def _cache_lookup(memory: object, clean_query: str) -> CacheLookupResult:
 def _cache_lookup_pool(
     memory: object, clean_query: str
 ) -> tuple[list[CacheLookupResult], float | None, str | None]:
-    """Every same-tier candidate, best score first, plus nearest — for
-    attachment-gate fallthrough (see `_evaluate_image_gate`/`_evaluate_file_gate`
-    callers below). Falls back to a single-item list (or empty) for a legacy
-    memory backend that only implements `check_cache`, so the caller's loop
-    works either way.
+    """Every candidate across all tiers — trusted, then band, then rescue,
+    best score first within each — plus nearest, for attachment-gate
+    fallthrough (see `_evaluate_image_gate`/`_evaluate_file_gate` callers
+    below). Falls back to a single-item list (or empty) for a legacy memory
+    backend that only implements `check_cache`, so the caller's loop works
+    either way.
     """
     lookup_pool = getattr(memory, "lookup_cache_pool", None)
     if callable(lookup_pool):
