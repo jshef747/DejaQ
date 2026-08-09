@@ -59,12 +59,18 @@ class OpenAIProviderClient:
 
         logger.debug("Sending hard query to OpenAI model=%s history_turns=%d", request.model, len(request.history))
         start = time.perf_counter()
+        # o-series reasoning models (o1-, o3-, o4-) reject `max_tokens` (need
+        # `max_completion_tokens`) and any non-default temperature.
+        is_reasoning_model = request.model.strip().lower().startswith(("o1-", "o3-", "o4-"))
+        extra_kwargs = {"max_completion_tokens": request.max_tokens} if is_reasoning_model else {
+            "max_tokens": request.max_tokens,
+            "temperature": request.temperature,
+        }
         try:
             response = await client.chat.completions.create(
                 model=request.model,
                 messages=messages,
-                max_tokens=request.max_tokens,
-                temperature=request.temperature,
+                **extra_kwargs,
             )
         except openai.AuthenticationError as exc:
             msg = redact_api_key(exc, api_key)
