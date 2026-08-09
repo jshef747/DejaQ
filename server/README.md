@@ -110,7 +110,7 @@ app/
   routers/feedback.py     /v1/feedback gateway feedback
   routers/admin/          /admin/v1/* management API
   db/                     SQLAlchemy repos, models, migrations-backed schema
-  services/               Pipeline, provider, auth, stats, feedback logic
+  services/               Pipeline, provider, stats, feedback logic
   tasks/cache_tasks.py    Celery generalize-and-store task
   schemas/                Pydantic request/response contracts
 cli/                      Rich-based dejaq-admin CLI

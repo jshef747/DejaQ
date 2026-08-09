@@ -18,7 +18,8 @@ export async function apiFetch(
   if (!BASE_URL) throw new Error("NEXT_PUBLIC_API_BASE_URL is required");
 
   // Dev-admin bypass: the backend grants a local dev-admin context and ignores
-  // this token. Local mode is the only mode.
+  // this token. There is no other auth path — /admin/v1/* is protected by
+  // loopback binding, not by a credential.
   const response = await fetch(`${BASE_URL}${path}`, {
     ...init,
     headers: {
