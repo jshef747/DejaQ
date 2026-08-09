@@ -16,8 +16,6 @@ class WorkspaceRef:
 class ManagementAuthContext:
     actor_type: Literal["user", "system"]
     # Populated for user actors only
-    local_user_id: int | None = None
-    supabase_user_id: str | None = None
     email: str | None = None
     accessible_workspaces: list[WorkspaceRef] = field(default_factory=list)
 
@@ -41,7 +39,7 @@ class ManagementAuthContext:
 
     @classmethod
     def local_dev(cls) -> "ManagementAuthContext":
-        """Dev-admin context used when AUTH_MODE == 'local' (no Supabase).
+        """Dev-admin context used for all management API requests.
 
         Full access like ``system()`` but carries a friendly email so /whoami
         reads sensibly. Local development only — never expose remotely.

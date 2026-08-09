@@ -30,7 +30,7 @@ To disconnect, close the SSH window (or press `Ctrl+C`).
 
 | Surface | Bound to | Protected by |
 |---|---|---|
-| Dashboard (`localhost:3000`) | 127.0.0.1 | Localhost + (optional) Supabase JWT |
+| Dashboard (`localhost:3000`) | 127.0.0.1 | Localhost only (dev-admin bypass, no login) |
 | Admin API (`/admin/v1/*`) | 127.0.0.1 | Loopback middleware (403 from LAN) |
 | Data plane (`/v1/*`) | 0.0.0.0 (LAN) | Workspace API key (`Authorization: Bearer ...`) |
 | ChromaDB (`:8001`) | 127.0.0.1 | Localhost only |

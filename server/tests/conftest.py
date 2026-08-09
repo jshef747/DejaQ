@@ -148,8 +148,6 @@ def scoped_admin_client():
     def build_client(accessible_workspaces: list[WorkspaceRef]):
         ctx = ManagementAuthContext(
             actor_type="user",
-            local_user_id=1,
-            supabase_user_id="test-supabase-uid",
             email="test@example.com",
             accessible_workspaces=accessible_workspaces,
         )

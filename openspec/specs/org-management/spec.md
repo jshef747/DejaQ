@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Operator can create an organization
-The system SHALL allow an operator to create a new organization by providing a name. The system SHALL derive a URL-safe slug from the name and store it alongside a UUID and creation timestamp in Supabase. Org slugs SHALL be globally unique; the system SHALL reject duplicates.
+The system SHALL allow an operator to create a new organization by providing a name. The system SHALL derive a URL-safe slug from the name and store it alongside a UUID and creation timestamp in SQLite. Org slugs SHALL be globally unique; the system SHALL reject duplicates.
 
 #### Scenario: Successful org creation
 - **WHEN** operator runs `dejaq-admin org create --name "Acme Corp"`
@@ -14,7 +14,7 @@ The system SHALL allow an operator to create a new organization by providing a n
 - **THEN** the CLI prints an error message and exits with a non-zero status code
 
 ### Requirement: Operator can list organizations
-The system SHALL allow an operator to retrieve all organizations stored in Supabase, ordered by creation time (newest first).
+The system SHALL allow an operator to retrieve all organizations stored in SQLite, ordered by creation time (newest first).
 
 #### Scenario: List with existing orgs
 - **WHEN** operator runs `dejaq-admin org list`
@@ -29,7 +29,7 @@ The system SHALL allow an operator to delete an organization by its slug or id. 
 
 #### Scenario: Successful org deletion
 - **WHEN** operator runs `dejaq-admin org delete --slug "acme-corp"`
-- **THEN** the org row and all its department rows are deleted from Supabase
+- **THEN** the org row and all its department rows are deleted from SQLite
 - **THEN** the CLI prints a confirmation message including how many departments were removed
 
 #### Scenario: Delete non-existent org

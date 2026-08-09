@@ -3,7 +3,7 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
-from app.db import api_key_repo, dept_repo, user_repo, workspace_repo
+from app.db import api_key_repo, dept_repo, workspace_repo
 from app.db.models.api_key import ApiKey
 from app.db.models.department import Department
 from app.db.models.workspace import Workspace
@@ -158,11 +158,8 @@ def create_workspace(name: str, ctx: ManagementAuthContext = _SYSTEM_CTX) -> Wor
             slug = message.split("'")[1] if "'" in message else name
             raise DuplicateSlug(slug) from exc
 
-        if not ctx.is_system and ctx.local_user_id is not None:
-            user_repo.create_membership_idempotent(session, ctx.local_user_id, new_workspace.id)
-
-    _invalidate_key_cache()
-    return new_workspace
+        _invalidate_key_cache()
+        return new_workspace
 
 
 def rename_workspace(slug: str, new_name: str, ctx: ManagementAuthContext = _SYSTEM_CTX) -> WorkspaceRead:

@@ -33,7 +33,7 @@ def _rate_limit_key(workspace_slug: str, provider: str, ctx: ManagementAuthConte
     if ctx.is_system:
         actor = "system"
     else:
-        actor = f"user:{ctx.local_user_id or ctx.supabase_user_id or ctx.email or 'unknown'}"
+        actor = f"user:{ctx.email or 'unknown'}"
     return (workspace_slug, provider, actor)
 
 

@@ -6,7 +6,7 @@ Every admin route that operates on a specific org must:
 - Return 200/201 when the user actor has membership in that org
 
 These tests use the `scoped_admin_client` fixture, which injects a user actor
-with a controlled list of accessible orgs, bypassing real Supabase validation.
+with a controlled list of accessible orgs, bypassing token validation entirely.
 """
 import pytest
 
@@ -257,34 +257,3 @@ def test_user_actor_whoami_returns_user_info(isolated_org_db, scoped_admin_clien
     assert data["actor_type"] == "user"
     assert data["email"] == "test@example.com"
     assert any(o["slug"] == "acme" for o in data["workspaces"])
-
-
-# ── auto-membership on org creation ──────────────────────────────────────────
-
-def test_user_actor_gets_membership_on_workspace_create(isolated_org_db, scoped_admin_client):
-    """When a user actor creates a workspace, they should automatically be a member in the DB."""
-    from app.db.session import get_session
-    from app.db.models.user import ManagementUser
-    from app.db.models.workspace import Workspace
-    from app.db.models.user_workspace_membership import UserWorkspaceMembership
-
-    # The scoped_admin_client injects local_user_id=1; seed the matching user row
-    # so the FK constraint on user_workspace_memberships is satisfied.
-    with get_session() as session:
-        user = ManagementUser(id=1, supabase_user_id="test-supabase-uid", email="test@example.com")
-        session.add(user)
-
-    client, headers = scoped_admin_client([])  # no pre-existing memberships
-
-    create_resp = client.post("/admin/v1/workspaces", json={"name": "New Org"}, headers=headers)
-    assert create_resp.status_code == 201
-
-    new_slug = create_resp.json()["slug"]
-
-    with get_session() as session:
-        workspace = session.query(Workspace).filter_by(slug=new_slug).first()
-        assert workspace is not None
-        membership = session.query(UserWorkspaceMembership).filter_by(
-            user_id=1, workspace_id=workspace.id
-        ).first()
-        assert membership is not None, "Auto-membership not created for user actor on workspace create"

@@ -61,9 +61,9 @@ The startup helper selects local vs remote Ollama:
 | `GET` | `/health` | none | Health and dependency status |
 | `POST` | `/v1/chat/completions` | DejaQ org API key | OpenAI-compatible chat gateway |
 | `POST` | `/v1/feedback` | DejaQ org API key | Positive/negative cache feedback |
-| `GET/POST/...` | `/admin/v1/*` | Supabase JWT (deployment) / dev-admin (local) | Management API for dashboard and operators |
+| `GET/POST/...` | `/admin/v1/*` | dev-admin (loopback-only) | Management API for dashboard and operators |
 
-Management auth is controlled by `DEJAQ_AUTH_MODE` — `local` (dev-admin bypass, default when Supabase is unconfigured) or `supabase` (per-request JWT validation).
+Management auth is unconditional dev-admin: `/admin/v1/*` requires no credential and is protected only by loopback binding (`AdminLoopbackMiddleware`).
 
 Hard-query external provider calls use encrypted per-org credentials stored through `/admin/v1/orgs/{org}/credentials/{provider}` or the dashboard. There is no runtime platform `GEMINI_API_KEY` fallback.
 
@@ -71,10 +71,6 @@ Hard-query external provider calls use encrypted per-org credentials stored thro
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `DEJAQ_AUTH_MODE` | auto | `local` (dev bypass) or `supabase`; auto-selected from `SUPABASE_URL` |
-| `SUPABASE_URL` | empty | Supabase project URL — enables `supabase` auth mode |
-| `SUPABASE_ANON_KEY` | empty | Supabase anon/public key |
-| `SUPABASE_SERVICE_ROLE_KEY` | empty | Reserved for admin Supabase operations |
 | `DEJAQ_CREDENTIAL_ENCRYPTION_KEY` | empty | Fernet key for org provider credentials |
 | `DEJAQ_REDIS_URL` | `redis://localhost:6379/0` | Celery broker/result backend |
 | `DEJAQ_USE_CELERY` | `true` | Run background storage in Celery or in process |

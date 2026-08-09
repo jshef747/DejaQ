@@ -11,7 +11,6 @@ def whoami(ctx: ManagementAuthContext = Depends(require_management_auth)):
     return {
         "authorized": True,
         "actor_type": ctx.actor_type,
-        "supabase_user_id": ctx.supabase_user_id,
         "email": ctx.email,
         "workspaces": [
             {
