@@ -179,7 +179,7 @@ def test_unknown_workspace_raises(mock_vectors, isolated_org_db):
 
 def test_user_without_access_is_forbidden(workspace, mock_vectors):
     # A user actor whose accessible_workspaces does not include this workspace.
-    stranger = ManagementAuthContext(actor_type="user", local_user_id=42, accessible_workspaces=[])
+    stranger = ManagementAuthContext(actor_type="user", accessible_workspaces=[])
     with pytest.raises(WorkspaceForbidden):
         rag_admin_service.add_text(workspace, "Policy", "Body.", stranger)
 
@@ -191,7 +191,7 @@ def test_access_is_checked_before_ingest_runs(workspace, mock_vectors, monkeypat
         raise AssertionError("ingestion must not run before the access check")
 
     monkeypatch.setattr(rag_admin_service.rag_ingest, "from_url", _boom)
-    stranger = ManagementAuthContext(actor_type="user", local_user_id=42, accessible_workspaces=[])
+    stranger = ManagementAuthContext(actor_type="user", accessible_workspaces=[])
     with pytest.raises(WorkspaceForbidden):
         rag_admin_service.add_url(workspace, "https://example.com", None, stranger)
 

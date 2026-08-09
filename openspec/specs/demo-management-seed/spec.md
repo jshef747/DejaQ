@@ -5,10 +5,10 @@ Define the idempotent demo setup path that creates a ready-to-use management wor
 
 ## Requirements
 
-### Requirement: Setup seeds an authenticated demo workspace
-The system SHALL provide an idempotent setup path that creates a demo Supabase user, a local DejaQ user row, a default demo organization, user-org membership, one or two departments, and sample stats data so a new install can sign in and immediately see a populated management dashboard.
+### Requirement: Setup seeds a demo workspace
+The system SHALL provide an idempotent setup path that creates a default demo organization, one or two departments, and sample stats data so a new install has a populated management dashboard immediately (the dashboard requires no sign-in).
 
-The demo user credentials SHALL be `demo@dejaq.local` / `demo1234`. The demo organization SHALL use a stable slug. Demo departments SHALL use stable slugs. Running the seed more than once SHALL NOT duplicate users, organizations, departments, memberships, or sample stat batches.
+The demo organization SHALL use a stable slug. Demo departments SHALL use stable slugs. Running the seed more than once SHALL NOT duplicate organizations, departments, or sample stat batches.
 
 The `seed demo` command SHALL accept the demo provider credential via either:
 
@@ -17,10 +17,9 @@ The `seed demo` command SHALL accept the demo provider credential via either:
 
 The system SHALL NOT accept the raw key as a literal argv value, because argv values are captured by shell history, `ps auxe`, container inspect output, and CI logs - exposing the key. After all other seed steps complete, the command SHALL upsert the provided key as an encrypted provider credential for the demo org. If `DEJAQ_CREDENTIAL_ENCRYPTION_KEY` is not set when a provider key is supplied, the command SHALL print a warning and skip the credential upsert rather than exiting with an error.
 
-#### Scenario: Demo seed creates sign-in user and org
-- **WHEN** setup runs with Supabase service credentials configured
-- **THEN** Supabase Auth contains a user that can sign in as `demo@dejaq.local` with password `demo1234`
-- **THEN** SQLite contains a matching local user row and membership to the default demo organization
+#### Scenario: Demo seed creates the demo org
+- **WHEN** setup runs
+- **THEN** SQLite contains the default demo organization
 
 #### Scenario: Demo seed creates departments
 - **WHEN** the demo seed completes
@@ -70,17 +69,16 @@ Sample stats SHALL be written to `DEJAQ_STATS_DB` using the same `requests` sche
 - **THEN** seeded stats rows are not duplicated
 - **THEN** the sample stats batch count remains stable
 
-### Requirement: Supabase setup and demo credentials are documented
-`CLAUDE.md` SHALL document the Supabase project setup steps required for local development, the environment variables needed by FastAPI to configure the official Supabase Python SDK, the environment variables or credentials needed for demo user seeding, and the demo credentials `demo@dejaq.local` / `demo1234`. `CLAUDE.md` SHALL also document `DEJAQ_CREDENTIAL_ENCRYPTION_KEY` in the environment variable table (with a backup-or-lose-everything warning) and include both the `--provider-key-stdin` flag and the `DEJAQ_SEED_PROVIDER_KEY` env var usage for `dejaq-admin seed demo`.
+### Requirement: Demo seed setup is documented
+`CLAUDE.md` SHALL document that the management API needs no sign-in or credential setup (loopback-bound, unauthenticated dev-admin context), the environment variables or credentials needed for demo seeding, and `DEJAQ_CREDENTIAL_ENCRYPTION_KEY` in the environment variable table (with a backup-or-lose-everything warning), and SHALL include both the `--provider-key-stdin` flag and the `DEJAQ_SEED_PROVIDER_KEY` env var usage for `dejaq-admin seed demo`.
 
 #### Scenario: Developer can find setup steps
 - **WHEN** a developer reads `CLAUDE.md`
-- **THEN** they can identify how to configure the Supabase Python SDK for management API JWT validation and user lookup
-- **THEN** they can identify how to seed and sign in with the demo user
+- **THEN** they can identify that the management API requires no login and how to seed demo data
 
 #### Scenario: Documentation states gateway is unaffected
 - **WHEN** a developer reads the management auth documentation in `CLAUDE.md`
-- **THEN** it states that `/v1/chat/completions` continues to use DejaQ org API keys instead of Supabase JWTs
+- **THEN** it states that `/v1/chat/completions` continues to use DejaQ org API keys
 
 #### Scenario: Documentation covers credential encryption key
 - **WHEN** a developer reads `CLAUDE.md`

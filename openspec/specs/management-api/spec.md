@@ -26,8 +26,8 @@ The system SHALL expose all management endpoints under the `/admin/v1` URL prefi
 
 #### Scenario: Admin namespace is reachable
 
-- **WHEN** the FastAPI app is started with valid Supabase SDK configuration
-- **THEN** `GET /admin/v1/orgs` with a valid Supabase bearer token returns HTTP 200 and a JSON array scoped to the caller's org memberships
+- **WHEN** the FastAPI app is started
+- **THEN** `GET /admin/v1/orgs` returns HTTP 200 and a JSON array of every organization, via the unauthenticated dev-admin context
 
 #### Scenario: Gateway namespace is unaffected
 
@@ -36,25 +36,19 @@ The system SHALL expose all management endpoints under the `/admin/v1` URL prefi
 
 ### Requirement: Whoami probe endpoint
 
-The system SHALL expose `GET /admin/v1/whoami` returning HTTP 200 when the bearer token is a valid Supabase access JWT. The response SHALL include `{authorized: true, actor_type: "user", supabase_user_id: "<id>", email: "<email>", orgs: [{id, name, slug, created_at}]}` where `orgs` contains the organizations accessible to the caller. For a system context used outside HTTP routing, equivalent service-level identity helpers SHALL report system actor status and full access.
+The system SHALL expose `GET /admin/v1/whoami` returning HTTP 200 for the unauthenticated dev-admin context. The response SHALL include `{authorized: true, actor_type: "system", email: "<email>", workspaces: [{id, name, slug, created_at}]}` where `workspaces` contains every workspace, since the dev-admin context always has full access.
 
-#### Scenario: Probe with valid token
+#### Scenario: Probe returns the dev-admin context
 
-- **WHEN** a client calls `GET /admin/v1/whoami` with a valid Supabase access JWT
+- **WHEN** a client calls `GET /admin/v1/whoami`
 - **THEN** the response is HTTP 200 with `authorized: true`
-- **THEN** the response includes the caller's Supabase user id, email, and accessible org list
-
-#### Scenario: Probe with unknown local membership
-
-- **WHEN** a valid Supabase user with no org memberships calls `GET /admin/v1/whoami`
-- **THEN** the response is HTTP 200 with `authorized: true`
-- **THEN** the response includes an empty org list
+- **THEN** the response includes the dev-admin email and the full workspace list
 
 #### Scenario: Probe response has stable identity fields
 
-- **WHEN** a valid Supabase user calls `GET /admin/v1/whoami`
-- **THEN** the response includes `actor_type`, `supabase_user_id`, `email`, and `orgs`
-- **THEN** each org item includes `id`, `name`, `slug`, and `created_at`
+- **WHEN** a client calls `GET /admin/v1/whoami`
+- **THEN** the response includes `actor_type`, `email`, and `workspaces`
+- **THEN** each workspace item includes `id`, `name`, `slug`, and `created_at`
 
 ### Requirement: Org management endpoints
 
@@ -280,9 +274,9 @@ Collection responses SHALL include only resources from accessible organizations 
 ## REMOVED Requirements
 
 ### Requirement: Admin endpoints require a shared admin bearer token
-**Reason**: Management API authorization is moving from a single shared secret to per-user Supabase authentication and local user-org memberships.
+**Reason**: Management API authorization moved from a single shared secret to loopback-bound, unauthenticated dev-admin access.
 
-**Migration**: Configure the official Supabase Python SDK and send Supabase access JWTs to `/admin/v1/*`. Use the system actor path for CLI commands instead of `DEJAQ_ADMIN_TOKEN`.
+**Migration**: No credential is needed for `/admin/v1/*` — access is restricted by loopback binding instead. Use the system actor path for CLI commands instead of `DEJAQ_ADMIN_TOKEN`.
 
 #### Scenario: Valid admin token is accepted
 
@@ -307,7 +301,7 @@ Collection responses SHALL include only resources from accessible organizations 
 ### Requirement: Admin router fails closed when no admin token is configured
 **Reason**: `DEJAQ_ADMIN_TOKEN` is no longer the management API authentication mechanism.
 
-**Migration**: Configure Supabase SDK values instead. Missing Supabase SDK configuration disables HTTP management auth with HTTP 503.
+**Migration**: No configuration is needed — `require_management_auth` always returns the unauthenticated dev-admin context, and the surface is protected by loopback binding instead.
 
 #### Scenario: DEJAQ_ADMIN_TOKEN is unset or blank
 
