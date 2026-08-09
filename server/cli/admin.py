@@ -490,11 +490,11 @@ def rag_add_file(workspace_slug: str, file_path: str, title: str | None) -> None
     svc = _rag_service()
     with open(file_path, "rb") as fh:
         data = fh.read()
-    filename = title or os.path.basename(file_path)
+    filename = os.path.basename(file_path)
     mime = mimetypes.guess_type(file_path)[0]
     with console.status("[cyan]Extracting + indexing…[/cyan]", spinner="dots"):
         try:
-            item = svc.add_upload(workspace_slug, filename, data, mime, ctx=_SYSTEM_CTX)
+            item = svc.add_upload(workspace_slug, filename, data, mime, title=title, ctx=_SYSTEM_CTX)
         except (admin_service.WorkspaceNotFound, admin_service.WorkspaceForbidden, svc.RagIngestError) as e:
             print_error(str(e))
             sys.exit(1)

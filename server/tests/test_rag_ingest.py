@@ -74,14 +74,30 @@ def test_from_url_rejects_non_http():
     assert not r.ok and "http" in r.reason
 
 
-def test_from_url_extracts_readable_text(monkeypatch):
-    html = b"<html><head><title>Docs</title></head><body><script>x=1</script><p>Hello world</p></body></html>"
+def test_from_upload_title_override_keeps_filename_detection():
+    # A custom title must not replace the filename that drives kind detection
+    # and source_ref.
+    data = b"# Handbook\n\nBe excellent to each other.\n" * 5
+    r = rag_ingest.from_upload("handbook.md", data, "application/octet-stream", title="Team Handbook")
+    assert r.ok and r.kind == "markdown"
+    assert r.title == "Team Handbook"
+    assert r.source_ref == "handbook.md"
 
+
+def _mock_streaming_client(monkeypatch, chunks):
     class _Resp:
-        content = html
-
         def raise_for_status(self):
             return None
+
+        def iter_bytes(self):
+            yield from chunks
+
+    class _Stream:
+        def __enter__(self):
+            return _Resp()
+
+        def __exit__(self, *a):
+            return False
 
     class _Client:
         def __init__(self, **kwargs):
@@ -93,14 +109,28 @@ def test_from_url_extracts_readable_text(monkeypatch):
         def __exit__(self, *a):
             return False
 
-        def get(self, url, headers=None):
-            return _Resp()
+        def stream(self, method, url, headers=None):
+            return _Stream()
 
     import httpx
 
     monkeypatch.setattr(httpx, "Client", _Client)
+
+
+def test_from_url_extracts_readable_text(monkeypatch):
+    html = b"<html><head><title>Docs</title></head><body><script>x=1</script><p>Hello world</p></body></html>"
+    _mock_streaming_client(monkeypatch, [html])
     r = rag_ingest.from_url("https://example.com/docs")
     assert r.ok and r.kind == "url" and r.source == "url"
     assert r.title == "Docs"
     assert "Hello world" in r.text
     assert "x=1" not in r.text  # <script> stripped
+
+
+def test_from_url_stops_reading_at_the_byte_cap(monkeypatch):
+    monkeypatch.setattr(rag_ingest, "_URL_MAX_BYTES", 100)
+    head = b"<html><body><p>capped page</p>"
+    _mock_streaming_client(monkeypatch, [head] + [b"x" * 64] * 1000)
+    r = rag_ingest.from_url("https://example.com/huge")
+    assert r.ok
+    assert len(r.text) < 200  # only the capped prefix was parsed

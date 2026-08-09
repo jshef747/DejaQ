@@ -7,10 +7,10 @@ that orchestration lives in `rag_admin_service`.
 
 Design notes:
 - RAG chunks live in their OWN Chroma collection per workspace,
-  "{workspace_slug}__rag", kept apart from the Q→A cache collections
+  "{workspace_slug}__rag_kb", kept apart from the Q→A cache collections
   ("{workspace_slug}__{dept}"). The cache is volatile — score-evicted and
   deleted on a thumbs-down — and curated knowledge must never be wiped that way.
-  The "__rag" suffix is load-bearing: the eviction beat task skips it.
+  The "__rag_kb" suffix is load-bearing: the eviction beat task skips it.
 - Chunks are embedded with the SAME BGE model the cache uses
   (`memory_chromaDB.embed_text`), so retrieval distances are comparable to cache
   distances and there is one embedder loaded in-process, not two.
@@ -229,16 +229,16 @@ def retrieve(
 
 
 def delete_document_chunks(namespace: str, rag_document_id: int) -> None:
-    """Remove every chunk belonging to one document."""
-    try:
-        collection = get_rag_collection(namespace)
-        collection.delete(where={"rag_document_id": rag_document_id})
-        logger.info("rag_delete_chunks namespace=%s doc_id=%s", namespace, rag_document_id)
-    except Exception:
-        logger.warning(
-            "Failed to delete RAG chunks namespace=%s doc_id=%s",
-            namespace, rag_document_id, exc_info=True,
-        )
+    """Remove every chunk belonging to one document.
+
+    Raises on a Chroma failure: callers delete the catalog row only after this
+    succeeds, so a failed vector delete fails the request instead of leaving
+    orphaned chunks that keep grounding answers with no admin handle left to
+    remove them.
+    """
+    collection = get_rag_collection(namespace)
+    collection.delete(where={"rag_document_id": rag_document_id})
+    logger.info("rag_delete_chunks namespace=%s doc_id=%s", namespace, rag_document_id)
 
 
 def delete_namespace(namespace: str) -> None:

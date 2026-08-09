@@ -12,7 +12,7 @@ class RagDocument(Base):
     This is only the CATALOG: the row records what was ingested (title, kind,
     identity hash, how many chunks it produced) so an admin can list and delete
     it. The retrievable text lives as chunks in the workspace's ChromaDB
-    collection ("{workspace_slug}__rag"), keyed back here by `rag_document_id`.
+    collection ("{workspace_slug}__rag_kb"), keyed back here by `rag_document_id`.
     Deleting the row must also delete those chunks — see rag_admin_service.
 
     `sha` is the sha256 of the whitespace-normalised extracted text, reused from

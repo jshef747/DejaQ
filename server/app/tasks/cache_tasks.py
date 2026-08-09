@@ -152,7 +152,7 @@ def evict_low_score_entries() -> dict:
         )
         namespaces = list(_pool.keys())
     for namespace in namespaces:
-        # RAG (Rug) knowledge collections ("{workspace}__rag") are curated by
+        # RAG (Rug) knowledge collections ("{workspace}__rag_kb") are curated by
         # admins, carry no score, and must never be score-evicted like the Q→A
         # cache — that is the whole reason they live in a separate collection.
         if rag_service.is_rag_namespace(namespace):

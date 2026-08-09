@@ -85,12 +85,9 @@ async def upload_rag_document(
         )
     if not data:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-    # `title` (optional form field) lets the admin override the filename-derived
-    # title; rag_ingest falls back to the filename when it is blank.
-    filename = title.strip() if (title and title.strip()) else file.filename
     try:
         return rag_admin_service.add_upload(
-            workspace_slug, filename, data, file.content_type, ctx
+            workspace_slug, file.filename, data, file.content_type, title, ctx
         )
     except (WorkspaceNotFound, WorkspaceForbidden, RagIngestError) as exc:
         raise _map_workspace_errors(exc)

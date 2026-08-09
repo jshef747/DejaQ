@@ -141,10 +141,11 @@ def add_upload(
     filename: str | None,
     data: bytes,
     mime: str | None,
+    title: str | None = None,
     ctx: ManagementAuthContext = _SYSTEM_CTX,
 ) -> RagDocumentItem:
     _assert_access(workspace_slug, ctx)
-    return _store(workspace_slug, rag_ingest.from_upload(filename, data, mime), ctx)
+    return _store(workspace_slug, rag_ingest.from_upload(filename, data, mime, title), ctx)
 
 
 def add_url(

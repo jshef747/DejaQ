@@ -254,7 +254,7 @@ MAX_ATTACHMENT_BYTES = int(_get_float("DEJAQ_MAX_ATTACHMENT_BYTES", 10 * 1024 * 
 
 # --- Rug (RAG) — per-workspace knowledge layer ---
 # A third answer source alongside the Q→A cache and the LLM: admins curate
-# documents into a workspace's own knowledge base ("{workspace_slug}__rag"
+# documents into a workspace's own knowledge base ("{workspace_slug}__rag_kb"
 # Chroma collection). On a cache MISS, the closest chunks are retrieved and
 # injected into the prompt as grounding, so the answer comes from the org's own
 # information — synthesised by whichever model (local/external) the query routes

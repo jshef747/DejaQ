@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import time
 from dataclasses import dataclass
 
 from app.config import MAX_ATTACHMENT_BYTES
@@ -30,6 +31,11 @@ _WHITESPACE_RE = re.compile(r"\s+")
 _IMAGE_MIME_PREFIX = "image/"
 # A URL fetch that returns more than this is almost certainly not an article.
 _URL_MAX_BYTES = MAX_ATTACHMENT_BYTES
+# Scanned-PDF OCR runs one tesseract pass per embedded image on a FastAPI
+# threadpool worker, so a many-page scan needs a hard ceiling: whichever of
+# these budgets is hit first stops the loop and keeps the text read so far.
+_SCANNED_PDF_MAX_PAGES = 50
+_SCANNED_PDF_MAX_SECONDS = 120.0
 
 
 @dataclass(frozen=True)
@@ -75,12 +81,19 @@ def from_text(title: str, content: str) -> IngestResult:
     return _finalize(title=title, kind="text", source="paste", source_ref=None, text=content)
 
 
-def from_upload(filename: str | None, data: bytes, mime: str | None) -> IngestResult:
-    """Extract text from an uploaded file, OCR'ing images and scanned PDFs."""
+def from_upload(
+    filename: str | None, data: bytes, mime: str | None, title: str | None = None
+) -> IngestResult:
+    """Extract text from an uploaded file, OCR'ing images and scanned PDFs.
+
+    `filename` is the real name of the uploaded file — it feeds extension-based
+    kind detection and is stored as source_ref. `title` is only a display-name
+    override and never influences extraction.
+    """
     if len(data) > MAX_ATTACHMENT_BYTES:
         return IngestResult(ok=False, reason=f"file exceeds {MAX_ATTACHMENT_BYTES} bytes")
 
-    display = (filename or "").strip() or "upload"
+    display = (title or "").strip() or (filename or "").strip() or "upload"
     ft = file_text.extract(data, mime, filename)
 
     # 1. A file with a real text layer (PDF/DOCX/Markdown/code) — the common case.
@@ -127,7 +140,15 @@ def _ocr_scanned_pdf(data: bytes) -> str:
             except Exception:
                 return ""
         parts: list[str] = []
-        for page in reader.pages:
+        deadline = time.monotonic() + _SCANNED_PDF_MAX_SECONDS
+        total_pages = len(reader.pages)
+        for page_index, page in enumerate(reader.pages):
+            if page_index >= _SCANNED_PDF_MAX_PAGES or time.monotonic() > deadline:
+                logger.info(
+                    "Scanned-PDF OCR stopped at page %d/%d (page/time budget reached)",
+                    page_index, total_pages,
+                )
+                break
             try:
                 for img in page.images:
                     page_text = image_text.ocr_plaintext(img.data)
@@ -153,9 +174,14 @@ def from_url(url: str, title: str | None = None) -> IngestResult:
         import httpx
 
         with httpx.Client(follow_redirects=True, timeout=20.0) as client:
-            resp = client.get(url, headers={"User-Agent": "DejaQ-RAG/1.0"})
-            resp.raise_for_status()
-            raw = resp.content[:_URL_MAX_BYTES]
+            with client.stream("GET", url, headers={"User-Agent": "DejaQ-RAG/1.0"}) as resp:
+                resp.raise_for_status()
+                buf = bytearray()
+                for chunk in resp.iter_bytes():
+                    buf.extend(chunk)
+                    if len(buf) >= _URL_MAX_BYTES:
+                        break
+                raw = bytes(buf[:_URL_MAX_BYTES])
     except Exception as exc:
         return IngestResult(ok=False, kind="url", source="url",
                             reason=f"could not fetch URL ({type(exc).__name__})")

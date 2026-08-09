@@ -75,6 +75,20 @@ def test_delete_removes_catalog_row_and_chunks(workspace, mock_vectors):
     assert (ns, item.id) in mock_vectors["deleted"]
 
 
+def test_failed_chunk_delete_keeps_the_catalog_row(workspace, mock_vectors, monkeypatch):
+    # A Chroma failure must fail the request and leave the row, never report
+    # deleted=true while orphaned chunks keep grounding answers.
+    item = rag_admin_service.add_text(workspace, "Policy", "Body.", _SYSTEM)
+
+    def _boom(ns, doc_id):
+        raise RuntimeError("chroma down")
+
+    monkeypatch.setattr(rag_service, "delete_document_chunks", _boom)
+    with pytest.raises(RuntimeError):
+        rag_admin_service.delete_document(workspace, item.id, _SYSTEM)
+    assert [d.id for d in rag_admin_service.list_documents(workspace, _SYSTEM)] == [item.id]
+
+
 def test_delete_missing_document_raises(workspace, mock_vectors):
     with pytest.raises(rag_admin_service.RagDocumentNotFound):
         rag_admin_service.delete_document(workspace, 9999, _SYSTEM)
