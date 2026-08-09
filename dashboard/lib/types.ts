@@ -73,6 +73,18 @@ export type ApiKeyDeleted = {
   deleted: boolean;
 };
 
+export type RagDocumentItem = {
+  id: number;
+  title: string;
+  kind: string;        // text | pdf | docx | markdown | url | image
+  source: string;      // paste | upload | url | ocr
+  source_ref: string | null;
+  char_count: number;
+  chunk_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
 export type Provider = "google" | "openai" | "anthropic";
 
 export const LIVE_PROVIDERS: Provider[] = ["google", "openai", "anthropic"];

@@ -186,8 +186,23 @@ def delete_workspace(slug: str, ctx: ManagementAuthContext = _SYSTEM_CTX) -> Wor
         session.flush()
     for ns in namespaces:
         _delete_chroma_namespace(ns)
+    # The workspace's RAG knowledge base is its own Chroma collection, separate
+    # from the department cache namespaces above. Its catalog rows cascade-delete
+    # with the workspace (FK), but the vectors must be dropped explicitly.
+    _delete_rag_namespace(slug)
     _invalidate_key_cache()
     return WorkspaceDeleteResult(deleted=True, departments_removed=departments_removed)
+
+
+def _delete_rag_namespace(workspace_slug: str) -> None:
+    try:
+        from app.services import rag_service
+
+        rag_service.delete_namespace(rag_service.rag_namespace(workspace_slug))
+    except Exception:
+        logging.getLogger("dejaq.admin_service").warning(
+            "Could not delete RAG collection for workspace '%s'", workspace_slug, exc_info=True
+        )
 
 
 def list_departments(

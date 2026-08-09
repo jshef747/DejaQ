@@ -18,6 +18,7 @@ if config.config_file_name is not None:
 from app.db.base import Base  # noqa: E402
 import app.db.models.workspace  # noqa: E402, F401
 import app.db.models.department  # noqa: E402, F401
+import app.db.models.rag_document  # noqa: E402, F401
 import app.db.models.api_key  # noqa: E402, F401
 import app.db.models.workspace_llm_config  # noqa: E402, F401
 import app.db.models.workspace_provider_credentials  # noqa: E402, F401

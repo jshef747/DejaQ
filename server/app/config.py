@@ -33,6 +33,17 @@ def _get_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _get_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("Invalid %s value; using default %s", name, default)
+        return default
+
+
 # Redis
 REDIS_URL = os.getenv("DEJAQ_REDIS_URL", "redis://localhost:6379/0")
 
@@ -240,6 +251,36 @@ CACHE_FILE_MIN_CHARS = int(_get_float("DEJAQ_CACHE_FILE_MIN_CHARS", 200))
 # checks 10MB of its own, but a client-side check is not a limit — anything
 # speaking the API directly bypasses it.
 MAX_ATTACHMENT_BYTES = int(_get_float("DEJAQ_MAX_ATTACHMENT_BYTES", 10 * 1024 * 1024))
+
+# --- Rug (RAG) — per-workspace knowledge layer ---
+# A third answer source alongside the Q→A cache and the LLM: admins curate
+# documents into a workspace's own knowledge base ("{workspace_slug}__rag_kb"
+# Chroma collection). On a cache MISS, the closest chunks are retrieved and
+# injected into the prompt as grounding, so the answer comes from the org's own
+# information — synthesised by whichever model (local/external) the query routes
+# to. See services/rag_service.py and the retrieval step in openai_compat.py.
+# Off switches BOTH retrieval and ingestion: every add path (dashboard, API, CLI)
+# is refused in rag_admin_service, so a server that will never read knowledge
+# cannot accumulate it. Listing and deleting stay open so an operator can clean up.
+RAG_ENABLED = _get_bool("DEJAQ_RAG_ENABLED", True)
+# How many chunks to pull per query, and the cosine-distance ceiling a chunk must
+# clear to count as relevant. 0.35 is deliberately looser than the cache trust
+# distance (0.15): we want related context to ground the model, not an exact
+# match. NOT a swept threshold — tune against real knowledge bases before trusting
+# it in production; too loose injects noise, too tight injects nothing.
+RAG_TOP_K = _get_int("DEJAQ_RAG_TOP_K", 4)
+RAG_MAX_DISTANCE = _get_float("DEJAQ_RAG_MAX_DISTANCE", 0.35)
+# Chunking: window size and overlap in characters when splitting a document.
+RAG_CHUNK_CHARS = _get_int("DEJAQ_RAG_CHUNK_CHARS", 1000)
+RAG_CHUNK_OVERLAP = _get_int("DEJAQ_RAG_CHUNK_OVERLAP", 150)
+# Hard cap on the total characters of retrieved context injected into one prompt,
+# so a handful of large chunks cannot blow the local model's context budget.
+RAG_MAX_CONTEXT_CHARS = _get_int("DEJAQ_RAG_MAX_CONTEXT_CHARS", 6000)
+# When RAG chunks are found, optionally force the request to the external
+# (long-context) provider instead of respecting the difficulty classifier's
+# local/external decision. Off by default — the classifier only ever sees the
+# bare question, so routing stays stable and the local model still gets grounding.
+RAG_FORCE_EXTERNAL = _get_bool("DEJAQ_RAG_FORCE_EXTERNAL", False)
 
 # Model backend: generation runs through Ollama (local or remote per this URL).
 OLLAMA_URL = _get_text("DEJAQ_OLLAMA_URL", "http://127.0.0.1:11434")
