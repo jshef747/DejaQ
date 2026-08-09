@@ -54,7 +54,12 @@ back to the catalog row by `rag_document_id`.
 
 Identity is a `sha256` of the whitespace-normalised extracted text. Re-adding the
 same content (same words) **replaces** the existing document rather than
-duplicating it — enforced by a `(workspace_id, sha)` unique constraint.
+duplicating it — enforced by a `(workspace_id, sha)` unique constraint. The
+replace updates that catalog row **in place**, so one sha keeps one id for the
+life of the document: chunk ids are derived from it (`{rag_document_id}:{index}`),
+and swapping the row for a fresh insert would let SQLite hand the replacement the
+rowid it just freed, so cleaning up "the old document's" chunks would delete the
+ones the re-index had only just written.
 
 ### Retrieval + grounding (user asks a question)
 

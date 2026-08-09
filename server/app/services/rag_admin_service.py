@@ -111,26 +111,38 @@ def _store(
     with get_session() as session:
         workspace = _resolve_workspace(session, workspace_slug, ctx)
 
-        # Re-adding the same content is a replace, not a duplicate: the old row
-        # goes now so the unique (workspace_id, sha) holds, but its chunks are
-        # dropped only after the new ones are indexed — a failed re-index must
-        # roll back to the old document intact, and Chroma has no rollback.
+        # Re-adding the same content (same sha) is a replace, not a duplicate,
+        # and it updates the existing row IN PLACE. Deleting the row and
+        # inserting a new one would satisfy the unique (workspace_id, sha) just
+        # as well, but SQLite hands a plain INTEGER PRIMARY KEY the rowid of the
+        # row just deleted, so the "new" document can be handed the id whose
+        # chunks are about to be cleaned up — and the cleanup would take the
+        # chunks it had just written. One id per sha removes that whole class.
         existing = rag_document_repo.get_by_sha(session, workspace.id, ingest.sha)
-        existing_id = existing.id if existing is not None else None
-        if existing_id is not None:
-            rag_document_repo.delete(session, workspace.id, existing_id)
-
-        row = rag_document_repo.create(
-            session,
-            workspace.id,
-            title=ingest.title,
-            kind=ingest.kind,
-            source=ingest.source,
-            source_ref=ingest.source_ref,
-            sha=ingest.sha,
-            char_count=ingest.char_count,
-            chunk_count=len(chunks),
-        )
+        previous_chunk_count = existing.chunk_count if existing is not None else 0
+        if existing is not None:
+            row = rag_document_repo.update_content(
+                session,
+                existing,
+                title=ingest.title,
+                kind=ingest.kind,
+                source=ingest.source,
+                source_ref=ingest.source_ref,
+                char_count=ingest.char_count,
+                chunk_count=len(chunks),
+            )
+        else:
+            row = rag_document_repo.create(
+                session,
+                workspace.id,
+                title=ingest.title,
+                kind=ingest.kind,
+                source=ingest.source,
+                source_ref=ingest.source_ref,
+                sha=ingest.sha,
+                char_count=ingest.char_count,
+                chunk_count=len(chunks),
+            )
         # Index into Chroma while still inside the session, so a Chroma failure
         # rolls back the catalog row (get_session rolls back on exception).
         rag_service.index_document(
@@ -143,8 +155,11 @@ def _store(
             kind=ingest.kind,
             source_ref=ingest.source_ref,
         )
-        if existing_id is not None:
-            rag_service.delete_document_chunks(namespace, existing_id)
+        # Deterministic chunk ids mean the upsert above already replaced indices
+        # 0..len(chunks)-1; only a tail left over from a longer previous version
+        # needs removing, and only after the new chunks are safely written.
+        if previous_chunk_count > len(chunks):
+            rag_service.delete_chunk_tail(namespace, row.id, len(chunks))
         item = RagDocumentItem.model_validate(row)
     logger.info(
         "rag_add workspace=%s doc_id=%s kind=%s source=%s chunks=%d",

@@ -31,6 +31,33 @@ def create(
     return row
 
 
+def update_content(
+    session: Session,
+    row: RagDocument,
+    *,
+    title: str,
+    kind: str,
+    source: str,
+    source_ref: str | None,
+    char_count: int,
+    chunk_count: int,
+) -> RagDocument:
+    """Refresh an existing document in place, keeping its id.
+
+    Re-adding the same words (same sha) is a replace. It updates this row rather
+    than swapping it for a new one, so the id chunks are keyed by never changes.
+    """
+    row.title = title
+    row.kind = kind
+    row.source = source
+    row.source_ref = source_ref
+    row.char_count = char_count
+    row.chunk_count = chunk_count
+    session.flush()
+    session.refresh(row)
+    return row
+
+
 def get(session: Session, workspace_id: int, doc_id: int) -> RagDocument | None:
     return (
         session.query(RagDocument)

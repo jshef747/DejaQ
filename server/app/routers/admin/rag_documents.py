@@ -3,7 +3,7 @@ import logging
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from starlette.concurrency import run_in_threadpool
 
-from app.config import MAX_ATTACHMENT_BYTES, RAG_ENABLED
+from app.config import MAX_ATTACHMENT_BYTES
 from app.dependencies.admin_auth import require_management_auth
 from app.dependencies.management_auth import ManagementAuthContext
 from app.schemas.admin.rag_documents import (
@@ -82,8 +82,6 @@ async def upload_rag_document(
     title: str | None = Form(default=None),
     ctx: ManagementAuthContext = Depends(require_management_auth),
 ):
-    if not RAG_ENABLED:
-        raise HTTPException(status_code=400, detail="RAG is disabled on this server.")
     data = await file.read()
     if len(data) > MAX_ATTACHMENT_BYTES:
         raise HTTPException(

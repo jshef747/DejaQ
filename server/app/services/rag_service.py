@@ -254,6 +254,29 @@ def delete_document_chunks(namespace: str, rag_document_id: int) -> None:
     logger.info("rag_delete_chunks namespace=%s doc_id=%s", namespace, rag_document_id)
 
 
+def delete_chunk_tail(namespace: str, rag_document_id: int, keep_count: int) -> None:
+    """Drop a re-indexed document's chunks beyond its new length.
+
+    Chunk ids are deterministic, so re-indexing upserts over indices
+    0..keep_count-1; a shorter rewrite leaves the old tail behind, still
+    retrievable and no longer part of the document. Only that tail is removed —
+    never the chunks just written.
+    """
+    collection = get_rag_collection(namespace)
+    collection.delete(
+        where={
+            "$and": [
+                {"rag_document_id": {"$eq": rag_document_id}},
+                {"chunk_index": {"$gte": keep_count}},
+            ]
+        }
+    )
+    logger.info(
+        "rag_delete_chunk_tail namespace=%s doc_id=%s from_index=%d",
+        namespace, rag_document_id, keep_count,
+    )
+
+
 def delete_namespace(namespace: str) -> None:
     """Drop a workspace's entire RAG collection (used on workspace deletion)."""
     logger_ = logging.getLogger("dejaq.rag")

@@ -29,23 +29,42 @@ def workspace(isolated_org_db):
 
 @pytest.fixture
 def mock_vectors(monkeypatch):
-    """Replace the vector side: chunk into fixed pieces, record index/delete calls."""
-    calls = {"indexed": [], "deleted": [], "order": [], "embeddings": []}
+    """Replace the vector side with an in-memory chunk store.
+
+    `store` is keyed exactly like Chroma ("{doc_id}:{index}"), so a delete that
+    targets the ids just written shows up as missing chunks rather than as a
+    plausible-looking call log.
+    """
+    calls = {"indexed": [], "deleted": [], "order": [], "embeddings": [], "store": {}}
+    store = calls["store"]
     monkeypatch.setattr(rag_service, "chunk_text", lambda text: ["chunk-a", "chunk-b"])
     monkeypatch.setattr(rag_service, "embed_chunks", lambda chunks: [[0.5]] * len(chunks))
 
     def _index(namespace, doc_id, chunks, **kw):
+        for i, chunk in enumerate(chunks):
+            store[f"{doc_id}:{i}"] = chunk
         calls["indexed"].append((namespace, doc_id, len(chunks)))
         calls["embeddings"].append(kw.get("embeddings"))
         calls["order"].append(("index", doc_id))
         return len(chunks)
 
     def _delete(namespace, doc_id):
+        for key in [k for k in store if k.split(":")[0] == str(doc_id)]:
+            del store[key]
         calls["deleted"].append((namespace, doc_id))
         calls["order"].append(("delete", doc_id))
 
+    def _delete_tail(namespace, doc_id, keep_count):
+        for key in [
+            k for k in store
+            if k.split(":")[0] == str(doc_id) and int(k.split(":")[1]) >= keep_count
+        ]:
+            del store[key]
+        calls["order"].append(("delete_tail", doc_id, keep_count))
+
     monkeypatch.setattr(rag_service, "index_document", _index)
     monkeypatch.setattr(rag_service, "delete_document_chunks", _delete)
+    monkeypatch.setattr(rag_service, "delete_chunk_tail", _delete_tail)
     return calls
 
 
@@ -72,16 +91,44 @@ def test_re_adding_identical_content_replaces_not_duplicates(workspace, mock_vec
     second = rag_admin_service.add_text(workspace, "Policy renamed", "Same body.", _SYSTEM)
     docs = rag_admin_service.list_documents(workspace, _SYSTEM)
     assert len(docs) == 1  # replaced, not duplicated
-    ns = rag_service.rag_namespace(workspace)
-    assert (ns, first.id) in mock_vectors["deleted"]
-    assert second.id != first.id or docs[0].title == "Policy renamed"
-    # The old chunks go only AFTER the new ones are indexed: Chroma cannot roll
-    # back, so dropping them first would leave a chunk-less row on a failed index.
-    assert mock_vectors["order"][-2:] == [("index", second.id), ("delete", first.id)]
+    assert docs[0].title == "Policy renamed"
+    # The row is refreshed in place, so the id chunks are keyed by never moves.
+    assert second.id == first.id
+    assert mock_vectors["deleted"] == []
+
+
+def test_re_adding_keeps_the_chunks_it_just_wrote(workspace, mock_vectors):
+    """The replaced document must still be retrievable afterwards.
+
+    SQLite reuses a deleted rowid, so a replace that dropped the old row and
+    inserted a new one could be handed the same id — and a delete-by-document-id
+    cleanup would then wipe the chunks the re-index had just written, leaving a
+    catalog row that grounds nothing and no error anywhere.
+    """
+    first = rag_admin_service.add_text(workspace, "Policy", "Same body.", _SYSTEM)
+    second = rag_admin_service.add_text(workspace, "Policy renamed", "Same body.", _SYSTEM)
+    assert second.chunk_count == 2
+    assert first.id == second.id
+    assert mock_vectors["store"] == {f"{second.id}:0": "chunk-a", f"{second.id}:1": "chunk-b"}
+
+
+def test_a_shorter_rewrite_drops_only_the_stale_tail(workspace, mock_vectors, monkeypatch):
+    first = rag_admin_service.add_text(workspace, "Policy", "Same body.", _SYSTEM)
+    assert len(mock_vectors["store"]) == 2
+
+    # Same sha (sha is over the NORMALISED text) but a shorter chunking, so the
+    # previous version's last chunk is no longer part of the document.
+    monkeypatch.setattr(rag_service, "chunk_text", lambda text: ["chunk-a"])
+    second = rag_admin_service.add_text(workspace, "Policy", "Same  body.", _SYSTEM)
+
+    assert second.id == first.id and second.chunk_count == 1
+    assert mock_vectors["store"] == {f"{second.id}:0": "chunk-a"}
+    assert ("delete_tail", second.id, 1) in mock_vectors["order"]
 
 
 def test_failed_reindex_leaves_the_previous_document_intact(workspace, mock_vectors, monkeypatch):
     first = rag_admin_service.add_text(workspace, "Policy", "Same body.", _SYSTEM)
+    chunks_before = dict(mock_vectors["store"])
 
     def _boom(*a, **kw):
         raise RuntimeError("chroma down")
@@ -90,10 +137,12 @@ def test_failed_reindex_leaves_the_previous_document_intact(workspace, mock_vect
     with pytest.raises(RuntimeError):
         rag_admin_service.add_text(workspace, "Policy renamed", "Same body.", _SYSTEM)
 
-    # The catalog row survived the rollback, and its chunks were never deleted —
-    # the document still grounds answers exactly as it did before the failed re-add.
-    assert [d.id for d in rag_admin_service.list_documents(workspace, _SYSTEM)] == [first.id]
+    # The catalog row survived the rollback with its original title, and its
+    # chunks were never deleted — the document grounds answers as it did before.
+    docs = rag_admin_service.list_documents(workspace, _SYSTEM)
+    assert [(d.id, d.title) for d in docs] == [(first.id, "Policy")]
     assert mock_vectors["deleted"] == []
+    assert mock_vectors["store"] == chunks_before
 
 
 def test_delete_removes_catalog_row_and_chunks(workspace, mock_vectors):

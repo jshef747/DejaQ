@@ -129,3 +129,15 @@ def test_retrieve_empty_collection_returns_nothing(monkeypatch):
 def test_delete_document_chunks_targets_the_document(fake_collection):
     rag_service.delete_document_chunks("acme__rag", 7)
     assert fake_collection.deleted_where == {"rag_document_id": 7}
+
+
+def test_delete_chunk_tail_spares_the_chunks_that_were_just_reindexed(fake_collection):
+    # A re-index upserts 0..keep_count-1 over the old ids, so only the leftover
+    # tail of a longer previous version may be removed.
+    rag_service.delete_chunk_tail("acme__rag", 7, 3)
+    assert fake_collection.deleted_where == {
+        "$and": [
+            {"rag_document_id": {"$eq": 7}},
+            {"chunk_index": {"$gte": 3}},
+        ]
+    }
