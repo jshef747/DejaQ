@@ -868,9 +868,10 @@ async def run_chat_pipeline(
                     ocr=image_ocr,
                     lookup=_candidate,
                 )
-                _image_clip_distance = detail.get("clip_distance")
-                _image_hamming = detail.get("hamming")
-                _image_token_jaccard = detail.get("token_jaccard")
+                if detail:
+                    _image_clip_distance = detail.get("clip_distance")
+                    _image_hamming = detail.get("hamming")
+                    _image_token_jaccard = detail.get("token_jaccard")
                 _image_gate_logged = True
                 # Print only the comparison that actually ran, against its own
                 # threshold, so the number that decided the outcome is obvious.
