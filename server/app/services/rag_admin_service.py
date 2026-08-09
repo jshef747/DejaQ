@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 
+from app.config import RAG_ENABLED
 from app.db import rag_document_repo
 from app.db.models.workspace import Workspace
 from app.db.session import get_session
@@ -42,6 +43,13 @@ class RagIngestError(Exception):
         super().__init__(reason)
 
 
+class RagDisabledError(Exception):
+    """DEJAQ_RAG_ENABLED is off, so no document may be added."""
+
+    def __init__(self) -> None:
+        super().__init__("RAG is disabled on this server (DEJAQ_RAG_ENABLED=false).")
+
+
 def _resolve_workspace(session, workspace_slug: str, ctx: ManagementAuthContext) -> Workspace:
     workspace = session.query(Workspace).filter_by(slug=workspace_slug).first()
     if workspace is None:
@@ -51,13 +59,21 @@ def _resolve_workspace(session, workspace_slug: str, ctx: ManagementAuthContext)
     return workspace
 
 
-def _assert_access(workspace_slug: str, ctx: ManagementAuthContext) -> None:
-    """Check the workspace exists and the caller may write to it — BEFORE ingest.
+def _assert_can_add(workspace_slug: str, ctx: ManagementAuthContext) -> None:
+    """Check RAG is on, the workspace exists, and the caller may write to it.
 
-    Ingestion can do real work (fetch a URL, OCR an image) so authorization must
-    be settled first: an authenticated user without access to this workspace must
-    not be able to make the server fetch a URL on their behalf.
+    Runs BEFORE ingest, because ingestion does real work (fetch a URL, OCR an
+    image): an authenticated user without access to this workspace must not be
+    able to make the server fetch a URL on their behalf, and a server with RAG
+    switched off must not accumulate knowledge that retrieval will never read.
+
+    This is the single boundary every add path routes through — the HTTP router
+    and the `dejaq-admin rag` CLI both land here — so the kill switch cannot be
+    bypassed by reaching the service directly. Reading and deleting stay open
+    when the switch is off, so an operator can still inspect and clean up.
     """
+    if not RAG_ENABLED:
+        raise RagDisabledError()
     with get_session() as session:
         _resolve_workspace(session, workspace_slug, ctx)
 
@@ -85,16 +101,24 @@ def _store(
     chunks = rag_service.chunk_text(ingest.text)
     if not chunks:
         raise RagIngestError("document produced no chunks")
+    # Embedding is the slow part (BGE, in-process, one pass per chunk) and needs
+    # no DB row, so it runs BEFORE the session opens. SQLite serialises writers,
+    # and a large document embedded inside the transaction would hold the write
+    # lock for seconds and fail every concurrent admin write with "database is
+    # locked".
+    embeddings = rag_service.embed_chunks(chunks)
 
     with get_session() as session:
         workspace = _resolve_workspace(session, workspace_slug, ctx)
 
-        # Re-adding the same content is a replace, not a duplicate: drop the old
-        # document's chunks and row first so the unique (workspace_id, sha) holds.
+        # Re-adding the same content is a replace, not a duplicate: the old row
+        # goes now so the unique (workspace_id, sha) holds, but its chunks are
+        # dropped only after the new ones are indexed — a failed re-index must
+        # roll back to the old document intact, and Chroma has no rollback.
         existing = rag_document_repo.get_by_sha(session, workspace.id, ingest.sha)
-        if existing is not None:
-            rag_service.delete_document_chunks(namespace, existing.id)
-            rag_document_repo.delete(session, workspace.id, existing.id)
+        existing_id = existing.id if existing is not None else None
+        if existing_id is not None:
+            rag_document_repo.delete(session, workspace.id, existing_id)
 
         row = rag_document_repo.create(
             session,
@@ -113,11 +137,14 @@ def _store(
             namespace,
             row.id,
             chunks,
+            embeddings=embeddings,
             workspace_slug=workspace_slug,
             title=ingest.title,
             kind=ingest.kind,
             source_ref=ingest.source_ref,
         )
+        if existing_id is not None:
+            rag_service.delete_document_chunks(namespace, existing_id)
         item = RagDocumentItem.model_validate(row)
     logger.info(
         "rag_add workspace=%s doc_id=%s kind=%s source=%s chunks=%d",
@@ -132,7 +159,7 @@ def add_text(
     content: str,
     ctx: ManagementAuthContext = _SYSTEM_CTX,
 ) -> RagDocumentItem:
-    _assert_access(workspace_slug, ctx)
+    _assert_can_add(workspace_slug, ctx)
     return _store(workspace_slug, rag_ingest.from_text(title, content), ctx)
 
 
@@ -144,7 +171,7 @@ def add_upload(
     title: str | None = None,
     ctx: ManagementAuthContext = _SYSTEM_CTX,
 ) -> RagDocumentItem:
-    _assert_access(workspace_slug, ctx)
+    _assert_can_add(workspace_slug, ctx)
     return _store(workspace_slug, rag_ingest.from_upload(filename, data, mime, title), ctx)
 
 
@@ -154,7 +181,7 @@ def add_url(
     title: str | None = None,
     ctx: ManagementAuthContext = _SYSTEM_CTX,
 ) -> RagDocumentItem:
-    _assert_access(workspace_slug, ctx)
+    _assert_can_add(workspace_slug, ctx)
     return _store(workspace_slug, rag_ingest.from_url(url, title), ctx)
 
 

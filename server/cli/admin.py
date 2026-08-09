@@ -471,7 +471,8 @@ def rag_add_text(workspace_slug: str, title: str, content: str) -> None:
     with console.status("[cyan]Indexing…[/cyan]", spinner="dots"):
         try:
             item = svc.add_text(workspace_slug, title, content, ctx=_SYSTEM_CTX)
-        except (admin_service.WorkspaceNotFound, admin_service.WorkspaceForbidden, svc.RagIngestError) as e:
+        except (admin_service.WorkspaceNotFound, admin_service.WorkspaceForbidden,
+                svc.RagIngestError, svc.RagDisabledError) as e:
             print_error(str(e))
             sys.exit(1)
     _print_rag_item(item, "Knowledge added")
@@ -495,7 +496,8 @@ def rag_add_file(workspace_slug: str, file_path: str, title: str | None) -> None
     with console.status("[cyan]Extracting + indexing…[/cyan]", spinner="dots"):
         try:
             item = svc.add_upload(workspace_slug, filename, data, mime, title=title, ctx=_SYSTEM_CTX)
-        except (admin_service.WorkspaceNotFound, admin_service.WorkspaceForbidden, svc.RagIngestError) as e:
+        except (admin_service.WorkspaceNotFound, admin_service.WorkspaceForbidden,
+                svc.RagIngestError, svc.RagDisabledError) as e:
             print_error(str(e))
             sys.exit(1)
     _print_rag_item(item, "Knowledge added")
@@ -511,7 +513,8 @@ def rag_add_url(workspace_slug: str, url: str, title: str | None) -> None:
     with console.status("[cyan]Fetching + indexing…[/cyan]", spinner="dots"):
         try:
             item = svc.add_url(workspace_slug, url, title, ctx=_SYSTEM_CTX)
-        except (admin_service.WorkspaceNotFound, admin_service.WorkspaceForbidden, svc.RagIngestError) as e:
+        except (admin_service.WorkspaceNotFound, admin_service.WorkspaceForbidden,
+                svc.RagIngestError, svc.RagDisabledError) as e:
             print_error(str(e))
             sys.exit(1)
     _print_rag_item(item, "Knowledge added")

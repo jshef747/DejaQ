@@ -199,9 +199,12 @@ Notes:
 - OCR requires the `tesseract` binary; URL ingestion requires `beautifulsoup4`
   (both are declared dependencies). Scanned-PDF OCR intentionally uses pypdf's
   embedded-image extraction rather than an AGPL rasteriser, and is budgeted:
-  it stops after 50 pages or 120 seconds (whichever comes first) and keeps the
-  text read so far, so a huge scan cannot pin an ingest worker
-  (`rag_ingest._SCANNED_PDF_MAX_PAGES` / `_SCANNED_PDF_MAX_SECONDS`).
+  it stops after 50 pages, 100 embedded images, or 120 seconds (whichever comes
+  first) and keeps the text read so far, so a huge scan cannot pin an ingest
+  worker (`rag_ingest._SCANNED_PDF_MAX_PAGES` / `_SCANNED_PDF_MAX_IMAGES` /
+  `_SCANNED_PDF_MAX_SECONDS`). The image and time budgets are checked per
+  embedded image, not only per page — a single page can carry hundreds of
+  rasters, and a per-page check would let that one page run unbounded.
 
 ---
 
@@ -211,7 +214,7 @@ All settings live in `server/app/config.py` (env-overridable):
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `DEJAQ_RAG_ENABLED` | `true` | Master switch for retrieval + grounding |
+| `DEJAQ_RAG_ENABLED` | `true` | Master switch. Off means no retrieval **and** no ingestion: every add path (dashboard, API, CLI) is refused at `rag_admin_service`, so knowledge cannot accumulate that nothing will ever read. Listing and deleting stay available so existing documents can be cleaned up |
 | `DEJAQ_RAG_TOP_K` | `4` | How many chunks to retrieve per query |
 | `DEJAQ_RAG_MAX_DISTANCE` | `0.35` | Cosine-distance ceiling a chunk must clear to be injected (looser than the 0.15 cache-trust distance — we want *related* context, not an exact match; **tune against real data** — see below) |
 | `DEJAQ_RAG_CHUNK_CHARS` | `1000` | Chunk window size when splitting a document |
@@ -261,9 +264,16 @@ if wrong groundings are unacceptable. There is no swept, corpus-derived value he
   loopback-only management API; on top of that, `rag_admin_service` verifies the
   caller has access to the workspace *before* it fetches a URL or extracts a file,
   so an authenticated admin without access to a given workspace cannot make the
-  server fetch a URL on their behalf. Note that URL ingestion does fetch an
-  operator-supplied URL server-side — keep that in mind on networks where the
-  server can reach sensitive internal hosts.
+  server fetch a URL on their behalf.
+- **URL ingestion cannot reach the server's own network.** `rag_ingest.from_url`
+  resolves the host and refuses anything that is not a globally routable address —
+  loopback, RFC1918 private ranges, link-local (including the `169.254.169.254`
+  cloud-metadata endpoint), CGNAT and the unspecified address. A hostname is
+  refused if *any* address it resolves to is non-public. Redirects are followed by
+  hand (max 5 hops) so every hop is re-checked, because a public URL can 302 into
+  an internal one. Not covered: DNS rebinding, where the name resolves to a public
+  address for the check and an internal one for the connect — closing that needs a
+  pinned-IP transport rather than a stricter rule.
 
 ---
 

@@ -133,6 +133,15 @@ def chunk_text(text: str) -> list[str]:
 
 # --- Indexing / retrieval / deletion ------------------------------------------
 
+def embed_chunks(chunks: list[str]) -> list[list[float]]:
+    """Embed chunks with the shared BGE model.
+
+    Split out from index_document so a caller can pay this cost outside a DB
+    transaction — it is the slow part of ingestion and holds no locks of its own.
+    """
+    return [embed_text(c) for c in chunks]
+
+
 def index_document(
     namespace: str,
     rag_document_id: int,
@@ -142,18 +151,22 @@ def index_document(
     title: str,
     kind: str,
     source_ref: str | None,
+    embeddings: list[list[float]] | None = None,
 ) -> int:
     """Embed and upsert a document's chunks. Returns the number of chunks stored.
 
     Ids are deterministic ("{doc_id}:{i}"), so calling this again for the same
     document replaces its chunks in place. Callers that re-index an already-seen
     document should delete_document_chunks first to clear a now-shorter tail.
+    `embeddings` may carry vectors already computed by `embed_chunks`; they are
+    recomputed here when absent or out of step with `chunks`.
     """
     if not chunks:
         return 0
     collection = get_rag_collection(namespace)
     ids = [f"{rag_document_id}:{i}" for i in range(len(chunks))]
-    embeddings = [embed_text(c) for c in chunks]
+    if embeddings is None or len(embeddings) != len(chunks):
+        embeddings = embed_chunks(chunks)
     stored_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     metadatas = [
         {

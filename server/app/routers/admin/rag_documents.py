@@ -14,7 +14,11 @@ from app.schemas.admin.rag_documents import (
 )
 from app.services import rag_admin_service
 from app.services.admin_service import WorkspaceForbidden, WorkspaceNotFound
-from app.services.rag_admin_service import RagDocumentNotFound, RagIngestError
+from app.services.rag_admin_service import (
+    RagDisabledError,
+    RagDocumentNotFound,
+    RagIngestError,
+)
 
 logger = logging.getLogger("dejaq.rag")
 
@@ -31,6 +35,8 @@ def _map_workspace_errors(exc: Exception) -> HTTPException:
     if isinstance(exc, RagIngestError):
         # The input reached us fine; we just could not extract usable text from it.
         return HTTPException(status_code=422, detail=str(exc))
+    if isinstance(exc, RagDisabledError):
+        return HTTPException(status_code=400, detail=str(exc))
     raise exc
 
 
@@ -53,7 +59,7 @@ def add_rag_text(
 ):
     try:
         return rag_admin_service.add_text(workspace_slug, body.title, body.content, ctx)
-    except (WorkspaceNotFound, WorkspaceForbidden, RagIngestError) as exc:
+    except (WorkspaceNotFound, WorkspaceForbidden, RagIngestError, RagDisabledError) as exc:
         raise _map_workspace_errors(exc)
 
 
@@ -65,7 +71,7 @@ def add_rag_url(
 ):
     try:
         return rag_admin_service.add_url(workspace_slug, body.url, body.title, ctx)
-    except (WorkspaceNotFound, WorkspaceForbidden, RagIngestError) as exc:
+    except (WorkspaceNotFound, WorkspaceForbidden, RagIngestError, RagDisabledError) as exc:
         raise _map_workspace_errors(exc)
 
 
@@ -96,7 +102,7 @@ async def upload_rag_document(
             title,
             ctx,
         )
-    except (WorkspaceNotFound, WorkspaceForbidden, RagIngestError) as exc:
+    except (WorkspaceNotFound, WorkspaceForbidden, RagIngestError, RagDisabledError) as exc:
         raise _map_workspace_errors(exc)
 
 

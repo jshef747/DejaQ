@@ -17,10 +17,13 @@ Extraction reuses what already exists rather than adding heavy dependencies:
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import logging
 import re
+import socket
 import time
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 from app.config import MAX_ATTACHMENT_BYTES
 from app.services import file_text, image_text
@@ -31,10 +34,16 @@ _WHITESPACE_RE = re.compile(r"\s+")
 _IMAGE_MIME_PREFIX = "image/"
 # A URL fetch that returns more than this is almost certainly not an article.
 _URL_MAX_BYTES = MAX_ATTACHMENT_BYTES
+# Redirects are followed by hand so every hop can be re-checked against the
+# private-address rules; this bounds the chain.
+_URL_MAX_REDIRECTS = 5
 # Scanned-PDF OCR runs one tesseract pass per embedded image on a FastAPI
 # threadpool worker, so a many-page scan needs a hard ceiling: whichever of
 # these budgets is hit first stops the loop and keeps the text read so far.
+# The time budget is re-checked per IMAGE, not only per page: a single page can
+# embed hundreds of rasters, and a per-page check lets one page run unbounded.
 _SCANNED_PDF_MAX_PAGES = 50
+_SCANNED_PDF_MAX_IMAGES = 100
 _SCANNED_PDF_MAX_SECONDS = 120.0
 
 
@@ -142,15 +151,23 @@ def _ocr_scanned_pdf(data: bytes) -> str:
         parts: list[str] = []
         deadline = time.monotonic() + _SCANNED_PDF_MAX_SECONDS
         total_pages = len(reader.pages)
+        images_done = 0
+        exhausted = False
         for page_index, page in enumerate(reader.pages):
             if page_index >= _SCANNED_PDF_MAX_PAGES or time.monotonic() > deadline:
+                exhausted = True
+            if exhausted:
                 logger.info(
-                    "Scanned-PDF OCR stopped at page %d/%d (page/time budget reached)",
+                    "Scanned-PDF OCR stopped at page %d/%d (page/image/time budget reached)",
                     page_index, total_pages,
                 )
                 break
             try:
                 for img in page.images:
+                    if images_done >= _SCANNED_PDF_MAX_IMAGES or time.monotonic() > deadline:
+                        exhausted = True
+                        break
+                    images_done += 1
                     page_text = image_text.ocr_plaintext(img.data)
                     if page_text.strip():
                         parts.append(page_text)
@@ -164,24 +181,87 @@ def _ocr_scanned_pdf(data: bytes) -> str:
         return ""
 
 
+def _resolve_ips(host: str, port: int) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    """Every address `host` resolves to, with IPv4-mapped IPv6 unwrapped."""
+    out = []
+    for info in socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP):
+        ip = ipaddress.ip_address(info[4][0])
+        out.append(getattr(ip, "ipv4_mapped", None) or ip)
+    return out
+
+
+def _url_block_reason(url: str) -> str | None:
+    """Why this URL must not be fetched server-side, or None when it is allowed.
+
+    The server sits on the operator's network, so an ingestion URL pointing at
+    loopback, a private range, or the cloud metadata endpoint would turn the
+    admin API into a read primitive for internal services. Only globally
+    routable addresses are fetched; a hostname is refused if ANY address it
+    resolves to is non-global. Every redirect hop is re-checked, since a public
+    URL can 302 into an internal one.
+
+    A DNS entry that changes between this check and the connect (rebinding) is
+    not covered — closing that needs a pinned-IP transport, not a stricter rule.
+    """
+    parsed = urlparse(url)
+    scheme = parsed.scheme.lower()
+    if scheme not in ("http", "https"):
+        return "URL must start with http:// or https://"
+    try:
+        host = parsed.hostname
+        port = parsed.port or (443 if scheme == "https" else 80)
+    except ValueError:
+        return "URL has an invalid host or port"
+    if not host:
+        return "URL has no host"
+    try:
+        ips = _resolve_ips(host, port)
+    except (OSError, ValueError):
+        return f"could not resolve host '{host}'"
+    for ip in ips:
+        if not ip.is_global:
+            return (
+                f"refusing to fetch '{host}': {ip} is a loopback, private, "
+                "link-local, or otherwise non-public address"
+            )
+    return None
+
+
 def from_url(url: str, title: str | None = None) -> IngestResult:
     """Fetch a URL and extract its readable text via BeautifulSoup."""
     url = (url or "").strip()
-    if not re.match(r"^https?://", url, re.IGNORECASE):
-        return IngestResult(ok=False, kind="url", source="url",
-                            reason="URL must start with http:// or https://")
     try:
         import httpx
 
-        with httpx.Client(follow_redirects=True, timeout=20.0) as client:
-            with client.stream("GET", url, headers={"User-Agent": "DejaQ-RAG/1.0"}) as resp:
-                resp.raise_for_status()
-                buf = bytearray()
-                for chunk in resp.iter_bytes():
-                    buf.extend(chunk)
-                    if len(buf) >= _URL_MAX_BYTES:
-                        break
-                raw = bytes(buf[:_URL_MAX_BYTES])
+        raw = b""
+        with httpx.Client(follow_redirects=False, timeout=20.0) as client:
+            current = url
+            for _ in range(_URL_MAX_REDIRECTS + 1):
+                blocked = _url_block_reason(current)
+                if blocked is not None:
+                    return IngestResult(ok=False, kind="url", source="url", reason=blocked)
+                with client.stream(
+                    "GET", current, headers={"User-Agent": "DejaQ-RAG/1.0"}
+                ) as resp:
+                    location = (
+                        resp.headers.get("location")
+                        if 300 <= resp.status_code < 400
+                        else None
+                    )
+                    if location:
+                        current = str(httpx.URL(current).join(location))
+                        continue
+                    resp.raise_for_status()
+                    buf = bytearray()
+                    for chunk in resp.iter_bytes():
+                        buf.extend(chunk)
+                        if len(buf) >= _URL_MAX_BYTES:
+                            break
+                    raw = bytes(buf[:_URL_MAX_BYTES])
+                    break
+            else:
+                return IngestResult(ok=False, kind="url", source="url",
+                                    reason=f"too many redirects (>{_URL_MAX_REDIRECTS})")
     except Exception as exc:
         return IngestResult(ok=False, kind="url", source="url",
                             reason=f"could not fetch URL ({type(exc).__name__})")

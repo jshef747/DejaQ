@@ -30,18 +30,22 @@ def workspace(isolated_org_db):
 @pytest.fixture
 def mock_vectors(monkeypatch):
     """Replace the vector side: chunk into fixed pieces, record index/delete calls."""
-    calls = {"indexed": [], "deleted": []}
+    calls = {"indexed": [], "deleted": [], "order": [], "embeddings": []}
     monkeypatch.setattr(rag_service, "chunk_text", lambda text: ["chunk-a", "chunk-b"])
+    monkeypatch.setattr(rag_service, "embed_chunks", lambda chunks: [[0.5]] * len(chunks))
 
     def _index(namespace, doc_id, chunks, **kw):
         calls["indexed"].append((namespace, doc_id, len(chunks)))
+        calls["embeddings"].append(kw.get("embeddings"))
+        calls["order"].append(("index", doc_id))
         return len(chunks)
 
+    def _delete(namespace, doc_id):
+        calls["deleted"].append((namespace, doc_id))
+        calls["order"].append(("delete", doc_id))
+
     monkeypatch.setattr(rag_service, "index_document", _index)
-    monkeypatch.setattr(
-        rag_service, "delete_document_chunks",
-        lambda ns, doc_id: calls["deleted"].append((ns, doc_id)),
-    )
+    monkeypatch.setattr(rag_service, "delete_document_chunks", _delete)
     return calls
 
 
@@ -56,15 +60,40 @@ def test_add_text_writes_catalog_row_and_indexes(workspace, mock_vectors):
     assert mock_vectors["indexed"] == [(ns, item.id, 2)]
 
 
+def test_add_text_embeds_once_and_passes_the_vectors_to_the_index(workspace, mock_vectors):
+    rag_admin_service.add_text(workspace, "Policy", "Refunds within 30 days.", _SYSTEM)
+    # Vectors are computed up front (outside the write transaction) and handed in,
+    # so index_document never re-embeds while holding the SQLite write lock.
+    assert mock_vectors["embeddings"] == [[[0.5], [0.5]]]
+
+
 def test_re_adding_identical_content_replaces_not_duplicates(workspace, mock_vectors):
     first = rag_admin_service.add_text(workspace, "Policy", "Same body.", _SYSTEM)
     second = rag_admin_service.add_text(workspace, "Policy renamed", "Same body.", _SYSTEM)
     docs = rag_admin_service.list_documents(workspace, _SYSTEM)
     assert len(docs) == 1  # replaced, not duplicated
-    # The old document's chunks were deleted before the new ones were indexed.
     ns = rag_service.rag_namespace(workspace)
     assert (ns, first.id) in mock_vectors["deleted"]
     assert second.id != first.id or docs[0].title == "Policy renamed"
+    # The old chunks go only AFTER the new ones are indexed: Chroma cannot roll
+    # back, so dropping them first would leave a chunk-less row on a failed index.
+    assert mock_vectors["order"][-2:] == [("index", second.id), ("delete", first.id)]
+
+
+def test_failed_reindex_leaves_the_previous_document_intact(workspace, mock_vectors, monkeypatch):
+    first = rag_admin_service.add_text(workspace, "Policy", "Same body.", _SYSTEM)
+
+    def _boom(*a, **kw):
+        raise RuntimeError("chroma down")
+
+    monkeypatch.setattr(rag_service, "index_document", _boom)
+    with pytest.raises(RuntimeError):
+        rag_admin_service.add_text(workspace, "Policy renamed", "Same body.", _SYSTEM)
+
+    # The catalog row survived the rollback, and its chunks were never deleted —
+    # the document still grounds answers exactly as it did before the failed re-add.
+    assert [d.id for d in rag_admin_service.list_documents(workspace, _SYSTEM)] == [first.id]
+    assert mock_vectors["deleted"] == []
 
 
 def test_delete_removes_catalog_row_and_chunks(workspace, mock_vectors):
@@ -116,6 +145,41 @@ def test_access_is_checked_before_ingest_runs(workspace, mock_vectors, monkeypat
     stranger = ManagementAuthContext(actor_type="user", local_user_id=42, accessible_workspaces=[])
     with pytest.raises(WorkspaceForbidden):
         rag_admin_service.add_url(workspace, "https://example.com", None, stranger)
+
+
+def test_every_add_path_is_refused_when_rag_is_disabled(workspace, mock_vectors, monkeypatch):
+    """DEJAQ_RAG_ENABLED=false must stop knowledge from accumulating anywhere.
+
+    Retrieval never runs with the switch off, so an add that still indexed would
+    silently grow a knowledge base that grounds nothing. The gate sits on the
+    service, which the HTTP router and the `dejaq-admin rag` CLI both go through.
+    """
+    monkeypatch.setattr(rag_admin_service, "RAG_ENABLED", False)
+
+    def _boom(*a, **k):
+        raise AssertionError("ingestion must not run when RAG is disabled")
+
+    monkeypatch.setattr(rag_admin_service.rag_ingest, "from_url", _boom)
+    monkeypatch.setattr(rag_admin_service.rag_ingest, "from_upload", _boom)
+
+    with pytest.raises(rag_admin_service.RagDisabledError):
+        rag_admin_service.add_text(workspace, "Policy", "Body.", _SYSTEM)
+    with pytest.raises(rag_admin_service.RagDisabledError):
+        rag_admin_service.add_url(workspace, "https://example.com", None, _SYSTEM)
+    with pytest.raises(rag_admin_service.RagDisabledError):
+        rag_admin_service.add_upload(workspace, "a.md", b"# hi", "text/markdown", None, _SYSTEM)
+
+    assert rag_admin_service.list_documents(workspace, _SYSTEM) == []
+    assert mock_vectors["indexed"] == []
+
+
+def test_listing_and_deleting_still_work_when_rag_is_disabled(workspace, mock_vectors, monkeypatch):
+    # Turning the switch off must not strand existing knowledge: an operator can
+    # still see it and clean it up.
+    item = rag_admin_service.add_text(workspace, "Policy", "Body.", _SYSTEM)
+    monkeypatch.setattr(rag_admin_service, "RAG_ENABLED", False)
+    assert [d.id for d in rag_admin_service.list_documents(workspace, _SYSTEM)] == [item.id]
+    assert rag_admin_service.delete_document(workspace, item.id, _SYSTEM) is True
 
 
 def test_ingest_failure_surfaces_as_rag_ingest_error(workspace, mock_vectors):
