@@ -198,6 +198,8 @@ Generation always runs through Ollama (`DEJAQ_OLLAMA_URL`); there is no per-role
 
 Threshold rationale (why 0.20, 0.60, 0.05, and why images get no trusted tier): [docs/image-gate.md](docs/image-gate.md).
 
+Rug (RAG) knowledge-layer settings (`DEJAQ_RAG_ENABLED`, `DEJAQ_RAG_TOP_K`, `DEJAQ_RAG_MAX_DISTANCE`, `DEJAQ_RAG_CHUNK_CHARS`, `DEJAQ_RAG_CHUNK_OVERLAP`, `DEJAQ_RAG_MAX_CONTEXT_CHARS`, `DEJAQ_RAG_FORCE_EXTERNAL`): defaults and tuning guidance live in [docs/rag-layer.md](docs/rag-layer.md#configuration).
+
 ### Endpoints
 - `GET /health` — health check; also reports Celery worker status
 - `POST /v1/chat/completions` — OpenAI Chat Completions-compatible chat (streaming + non-streaming); **requires** `Authorization: Bearer <workspace-api-key>` (401 when missing/invalid — no anonymous fallback) and optional `X-DejaQ-Department` header; response includes `X-DejaQ-Response-Id` header when cached or stored. Hard queries return HTTP 402 when the workspace has no credential for the configured external provider.
@@ -214,6 +216,7 @@ Threshold rationale (why 0.20, 0.60, 0.05, and why images get no trusted tier): 
   - `PUT /admin/v1/workspaces/{workspace_slug}/credentials/{provider}`
   - `DELETE /admin/v1/workspaces/{workspace_slug}/credentials/{provider}`
   - `POST /admin/v1/workspaces/{workspace_slug}/test-provider`
+  - `GET /admin/v1/workspaces/{workspace_slug}/rag-documents`, `POST .../rag-documents/text|url|upload`, `DELETE .../rag-documents/{id}` - Rug knowledge base ([docs/rag-layer.md](docs/rag-layer.md))
   - `GET|POST /admin/v1/feedback`
 - `dejaq-admin cache purge-images --workspace <slug> [--department <slug>] [--no-dry-run]` — delete image-anchored cache entries after a gate rule change; text entries untouched, defaults to a dry run
 
@@ -226,12 +229,12 @@ Layering: `routers/` (endpoints) → `services/` (business logic) → `schemas/`
 | `app/main.py`, `config.py`, `celery_app.py` | FastAPI init + CORS + health, centralized settings, Celery broker/queue config |
 | `app/routers/` | `openai_compat.py` (`/v1/chat/completions`, plus the shared `run_chat_pipeline`), `feedback.py`, `departments.py`, `admin/` (`/admin/v1/*`) |
 | `app/routers/openai_responses.py` | `/v1/responses` — its own router (`openai_responses.py:199`, mounted at `main.py:90`); parses `input`/attachments, then delegates into `openai_compat.run_chat_pipeline` |
-| `app/services/` | The pipeline: `normalizer`, `context_enricher`, `context_adjuster`, `validator`, `cache_filter`, `classifier`, `lexical_match`, `memory_chromaDB` (semantic cache), `image_fingerprint` + `image_text` (image gate), `file_text` (PDF/DOCX/text file gate). Plus infra: `model_backends` (OllamaBackend + `MODEL_RUNTIME_SPECS`), `service_factory`, `llm_router`, `external_llm` + `llm_providers/` (Google/OpenAI/Anthropic), `credential_service`, `provider_inference`, `admin_service`, `stats_service`, `llm_config_service`, `feedback_service`, `request_logger` |
+| `app/services/` | The pipeline: `normalizer`, `context_enricher`, `context_adjuster`, `validator`, `cache_filter`, `classifier`, `lexical_match`, `memory_chromaDB` (semantic cache), `image_fingerprint` + `image_text` (image gate), `file_text` (PDF/DOCX/text file gate), `rag_service` + `rag_ingest` + `rag_admin_service` (Rug knowledge layer). Plus infra: `model_backends` (OllamaBackend + `MODEL_RUNTIME_SPECS`), `service_factory`, `llm_router`, `external_llm` + `llm_providers/` (Google/OpenAI/Anthropic), `credential_service`, `provider_inference`, `admin_service`, `stats_service`, `llm_config_service`, `feedback_service`, `request_logger` |
 | `app/tasks/cache_tasks.py` | Celery `generalize_and_store_task` (Gemma 4 E2B + ChromaDB) |
-| `app/db/` | SQLAlchemy base/session, repos, and `models/` (org, department, api_key, org_llm_config, org_provider_credentials) |
+| `app/db/` | SQLAlchemy base/session, repos, and `models/` (org, department, api_key, org_llm_config, org_provider_credentials, rag_document) |
 | `app/middleware/`, `app/dependencies/` | Bearer token → org/department resolution onto `request.state` |
 | `app/utils/` | `logger.py`, `exceptions.py` (`ExternalLLMError` / `…AuthError` / `…TimeoutError`) |
-| `cli/` | `dejaq-admin` (org, dept, key, stats) + Rich rendering helpers |
+| `cli/` | `dejaq-admin` (org, dept, key, stats, rag) + Rich rendering helpers |
 
 **Key patterns:**
 - All generation runs through Ollama (`OllamaBackend`); `service_factory` builds one shared backend from `DEJAQ_OLLAMA_URL` (local or remote)
@@ -297,7 +300,7 @@ Rug — per-workspace RAG knowledge layer ([docs/rag-layer.md](docs/rag-layer.md
 
 ## Active Technologies
 
-- Python 3.13+ + FastAPI + Uvicorn, ChromaDB (HttpClient), redis-py (Celery dependency), Pydantic v2, Celery, aiosqlite (request log), Rich (stats CLI), SQLAlchemy + Alembic (org/dept/key/credential DB, SQLite), cryptography/Fernet, google-genai, openai, anthropic
+- Python 3.13+ + FastAPI + Uvicorn, ChromaDB (HttpClient), redis-py (Celery dependency), Pydantic v2, Celery, aiosqlite (request log), Rich (stats CLI), SQLAlchemy + Alembic (org/dept/key/credential DB, SQLite), cryptography/Fernet, google-genai, openai, anthropic, beautifulsoup4 + python-multipart (Rug URL ingestion / document upload)
 
 ## Dashboard
 

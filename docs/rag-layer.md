@@ -198,7 +198,10 @@ Notes:
   / a CLI error), never stored silently.
 - OCR requires the `tesseract` binary; URL ingestion requires `beautifulsoup4`
   (both are declared dependencies). Scanned-PDF OCR intentionally uses pypdf's
-  embedded-image extraction rather than an AGPL rasteriser.
+  embedded-image extraction rather than an AGPL rasteriser, and is budgeted:
+  it stops after 50 pages or 120 seconds (whichever comes first) and keeps the
+  text read so far, so a huge scan cannot pin an ingest worker
+  (`rag_ingest._SCANNED_PDF_MAX_PAGES` / `_SCANNED_PDF_MAX_SECONDS`).
 
 ---
 
