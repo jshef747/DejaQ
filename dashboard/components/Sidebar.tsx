@@ -11,6 +11,7 @@ import {
   Settings,
   MessageSquare,
   GitBranch,
+  BookOpen,
   ChevronDown,
   Check,
   LogOut,
@@ -27,11 +28,13 @@ const NAV_ITEMS = [
   { href: "/dashboard/departments", label: "Departments", Icon: Users },
   { href: "/dashboard/tree",        label: "Workspace Tree", Icon: GitBranch },
   { href: "/dashboard/keys",        label: "API Keys",    Icon: Key },
+  { href: "/dashboard/rag",         label: "Knowledge Base", Icon: BookOpen },
 ];
 
 const WORKSPACE_SCOPED_PATHS = [
   "/dashboard/departments",
   "/dashboard/keys",
+  "/dashboard/rag",
   "/dashboard/workspaces",
   "/dashboard/settings",
   "/dashboard/tree",

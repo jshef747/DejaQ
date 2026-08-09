@@ -32,7 +32,6 @@ touch "$LOG_DIR/redis.log"
 STACK_ARG=""
 MODE_ARG=""
 LOG_MODE_ARG=""
-VALIDATOR_ARG=""
 OLLAMA_URL_ARG=""
 OLLAMA_URL_FLAG_SET=false
 DRY_RUN=false
@@ -44,11 +43,10 @@ ENV_STACK="${DEJAQ_STACK:-}"
 ENV_MODE="${DEJAQ_MODE:-}"
 ENV_OLLAMA_URL="${DEJAQ_OLLAMA_URL:-}"
 ENV_START_LOGS="${DEJAQ_START_LOGS:-}"
-ENV_VALIDATOR="${DEJAQ_VALIDATOR_ENABLED:-}"
 ENV_LAN="${DEJAQ_LAN:-}"
 
 usage() {
-  echo "Usage: $0 [--stack=all|server|client] [--mode=local|remote] [--logs=requests|all] [--validator=off] [--ollama-url URL] [--lan|--no-lan] [--fresh] [--yes] [--dry-run]"
+  echo "Usage: $0 [--stack=all|server|client] [--mode=local|remote] [--logs=requests|all] [--ollama-url URL] [--lan|--no-lan] [--fresh] [--yes] [--dry-run]"
   echo ""
   echo "Stacks:"
   echo "  all      Everything on this machine: backend + dashboard + chat"
@@ -63,8 +61,6 @@ usage() {
   echo "  requests Tail compact request/response logs only"
   echo "  all      Tail all service logs"
   echo ""
-  echo "Cache-answer validator is ON by default; disable with --validator=off."
-  echo ""
   echo "Network:"
   echo "  --lan    Expose the chat UI (4000) on 0.0.0.0 for other LAN devices. The"
   echo "           data-plane API is already LAN-bound; admin stays loopback-only."
@@ -78,7 +74,6 @@ usage() {
   echo "  DEJAQ_STACK             Non-interactive stack selection: all, server, or client"
   echo "  DEJAQ_MODE              Non-interactive mode selection: local or remote"
   echo "  DEJAQ_START_LOGS        Non-interactive log mode selection: requests or all"
-  echo "  DEJAQ_VALIDATOR_ENABLED Validator toggle: true (default) or false"
   echo "  DEJAQ_OLLAMA_URL        Ollama endpoint (required for remote mode)"
   echo "  DEJAQ_LAN               Expose chat+API on the LAN: true or false (default)"
   echo "  DEJAQ_LAN_IP            LAN IP to advertise; skips the prompt when set"
@@ -109,15 +104,6 @@ for arg in "$@"; do
       ;;
     --logs)
       echo -e "${RED}Use --logs=<requests|all>${NC}"; exit 1
-      ;;
-    --validator=*)
-      VALIDATOR_ARG="${arg#*=}"
-      ;;
-    --validator)
-      echo -e "${RED}Use --validator=<on|off>${NC}"; exit 1
-      ;;
-    --no-validator)
-      VALIDATOR_ARG="off"
       ;;
     --ollama-url=*)
       OLLAMA_URL_ARG="${arg#*=}"
@@ -339,16 +325,6 @@ select_log_mode() {
   esac
 }
 
-# Validator is ON by default; only an explicit off flag/env disables it. No prompt.
-resolve_validator() {
-  local raw="${VALIDATOR_ARG:-${ENV_VALIDATOR:-}}"
-  case "$raw" in
-    ""|on|true|1|yes|enabled)  echo "on"  ;;
-    off|false|0|no|disabled)   echo "off" ;;
-    *) echo -e "${RED}Invalid validator value %r. Use on or off.${NC}" >&2; exit 1 ;;
-  esac
-}
-
 select_mode() {
   local selected="${MODE_ARG:-${DEJAQ_MODE:-}}"
   if [[ -z "$selected" && "$OLLAMA_URL_FLAG_SET" == "true" ]]; then
@@ -376,9 +352,8 @@ select_mode() {
 }
 
 apply_mode() {
-  local mode="$1" validator="$2"
+  local mode="$1"
   export DEJAQ_MODE="$mode"
-  export DEJAQ_VALIDATOR_ENABLED="$([[ "$validator" == "on" ]] && echo true || echo false)"
 
   if [[ "$OLLAMA_URL_FLAG_SET" == "true" ]]; then
     export DEJAQ_OLLAMA_URL="$OLLAMA_URL_ARG"
@@ -560,16 +535,15 @@ case "$STACK" in
   client) RUN_BACKEND=false; RUN_DASHBOARD=false; RUN_CHAT=true  ;;
 esac
 
-# Ollama mode/validator only apply when a local backend runs.
+# Ollama mode only applies when a local backend runs.
 if [[ "$RUN_BACKEND" == "true" ]]; then
   MODE="$(select_mode)"
-  VALIDATOR="$(resolve_validator)"
 else
-  MODE="n/a"; VALIDATOR="n/a"
+  MODE="n/a"
 fi
 LOG_MODE="$(select_log_mode)"
 LAN_MODE="$(select_lan_mode)"
-[[ "$RUN_BACKEND" == "true" ]] && apply_mode "$MODE" "$VALIDATOR"
+[[ "$RUN_BACKEND" == "true" ]] && apply_mode "$MODE"
 
 # Detect LAN IP and expose it to the chat Next.js config (allowedDevOrigins) when --lan is on.
 LAN_IP=""
@@ -581,14 +555,12 @@ fi
 echo -e "${CYAN}Startup stack: ${STACK}${NC}"
 if [[ "$RUN_BACKEND" == "true" ]]; then
   echo -e "${CYAN}Ollama mode: ${MODE}${NC}"
-  echo -e "${CYAN}Validator: ${VALIDATOR}${NC}"
 fi
 echo -e "${CYAN}Log mode: ${LOG_MODE}${NC}"
 echo -e "${CYAN}LAN mode: $([[ "$LAN_MODE" == "true" ]] && echo on || echo off)${NC}"
 echo -e "${CYAN}Logs: ${LOG_DIR}/${NC}"
 if [[ "$RUN_BACKEND" == "true" ]]; then
   echo -e "  DEJAQ_OLLAMA_URL=${DEJAQ_OLLAMA_URL}"
-  echo -e "  DEJAQ_VALIDATOR_ENABLED=${DEJAQ_VALIDATOR_ENABLED}"
   check_ollama "${DEJAQ_OLLAMA_URL}"
   check_tesseract
 fi

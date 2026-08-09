@@ -34,6 +34,41 @@ def test_malformed_data_url_rejected():
     assert exc.value.status_code == 400
 
 
+def test_oversized_payload_rejected_before_decoding(monkeypatch):
+    """The cap must be checked against the base64 string's length, not the
+    decoded bytes — decoding first means buffering a payload we were always
+    going to reject. Use a small override so the test doesn't need a
+    multi-GB string to prove the bound is enforced before b64decode runs."""
+    import app.routers.openai_responses as responses_router
+
+    monkeypatch.setattr(responses_router, "MAX_ATTACHMENT_BYTES", 16)
+
+    decode_calls = []
+    real_b64decode = base64.b64decode
+
+    def _tracking_b64decode(payload):
+        decode_calls.append(payload)
+        return real_b64decode(payload)
+
+    monkeypatch.setattr(responses_router.base64, "b64decode", _tracking_b64decode)
+
+    with pytest.raises(PipelineError) as exc:
+        _parse_data_url(_data_url(b"x" * 1000, "image/png"))
+
+    assert exc.value.status_code == 400
+    assert decode_calls == [], "payload must be size-checked before it is decoded"
+
+
+def test_payload_within_cap_still_decodes(monkeypatch):
+    import app.routers.openai_responses as responses_router
+
+    monkeypatch.setattr(responses_router, "MAX_ATTACHMENT_BYTES", 1_000_000)
+
+    data, mime = _parse_data_url(_data_url(b"small enough", "image/png"))
+    assert data == b"small enough"
+    assert mime == "image/png"
+
+
 def test_text_only_returns_no_image():
     msgs, image, _file = _responses_request_to_messages(_req("just text"))
     assert image is None

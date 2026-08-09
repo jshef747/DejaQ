@@ -1,5 +1,6 @@
 from app.db.models.api_key import ApiKey
 from app.db.models.department import Department
+from app.db.models.rag_document import RagDocument
 from app.db.models.user import ManagementUser
 from app.db.models.user_workspace_membership import UserWorkspaceMembership
 from app.db.models.workspace import Workspace
@@ -10,6 +11,7 @@ __all__ = [
     "Workspace",
     "Department",
     "ApiKey",
+    "RagDocument",
     "WorkspaceLlmConfig",
     "WorkspaceProviderCredentials",
     "ManagementUser",

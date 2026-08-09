@@ -47,6 +47,30 @@ def test_invalid_log_mode_fails_before_starting_services():
     assert "Invalid log mode" in result.stderr
 
 
+def test_start_script_no_longer_references_removed_validator_env_var():
+    """DEJAQ_VALIDATOR_ENABLED was removed from app/config.py and nothing reads
+    it; start.sh must not document, prompt for, or export it as if it still
+    did something. ("validator rejected" is an unrelated log-grep pattern for
+    the actual cache-answer validator and is fine to keep.)"""
+    contents = START_SCRIPT.read_text()
+    assert "DEJAQ_VALIDATOR_ENABLED" not in contents
+    assert "--validator" not in contents
+    assert "--no-validator" not in contents
+
+
+def test_dry_run_rejects_the_removed_validator_flag():
+    result = _run_start("--dry-run", "--validator=off")
+
+    assert result.returncode != 0
+
+
+def test_dry_run_does_not_print_validator_env_var():
+    result = _run_start("--dry-run", env={"DEJAQ_START_LOGS": "requests"})
+
+    assert result.returncode == 0
+    assert "DEJAQ_VALIDATOR_ENABLED" not in result.stdout
+
+
 def test_terminal_log_formatter_adds_separator_without_rewriting_input():
     result = subprocess.run(
         ["bash", str(START_SCRIPT), "--format-log-lines"],

@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -13,10 +14,28 @@ logger = logging.getLogger("dejaq.middleware.api_key")
 _ANONYMOUS_NAMESPACE = "dejaq_default"
 
 
+def _db_mtime() -> float:
+    """mtime of the SQLite file backing org/dept/key data.
+
+    A shared signal any process can produce just by committing a write —
+    unlike in-process invalidate(), this is visible to the server even when
+    the mutation came from a separate `dejaq-admin` CLI process.
+    """
+    try:
+        from app.db.base import SessionLocal
+
+        return os.path.getmtime(SessionLocal.kw["bind"].url.database)
+    except OSError:
+        return 0.0
+
+
 class _KeyCache:
     """In-process cache of active API keys and department namespaces.
 
-    Loaded from SQLite on first request; refreshed every KEY_CACHE_TTL seconds.
+    Loaded from SQLite on first request; refreshed every KEY_CACHE_TTL seconds,
+    or immediately once the backing DB file's mtime moves past what was loaded
+    (see `_db_mtime`) — this is what lets a `dejaq-admin` mutation in another
+    process take effect without waiting out the TTL.
     Structure:
         _keys:  token → (workspace_slug, workspace_id)
         _depts: (workspace_id, dept_slug) → cache_namespace
@@ -25,12 +44,15 @@ class _KeyCache:
     def __init__(self, ttl: int) -> None:
         self._ttl = ttl
         self._loaded_at: float = 0.0
+        self._db_mtime_at_load: float = 0.0
         self._keys: dict[str, tuple[str, int]] = {}
         self._depts: dict[tuple[int, str], str] = {}
         self._workspace_slugs: dict[int, str] = {}
 
     def _is_stale(self) -> bool:
-        return (time.monotonic() - self._loaded_at) >= self._ttl
+        if (time.monotonic() - self._loaded_at) >= self._ttl:
+            return True
+        return _db_mtime() > self._db_mtime_at_load
 
     def _refresh(self) -> None:
         from app.db.models.api_key import ApiKey
@@ -66,6 +88,7 @@ class _KeyCache:
             self._depts = new_depts
             self._workspace_slugs = new_workspace_slugs
             self._loaded_at = time.monotonic()
+            self._db_mtime_at_load = _db_mtime()
             logger.debug(
                 "Key cache refreshed: %d active keys, %d departments",
                 len(new_keys),

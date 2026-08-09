@@ -41,3 +41,40 @@ describe("getDejaQConfig key resolution precedence", () => {
     }
   });
 });
+
+describe("getDejaQConfig env-key fallback is scoped to the default server", () => {
+  const ORIGINAL_BASE = process.env.DEJAQ_API_BASE_URL;
+
+  afterEach(() => {
+    if (ORIGINAL_BASE === undefined) delete process.env.DEJAQ_API_BASE_URL;
+    else process.env.DEJAQ_API_BASE_URL = ORIGINAL_BASE;
+  });
+
+  it("does NOT forward the env key to an attacker-supplied X-DejaQ-Server", async () => {
+    process.env.DEJAQ_API_KEY = "operator-secret";
+    delete process.env.DEJAQ_API_BASE_URL; // default: http://127.0.0.1:8000
+    const config = getDejaQConfig("http://attacker:9999", null);
+    expect(isNextResponse(config)).toBe(true);
+    if (isNextResponse(config)) {
+      expect(config.status).toBe(424);
+      const body = await config.json();
+      expect(body.code).toBe("missing_dejaq_api_key");
+    }
+  });
+
+  it("still uses the env key when the target is the configured default server", () => {
+    process.env.DEJAQ_API_KEY = "operator-secret";
+    delete process.env.DEJAQ_API_BASE_URL; // default: http://127.0.0.1:8000
+    const config = getDejaQConfig("http://127.0.0.1:8000/", null);
+    expect(isNextResponse(config)).toBe(false);
+    if (!isNextResponse(config)) expect(config.apiKey).toBe("operator-secret");
+  });
+
+  it("still uses the env key when no server override is supplied", () => {
+    process.env.DEJAQ_API_KEY = "operator-secret";
+    delete process.env.DEJAQ_API_BASE_URL;
+    const config = getDejaQConfig(null, null);
+    expect(isNextResponse(config)).toBe(false);
+    if (!isNextResponse(config)) expect(config.apiKey).toBe("operator-secret");
+  });
+});

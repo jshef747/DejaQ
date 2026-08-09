@@ -42,6 +42,12 @@ dependencies = [
     # Used by services/image_fingerprint.py, which imported it while it was in
     # neither pyproject.toml nor uv.lock — the venv worked only by accident.
     "pillow>=11.0.0",
+    # RAG (Rug) knowledge layer: HTML→text for URL ingestion (services/rag_ingest.py).
+    # MIT-licensed, lightweight — no AGPL dependency, matching the pypdf choice above.
+    "beautifulsoup4>=4.12.0",
+    # Required by FastAPI to parse multipart/form-data — the RAG document upload
+    # endpoint (routers/admin/rag_documents.py) uses UploadFile/Form.
+    "python-multipart>=0.0.9",
 ]
 
 [project.scripts]
