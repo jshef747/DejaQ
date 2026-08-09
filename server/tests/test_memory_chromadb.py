@@ -1,3 +1,5 @@
+import hashlib
+
 import pytest
 
 from app.services.memory_chromaDB import MemoryService
@@ -331,3 +333,65 @@ class TestAliases:
         alias_id = svc.store_alias("what is teh captial of rusia?", parent_id)
         assert svc.delete_entry(parent_id) is True
         assert svc.get_entry_metadata(alias_id) is None
+
+
+@chroma_required
+class TestEvictBelowFloorCascade:
+    def test_evicting_a_root_removes_its_aliases(self):
+        """B11 regression: evict_below_floor used to bulk-delete via
+        self._collection.delete directly, bypassing delete_entry's alias
+        cascade - an evicted root left orphan aliases still serving its
+        copied answer. It must now route through delete_entry."""
+        svc = _make_svc("evict_cascade")
+        parent_id = svc.store_interaction("what is the capital of russia?", "Moscow.", "orig", "u1")
+        alias_id = svc.store_alias("what is teh captial of rusia?", parent_id)
+
+        meta = svc.get_entry_metadata(parent_id)
+        meta["score"] = -10.0
+        svc.update_entry_metadata(parent_id, meta)
+
+        deleted = svc.evict_below_floor(-5.0)
+
+        assert deleted == 1
+        assert svc.get_entry_metadata(parent_id) is None
+        assert svc.get_entry_metadata(alias_id) is None
+
+    def test_entries_at_or_above_the_floor_survive(self):
+        svc = _make_svc("evict_survivor")
+        survivor_id = svc.store_interaction("what is the capital of france?", "Paris.", "orig", "u1")
+
+        deleted = svc.evict_below_floor(-5.0)
+
+        assert deleted == 0
+        assert svc.get_entry_metadata(survivor_id) is not None
+
+
+@chroma_required
+class TestStoreAliasRace:
+    def test_alias_does_not_survive_a_parent_deleted_mid_store(self, monkeypatch):
+        """B12 regression: store_alias runs fire-and-forget after the
+        response is sent; if the parent is deleted (negative feedback)
+        between the get_entry_metadata read and the upsert, the alias used
+        to be written as an orphan carrying the just-deleted answer. Now the
+        parent's existence is re-verified after the upsert and the alias is
+        removed if the parent is gone."""
+        svc = _make_svc("alias_race")
+        parent_id = svc.store_interaction("what is the capital of russia?", "Moscow.", "orig", "u1")
+
+        original_upsert = svc._collection.upsert
+
+        def racing_upsert(*args, **kwargs):
+            # Simulate a negative-feedback delete landing between the parent
+            # read in store_alias and this upsert actually committing.
+            svc.delete_entry(parent_id)
+            return original_upsert(*args, **kwargs)
+
+        monkeypatch.setattr(svc._collection, "upsert", racing_upsert)
+
+        alias_query = "what is teh captial of rusia?"
+        alias_id = svc.store_alias(alias_query, parent_id)
+
+        assert alias_id is None
+        assert svc.get_entry_metadata(parent_id) is None
+        expected_alias_id = hashlib.sha256(alias_query.encode()).hexdigest()[:16]
+        assert svc.get_entry_metadata(expected_alias_id) is None
