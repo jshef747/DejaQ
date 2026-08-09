@@ -61,8 +61,20 @@ def _parse_data_url(url: str, what: str = "image", default_mime: str = "image/jp
     try:
         header, payload = url[len("data:"):].split(",", 1)
         mime = header.split(";", 1)[0] or default_mime
+    except ValueError as exc:
+        raise PipelineError(400, f"Malformed data {what} URL: {exc}") from exc
+    # Reject on the base64 string's own length before decoding — decoding first
+    # buffers the payload string plus its decoded bytes (~2x) in memory, so an
+    # oversized data URL must be rejected before that allocation happens, not after.
+    if (len(payload) * 3) // 4 > MAX_ATTACHMENT_BYTES:
+        raise PipelineError(
+            400,
+            f"Attached {what} is too large; the limit is "
+            f"{MAX_ATTACHMENT_BYTES / 1048576:.0f} MB.",
+        )
+    try:
         data = base64.b64decode(payload)
-    except (ValueError, binascii.Error) as exc:
+    except binascii.Error as exc:
         raise PipelineError(400, f"Malformed data {what} URL: {exc}") from exc
     # A client-side size check is not a limit; anything speaking the API directly
     # bypasses it. This is the one that holds.
