@@ -161,8 +161,8 @@ def create_workspace(name: str, ctx: ManagementAuthContext = _SYSTEM_CTX) -> Wor
         if not ctx.is_system and ctx.local_user_id is not None:
             user_repo.create_membership_idempotent(session, ctx.local_user_id, new_workspace.id)
 
-        _invalidate_key_cache()
-        return new_workspace
+    _invalidate_key_cache()
+    return new_workspace
 
 
 def rename_workspace(slug: str, new_name: str, ctx: ManagementAuthContext = _SYSTEM_CTX) -> WorkspaceRead:
@@ -233,8 +233,9 @@ def create_department(
             message = str(exc)
             slug = message.split("'")[1] if "'" in message else name
             raise DuplicateSlug(slug) from exc
-        _invalidate_key_cache()
-        return _dept_item(dept, workspace_slug)
+        item = _dept_item(dept, workspace_slug)
+    _invalidate_key_cache()
+    return item
 
 
 def rename_department(
@@ -331,13 +332,14 @@ def generate_key(
             api_key_repo.revoke_key(session, existing.id)
 
         key = api_key_repo.create_key(session, workspace.id)
-        _invalidate_key_cache()
-        return KeyCreated(
+        result = KeyCreated(
             id=key.id,
             workspace_slug=workspace_slug,
             token=key.token,
             created_at=key.created_at,
         )
+    _invalidate_key_cache()
+    return result
 
 
 def revoke_key(
@@ -355,13 +357,14 @@ def revoke_key(
         revoked = api_key_repo.revoke_key(session, key_id)
         if revoked is None:
             raise KeyNotFound(key_id)
-        _invalidate_key_cache()
-        return KeyRevokeResult(
+        result = KeyRevokeResult(
             id=revoked.id,
             revoked=True,
             already_revoked=already_revoked,
             revoked_at=revoked.revoked_at,
         )
+    _invalidate_key_cache()
+    return result
 
 
 def delete_revoked_key(

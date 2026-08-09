@@ -86,12 +86,14 @@ class GoogleProviderClient:
 
         latency_ms = elapsed_ms(start)
         usage = response.usage_metadata
+        prompt_tokens = (usage.prompt_token_count or 0) if usage else 0
+        completion_tokens = (usage.candidates_token_count or 0) if usage else 0
         logger.debug(
             "Google request successful (model=%s, latency=%.2f ms, prompt_tokens=%d, completion_tokens=%d)",
             request.model,
             latency_ms,
-            usage.prompt_token_count if usage else 0,
-            usage.candidates_token_count if usage else 0,
+            prompt_tokens,
+            completion_tokens,
         )
         candidate_finish_reason = (
             response.candidates[0].finish_reason if response.candidates else None
@@ -99,8 +101,8 @@ class GoogleProviderClient:
         return ExternalLLMResponse(
             text=response.text or "",
             model_used=request.model,
-            prompt_tokens=usage.prompt_token_count if usage else 0,
-            completion_tokens=usage.candidates_token_count if usage else 0,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
             latency_ms=latency_ms,
             finish_reason=normalize_finish_reason(candidate_finish_reason),
         )

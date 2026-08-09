@@ -294,3 +294,95 @@ def test_provider_clients_map_timeout_errors_uniformly(monkeypatch, provider_nam
 
     with pytest.raises(ExternalLLMTimeoutError):
         asyncio.run(client.generate_response(_request(), "SecretKey123"))
+
+
+def test_openai_provider_client_sends_reasoning_params_for_o_series(monkeypatch):
+    """o1-/o3-/o4- models reject `max_tokens` and non-default `temperature`;
+    the client must send `max_completion_tokens` and omit `temperature`."""
+    from app.services.llm_providers import openai as openai_provider
+
+    calls = {}
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            calls.update(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(
+                    message=SimpleNamespace(content="o-series answer"),
+                    finish_reason="stop",
+                )],
+                usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+            )
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr(openai_provider.openai, "AsyncOpenAI", FakeClient)
+
+    response = asyncio.run(
+        openai_provider.OpenAIProviderClient().generate_response(_request("o4-mini"), "SecretKey123")
+    )
+
+    assert response.text == "o-series answer"
+    assert calls["max_completion_tokens"] == 64
+    assert "max_tokens" not in calls
+    assert "temperature" not in calls
+
+
+def test_openai_provider_client_sends_legacy_params_for_non_reasoning_models(monkeypatch):
+    from app.services.llm_providers import openai as openai_provider
+
+    calls = {}
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            calls.update(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(
+                    message=SimpleNamespace(content="answer"),
+                    finish_reason="stop",
+                )],
+                usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+            )
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr(openai_provider.openai, "AsyncOpenAI", FakeClient)
+
+    asyncio.run(openai_provider.OpenAIProviderClient().generate_response(_request("gpt-4o"), "SecretKey123"))
+
+    assert calls["max_tokens"] == 64
+    assert calls["temperature"] == 0.2
+    assert "max_completion_tokens" not in calls
+
+
+def test_google_provider_client_coalesces_none_token_counts(monkeypatch):
+    """Blocked/empty-candidate Gemini responses carry usage_metadata with
+    None token counts; the client must not let that crash into a
+    Pydantic ValidationError on ExternalLLMResponse.completion_tokens: int."""
+    from app.services.llm_providers import google as google_provider
+
+    class FakeModels:
+        async def generate_content(self, **kwargs):
+            return SimpleNamespace(
+                text=None,
+                usage_metadata=SimpleNamespace(prompt_token_count=None, candidates_token_count=None),
+                candidates=[],
+            )
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.aio = SimpleNamespace(models=FakeModels())
+
+    monkeypatch.setattr(google_provider.genai, "Client", FakeClient)
+
+    response = asyncio.run(
+        google_provider.GoogleProviderClient().generate_response(_request("gemini-2.5-flash"), "SecretKey123")
+    )
+
+    assert response.prompt_tokens == 0
+    assert response.completion_tokens == 0
+    assert response.text == ""

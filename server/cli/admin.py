@@ -363,7 +363,11 @@ def cache_purge_images(workspace_slug: str, dept_slug: str | None, yes: bool, dr
             print_error(f"Department '{dept_slug}' not found under workspace '{workspace_slug}'.")
             sys.exit(1)
 
-    namespaces = [d.cache_namespace for d in departments] or [f"{workspace_slug}--default"]
+    namespaces = [d.cache_namespace for d in departments]
+    if not dept_slug:
+        # Requests without an X-DejaQ-Department header always land here
+        # (app/middleware/api_key.py), regardless of whether departments exist.
+        namespaces = list(dict.fromkeys(namespaces + [f"{workspace_slug}--default"]))
     found: list[tuple[str, int]] = []
     for namespace in namespaces:
         try:
