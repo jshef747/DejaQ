@@ -27,18 +27,19 @@ NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
 npm run dev
 ```
 
-Open `http://localhost:3000`. You go straight to the dashboard — create an
-organization and generate an API key to start using the gateway.
+Open `http://localhost:3000`. You go straight to the dashboard — create a
+workspace and generate an API key to start using the gateway.
 
 ## What It Manages
 
-- Organizations and departments
-- Org API keys for `/v1/chat/completions` and `/v1/feedback`
-- Org provider credentials for Google, OpenAI, and Anthropic
-- Per-org LLM config and provider test calls
+- Workspaces and departments
+- Workspace API keys for `/v1/chat/completions` and `/v1/feedback`
+- Workspace provider credentials for Google, OpenAI, and Anthropic
+- Per-workspace LLM config and provider test calls
+- Per-workspace knowledge base (Rug/RAG documents)
 - Request stats and cache feedback review
 
-Gateway requests (`/v1/*`) always use DejaQ org API keys, never the dashboard's own auth.
+Gateway requests (`/v1/*`) always use DejaQ workspace API keys, never the dashboard's own auth.
 
 ## Verify
 

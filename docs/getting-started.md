@@ -75,8 +75,8 @@ cd chat && npm run dev                                                   # termi
 | Chat UI | http://localhost:4000 |
 | API health check | http://127.0.0.1:8000/health |
 
-1. Open the dashboard → **Organizations** → create an org → **Keys** → generate an API key (copy it).
-   (Equivalent CLI: `cd server && uv run dejaq-admin org create --name Demo && uv run dejaq-admin key generate --org demo`.)
+1. Open the dashboard → **Workspaces** → create a workspace → **API Keys** → generate an API key (copy it).
+   (Equivalent CLI: `cd server && uv run dejaq-admin workspace create --name Demo && uv run dejaq-admin key generate --workspace demo`.)
 2. Open the chat UI → **Settings** → paste the API key (and an optional department slug).
 3. Start chatting — easy questions route to the local model, hard ones to your configured
    external provider, and repeated questions are answered from the semantic cache.

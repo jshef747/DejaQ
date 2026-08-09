@@ -441,7 +441,7 @@ def rag_list(workspace_slug: str) -> None:
     svc = _rag_service()
     try:
         docs = svc.list_documents(workspace_slug)
-    except (admin_service.WorkspaceNotFound) as e:
+    except admin_service.WorkspaceNotFound as e:
         print_error(str(e))
         sys.exit(1)
     print_table(

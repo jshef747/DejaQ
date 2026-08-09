@@ -59,27 +59,27 @@ The startup helper selects local vs remote Ollama:
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/health` | none | Health and dependency status |
-| `POST` | `/v1/chat/completions` | DejaQ org API key | OpenAI-compatible chat gateway |
-| `POST` | `/v1/feedback` | DejaQ org API key | Positive/negative cache feedback |
+| `POST` | `/v1/chat/completions` | DejaQ workspace API key | OpenAI-compatible chat gateway |
+| `POST` | `/v1/feedback` | DejaQ workspace API key | Positive/negative cache feedback |
 | `GET/POST/...` | `/admin/v1/*` | dev-admin (loopback-only) | Management API for dashboard and operators |
 
 Management auth is unconditional dev-admin: `/admin/v1/*` requires no credential and is protected only by loopback binding (`AdminLoopbackMiddleware`).
 
-Hard-query external provider calls use encrypted per-org credentials stored through `/admin/v1/orgs/{org}/credentials/{provider}` or the dashboard. There is no runtime platform `GEMINI_API_KEY` fallback.
+Hard-query external provider calls use encrypted per-workspace credentials stored through `/admin/v1/workspaces/{workspace_slug}/credentials/{provider}` or the dashboard. There is no runtime platform `GEMINI_API_KEY` fallback.
 
 ## Key Environment Variables
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `DEJAQ_CREDENTIAL_ENCRYPTION_KEY` | empty | Fernet key for org provider credentials |
+| `DEJAQ_CREDENTIAL_ENCRYPTION_KEY` | empty | Fernet key for workspace provider credentials |
 | `DEJAQ_REDIS_URL` | `redis://localhost:6379/0` | Celery broker/result backend |
 | `DEJAQ_USE_CELERY` | `true` | Run background storage in Celery or in process |
-| `DEJAQ_KEY_CACHE_TTL` | `60` | Org API key lookup cache TTL |
+| `DEJAQ_KEY_CACHE_TTL` | `60` | Workspace API key lookup cache TTL |
 | `DEJAQ_STATS_DB` | `dejaq_stats.db` | SQLite request log path |
 | `DEJAQ_LOG_LEVEL` | `INFO` | App log level |
 | `DEJAQ_LOG_SHOW_CONTENT` | `false` | Include prompt/response content in request logs |
 | `DEJAQ_EVICTION_FLOOR` | `-5.0` | Cache score floor for eviction |
-| `DEJAQ_EXTERNAL_MODEL` | `gemini-2.5-flash` | Default hard-query model when org config has no override |
+| `DEJAQ_EXTERNAL_MODEL` | `gemini-2.5-flash` | Default hard-query model when workspace config has no override |
 | `DEJAQ_ROUTING_THRESHOLD` | `0.3` | Default easy/hard threshold |
 | `DEJAQ_CHROMA_HOST` | `127.0.0.1` | ChromaDB host |
 | `DEJAQ_CHROMA_PORT` | `8001` | ChromaDB port |
@@ -92,13 +92,15 @@ See `.env.example` for the complete editable template.
 
 ```bash
 uv run dejaq-admin --help
-uv run dejaq-admin org create --name Demo
-uv run dejaq-admin key generate --org demo
+uv run dejaq-admin workspace create --name Demo
+uv run dejaq-admin key generate --workspace demo
 uv run dejaq-admin stats
 ```
 
-The `dejaq-admin` CLI manages orgs, departments, API keys, and stats — the headless/server-only
-bootstrap path. Provider credentials and feedback are managed through the dashboard or `/admin/v1/*`.
+The `dejaq-admin` CLI manages workspaces, departments, API keys, knowledge-base documents,
+and stats — the headless/server-only bootstrap path. Provider credentials and feedback are
+managed through the dashboard or `/admin/v1/*`. Full command reference:
+[docs/cli-instructions.md](../docs/cli-instructions.md).
 
 ## Architecture Map
 
