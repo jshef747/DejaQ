@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from app.config import OLLAMA_TIMEOUT_SECONDS
+from app.config import DEFAULT_MAX_TOKENS, OLLAMA_TIMEOUT_SECONDS
 from app.db.session import get_session
 from app.schemas.chat import ExternalLLMRequest
 from app.schemas.feedback import EscalatedResponse
@@ -43,6 +43,40 @@ class EscalationResult(BaseModel):
 
 def _doc_id(clean_query: str) -> str:
     return hashlib.sha256(clean_query.encode()).hexdigest()[:16]
+
+
+def _entry_is_attachment_anchored(meta: dict | None) -> bool:
+    if not meta:
+        return False
+    return bool(
+        meta.get("image_kind")
+        or meta.get("image_text")
+        or meta.get("image_dhash")
+        or meta.get("image_clip")
+        or meta.get("file_sha")
+        or meta.get("file_kind")
+    )
+
+
+async def _parent_is_attachment_anchored(interaction) -> bool:
+    # Only a cache-served parent can be attachment-anchored: both escalation
+    # branches store plain-text answers, so a "local"/"external" parent's own
+    # cache entry (if any) never carries image/file metadata - no need to walk
+    # further up the chain.
+    if interaction.served_tier != "cache" or not interaction.response_id:
+        return False
+    namespace, _, doc_id = interaction.response_id.partition(":")
+    if not doc_id:
+        return False
+    try:
+        meta = await asyncio.to_thread(get_memory_service(namespace).get_entry_metadata, doc_id)
+    except Exception:
+        logger.exception(
+            "feedback_escalation attachment_check failed interaction_id=%s - refusing to cache",
+            interaction.interaction_id,
+        )
+        return True
+    return _entry_is_attachment_anchored(meta)
 
 
 async def _store_escalation_cache_entry(
@@ -112,6 +146,30 @@ async def _cache_response_id_for_escalation(
     if truncated:
         logger.warning(
             "feedback_escalation cache_store status=skipped reason=truncated "
+            "interaction_id=%s",
+            interaction.interaction_id,
+        )
+        return None
+
+    # Same rule as the miss path (openai_compat.py) - an empty answer (e.g. a
+    # safety-blocked provider response normalized to finish_reason="stop") is
+    # not an answer, and caching it means every later match is served silence.
+    if not answer.strip():
+        logger.warning(
+            "feedback_escalation cache_store status=skipped reason=empty_answer "
+            "interaction_id=%s",
+            interaction.interaction_id,
+        )
+        return None
+
+    # The re-answer above was generated from message.history alone, blind to
+    # whatever image/file the original cached answer was anchored to (the
+    # client never re-sends attachment bytes on a feedback replay). Storing it
+    # as an ungated text entry is exactly the poisoning the image/file gates
+    # exist to prevent - refuse the store rather than trust a blind answer.
+    if await _parent_is_attachment_anchored(interaction):
+        logger.warning(
+            "feedback_escalation cache_store status=skipped reason=attachment_anchored "
             "interaction_id=%s",
             interaction.interaction_id,
         )
@@ -218,6 +276,7 @@ async def _escalate_to_local(
             get_llm_router_service().generate_local_response(
                 query,
                 history=history,
+                max_tokens=DEFAULT_MAX_TOKENS,
                 system_prompt=system_prompt
                 or "You are a helpful assistant. Answer the user's query concisely and accurately.",
             ),
@@ -294,6 +353,7 @@ async def _escalate_to_external(
         query=query,
         history=history,
         model=config.external_model,
+        max_tokens=DEFAULT_MAX_TOKENS,
         system_prompt=system_prompt
         or "You are a helpful assistant. Answer the user's query concisely and accurately.",
     )

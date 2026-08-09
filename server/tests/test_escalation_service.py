@@ -19,7 +19,7 @@ def _credential_key(monkeypatch):
     monkeypatch.setattr(config, "CREDENTIAL_ENCRYPTION_KEY", key, raising=False)
 
 
-def _interaction(served_tier: str):
+def _interaction(served_tier: str, response_id: str | None = None):
     from app.services.response_registry import ResponseInteraction
 
     return ResponseInteraction(
@@ -29,7 +29,7 @@ def _interaction(served_tier: str):
         department="eng",
         cache_namespace="acme__eng",
         served_tier=served_tier,
-        response_id=None,
+        response_id=response_id,
         message_hash="hash",
         created_at="2026-01-01T00:00:00+00:00",
         escalation_attempted=False,
@@ -570,6 +570,242 @@ def test_cache_helper_returns_none_when_not_cacheable(monkeypatch):
 
     assert response_id is None
     assert scheduled == []
+
+
+def test_cache_helper_refuses_to_store_an_empty_answer(monkeypatch):
+    """A safety-blocked provider response can arrive as empty text with
+    finish_reason normalized to "stop" - not truncated, but still not an
+    answer worth caching. Mirrors the main pipeline's own guard."""
+    from app.services import escalation
+
+    class Enricher:
+        async def enrich(self, query, history):
+            return query
+
+    class Normalizer:
+        async def normalize(self, enriched):
+            return "normalized current question"
+
+    scheduled = []
+    monkeypatch.setattr(escalation, "get_context_enricher_service", lambda: Enricher())
+    monkeypatch.setattr(escalation, "get_normalizer_service", lambda: Normalizer())
+    monkeypatch.setattr(escalation.cache_filter, "should_cache", lambda enriched, clean, **kw: (True, "passed"))
+    monkeypatch.setattr(escalation, "_schedule_escalation_cache_store", lambda **kwargs: scheduled.append(kwargs))
+
+    response_id = asyncio.run(
+        escalation._cache_response_id_for_escalation(
+            interaction=_interaction("cache"),
+            query="Current question",
+            history=[],
+            answer="   ",
+            truncated=False,
+        )
+    )
+
+    assert response_id is None
+    assert scheduled == []
+
+
+def test_cache_helper_refuses_to_store_when_parent_is_attachment_anchored(monkeypatch):
+    """A negative-feedback escalation of a cache hit re-answers from message
+    history alone - never the original image/file - so if the parent cache
+    entry was attachment-anchored, the blind answer must not be stored as an
+    ungated text entry."""
+    from app.services import escalation
+
+    class Enricher:
+        async def enrich(self, query, history):
+            return query
+
+    class Normalizer:
+        async def normalize(self, enriched):
+            return "normalized current question"
+
+    class Memory:
+        def get_entry_metadata(self, entry_id):
+            assert entry_id == "docid123"
+            return {"file_sha": "abc123", "file_kind": "pdf"}
+
+    scheduled = []
+    monkeypatch.setattr(escalation, "get_context_enricher_service", lambda: Enricher())
+    monkeypatch.setattr(escalation, "get_normalizer_service", lambda: Normalizer())
+    monkeypatch.setattr(escalation.cache_filter, "should_cache", lambda enriched, clean, **kw: (True, "passed"))
+    monkeypatch.setattr(escalation, "_schedule_escalation_cache_store", lambda **kwargs: scheduled.append(kwargs))
+    monkeypatch.setattr(escalation, "get_memory_service", lambda namespace: Memory())
+
+    response_id = asyncio.run(
+        escalation._cache_response_id_for_escalation(
+            interaction=_interaction("cache", response_id="acme__eng:docid123"),
+            query="Summarise this document",
+            history=[],
+            answer="It's a summary the model made up without seeing the file",
+            truncated=False,
+        )
+    )
+
+    assert response_id is None
+    assert scheduled == []
+
+
+def test_cache_helper_stores_when_parent_is_plain_text(monkeypatch):
+    """Control: a cache-tier parent with no attachment metadata is unaffected
+    by the new guard."""
+    from app.services import escalation
+
+    class Enricher:
+        async def enrich(self, query, history):
+            return query
+
+    class Normalizer:
+        async def normalize(self, enriched):
+            return "normalized current question"
+
+    class Memory:
+        def get_entry_metadata(self, entry_id):
+            return {"answer": "hi", "score": 0.0}
+
+    scheduled = []
+    monkeypatch.setattr(escalation, "get_context_enricher_service", lambda: Enricher())
+    monkeypatch.setattr(escalation, "get_normalizer_service", lambda: Normalizer())
+    monkeypatch.setattr(escalation.cache_filter, "should_cache", lambda enriched, clean, **kw: (True, "passed"))
+    monkeypatch.setattr(escalation, "_schedule_escalation_cache_store", lambda **kwargs: scheduled.append(kwargs))
+    monkeypatch.setattr(escalation, "get_memory_service", lambda namespace: Memory())
+
+    response_id = asyncio.run(
+        escalation._cache_response_id_for_escalation(
+            interaction=_interaction("cache", response_id="acme__eng:docid123"),
+            query="Current question",
+            history=[],
+            answer="a real answer",
+            truncated=False,
+        )
+    )
+
+    assert response_id is not None
+    assert scheduled != []
+
+
+def test_cache_helper_skips_attachment_check_for_non_cache_parent(monkeypatch):
+    """Only a cache-served parent can be attachment-anchored - a local/external
+    parent's own stored answer (if any) is always plain text, so the guard
+    must not even query the memory service for those, avoiding an unnecessary
+    lookup on the far more common non-cache escalation path."""
+    from app.services import escalation
+
+    class Enricher:
+        async def enrich(self, query, history):
+            return query
+
+    class Normalizer:
+        async def normalize(self, enriched):
+            return "normalized current question"
+
+    def _unexpected_get_memory_service(namespace):
+        raise AssertionError("must not query memory service for a non-cache parent")
+
+    scheduled = []
+    monkeypatch.setattr(escalation, "get_context_enricher_service", lambda: Enricher())
+    monkeypatch.setattr(escalation, "get_normalizer_service", lambda: Normalizer())
+    monkeypatch.setattr(escalation.cache_filter, "should_cache", lambda enriched, clean, **kw: (True, "passed"))
+    monkeypatch.setattr(escalation, "_schedule_escalation_cache_store", lambda **kwargs: scheduled.append(kwargs))
+    monkeypatch.setattr(escalation, "get_memory_service", _unexpected_get_memory_service)
+
+    response_id = asyncio.run(
+        escalation._cache_response_id_for_escalation(
+            interaction=_interaction("local", response_id="acme__eng:docid123"),
+            query="Current question",
+            history=[],
+            answer="a real answer",
+            truncated=False,
+        )
+    )
+
+    assert response_id is not None
+    assert scheduled != []
+
+
+def test_local_escalation_uses_default_max_tokens(monkeypatch):
+    """The main path moved to DEFAULT_MAX_TOKENS=4096 precisely because 1024
+    truncated ordinary answers - escalation must not stay capped at the old
+    default."""
+    from app.config import DEFAULT_MAX_TOKENS
+    from app.services import escalation
+
+    class Router:
+        async def generate_local_response(self, query, history=None, max_tokens=1024, system_prompt=None):
+            self.max_tokens = max_tokens
+            return "a" * 5000, 11.0, "stop"
+
+    router = Router()
+
+    async def _cache_response_id_for_escalation(**kwargs):
+        return None
+
+    monkeypatch.setattr(escalation, "get_llm_router_service", lambda: router)
+    monkeypatch.setattr(escalation, "response_registry", _RecordingRegistry())
+    monkeypatch.setattr(escalation, "_cache_response_id_for_escalation", _cache_response_id_for_escalation)
+
+    result = asyncio.run(
+        escalation.escalate(
+            interaction=_interaction("cache"),
+            messages=[{"role": "user", "content": "Current question"}],
+        )
+    )
+
+    assert result.escalation_status == "answered"
+    assert router.max_tokens == DEFAULT_MAX_TOKENS
+
+
+def test_external_escalation_uses_default_max_tokens(monkeypatch):
+    from app.config import DEFAULT_MAX_TOKENS
+    from app.schemas.chat import ExternalLLMResponse
+    from app.services import escalation
+
+    class External:
+        async def generate_response(self, request, provider, api_key):
+            self.request = request
+            return ExternalLLMResponse(
+                text="external better answer",
+                model_used=request.model,
+                prompt_tokens=1,
+                completion_tokens=2,
+                latency_ms=3,
+            )
+
+    @contextmanager
+    def fake_session():
+        yield object()
+
+    external = External()
+
+    async def _cache_response_id_for_escalation(**kwargs):
+        return None
+
+    monkeypatch.setattr(escalation, "response_registry", _RecordingRegistry())
+    monkeypatch.setattr(escalation, "_cache_response_id_for_escalation", _cache_response_id_for_escalation)
+    monkeypatch.setattr(
+        escalation.llm_config_service,
+        "read_for_workspace",
+        lambda workspace_slug: type("Cfg", (), {"external_model": "gpt-5.4-mini"})(),
+    )
+    monkeypatch.setattr(escalation, "provider_for_model", lambda model: "openai")
+    monkeypatch.setattr(escalation, "get_session", fake_session)
+    monkeypatch.setattr(
+        escalation.CredentialService,
+        "get_decrypted_key",
+        lambda self, session, workspace_id, provider: "sk-test",
+    )
+    monkeypatch.setattr(escalation, "ExternalLLMService", lambda: external)
+
+    result = asyncio.run(
+        escalation.escalate(
+            interaction=_interaction("local"),
+            messages=[{"role": "user", "content": "Hello"}],
+        )
+    )
+
+    assert result.escalation_status == "answered"
+    assert external.request.max_tokens == DEFAULT_MAX_TOKENS
 
 
 def test_cache_helper_refuses_to_store_a_truncated_answer(monkeypatch):
