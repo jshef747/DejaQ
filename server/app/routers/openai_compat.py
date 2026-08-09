@@ -741,7 +741,7 @@ async def run_chat_pipeline(
             logger.exception("Normalizer failed")
             clean_query = enriched
 
-        # 3. Cache lookup — the full same-tier pool, not just the top score, so an
+        # 3. Cache lookup — the full cross-tier pool, not just the top score, so an
         # attachment-gate REJECT below can fall through to the next candidate
         # instead of becoming a full miss (see _cache_lookup_pool).
         cache_lookup = CacheLookupResult(hit=False)

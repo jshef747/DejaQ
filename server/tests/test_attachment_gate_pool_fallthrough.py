@@ -97,6 +97,12 @@ def _patch_pipeline(monkeypatch, *, memory):
         ),
     )
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: memory)
+    monkeypatch.setattr(
+        openai_compat, "_read_effective_llm_config",
+        lambda workspace_slug, workspace_id: openai_compat.EffectiveLlmConfig(
+            external_model="gemini-2.5-flash", routing_threshold=0.3,
+        ),
+    )
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
     _patch_external_provider(monkeypatch, "a fresh answer generated for this document")
@@ -146,3 +152,59 @@ def test_uncached_document_still_misses(monkeypatch):
     assert resp.headers.get("x-dejaq-tier") != "cache"
     assert ANSWER_A not in resp.text
     assert ANSWER_B not in resp.text
+
+
+def _memory_with_rows(monkeypatch, rows):
+    from app.services import memory_chromaDB
+
+    class StubCollection:
+        def count(self):
+            return len(rows)
+
+        def query(self, **kwargs):
+            return {
+                "ids": [[r["id"] for r in rows]],
+                "distances": [[r["dist"] for r in rows]],
+                "documents": [[r.get("doc", QUESTION) for r in rows]],
+                "metadatas": [[r["meta"] for r in rows]],
+            }
+
+    monkeypatch.setattr(memory_chromaDB, "_embed", lambda text: [0.0])
+    service = memory_chromaDB.MemoryService.__new__(memory_chromaDB.MemoryService)
+    service._collection = StubCollection()
+    return service
+
+
+def test_pool_spans_all_tiers_with_per_candidate_flags(monkeypatch):
+    """Trusted, band, and rescue rows all appear in the pool in tier priority
+    order — score-ordered within each tier — each carrying its own tier's
+    requires_validation/rescued flags."""
+    memory = _memory_with_rows(monkeypatch, [
+        {"id": "band-1", "dist": 0.18, "meta": {"generalized_answer": "band", "score": 9.0}},
+        {"id": "trusted-low", "dist": 0.05, "meta": {"generalized_answer": "t-low", "score": 1.0}},
+        {"id": "rescue-1", "dist": 0.40, "meta": {"generalized_answer": "rescue", "score": 9.0}},
+        {"id": "trusted-high", "dist": 0.10, "meta": {"generalized_answer": "t-high", "score": 5.0}},
+    ])
+
+    candidates, nearest_dist, nearest_prompt = memory.lookup_cache_pool(QUESTION)
+
+    assert [c.entry_id for c in candidates] == ["trusted-high", "trusted-low", "band-1", "rescue-1"]
+    assert [(c.requires_validation, c.rescued) for c in candidates] == [
+        (False, False), (False, False), (True, False), (True, True),
+    ]
+    assert nearest_dist == pytest.approx(0.18)
+    assert nearest_prompt == QUESTION
+
+
+def test_corrupt_entry_skipped_not_fatal(monkeypatch):
+    """A row missing generalized_answer metadata is dropped, not a KeyError
+    that turns the whole lookup into a miss."""
+    memory = _memory_with_rows(monkeypatch, [
+        {"id": "corrupt", "dist": 0.03, "meta": {"score": 9.0}},
+        {"id": "good", "dist": 0.05, "meta": {"generalized_answer": "fine", "score": 1.0}},
+    ])
+
+    candidates, _, _ = memory.lookup_cache_pool(QUESTION)
+
+    assert [c.entry_id for c in candidates] == ["good"]
+    assert memory.lookup_cache(QUESTION).entry_id == "good"

@@ -132,16 +132,18 @@ class MemoryService:
     def _lookup_candidates(
         self, normalized_query: str
     ) -> tuple[list[CacheLookupResult], float | None, str | None]:
-        """Build every same-tier candidate for a query, best score first.
+        """Build every candidate for a query, tier priority then best score first.
 
         Three tiers, in priority order:
         - trusted (distance ≤ CACHE_TRUST_DISTANCE): served directly,
         - band (≤ CACHE_BAND_MAX_DISTANCE): served only if the validator accepts,
         - lexical rescue (≤ CACHE_RESCUE_MAX_DISTANCE and word-aligned with the
           stored query — a heavily typo'd variant): validator-gated as well.
-        Only the highest-priority non-empty tier is returned — never a mix — so
-        every candidate in the list shares one requires_validation/rescued verdict.
-        Within that tier, highest score wins (absent score treated as 0.0).
+        All tiers are returned, concatenated in that priority order and
+        score-ordered within each (absent score treated as 0.0); every
+        candidate carries its own tier's requires_validation/rescued flags, so
+        a caller that falls through past the trusted rows knows the later rows
+        still need the validator.
 
         Callers that need an attachment gate to pick among candidates (rather
         than trust the top score) use the full list; `lookup_cache` keeps the
@@ -195,39 +197,51 @@ class MemoryService:
             logger.debug("Cache MISS distance=%.4f latency=%.1fms", nearest_dist, latency_ms)
             return [], nearest_dist, nearest_prompt
 
-        pool = trusted or band or rescue
-        requires_validation = not trusted
-        rescued = not trusted and not band
-        pool.sort(key=lambda r: r[0], reverse=True)
-
         candidates: list[CacheLookupResult] = []
-        for score, dist, entry_id, meta, matched_query in pool:
-            # Word-level mismatches vs this entry — validator hint for the
-            # single-word-swap trap (list/string). Only informative when the
-            # words DIDN'T align; rescued hits aligned by construction.
-            mismatches: tuple[tuple[str, str], ...] | None = None
-            if not rescued and matched_query:
-                align_result = align(normalized_query, matched_query)
-                if not align_result.aligned and align_result.mismatches:
-                    mismatches = align_result.mismatches
-            candidates.append(CacheLookupResult(
-                hit=True,
-                generalized_answer=meta["generalized_answer"],
-                entry_id=entry_id,
-                distance=dist,
-                matched_query=matched_query,
-                nearest_distance=nearest_dist,
-                nearest_prompt=nearest_prompt,
-                requires_validation=requires_validation,
-                rescued=rescued,
-                mismatches=mismatches,
-                image_dhash=meta.get("image_dhash"),
-                image_clip=meta.get("image_clip"),
-                image_kind=meta.get("image_kind"),
-                image_text=meta.get("image_text"),
-                file_sha=meta.get("file_sha"),
-                file_kind=meta.get("file_kind"),
-            ))
+        for tier, requires_validation, rescued in (
+            (trusted, False, False),
+            (band, True, False),
+            (rescue, True, True),
+        ):
+            tier.sort(key=lambda r: r[0], reverse=True)
+            for score, dist, entry_id, meta, matched_query in tier:
+                generalized_answer = meta.get("generalized_answer")
+                if generalized_answer is None:
+                    logger.warning(
+                        "Cache entry %s missing generalized_answer metadata; skipping",
+                        entry_id,
+                    )
+                    continue
+                # Word-level mismatches vs this entry — validator hint for the
+                # single-word-swap trap (list/string). Only informative when the
+                # words DIDN'T align; rescued hits aligned by construction.
+                mismatches: tuple[tuple[str, str], ...] | None = None
+                if not rescued and matched_query:
+                    align_result = align(normalized_query, matched_query)
+                    if not align_result.aligned and align_result.mismatches:
+                        mismatches = align_result.mismatches
+                candidates.append(CacheLookupResult(
+                    hit=True,
+                    generalized_answer=generalized_answer,
+                    entry_id=entry_id,
+                    distance=dist,
+                    matched_query=matched_query,
+                    nearest_distance=nearest_dist,
+                    nearest_prompt=nearest_prompt,
+                    requires_validation=requires_validation,
+                    rescued=rescued,
+                    mismatches=mismatches,
+                    image_dhash=meta.get("image_dhash"),
+                    image_clip=meta.get("image_clip"),
+                    image_kind=meta.get("image_kind"),
+                    image_text=meta.get("image_text"),
+                    file_sha=meta.get("file_sha"),
+                    file_kind=meta.get("file_kind"),
+                ))
+
+        if not candidates:
+            logger.debug("Cache MISS distance=%.4f latency=%.1fms", nearest_dist, latency_ms)
+            return [], nearest_dist, nearest_prompt
 
         logger.debug(
             "Cache HIT candidates=%d top_distance=%.4f trust=%.2f band_max=%.2f "
@@ -236,8 +250,8 @@ class MemoryService:
             candidates[0].distance,
             CACHE_TRUST_DISTANCE,
             CACHE_BAND_MAX_DISTANCE,
-            requires_validation,
-            rescued,
+            candidates[0].requires_validation,
+            candidates[0].rescued,
             latency_ms,
             candidates[0].entry_id,
         )
@@ -257,15 +271,16 @@ class MemoryService:
     def lookup_cache_pool(
         self, normalized_query: str
     ) -> tuple[list[CacheLookupResult], float | None, str | None]:
-        """Return every same-tier cache candidate, best score first, plus the nearest.
+        """Return every cache candidate across all tiers, plus the nearest.
 
-        Same tier selection and ranking as `lookup_cache`, but the full ranked
-        list rather than just the winner — for callers whose gate can reject a
-        top candidate (e.g. a different attachment) yet must still consider the
-        next entry rather than treat that as a full miss. The candidate list is
-        empty when there is no candidate in any tier; nearest_distance/prompt
-        (the closest text match regardless of tier) are still returned for
-        diagnostics in that case.
+        Same tier ranking as `lookup_cache` (trusted, then band, then rescue,
+        score-ordered within each, per-candidate validation flags), but the
+        full ranked list rather than just the winner — for callers whose gate
+        can reject a top candidate (e.g. a different attachment) yet must still
+        consider the next entry rather than treat that as a full miss. The
+        candidate list is empty when there is no candidate in any tier;
+        nearest_distance/prompt (the closest text match regardless of tier) are
+        still returned for diagnostics in that case.
         """
         return self._lookup_candidates(normalized_query)
 
