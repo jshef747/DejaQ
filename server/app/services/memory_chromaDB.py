@@ -339,6 +339,15 @@ class MemoryService:
                 "alias_of": root_id,
             }],
         )
+        # Re-verify the root survived the upsert: a negative-feedback delete
+        # racing between the get_entry_metadata read above and this upsert
+        # would otherwise leave the alias as an orphan carrying the deleted
+        # answer. Not fully closed (the root could still vanish right after
+        # this check), but it closes the actual observed window.
+        if self.get_entry_metadata(root_id) is None:
+            self._collection.delete(ids=[doc_id])
+            logger.info("store_alias: root %s vanished during store, discarding alias %s", root_id, doc_id)
+            return None
         logger.info("Stored alias %s -> %s (query=%r)", doc_id, root_id, alias_query[:60])
         return doc_id
 
@@ -474,7 +483,13 @@ class MemoryService:
             return 0
 
     def evict_below_floor(self, floor: float) -> int:
-        """Delete all entries with score < floor. Returns count of deleted entries."""
+        """Delete all entries with score < floor, cascading each to its aliases.
+
+        Routed through delete_entry (not a bulk self._collection.delete) so an
+        evicted root's aliases - which keep a byte-identical copy of its answer -
+        are removed too, instead of surviving as orphans.
+        Returns count of root entries deleted (cascade-removed aliases not counted).
+        """
         try:
             results = self._collection.get(
                 where={"score": {"$lt": floor}},
@@ -483,9 +498,9 @@ class MemoryService:
             ids_to_delete = results["ids"]
             if not ids_to_delete:
                 return 0
-            self._collection.delete(ids=ids_to_delete)
-            logger.info("Evicted %d entries below score floor %.1f", len(ids_to_delete), floor)
-            return len(ids_to_delete)
+            deleted = sum(1 for entry_id in ids_to_delete if self.delete_entry(entry_id))
+            logger.info("Evicted %d entries below score floor %.1f", deleted, floor)
+            return deleted
         except Exception:
             logger.error("evict_below_floor failed", exc_info=True)
             return 0

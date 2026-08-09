@@ -848,6 +848,36 @@ class TestGeneralizeSafetyNet:
         assert "ANSWER:" not in runaway[:cut]
         assert is_generalization_sane(TestIsGeneralizationSane.RAW_ANSWER, runaway[:cut])
 
+    def test_content_containing_the_stop_marker_round_trips_untruncated(self):
+        """B14 regression: a rewrite that faithfully reproduces an answer
+        containing a legitimate '*****' markdown thematic break used to be
+        silently cut at the marker (done_reason='stop' looks identical to a
+        real runaway trip, and the truncated prefix passes
+        is_generalization_sane cleanly). generalize() must now detect the
+        stop-hit and retry once without the stop sequence, returning the
+        full untruncated text."""
+        raw = "Section one covers setup.\n\n\n*****\n\nSection two covers teardown."
+
+        class _StopThenFullBackend:
+            def __init__(self):
+                self.calls = 0
+
+            async def complete(self, request):
+                self.calls += 1
+                if request.stop:
+                    # Simulates Ollama truncating at the stop marker: only the
+                    # text before it comes back, with done_reason="stop".
+                    return CompletionResult(text="Section one covers setup.", done_reason="stop")
+                return CompletionResult(text=raw, done_reason="stop")
+
+        backend = _StopThenFullBackend()
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        result = asyncio.run(service.generalize(raw))
+
+        assert result == raw
+        assert backend.calls == 2
+
 
 class TestIsAdjustmentSane:
     """Pure unit tests for the adjust() serve-time safety net, the sibling of

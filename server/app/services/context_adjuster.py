@@ -281,48 +281,74 @@ class ContextAdjusterService:
 
         start = time.time()
 
+        messages = [
+            {"role": "system", "content": "Rewrite the ANSWER into a neutral, factual tone. Remove slang, humor, and personality. Keep all facts. Output only the rewritten answer."},
+            # Few-shot examples must stay inert (no real-world fact in
+            # their content): a small instruct model can regurgitate a
+            # few-shot's own subject matter instead of conditioning on
+            # the real ANSWER. The turn shape below is what teaches
+            # tone-stripping; any real fact in it becomes a leak.
+            # Example 1: casual → neutral
+            {"role": "user", "content": "ANSWER: Yo so basically the mechanism just takes whatever input you give it and spits out an output, no biggie, it does this by running through a fixed set of steps every time!"},
+            {"role": "assistant", "content": "The mechanism converts an input value into an output value by applying a fixed sequence of transformation steps."},
+            # Example 2: casual → neutral
+            {"role": "user", "content": "ANSWER: The little widget thingy is super handy, it just quietly does its own validation step before passing stuff along, no fuss!"},
+            {"role": "assistant", "content": "The component performs an internal validation step before forwarding its input for further processing."},
+            # Actual answer
+            {"role": "user", "content": f"ANSWER: {answer}"},
+        ]
+        # The rewrite budget, not the request's own (see
+        # REWRITE_MAX_TOKENS in app/config.py, the same budget adjust()
+        # uses). The system prompt above says "Keep all facts"; a raw
+        # miss answer can reach ~3,700 tokens
+        # (openai_compat.DEFAULT_MAX_TOKENS),
+        # so the old 1024 cap truncated the generalized rewrite of a
+        # long answer mid-sentence - and the stored copy is what every
+        # future cache hit serves, so a truncated one never self-heals.
+        # This role is one of only two that need a window set: num_ctx
+        # bounds the prompt as well as the generation, and the prompt
+        # here carries the whole answer being rewritten on top of that
+        # budget. Left at Ollama's own default, the pair overflows it
+        # and the head of the prompt is silently dropped - so the model
+        # never sees the tail of the answer it was told to preserve.
+        # Deterministic: this is a faithful tone-neutralization
+        # rewrite, not creative generation, so temperature buys
+        # nothing here (see adjust() below for the same reasoning).
         generalized = await self.generalize_backend.complete(
             CompletionRequest(
                 model_name=self.generalize_model_name,
-                messages=[
-                {"role": "system", "content": "Rewrite the ANSWER into a neutral, factual tone. Remove slang, humor, and personality. Keep all facts. Output only the rewritten answer."},
-                # Few-shot examples must stay inert (no real-world fact in
-                # their content): a small instruct model can regurgitate a
-                # few-shot's own subject matter instead of conditioning on
-                # the real ANSWER. The turn shape below is what teaches
-                # tone-stripping; any real fact in it becomes a leak.
-                # Example 1: casual → neutral
-                {"role": "user", "content": "ANSWER: Yo so basically the mechanism just takes whatever input you give it and spits out an output, no biggie, it does this by running through a fixed set of steps every time!"},
-                {"role": "assistant", "content": "The mechanism converts an input value into an output value by applying a fixed sequence of transformation steps."},
-                # Example 2: casual → neutral
-                {"role": "user", "content": "ANSWER: The little widget thingy is super handy, it just quietly does its own validation step before passing stuff along, no fuss!"},
-                {"role": "assistant", "content": "The component performs an internal validation step before forwarding its input for further processing."},
-                # Actual answer
-                {"role": "user", "content": f"ANSWER: {answer}"},
-                ],
-                # The rewrite budget, not the request's own (see
-                # REWRITE_MAX_TOKENS in app/config.py, the same budget adjust()
-                # uses). The system prompt above says "Keep all facts"; a raw
-                # miss answer can reach ~3,700 tokens
-                # (openai_compat.DEFAULT_MAX_TOKENS),
-                # so the old 1024 cap truncated the generalized rewrite of a
-                # long answer mid-sentence - and the stored copy is what every
-                # future cache hit serves, so a truncated one never self-heals.
+                messages=messages,
                 max_tokens=REWRITE_MAX_TOKENS,
-                # This role is one of only two that need a window set: num_ctx
-                # bounds the prompt as well as the generation, and the prompt
-                # here carries the whole answer being rewritten on top of that
-                # budget. Left at Ollama's own default, the pair overflows it
-                # and the head of the prompt is silently dropped - so the model
-                # never sees the tail of the answer it was told to preserve.
                 num_ctx=OLLAMA_NUM_CTX,
-                # Deterministic: this is a faithful tone-neutralization
-                # rewrite, not creative generation, so temperature buys
-                # nothing here (see adjust() below for the same reasoning).
                 temperature=0,
                 stop=_GENERALIZE_STOP,
             )
         )
+
+        # The stop string matches anywhere in the generation, including as
+        # part of legitimate content (a faithful rewrite of an answer that
+        # itself contains a "*****" markdown thematic break after a blank
+        # line). done_reason=="stop" cannot tell that apart from the intended
+        # runaway-loop trip: Ollama omits the matched stop text from the
+        # response either way, and is_generalization_sane() cannot see a
+        # truncation, since a truncated rewrite is SHORTER than the raw
+        # answer with no elevated repetition - exactly the profile of a
+        # clean rewrite. So on a stop-string hit, regenerate once WITHOUT
+        # the stop sequence to get the untruncated text and let the actual
+        # guard (is_generalization_sane, below) judge it on its merits - a
+        # real runaway still fails that guard (see
+        # test_rejects_the_real_captured_runaway); legitimate content is no
+        # longer cut off at a coincidental marker match.
+        if generalized.done_reason == "stop":
+            generalized = await self.generalize_backend.complete(
+                CompletionRequest(
+                    model_name=self.generalize_model_name,
+                    messages=messages,
+                    max_tokens=REWRITE_MAX_TOKENS,
+                    num_ctx=OLLAMA_NUM_CTX,
+                    temperature=0,
+                )
+            )
 
         latency = (time.time() - start) * 1000
         logger.debug("Generalization completed in %.2f ms", latency)
