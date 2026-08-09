@@ -58,6 +58,8 @@ DOCX text extraction is deliberately limited to **paragraphs and tables only** �
 
 The suffix is load-bearing. Without it, two **different** documents asked the **same** question share one id and silently overwrite each other — and "summarise this document" is precisely the question people ask about documents. Text entries keep their original ids, so nothing already cached moves.
 
+Storing both is only half of it: they land at the same text distance, so the gate has to walk the whole candidate pool rather than veto whichever entry won the tie-break. See [Sibling entries and the candidate pool](image-gate.md#sibling-entries-and-the-candidate-pool).
+
 ## Serving a file hit
 
 Identical to an image hit, for identical reasons — every model downstream is blind to the attachment:
@@ -111,6 +113,8 @@ file kind=pdf scan.pdf 3.1MB freshly-attached — NOT CACHEABLE: 4 chars extract
 file_gate ACCEPT — this=pdf/3f9a1c2e cached=pdf/3f9a1c2e SAME FILE | text_distance=0.1142 matched_prompt='...' entry=abc123
 file_gate REJECT — this=pdf/3f9a1c2e cached=pdf/91be07d4 DIFFERENT FILE | ...
 ```
+
+One request can print more than one of these, one per candidate the gate tried: a REJECT is a sibling entry walked past, not necessarily the outcome ([Sibling entries and the candidate pool](image-gate.md#sibling-entries-and-the-candidate-pool)).
 
 **Do we hold this document at all?** When the text lookup produces no candidate the file is never compared, and this line says whether we have it anyway — because "the question missed" and "we have never seen this file" are different problems with different fixes:
 ```
