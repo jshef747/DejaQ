@@ -8,7 +8,6 @@ from app.db.models.api_key import ApiKey
 from app.db.models.department import Department
 from app.db.models.workspace import Workspace
 from app.db.session import get_session
-from app.dependencies.management_auth import ManagementAuthContext
 from app.schemas.department import DeptRead
 from app.schemas.workspace import WorkspaceRead
 
@@ -17,12 +16,6 @@ class WorkspaceNotFound(Exception):
     def __init__(self, workspace_slug: str) -> None:
         self.workspace_slug = workspace_slug
         super().__init__(f"Workspace '{workspace_slug}' not found.")
-
-
-class WorkspaceForbidden(Exception):
-    def __init__(self, workspace_slug: str) -> None:
-        self.workspace_slug = workspace_slug
-        super().__init__(f"Access denied to workspace '{workspace_slug}'.")
 
 
 class DeptNotFound(Exception):
@@ -36,12 +29,6 @@ class KeyNotFound(Exception):
     def __init__(self, key_id: int) -> None:
         self.key_id = key_id
         super().__init__(f"Key id={key_id} not found.")
-
-
-class KeyForbidden(Exception):
-    def __init__(self, key_id: int) -> None:
-        self.key_id = key_id
-        super().__init__(f"Access denied to key id={key_id}.")
 
 
 class ActiveKeyCannotBeDeleted(Exception):
@@ -110,9 +97,6 @@ class KeyDeleteResult(BaseModel):
     deleted: bool
 
 
-_SYSTEM_CTX = ManagementAuthContext.system()
-
-
 def _dept_item(dept: DeptRead, workspace_slug: str) -> DepartmentItem:
     return DepartmentItem(
         id=dept.id,
@@ -124,19 +108,9 @@ def _dept_item(dept: DeptRead, workspace_slug: str) -> DepartmentItem:
     )
 
 
-def _check_workspace_access(ctx: ManagementAuthContext, workspace: Workspace) -> None:
-    """Raise WorkspaceForbidden if user actor cannot access workspace."""
-    if not ctx.has_workspace_access(workspace.id):
-        raise WorkspaceForbidden(workspace.slug)
-
-
-def list_workspaces(ctx: ManagementAuthContext = _SYSTEM_CTX) -> list[WorkspaceRead]:
+def list_workspaces() -> list[WorkspaceRead]:
     with get_session() as session:
-        all_workspaces = workspace_repo.list_workspaces(session)
-        if ctx.is_system:
-            return all_workspaces
-        accessible_ids = {w.id for w in ctx.accessible_workspaces}
-        return [w for w in all_workspaces if w.id in accessible_ids]
+        return workspace_repo.list_workspaces(session)
 
 
 def _invalidate_key_cache() -> None:
@@ -149,7 +123,7 @@ def _invalidate_key_cache() -> None:
         logging.getLogger("dejaq.admin_service").warning("Key-cache invalidation failed", exc_info=True)
 
 
-def create_workspace(name: str, ctx: ManagementAuthContext = _SYSTEM_CTX) -> WorkspaceRead:
+def create_workspace(name: str) -> WorkspaceRead:
     with get_session() as session:
         try:
             new_workspace = workspace_repo.create_workspace(session, name)
@@ -158,25 +132,23 @@ def create_workspace(name: str, ctx: ManagementAuthContext = _SYSTEM_CTX) -> Wor
             slug = message.split("'")[1] if "'" in message else name
             raise DuplicateSlug(slug) from exc
 
-        _invalidate_key_cache()
-        return new_workspace
+    _invalidate_key_cache()
+    return new_workspace
 
 
-def rename_workspace(slug: str, new_name: str, ctx: ManagementAuthContext = _SYSTEM_CTX) -> WorkspaceRead:
+def rename_workspace(slug: str, new_name: str) -> WorkspaceRead:
     with get_session() as session:
         workspace = session.query(Workspace).filter_by(slug=slug).first()
         if workspace is None:
             raise WorkspaceNotFound(slug)
-        _check_workspace_access(ctx, workspace)
         return workspace_repo.rename_workspace(session, slug, new_name)
 
 
-def delete_workspace(slug: str, ctx: ManagementAuthContext = _SYSTEM_CTX) -> WorkspaceDeleteResult:
+def delete_workspace(slug: str) -> WorkspaceDeleteResult:
     with get_session() as session:
         workspace = session.query(Workspace).filter_by(slug=slug).first()
         if workspace is None:
             raise WorkspaceNotFound(slug)
-        _check_workspace_access(ctx, workspace)
         namespaces = [d.cache_namespace for d in workspace.departments]
         departments_removed = len(namespaces)
         session.delete(workspace)
@@ -202,43 +174,32 @@ def _delete_rag_namespace(workspace_slug: str) -> None:
         )
 
 
-def list_departments(
-    workspace_slug: str | None = None,
-    ctx: ManagementAuthContext = _SYSTEM_CTX,
-) -> list[DepartmentItem]:
+def list_departments(workspace_slug: str | None = None) -> list[DepartmentItem]:
     with get_session() as session:
         if workspace_slug:
             workspace = session.query(Workspace).filter_by(slug=workspace_slug).first()
             if workspace is None:
                 raise WorkspaceNotFound(workspace_slug)
-            _check_workspace_access(ctx, workspace)
             depts = dept_repo.list_depts(session, workspace_slug=workspace_slug)
             return [_dept_item(dept, workspace_slug) for dept in depts]
 
         rows = (
-            session.query(Department, Workspace.slug, Workspace.id)
+            session.query(Department, Workspace.slug)
             .join(Workspace, Department.workspace_id == Workspace.id)
             .order_by(Department.created_at.desc())
             .all()
         )
-        result = []
-        for dept, row_workspace_slug, workspace_id in rows:
-            if not ctx.is_system and not ctx.has_workspace_access(workspace_id):
-                continue
-            result.append(_dept_item(DeptRead.model_validate(dept), row_workspace_slug))
-        return result
+        return [
+            _dept_item(DeptRead.model_validate(dept), row_workspace_slug)
+            for dept, row_workspace_slug in rows
+        ]
 
 
-def create_department(
-    workspace_slug: str,
-    name: str,
-    ctx: ManagementAuthContext = _SYSTEM_CTX,
-) -> DepartmentItem:
+def create_department(workspace_slug: str, name: str) -> DepartmentItem:
     with get_session() as session:
         workspace = session.query(Workspace).filter_by(slug=workspace_slug).first()
         if workspace is None:
             raise WorkspaceNotFound(workspace_slug)
-        _check_workspace_access(ctx, workspace)
         try:
             dept = dept_repo.create_dept(session, workspace_slug, name)
         except ValueError as exc:
@@ -254,13 +215,11 @@ def rename_department(
     workspace_slug: str,
     dept_slug: str,
     new_name: str,
-    ctx: ManagementAuthContext = _SYSTEM_CTX,
 ) -> DepartmentItem:
     with get_session() as session:
         workspace = session.query(Workspace).filter_by(slug=workspace_slug).first()
         if workspace is None:
             raise WorkspaceNotFound(workspace_slug)
-        _check_workspace_access(ctx, workspace)
         try:
             dept = dept_repo.rename_dept(session, workspace_slug, dept_slug, new_name)
         except ValueError as exc:
@@ -271,13 +230,11 @@ def rename_department(
 def delete_department(
     workspace_slug: str,
     dept_slug: str,
-    ctx: ManagementAuthContext = _SYSTEM_CTX,
 ) -> DeptDeleteResult:
     with get_session() as session:
         workspace = session.query(Workspace).filter_by(slug=workspace_slug).first()
         if workspace is None:
             raise WorkspaceNotFound(workspace_slug)
-        _check_workspace_access(ctx, workspace)
         try:
             deleted = dept_repo.delete_dept(session, workspace_slug, dept_slug)
         except ValueError as exc:
@@ -305,15 +262,11 @@ def _delete_chroma_namespace(namespace: str) -> None:
         logger.warning("Could not delete ChromaDB collection '%s'", namespace, exc_info=True)
 
 
-def list_keys(
-    workspace_slug: str,
-    ctx: ManagementAuthContext = _SYSTEM_CTX,
-) -> list[KeyListItem]:
+def list_keys(workspace_slug: str) -> list[KeyListItem]:
     with get_session() as session:
         workspace = session.query(Workspace).filter_by(slug=workspace_slug).first()
         if workspace is None:
             raise WorkspaceNotFound(workspace_slug)
-        _check_workspace_access(ctx, workspace)
         keys = api_key_repo.list_keys_for_workspace(session, workspace.id)
         return [
             KeyListItem(
@@ -326,16 +279,11 @@ def list_keys(
         ]
 
 
-def generate_key(
-    workspace_slug: str,
-    force: bool,
-    ctx: ManagementAuthContext = _SYSTEM_CTX,
-) -> KeyCreated:
+def generate_key(workspace_slug: str, force: bool) -> KeyCreated:
     with get_session() as session:
         workspace = session.query(Workspace).filter_by(slug=workspace_slug).first()
         if workspace is None:
             raise WorkspaceNotFound(workspace_slug)
-        _check_workspace_access(ctx, workspace)
 
         existing = api_key_repo.get_active_key_for_workspace(session, workspace.id)
         if existing and not force:
@@ -354,17 +302,11 @@ def generate_key(
     return result
 
 
-def revoke_key(
-    key_id: int,
-    ctx: ManagementAuthContext = _SYSTEM_CTX,
-) -> KeyRevokeResult:
+def revoke_key(key_id: int) -> KeyRevokeResult:
     with get_session() as session:
         key = session.query(ApiKey).filter_by(id=key_id).first()
         if key is None:
             raise KeyNotFound(key_id)
-        workspace = session.query(Workspace).filter_by(id=key.workspace_id).first()
-        if workspace and not ctx.has_workspace_access(workspace.id):
-            raise KeyForbidden(key_id)
         already_revoked = key.revoked_at is not None
         revoked = api_key_repo.revoke_key(session, key_id)
         if revoked is None:
@@ -379,17 +321,11 @@ def revoke_key(
     return result
 
 
-def delete_revoked_key(
-    key_id: int,
-    ctx: ManagementAuthContext = _SYSTEM_CTX,
-) -> KeyDeleteResult:
+def delete_revoked_key(key_id: int) -> KeyDeleteResult:
     with get_session() as session:
         key = session.query(ApiKey).filter_by(id=key_id).first()
         if key is None:
             raise KeyNotFound(key_id)
-        workspace = session.query(Workspace).filter_by(id=key.workspace_id).first()
-        if workspace and not ctx.has_workspace_access(workspace.id):
-            raise KeyForbidden(key_id)
         if key.revoked_at is None:
             raise ActiveKeyCannotBeDeleted(key_id)
         deleted = api_key_repo.delete_revoked_key(session, key_id)

@@ -57,30 +57,30 @@ The system SHALL persist per-org provider credentials in a new `org_provider_cre
 
 ---
 
-### Requirement: All credential endpoints enforce org-scoped authorization
+### Requirement: All credential endpoints resolve the org before touching credentials
 
-The system SHALL enforce org-scoped authorization on every credential endpoint by calling `ManagementAuthContext.has_org_access(org_id)` after resolving the org by slug. Callers without access to the target org SHALL receive HTTP 403, regardless of whether the org or credentials exist. This mirrors the org-scoping pattern already used by `/admin/v1/orgs/{slug}/llm-config`.
+Every credential endpoint SHALL resolve the org by slug before reading or writing any credential, and SHALL return HTTP 404 when the slug is unknown. There is no per-caller authorization: `/admin/v1/*` serves a single unauthenticated dev-admin context protected by loopback binding, so no credential endpoint denies a request on authorization grounds. This matches `/admin/v1/orgs/{slug}/llm-config`.
 
-#### Scenario: Caller without org access receives 403 on list
+#### Scenario: Unknown org returns 404 on list
 
-- **WHEN** an authenticated caller without access to org `acme` calls `GET /admin/v1/orgs/acme/credentials`
-- **THEN** the response is HTTP 403 and no credential data is returned
+- **WHEN** a client calls `GET /admin/v1/orgs/does-not-exist/credentials`
+- **THEN** the response is HTTP 404 and no credential data is returned
 
-#### Scenario: Caller without org access receives 403 on upsert
+#### Scenario: Unknown org returns 404 on upsert
 
-- **WHEN** an authenticated caller without access to org `acme` PUTs to `/admin/v1/orgs/acme/credentials/google`
-- **THEN** the response is HTTP 403 and no row is written
+- **WHEN** a client PUTs to `/admin/v1/orgs/does-not-exist/credentials/google`
+- **THEN** the response is HTTP 404 and no row is written
 
-#### Scenario: Caller without org access receives 403 on delete
+#### Scenario: Unknown org returns 404 on delete
 
-- **WHEN** an authenticated caller without access to org `acme` DELETEs `/admin/v1/orgs/acme/credentials/google`
-- **THEN** the response is HTTP 403 and no row is deleted
+- **WHEN** a client DELETEs `/admin/v1/orgs/does-not-exist/credentials/google`
+- **THEN** the response is HTTP 404 and no row is deleted
 
 ---
 
 ### Requirement: List credentials endpoint with safe masking
 
-The system SHALL expose `GET /admin/v1/orgs/{org_slug}/credentials` returning HTTP 200 with an array of `{provider, key_preview, created_at, updated_at}` objects. `key_preview` SHALL mask the key as `<first4>****<last4>` when the underlying key has at least 12 characters; SHALL mask as `********` (eight asterisks) when the key has fewer than 12 characters, to prevent leaking short keys or test stubs. The full decrypted key SHALL NOT appear in any response body. Unknown org SHALL return HTTP 404. Org inaccessible to the caller SHALL return HTTP 403.
+The system SHALL expose `GET /admin/v1/orgs/{org_slug}/credentials` returning HTTP 200 with an array of `{provider, key_preview, created_at, updated_at}` objects. `key_preview` SHALL mask the key as `<first4>****<last4>` when the underlying key has at least 12 characters; SHALL mask as `********` (eight asterisks) when the key has fewer than 12 characters, to prevent leaking short keys or test stubs. The full decrypted key SHALL NOT appear in any response body. Unknown org SHALL return HTTP 404.
 
 #### Scenario: List returns masked keys for normal-length keys
 
@@ -107,7 +107,7 @@ The system SHALL expose `GET /admin/v1/orgs/{org_slug}/credentials` returning HT
 
 ### Requirement: Upsert credential endpoint
 
-The system SHALL expose `PUT /admin/v1/orgs/{org_slug}/credentials/{provider}` accepting `{api_key: str}` and upserting the encrypted credential for that org and provider. HTTP 200 SHALL be returned with the masked credential object `{provider, key_preview, created_at, updated_at}`. An empty or whitespace-only `api_key` SHALL return HTTP 422. An invalid provider name SHALL return HTTP 422. Unknown org SHALL return HTTP 404. Org inaccessible to the caller SHALL return HTTP 403.
+The system SHALL expose `PUT /admin/v1/orgs/{org_slug}/credentials/{provider}` accepting `{api_key: str}` and upserting the encrypted credential for that org and provider. HTTP 200 SHALL be returned with the masked credential object `{provider, key_preview, created_at, updated_at}`. An empty or whitespace-only `api_key` SHALL return HTTP 422. An invalid provider name SHALL return HTTP 422. Unknown org SHALL return HTTP 404.
 
 #### Scenario: Upsert creates a new credential
 
@@ -134,7 +134,7 @@ The system SHALL expose `PUT /admin/v1/orgs/{org_slug}/credentials/{provider}` a
 
 ### Requirement: Delete credential endpoint
 
-The system SHALL expose `DELETE /admin/v1/orgs/{org_slug}/credentials/{provider}` to remove a configured provider credential. HTTP 200 SHALL be returned with `{"deleted": true}` when a credential existed and was removed. Unknown org SHALL return HTTP 404. Missing credential for a known org/provider SHALL return HTTP 404. Org inaccessible to the caller SHALL return HTTP 403.
+The system SHALL expose `DELETE /admin/v1/orgs/{org_slug}/credentials/{provider}` to remove a configured provider credential. HTTP 200 SHALL be returned with `{"deleted": true}` when a credential existed and was removed. Unknown org SHALL return HTTP 404. Missing credential for a known org/provider SHALL return HTTP 404.
 
 #### Scenario: Delete existing credential
 

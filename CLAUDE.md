@@ -83,8 +83,8 @@ ollama pull qwen2.5:0.5b qwen2.5:1.5b gemma4:e2b gemma4:e4b
 ./start.sh --stack=all --mode=remote --ollama-url=http://<host>:11434
 ./start.sh --stack=all --mode=local --lan   # expose chat (4000) + API (8000) on the LAN
 # --lan binds chat + API to 0.0.0.0 so other devices on the same network can reach them;
-# dashboard (3000), ChromaDB (8001), and Redis stay localhost-only. In AUTH_MODE=local
-# the admin API is unauthenticated — only use --lan on trusted networks.
+# dashboard (3000), ChromaDB (8001), and Redis stay localhost-only. The admin API is
+# unauthenticated, so only use --lan on trusted networks.
 
 # Manual (Terminal 1) Redis
 redis-server
@@ -298,7 +298,7 @@ Rug — per-workspace RAG knowledge layer ([docs/rag-layer.md](docs/rag-layer.md
 
 The web dashboard lives in `dashboard/` (Next.js 16, TypeScript, Tailwind v4, App Router). It talks to the management API at `/admin/v1/*`. Setup and env vars: see [dashboard/README.md](dashboard/README.md).
 
-> ⚠️ Next.js 16 differs from older versions — see [dashboard/AGENTS.md](dashboard/AGENTS.md). Notably the middleware file convention was renamed `middleware.ts` → `proxy.ts`; the project root `proxy.ts` is the active middleware.
+> ⚠️ Next.js 16 differs from older versions — see [dashboard/AGENTS.md](dashboard/AGENTS.md). Notably the middleware file convention was renamed `middleware.ts` → `proxy.ts`; the dashboard has no middleware file of either name, since local mode never gated dashboard access.
 
 **Auth:** dev bypass only. The dashboard skips login entirely; `lib/api.ts` sends `Authorization: Bearer dev-local` on every `/admin/v1/*` call, and the backend ignores the value (`require_management_auth` always grants a dev-admin context). `/v1/chat/completions` and `/v1/feedback` always use DejaQ org API keys, never the dashboard's own auth.
 

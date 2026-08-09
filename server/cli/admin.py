@@ -5,12 +5,9 @@ from rich.panel import Panel
 from rich.prompt import Confirm
 from rich.text import Text
 
-from app.dependencies.management_auth import ManagementAuthContext
 from app.services import admin_service
 from cli.ui import console, print_error, print_header, print_success, print_table, print_warning
 from cli.stats import run as _run_stats
-
-_SYSTEM_CTX = ManagementAuthContext.system()
 
 
 # ---------------------------------------------------------------------------
@@ -45,7 +42,7 @@ def workspace_create(name: str) -> None:
     """Create a new workspace."""
     with console.status("[cyan]Creating workspace…[/cyan]", spinner="dots"):
         try:
-            result = admin_service.create_workspace(name, ctx=_SYSTEM_CTX)
+            result = admin_service.create_workspace(name)
         except admin_service.DuplicateSlug as e:
             print_error(str(e))
             sys.exit(1)
@@ -64,7 +61,7 @@ def workspace_create(name: str) -> None:
 @workspace.command("list")
 def workspace_list() -> None:
     """List all workspaces."""
-    workspaces = admin_service.list_workspaces(ctx=_SYSTEM_CTX)
+    workspaces = admin_service.list_workspaces()
 
     print_table(
         "Workspaces",
@@ -82,7 +79,7 @@ def workspace_delete(slug: str) -> None:
     """Delete a workspace and all its departments."""
     # Preview cascade
     try:
-        depts = admin_service.list_departments(workspace_slug=slug, ctx=_SYSTEM_CTX)
+        depts = admin_service.list_departments(workspace_slug=slug)
     except admin_service.WorkspaceNotFound:
         print_error(f"Workspace '{slug}' not found.")
         sys.exit(1)
@@ -102,7 +99,7 @@ def workspace_delete(slug: str) -> None:
             sys.exit(0)
 
     with console.status("[cyan]Deleting…[/cyan]", spinner="dots"):
-        result = admin_service.delete_workspace(slug, ctx=_SYSTEM_CTX)
+        result = admin_service.delete_workspace(slug)
 
     print_success(
         f"Workspace [bold]{slug}[/bold] deleted"
@@ -150,7 +147,7 @@ def dept_create(workspace_slug: str, name: str) -> None:
     """Create a new department under a workspace."""
     with console.status("[cyan]Creating department…[/cyan]", spinner="dots"):
         try:
-            result = admin_service.create_department(workspace_slug, name, ctx=_SYSTEM_CTX)
+            result = admin_service.create_department(workspace_slug, name)
         except (admin_service.WorkspaceNotFound, admin_service.DuplicateSlug) as e:
             print_error(str(e))
             sys.exit(1)
@@ -173,7 +170,7 @@ def dept_create(workspace_slug: str, name: str) -> None:
 def dept_list(workspace_slug: str | None) -> None:
     """List departments, optionally filtered by workspace."""
     try:
-        depts = admin_service.list_departments(workspace_slug=workspace_slug, ctx=_SYSTEM_CTX)
+        depts = admin_service.list_departments(workspace_slug=workspace_slug)
     except admin_service.WorkspaceNotFound as e:
         print_error(str(e))
         sys.exit(1)
@@ -218,7 +215,7 @@ def dept_delete(workspace_slug: str, slug: str) -> None:
     """Delete a department."""
     try:
         dept_data = next(
-            (dept for dept in admin_service.list_departments(workspace_slug=workspace_slug, ctx=_SYSTEM_CTX) if dept.slug == slug),
+            (dept for dept in admin_service.list_departments(workspace_slug=workspace_slug) if dept.slug == slug),
             None,
         )
     except admin_service.WorkspaceNotFound:
@@ -232,7 +229,7 @@ def dept_delete(workspace_slug: str, slug: str) -> None:
         sys.exit(0)
 
     with console.status("[cyan]Deleting…[/cyan]", spinner="dots"):
-        deleted = admin_service.delete_department(workspace_slug, slug, ctx=_SYSTEM_CTX)
+        deleted = admin_service.delete_department(workspace_slug, slug)
 
     print_success(
         f"Department [bold]{slug}[/bold] deleted. "
@@ -255,7 +252,7 @@ def key() -> None:
 def key_generate(workspace_slug: str, force: bool) -> None:
     """Generate an API key for a workspace."""
     try:
-        new_key = admin_service.generate_key(workspace_slug, force=force, ctx=_SYSTEM_CTX)
+        new_key = admin_service.generate_key(workspace_slug, force=force)
     except admin_service.WorkspaceNotFound:
         print_error(f"Workspace '{workspace_slug}' not found.")
         sys.exit(1)
@@ -284,7 +281,7 @@ def key_generate(workspace_slug: str, force: bool) -> None:
 def key_list(workspace_slug: str) -> None:
     """List all API keys for a workspace."""
     try:
-        keys = admin_service.list_keys(workspace_slug, ctx=_SYSTEM_CTX)
+        keys = admin_service.list_keys(workspace_slug)
     except admin_service.WorkspaceNotFound:
         print_error(f"Workspace '{workspace_slug}' not found.")
         sys.exit(1)
@@ -313,7 +310,7 @@ def key_list(workspace_slug: str) -> None:
 def key_revoke(key_id: int) -> None:
     """Revoke an API key by its ID."""
     try:
-        result = admin_service.revoke_key(key_id, ctx=_SYSTEM_CTX)
+        result = admin_service.revoke_key(key_id)
     except admin_service.KeyNotFound:
         print_error(f"Key id={key_id} not found.")
         sys.exit(1)
@@ -352,7 +349,7 @@ def cache_purge_images(workspace_slug: str, dept_slug: str | None, yes: bool, dr
     from app.services.memory_chromaDB import get_memory_service
 
     try:
-        departments = admin_service.list_departments(workspace_slug=workspace_slug, ctx=_SYSTEM_CTX)
+        departments = admin_service.list_departments(workspace_slug=workspace_slug)
     except admin_service.WorkspaceNotFound:
         print_error(f"Workspace '{workspace_slug}' not found.")
         sys.exit(1)
@@ -443,8 +440,8 @@ def rag_list(workspace_slug: str) -> None:
     """List knowledge-base documents for a workspace."""
     svc = _rag_service()
     try:
-        docs = svc.list_documents(workspace_slug, ctx=_SYSTEM_CTX)
-    except (admin_service.WorkspaceNotFound, admin_service.WorkspaceForbidden) as e:
+        docs = svc.list_documents(workspace_slug)
+    except (admin_service.WorkspaceNotFound) as e:
         print_error(str(e))
         sys.exit(1)
     print_table(
@@ -474,8 +471,8 @@ def rag_add_text(workspace_slug: str, title: str, content: str) -> None:
     svc = _rag_service()
     with console.status("[cyan]Indexing…[/cyan]", spinner="dots"):
         try:
-            item = svc.add_text(workspace_slug, title, content, ctx=_SYSTEM_CTX)
-        except (admin_service.WorkspaceNotFound, admin_service.WorkspaceForbidden,
+            item = svc.add_text(workspace_slug, title, content)
+        except (admin_service.WorkspaceNotFound,
                 svc.RagIngestError, svc.RagDisabledError) as e:
             print_error(str(e))
             sys.exit(1)
@@ -499,8 +496,8 @@ def rag_add_file(workspace_slug: str, file_path: str, title: str | None) -> None
     mime = mimetypes.guess_type(file_path)[0]
     with console.status("[cyan]Extracting + indexing…[/cyan]", spinner="dots"):
         try:
-            item = svc.add_upload(workspace_slug, filename, data, mime, title=title, ctx=_SYSTEM_CTX)
-        except (admin_service.WorkspaceNotFound, admin_service.WorkspaceForbidden,
+            item = svc.add_upload(workspace_slug, filename, data, mime, title=title)
+        except (admin_service.WorkspaceNotFound,
                 svc.RagIngestError, svc.RagDisabledError) as e:
             print_error(str(e))
             sys.exit(1)
@@ -516,8 +513,8 @@ def rag_add_url(workspace_slug: str, url: str, title: str | None) -> None:
     svc = _rag_service()
     with console.status("[cyan]Fetching + indexing…[/cyan]", spinner="dots"):
         try:
-            item = svc.add_url(workspace_slug, url, title, ctx=_SYSTEM_CTX)
-        except (admin_service.WorkspaceNotFound, admin_service.WorkspaceForbidden,
+            item = svc.add_url(workspace_slug, url, title)
+        except (admin_service.WorkspaceNotFound,
                 svc.RagIngestError, svc.RagDisabledError) as e:
             print_error(str(e))
             sys.exit(1)
@@ -536,8 +533,8 @@ def rag_delete(workspace_slug: str, doc_id: int, yes: bool) -> None:
         sys.exit(0)
     with console.status("[cyan]Deleting…[/cyan]", spinner="dots"):
         try:
-            svc.delete_document(workspace_slug, doc_id, ctx=_SYSTEM_CTX)
-        except (admin_service.WorkspaceNotFound, admin_service.WorkspaceForbidden, svc.RagDocumentNotFound) as e:
+            svc.delete_document(workspace_slug, doc_id)
+        except (admin_service.WorkspaceNotFound, svc.RagDocumentNotFound) as e:
             print_error(str(e))
             sys.exit(1)
     print_success(f"Deleted knowledge document [bold]{doc_id}[/bold].")

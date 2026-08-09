@@ -27,7 +27,7 @@ The system SHALL NOT accept the raw key as a literal argv value, because argv va
 
 #### Scenario: Demo seed is idempotent
 - **WHEN** the demo seed is run twice
-- **THEN** there is still exactly one demo user, one default demo organization, one membership between them, and one row per seeded department
+- **THEN** there is still exactly one default demo organization and one row per seeded department
 
 #### Scenario: Demo seed with provider key via stdin upserts credential
 - **WHEN** `echo AIzaXXXXXXXXX | dejaq-admin seed demo --provider-key-stdin google` is run and `DEJAQ_CREDENTIAL_ENCRYPTION_KEY` is set
