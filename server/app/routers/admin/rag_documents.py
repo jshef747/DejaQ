@@ -1,6 +1,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from app.config import MAX_ATTACHMENT_BYTES, RAG_ENABLED
 from app.dependencies.admin_auth import require_management_auth
@@ -86,8 +87,14 @@ async def upload_rag_document(
     if not data:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
     try:
-        return rag_admin_service.add_upload(
-            workspace_slug, file.filename, data, file.content_type, title, ctx
+        return await run_in_threadpool(
+            rag_admin_service.add_upload,
+            workspace_slug,
+            file.filename,
+            data,
+            file.content_type,
+            title,
+            ctx,
         )
     except (WorkspaceNotFound, WorkspaceForbidden, RagIngestError) as exc:
         raise _map_workspace_errors(exc)
