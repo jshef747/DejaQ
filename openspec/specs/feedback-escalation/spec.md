@@ -37,7 +37,7 @@ Valid escalation statuses are:
 #### Scenario: Thumbs-down on local LLM escalates to external LLM
 
 - **WHEN** a client POSTs negative feedback with a valid local-tier `interaction_id` and matching `messages`
-- **THEN** the system calls the external LLM using server-side org configuration and credentials, creates a new interaction record for the escalated answer, logs the escalation request, and returns HTTP 200 with `{"status": "ok", "escalated_response": {"content": "<external LLM answer>", "tier": "external", "interaction_id": "<new-id>", "response_id": "<optional-cache-id>"}, "escalation_status": "answered"}`
+- **THEN** the system calls the external LLM using server-side workspace configuration and credentials, creates a new interaction record for the escalated answer, logs the escalation request, and returns HTTP 200 with `{"status": "ok", "escalated_response": {"content": "<external LLM answer>", "tier": "external", "interaction_id": "<new-id>", "response_id": "<optional-cache-id>"}, "escalation_status": "answered"}`
 
 #### Scenario: Cacheable escalated answer records cache response id
 
@@ -74,9 +74,9 @@ Valid escalation statuses are:
 - **WHEN** a client POSTs feedback for a cache-tier interaction and includes `tier: "local"` in the request body
 - **THEN** the system ignores the client tier, uses stored `served_tier: "cache"`, and escalates only to the local LLM
 
-#### Scenario: Escalation to external LLM fails due to missing org credential
+#### Scenario: Escalation to external LLM fails due to missing workspace credential
 
-- **WHEN** a client POSTs negative feedback for a local-tier interaction and the authenticated org has no credential for the configured external provider
+- **WHEN** a client POSTs negative feedback for a local-tier interaction and the authenticated workspace has no credential for the configured external provider
 - **THEN** the system does not expose credential details and returns HTTP 200 with `{"status": "ok", "escalated_response": null, "escalation_status": "no_credential"}`
 
 #### Scenario: External provider failure is graceful
