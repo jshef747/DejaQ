@@ -154,6 +154,57 @@ def test_uncached_document_still_misses(monkeypatch):
     assert ANSWER_B not in resp.text
 
 
+IMAGE_TOKENS_A = frozenset(f"alpha{i}" for i in range(10))
+IMAGE_TOKENS_B = frozenset(f"bravo{i}" for i in range(10))
+
+
+class TwoImagePoolMemory:
+    """Same shape as TwoDocumentPoolMemory, image side: two scanned pages under
+    one question, the wrong one ranked first."""
+
+    def lookup_cache_pool(self, clean_query: str):
+        candidates = [
+            CacheLookupResult(
+                hit=True, generalized_answer=ANSWER_B, entry_id="img-b",
+                distance=0.03, matched_query=QUESTION, image_kind="document",
+                image_text=" ".join(sorted(IMAGE_TOKENS_B)),
+            ),
+            CacheLookupResult(
+                hit=True, generalized_answer=ANSWER_A, entry_id="img-a",
+                distance=0.03, matched_query=QUESTION, image_kind="document",
+                image_text=" ".join(sorted(IMAGE_TOKENS_A)),
+            ),
+        ]
+        return candidates, 0.03, QUESTION
+
+    def increment_hit_count(self, doc_id: str):
+        return None
+
+
+def test_own_image_served_even_when_a_sibling_wins_the_tie(monkeypatch):
+    """The image gate falls through the same way the file gate does — the pool
+    walk is shared, so the photo/document path must not still veto-and-miss."""
+    from app.services.image_text import OcrResult
+
+    _patch_pipeline(monkeypatch, memory=TwoImagePoolMemory())
+    monkeypatch.setattr(
+        openai_compat, "extract_image_text",
+        lambda data: OcrResult(IMAGE_TOKENS_A, word_count=200, mean_confidence=90.0, ok=True),
+    )
+
+    resp = TestClient(app, headers=_AUTH).post(
+        "/v1/responses",
+        json={"model": "gpt-4o", "stream": False, "input": [{"role": "user", "content": [
+            {"type": "input_text", "text": QUESTION},
+            {"type": "input_image",
+             "image_url": "data:image/png;base64," + base64.b64encode(b"PAGE-A").decode()},
+        ]}]},
+    )
+
+    assert resp.headers.get("x-dejaq-tier") == "cache"
+    assert resp.json()["output_text"] == ANSWER_A
+
+
 def _memory_with_rows(monkeypatch, rows):
     from app.services import memory_chromaDB
 

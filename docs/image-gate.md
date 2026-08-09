@@ -271,6 +271,17 @@ Measured on `gemma4:e2b` (`evals/validator/scripts/image_intent_check.py`, 25 pa
 
 The single miss is `what does this say?` vs `translate this to english` at distance **0.2497** — past `DEJAQ_CACHE_BAND_MAX_DISTANCE` (0.20), so the validator is never called on it in production. Worth recording anyway: that pair is a **verbatim few-shot** in the prompt and the model still answered VALID, which is a fair measure of how much `gemma4:e2b` can be pushed on read-vs-translate. Reachable phrasings of the same trap (`transcribe`/`translate` 0.1603, `what is written here?`/`translate what is written here` 0.1359) are rejected only after the prompt gained an explicit containment rule: extra words about *tone or depth* keep it VALID, extra words changing *output language or form* make it INVALID.
 
+## Sibling entries and the candidate pool
+
+Two attachments asked the same question are two entries, because the entry id keys on the attachment (see [file-gate.md](file-gate.md#entry-identity-includes-the-file)) - and they sit at the *same* text distance, because the attachment is never part of the cache key. Which of them ranks first is therefore an arbitrary tie-break, and a gate that could only veto the single top-scored entry turned every request carrying the *other* attachment into a full miss: the loser of the tie was regenerated and re-stored, never served again.
+
+So the gate filters the whole fetched candidate list instead of vetoing one winner. Candidates are walked in tier priority order (trusted, then band, then rescue, score-ordered within each, each carrying its own tier's validator flag), and the first one that passes both the image and file gates is served; when none passes, it is a clean miss, with the pool's nearest text match preserved for the `x-dejaq-nearest-cache-distance` / `-prompt` diagnostics rather than replaced by whichever candidate was rejected last. The gates themselves are unchanged - a different attachment's entry is still never served - only what happens after a REJECT. `MemoryService.lookup_cache_pool`, walked in `routers/openai_compat.py`; regression test `server/tests/test_attachment_gate_pool_fallthrough.py`.
+
+Two consequences worth knowing:
+
+- **Gate lines repeat.** One request can log several `image_gate` / `file_gate` lines, one per candidate tried. The REJECTs are the siblings it walked past; the last line is the outcome.
+- **The pool is bounded by the lookup fetch** (`_LOOKUP_N_RESULTS` = 10 in `services/memory_chromaDB.py`). Past ten attachment entries under one identical question, the requesting attachment's own entry can fall outside the fetched candidates entirely and the request misses. Inspected and accepted: raising K widens every lookup to fix a case that needs a different query, not a bigger K.
+
 ## Round 3: the populations rounds 1 and 2 never contained
 
 Rounds 1 and 2 were both documents, and the photo path had only ever been measured on
