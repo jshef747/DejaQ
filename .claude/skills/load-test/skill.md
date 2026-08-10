@@ -1,10 +1,10 @@
 ---
 name: load-test
-description: Sends ~100 realistic prompts to the running DejaQ stack as a specific persona via the Responses API (/v1/responses), organized as multi-turn conversations. Creates a matching department in the demo org each run. Writes a live-updating markdown report with cache-hit rate, validator rejections, and nearest-cache diagnostics. Usage: /load-test <persona description>
+description: Sends ~100 realistic prompts to the running DejaQ stack as a specific persona via the Responses API (/v1/responses), organized as multi-turn conversations. Creates a matching department in the demo workspace each run. Writes a live-updating markdown report with cache-hit rate, validator rejections, and nearest-cache diagnostics. Usage: /load-test <persona description>
 ---
 
 Run a realistic load test against the DejaQ stack, impersonating a given persona.
-Each run creates a fresh department in the demo org. Prompts are organized as **multi-turn
+Each run creates a fresh department in the demo workspace. Prompts are organized as **multi-turn
 conversation threads** — each thread sends messages sequentially with the full history
 accumulated in the `input` array, then resets for the next thread.
 
@@ -43,30 +43,30 @@ Poll `/health` every 3 seconds (up to 90s) until 200. Tell the user when ready.
 Note: the cache-answer validator is **on by default**. This is intentional — the report
 captures validator rejections. Pass `--validator=off` only if you want to skip validation.
 
-### 4. Ensure demo org and API key exist
+### 4. Ensure demo workspace and API key exist
 
 ```bash
-cd server && uv run dejaq-admin org list 2>/dev/null
+cd server && uv run dejaq-admin workspace list 2>/dev/null
 ```
 
-If `demo` org does not exist:
+If `demo` workspace does not exist:
 ```bash
-cd server && uv run dejaq-admin org create --name Demo 2>/dev/null
+cd server && uv run dejaq-admin workspace create --name Demo 2>/dev/null
 ```
 
 Get the API key:
 ```bash
-cd server && uv run dejaq-admin key list --org demo 2>/dev/null
+cd server && uv run dejaq-admin key list --workspace demo 2>/dev/null
 ```
 
 If none, create one:
 ```bash
-cd server && uv run dejaq-admin key generate --org demo 2>/dev/null
+cd server && uv run dejaq-admin key generate --workspace demo 2>/dev/null
 ```
 
 If the CLI only shows truncated tokens, read the full key directly:
 ```bash
-sqlite3 server/dejaq.db "SELECT token FROM api_keys WHERE revoked_at IS NULL AND org_id = (SELECT id FROM organizations WHERE slug='demo') LIMIT 1;"
+sqlite3 server/dejaq.db "SELECT token FROM api_keys WHERE revoked_at IS NULL AND workspace_id = (SELECT id FROM workspaces WHERE slug='demo') LIMIT 1;"
 ```
 
 ### 5. Create a department for this run
@@ -76,7 +76,7 @@ Add today's date suffix (YYYYMMDD) to avoid collisions across runs.
 Example: `cs-students-algorithms-20260503`
 
 ```bash
-cd server && uv run dejaq-admin dept create --org demo --name "<full persona name> <YYYYMMDD>" 2>/dev/null
+cd server && uv run dejaq-admin dept create --workspace demo --name "<full persona name> <YYYYMMDD>" 2>/dev/null
 ```
 
 Note the `slug` and `cache_namespace` from the output — send the slug as `X-DejaQ-Department`.
@@ -84,21 +84,21 @@ Note the `slug` and `cache_namespace` from the output — send the slug as `X-De
 ### 5b. Ensure a hard-query credential exists
 
 Hard turns are classified as `external` and routed to the configured external provider
-(`anthropic` when using `claude-haiku-4-5-20251001`). Without an encrypted org credential
+(`anthropic` when using `claude-haiku-4-5-20251001`). Without an encrypted workspace credential
 the server returns **HTTP 402**. The load test runs regardless, but those turns are reported
 as `🟠 HARD MISS (402)` instead of `🔴 HARD MISS`.
 
-Check whether the demo org already has an Anthropic key:
+Check whether the demo workspace already has an Anthropic key:
 
 ```bash
-sqlite3 server/dejaq.db "SELECT provider FROM org_provider_credentials c JOIN organizations o ON o.id=c.org_id WHERE o.slug='demo';"
+sqlite3 server/dejaq.db "SELECT provider FROM workspace_provider_credentials c JOIN workspaces w ON w.id=c.workspace_id WHERE w.slug='demo';"
 ```
 
 - `anthropic` appears → fine, proceed.
 - Empty → add one via the dashboard (**Settings → Credentials → Anthropic**), or via curl
   (requires `DEJAQ_CREDENTIAL_ENCRYPTION_KEY` to be set):
   ```bash
-  curl -sX PUT http://127.0.0.1:8000/admin/v1/orgs/demo/credentials/anthropic \
+  curl -sX PUT http://127.0.0.1:8000/admin/v1/workspaces/demo/credentials/anthropic \
     -H "Authorization: Bearer dev-local" \
     -H "Content-Type: application/json" \
     -d '{"api_key":"<YOUR_ANTHROPIC_API_KEY>"}'

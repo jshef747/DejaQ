@@ -7,7 +7,7 @@ The system SHALL create a response identity record for every `/v1/chat/completio
 Each record SHALL contain:
 
 - `interaction_id`
-- authenticated `org_id` and `org_slug`
+- authenticated `workspace_id` and `workspace_slug`
 - department slug and cache namespace
 - `served_tier` (`cache`, `local`, or `external`)
 - optional cache `response_id`
@@ -39,11 +39,11 @@ The system SHALL NOT store full message content in the response identity record.
 
 ### Requirement: Response identity enforces tenant and department ownership
 
-The system SHALL use the authenticated org and department context on feedback requests to verify ownership of the `interaction_id`. A feedback request for an interaction owned by another org or department SHALL fail without mutating ChromaDB and without calling an LLM.
+The system SHALL use the authenticated workspace and department context on feedback requests to verify ownership of the `interaction_id`. A feedback request for an interaction owned by another workspace or department SHALL fail without mutating ChromaDB and without calling an LLM.
 
-#### Scenario: Cross-org interaction feedback is rejected
+#### Scenario: Cross-workspace interaction feedback is rejected
 
-- **WHEN** an API key for org `acme` submits feedback for an interaction owned by org `globex`
+- **WHEN** an API key for workspace `acme` submits feedback for an interaction owned by workspace `globex`
 - **THEN** the system returns an authorization or validation error and does not call an LLM
 
 #### Scenario: Cross-department interaction feedback is rejected
