@@ -16,6 +16,8 @@ class WorkspaceLlmConfig(Base):
     )
     external_model: Mapped[str | None] = mapped_column(String, nullable=True)
     local_model: Mapped[str | None] = mapped_column(String, nullable=True)
+    generalizer_model: Mapped[str | None] = mapped_column(String, nullable=True)
+    adjuster_model: Mapped[str | None] = mapped_column(String, nullable=True)
     routing_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

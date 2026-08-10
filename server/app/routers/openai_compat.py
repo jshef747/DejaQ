@@ -23,7 +23,6 @@ from app.schemas.openai_compat import (
     OAIStreamDelta,
     OAIUsage,
 )
-from app.services.llm_router import _LOCAL_MODEL_NAME
 from app.services.external_llm import ExternalLLMService
 from app.services.credential_service import (
     ENCRYPTION_KEY_MISMATCH_DETAIL,
@@ -47,7 +46,7 @@ from app.services.image_text import (
 from app.services.file_text import FileText, extract as extract_file_text
 from app.dependencies.auth import ResolvedWorkspace, require_org_key
 from app.services.provider_inference import provider_for_model
-from app.services import cache_filter, llm_config_service, rag_service
+from app.services import cache_filter, llm_config_service, pipeline_config_cache, rag_service
 from app.services.classifier import ClassifierService
 from app.services.service_factory import (
     get_context_adjuster_service,
@@ -62,6 +61,7 @@ from app.config import (
     CACHE_ALIAS_ENABLED,
     CACHE_BAND_MAX_DISTANCE,
     CACHE_FILE_ENABLED,
+    CONTEXT_ADJUSTER_MODEL_NAME,
     DEFAULT_MAX_TOKENS,
     CACHE_IMAGE_MAX_DISTANCE,
     CACHE_IMAGE_MAX_HAMMING,
@@ -69,6 +69,8 @@ from app.config import (
     CACHE_IMAGE_OCR_MIN_CONFIDENCE,
     CACHE_IMAGE_TEXT_MIN_JACCARD,
     EXTERNAL_MODEL_NAME,
+    GENERALIZER_MODEL_NAME,
+    LOCAL_LLM_MODEL_NAME,
     RAG_ENABLED,
     RAG_FORCE_EXTERNAL,
     RAG_MAX_CONTEXT_CHARS,
@@ -112,6 +114,21 @@ class ModelServices:
 class EffectiveLlmConfig:
     external_model: str
     routing_threshold: float
+    # Defaulted, not required: existing tests construct this with only the
+    # two fields above (they monkeypatch _read_effective_llm_config wholesale
+    # and don't care about local/generalizer/adjuster resolution), and a
+    # shipped-default / no-override value is exactly the right value for them.
+    local_model: str = LOCAL_LLM_MODEL_NAME
+    generalizer_model: str = GENERALIZER_MODEL_NAME
+    adjuster_model: str = CONTEXT_ADJUSTER_MODEL_NAME
+    # Which of the three above are workspace overrides rather than shipped
+    # defaults - used to decide whether the request path needs a freshly
+    # resolved service instance or can reuse the default-model singleton
+    # (and stay monkeypatchable by tests that patch openai_compat._llm_router
+    # / _adjuster directly).
+    local_model_overridden: bool = False
+    generalizer_model_overridden: bool = False
+    adjuster_model_overridden: bool = False
 
 
 # --- Service singletons (shared with main process; each service is safe to instantiate once per router module) ---
@@ -171,25 +188,25 @@ def _request_routing_mode(raw_request: Request) -> str:
 
 def _read_effective_llm_config(workspace_slug: str, workspace_id: int | None) -> EffectiveLlmConfig:
     if workspace_id is None:
-        return EffectiveLlmConfig(
-            external_model=EXTERNAL_MODEL_NAME,
-            routing_threshold=ROUTING_THRESHOLD,
-        )
+        return EffectiveLlmConfig(external_model=EXTERNAL_MODEL_NAME, routing_threshold=ROUTING_THRESHOLD)
     try:
-        config = llm_config_service.read_for_workspace(workspace_slug)
+        config = pipeline_config_cache.get_effective_config(workspace_slug)
     except llm_config_service.WorkspaceNotFound:
         logger.warning("LLM config requested for missing org slug=%s; using defaults", workspace_slug)
-        return EffectiveLlmConfig(
-            external_model=EXTERNAL_MODEL_NAME,
-            routing_threshold=ROUTING_THRESHOLD,
-        )
+        return EffectiveLlmConfig(external_model=EXTERNAL_MODEL_NAME, routing_threshold=ROUTING_THRESHOLD)
     return EffectiveLlmConfig(
         external_model=config.external_model,
         routing_threshold=config.routing_threshold,
+        local_model=config.local_model,
+        generalizer_model=config.generalizer_model,
+        adjuster_model=config.adjuster_model,
+        local_model_overridden="local_model" in config.overrides,
+        generalizer_model_overridden="generalizer_model" in config.overrides,
+        adjuster_model_overridden="adjuster_model" in config.overrides,
     )
 
 
-def _services_for_model_profile(model_profile: str) -> ModelServices:
+def _services_for_model_profile(model_profile: str, llm_config: EffectiveLlmConfig) -> ModelServices:
     # Temporary developer-only weak CPU profile. Keep the default singleton path
     # unchanged so production behavior and existing tests remain stable.
     #
@@ -213,19 +230,36 @@ def _services_for_model_profile(model_profile: str) -> ModelServices:
             enricher=get_context_enricher_service(model_name=WEAK_CPU_MODEL_NAME),
             validator=_validator,
         )
+    # Per-workspace pipeline config (dashboard-driven, Slice 1: local
+    # answering, generalizer, adjuster model selection). Only resolve a
+    # fresh service_factory instance when this workspace actually overrides
+    # the role - otherwise reuse the shipped-default singleton below, which
+    # keeps existing tests that monkeypatch openai_compat._llm_router /
+    # _adjuster working unchanged.
+    llm_router = (
+        get_llm_router_service(model_name=llm_config.local_model)
+        if llm_config.local_model_overridden
+        else _llm_router
+    )
+    adjuster = (
+        get_context_adjuster_service(
+            adjust_model_name=llm_config.adjuster_model,
+            generalize_model_name=llm_config.generalizer_model,
+        )
+        if (llm_config.adjuster_model_overridden or llm_config.generalizer_model_overridden)
+        else _adjuster
+    )
     return ModelServices(
         normalizer=_normalizer,
-        llm_router=_llm_router,
-        adjuster=_adjuster,
+        llm_router=llm_router,
+        adjuster=adjuster,
         enricher=_enricher,
         validator=_validator,
     )
 
 
-def _local_model_used(llm_router: object, model_profile: str) -> str:
-    if model_profile == MODEL_PROFILE_WEAK_CPU:
-        return str(getattr(llm_router, "model_name", WEAK_CPU_MODEL_NAME))
-    return _LOCAL_MODEL_NAME
+def _local_model_used(llm_router: object) -> str:
+    return str(getattr(llm_router, "model_name", LOCAL_LLM_MODEL_NAME))
 
 
 # Bound to the store's own derivation rather than reimplemented — the router,
@@ -555,6 +589,29 @@ def _cache_lookup_pool(
     return [], single.nearest_distance, single.nearest_prompt
 
 
+def _llm_config_for_workspace_slug(workspace_slug: str) -> EffectiveLlmConfig:
+    """_read_effective_llm_config's logic for a caller that only has the
+    workspace SLUG on hand (the non-Celery background store path below;
+    unlike the main request path it never resolved a numeric workspace_id).
+    """
+    if workspace_slug == "anonymous":
+        return EffectiveLlmConfig(external_model=EXTERNAL_MODEL_NAME, routing_threshold=ROUTING_THRESHOLD)
+    try:
+        config = pipeline_config_cache.get_effective_config(workspace_slug)
+    except llm_config_service.WorkspaceNotFound:
+        return EffectiveLlmConfig(external_model=EXTERNAL_MODEL_NAME, routing_threshold=ROUTING_THRESHOLD)
+    return EffectiveLlmConfig(
+        external_model=config.external_model,
+        routing_threshold=config.routing_threshold,
+        local_model=config.local_model,
+        generalizer_model=config.generalizer_model,
+        adjuster_model=config.adjuster_model,
+        local_model_overridden="local_model" in config.overrides,
+        generalizer_model_overridden="generalizer_model" in config.overrides,
+        adjuster_model_overridden="adjuster_model" in config.overrides,
+    )
+
+
 def _bg_generalize_and_store(
     clean_query: str,
     answer: str,
@@ -579,7 +636,9 @@ def _bg_generalize_and_store(
         if image_kind or file_kind:
             generalized = answer
         else:
-            generalized = asyncio.run(_services_for_model_profile(model_profile).adjuster.generalize(answer))
+            llm_config = _llm_config_for_workspace_slug(tenant_id)
+            services = _services_for_model_profile(model_profile, llm_config)
+            generalized = asyncio.run(services.adjuster.generalize(answer))
         memory = get_memory_service(cache_namespace)
         doc_id = memory.store_interaction(
             clean_query, generalized, original_query, tenant_id,
@@ -765,7 +824,7 @@ async def run_chat_pipeline(
     model_profile = _request_model_profile(raw_request)
     routing_mode = _request_routing_mode(raw_request)
     llm_config = await run_in_threadpool(_read_effective_llm_config, workspace_slug, workspace_id)
-    services = _services_for_model_profile(model_profile)
+    services = _services_for_model_profile(model_profile, llm_config)
 
     try:
         query = content_snippet(user_query)
@@ -1245,7 +1304,7 @@ async def run_chat_pipeline(
 
         complexity = classification["complexity"]
         answer: str = ""
-        model_used: str = _local_model_used(services.llm_router, model_profile)
+        model_used: str = _local_model_used(services.llm_router)
         route = "external" if complexity == "hard" else "local"
         # "length" only when the generator's own signal says the token budget
         # cut the answer off (Ollama's done_reason / the provider's own stop
@@ -1364,7 +1423,7 @@ async def run_chat_pipeline(
                         max_tokens=_max_tokens,
                         system_prompt=llm_system_prompt,
                     )
-                    model_used = _local_model_used(services.llm_router, model_profile)
+                    model_used = _local_model_used(services.llm_router)
                     finish_reason = "length" if done_reason == "length" else "stop"
         except PipelineError:
             raise
@@ -1465,20 +1524,24 @@ async def run_chat_pipeline(
                 if USE_CELERY:
                     try:
                         # Text requests keep the legacy positional-args call; image
-                        # fingerprints ride as kwargs only when present.
+                        # fingerprints ride as kwargs only when present. workspace_slug
+                        # always rides as a kwarg (plain string) so the worker can
+                        # resolve its own fresh generalizer config - see
+                        # tasks/cache_tasks.py.
                         _apply_kwargs: dict = {
                             "headers": {"dejaq_model_profile": model_profile},
                             "ignore_result": True,
+                            "kwargs": {"workspace_slug": workspace_slug},
                         }
                         if _request_has_image:
-                            _apply_kwargs["kwargs"] = {
+                            _apply_kwargs["kwargs"].update({
                                 "image_dhash": _img_dhash, "image_clip": _img_clip,
                                 "image_kind": _img_kind, "image_text": _img_text,
-                            }
+                            })
                         elif _request_has_file:
-                            _apply_kwargs["kwargs"] = {
+                            _apply_kwargs["kwargs"].update({
                                 "file_sha": _file_sha, "file_kind": _file_kind,
-                            }
+                            })
                         generalize_and_store_task.apply_async(
                             args=(clean_query, answer, user_query, workspace_slug, cache_namespace),
                             **_apply_kwargs,

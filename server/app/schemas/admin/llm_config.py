@@ -6,6 +6,8 @@ from pydantic import BaseModel, Field, model_validator
 class LlmConfigResponse(BaseModel):
     external_model: str
     local_model: str
+    generalizer_model: str
+    adjuster_model: str
     routing_threshold: float
     overrides: dict[str, str | float]
     updated_at: datetime | None
@@ -16,6 +18,8 @@ class LlmConfigResponse(BaseModel):
 class LlmConfigUpdate(BaseModel):
     external_model: str | None = None
     local_model: str | None = None
+    generalizer_model: str | None = None
+    adjuster_model: str | None = None
     routing_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
 
     @model_validator(mode="after")

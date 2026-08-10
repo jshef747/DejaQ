@@ -4,7 +4,13 @@ from sqlalchemy.orm import Session
 
 from app.db.models.workspace_llm_config import WorkspaceLlmConfig
 
-_CONFIG_FIELDS = {"external_model", "local_model", "routing_threshold"}
+_CONFIG_FIELDS = {
+    "external_model",
+    "local_model",
+    "generalizer_model",
+    "adjuster_model",
+    "routing_threshold",
+}
 
 
 def get_for_workspace(session: Session, workspace_id: int) -> WorkspaceLlmConfig | None:

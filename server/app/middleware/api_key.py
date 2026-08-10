@@ -1,5 +1,4 @@
 import logging
-import os
 import time
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -7,26 +6,12 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from app.config import KEY_CACHE_TTL
+from app.utils.db_freshness import db_mtime as _db_mtime
 
 logger = logging.getLogger("dejaq.middleware.api_key")
 
 # Fallback namespace for requests with no valid API key.
 _ANONYMOUS_NAMESPACE = "dejaq_default"
-
-
-def _db_mtime() -> float:
-    """mtime of the SQLite file backing workspace/dept/key data.
-
-    A shared signal any process can produce just by committing a write —
-    unlike in-process invalidate(), this is visible to the server even when
-    the mutation came from a separate `dejaq-admin` CLI process.
-    """
-    try:
-        from app.db.base import SessionLocal
-
-        return os.path.getmtime(SessionLocal.kw["bind"].url.database)
-    except OSError:
-        return 0.0
 
 
 class _KeyCache:

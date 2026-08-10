@@ -66,7 +66,7 @@ def _patch_common(monkeypatch, memory, router=None):
     # reads module-level singletons built at import), so patch that seam.
     monkeypatch.setattr(
         openai_compat, "_services_for_model_profile",
-        lambda profile: openai_compat.ModelServices(
+        lambda profile, llm_config=None: openai_compat.ModelServices(
             normalizer=StubNormalizer(), llm_router=router,
             adjuster=StubAdjuster(), enricher=StubEnricher(), validator=None,
         ),
@@ -131,7 +131,7 @@ def test_image_answers_are_stored_verbatim(monkeypatch):
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: memory)
     monkeypatch.setattr(
         openai_compat, "_services_for_model_profile",
-        lambda profile: openai_compat.ModelServices(
+        lambda profile, llm_config=None: openai_compat.ModelServices(
             normalizer=StubNormalizer(), llm_router=None,
             adjuster=TrackingAdjuster(), enricher=StubEnricher(), validator=None,
         ),

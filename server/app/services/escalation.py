@@ -11,7 +11,7 @@ from app.config import DEFAULT_MAX_TOKENS, OLLAMA_TIMEOUT_SECONDS
 from app.db.session import get_session
 from app.schemas.chat import ExternalLLMRequest
 from app.schemas.feedback import EscalatedResponse
-from app.services import cache_filter, llm_config_service
+from app.services import cache_filter, llm_config_service, pipeline_config_cache
 from app.services.chat_messages import extract_pipeline_inputs
 from app.services.credential_service import CredentialService
 from app.services.external_llm import ExternalLLMService
@@ -43,6 +43,22 @@ class EscalationResult(BaseModel):
 
 def _doc_id(clean_query: str) -> str:
     return hashlib.sha256(clean_query.encode()).hexdigest()[:16]
+
+
+def _workspace_model_override(workspace_slug: str, field: str) -> str | None:
+    """The workspace's override for `field` ("local_model" or
+    "generalizer_model"), or None when there isn't one - including when the
+    workspace can't be resolved at all. None lets callers make the exact
+    same no-override get_*_service() call this module always made before
+    per-workspace pipeline config existed.
+    """
+    try:
+        config = pipeline_config_cache.get_effective_config(workspace_slug)
+    except llm_config_service.WorkspaceNotFound:
+        return None
+    if field not in config.overrides:
+        return None
+    return getattr(config, field)
 
 
 def _entry_is_attachment_anchored(meta: dict | None) -> bool:
@@ -89,7 +105,13 @@ async def _store_escalation_cache_entry(
 ) -> None:
     doc_id = _doc_id(clean_query)
     try:
-        generalized = await get_context_adjuster_service().generalize(answer)
+        generalizer_model = _workspace_model_override(tenant_id, "generalizer_model")
+        adjuster_service = (
+            get_context_adjuster_service(generalize_model_name=generalizer_model)
+            if generalizer_model
+            else get_context_adjuster_service()
+        )
+        generalized = await adjuster_service.generalize(answer)
         get_memory_service(cache_namespace).store_interaction(
             clean_query,
             generalized,
@@ -271,9 +293,13 @@ async def _escalate_to_local(
     history: list[dict],
     system_prompt: str | None,
 ) -> EscalationResult:
+    local_model = _workspace_model_override(interaction.workspace_slug, "local_model")
+    router_service = (
+        get_llm_router_service(model_name=local_model) if local_model else get_llm_router_service()
+    )
     try:
         answer, latency, done_reason = await asyncio.wait_for(
-            get_llm_router_service().generate_local_response(
+            router_service.generate_local_response(
                 query,
                 history=history,
                 max_tokens=DEFAULT_MAX_TOKENS,
