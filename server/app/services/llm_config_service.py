@@ -5,10 +5,13 @@ from pydantic import BaseModel
 
 from app.config import (
     CONTEXT_ADJUSTER_MODEL_NAME,
+    ENRICHER_MODEL_NAME,
     EXTERNAL_MODEL_NAME,
     GENERALIZER_MODEL_NAME,
     LOCAL_LLM_MODEL_NAME,
+    NORMALIZER_MODEL_NAME,
     ROUTING_THRESHOLD,
+    VALIDATOR_MODEL_NAME,
 )
 from app.db import credential_repo, llm_config_repo
 from app.db.models.workspace import Workspace
@@ -20,7 +23,14 @@ from app.services.model_backends import MODEL_RUNTIME_SPECS
 # Ollama host (captain's decision: any installed tag is selectable, not just
 # ones registered in MODEL_RUNTIME_SPECS - see model_backends.py). Distinct
 # from external_model, which names a provider model string, not an Ollama tag.
-_OLLAMA_ROLE_FIELDS = {"local_model", "generalizer_model", "adjuster_model"}
+_OLLAMA_ROLE_FIELDS = {
+    "local_model",
+    "generalizer_model",
+    "adjuster_model",
+    "enricher_model",
+    "normalizer_model",
+    "validator_model",
+}
 
 
 class WorkspaceNotFound(Exception):
@@ -38,6 +48,9 @@ class LlmConfigResult(BaseModel):
     local_model: str
     generalizer_model: str
     adjuster_model: str
+    enricher_model: str
+    normalizer_model: str
+    validator_model: str
     routing_threshold: float
     overrides: dict[str, str | float]
     updated_at: datetime | None
@@ -76,6 +89,18 @@ def _effective(row, credentials_configured: list[str] | None = None) -> LlmConfi
             row.adjuster_model if row and row.adjuster_model is not None
             else _shipped_default_ollama_tag(CONTEXT_ADJUSTER_MODEL_NAME)
         ),
+        "enricher_model": (
+            row.enricher_model if row and row.enricher_model is not None
+            else _shipped_default_ollama_tag(ENRICHER_MODEL_NAME)
+        ),
+        "normalizer_model": (
+            row.normalizer_model if row and row.normalizer_model is not None
+            else _shipped_default_ollama_tag(NORMALIZER_MODEL_NAME)
+        ),
+        "validator_model": (
+            row.validator_model if row and row.validator_model is not None
+            else _shipped_default_ollama_tag(VALIDATOR_MODEL_NAME)
+        ),
         "routing_threshold": (
             row.routing_threshold
             if row and row.routing_threshold is not None
@@ -84,7 +109,16 @@ def _effective(row, credentials_configured: list[str] | None = None) -> LlmConfi
     }
     overrides: dict[str, str | float] = {}
     if row:
-        for field in ("external_model", "local_model", "generalizer_model", "adjuster_model", "routing_threshold"):
+        for field in (
+            "external_model",
+            "local_model",
+            "generalizer_model",
+            "adjuster_model",
+            "enricher_model",
+            "normalizer_model",
+            "validator_model",
+            "routing_threshold",
+        ):
             stored = getattr(row, field)
             if stored is not None:
                 overrides[field] = stored

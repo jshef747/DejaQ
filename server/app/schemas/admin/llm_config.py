@@ -8,6 +8,9 @@ class LlmConfigResponse(BaseModel):
     local_model: str
     generalizer_model: str
     adjuster_model: str
+    enricher_model: str
+    normalizer_model: str
+    validator_model: str
     routing_threshold: float
     overrides: dict[str, str | float]
     updated_at: datetime | None
@@ -20,6 +23,9 @@ class LlmConfigUpdate(BaseModel):
     local_model: str | None = None
     generalizer_model: str | None = None
     adjuster_model: str | None = None
+    enricher_model: str | None = None
+    normalizer_model: str | None = None
+    validator_model: str | None = None
     routing_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
 
     @model_validator(mode="after")

@@ -9,6 +9,9 @@ _CONFIG_FIELDS = {
     "local_model",
     "generalizer_model",
     "adjuster_model",
+    "enricher_model",
+    "normalizer_model",
+    "validator_model",
     "routing_threshold",
 }
 

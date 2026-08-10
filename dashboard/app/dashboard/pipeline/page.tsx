@@ -2,19 +2,19 @@ import { redirect } from "next/navigation";
 import Topbar from "@/components/Topbar";
 import { listWorkspaces } from "@/app/actions/workspaces";
 import { getLlmConfig } from "@/app/actions/llm-config";
-import { listCredentials } from "@/app/actions/credentials";
-import SettingsClient from "./SettingsClient";
-import type { CredentialItem, LlmConfigResponse, WorkspaceItem } from "@/lib/types";
+import { getAvailableModels } from "@/app/actions/available-models";
+import PipelineClient from "./PipelineClient";
+import type { AvailableModelsResponse, LlmConfigResponse, WorkspaceItem } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
 function NoWorkspacesState() {
   return (
     <>
-      <Topbar section="Settings" />
+      <Topbar section="Pipeline" />
       <div style={{ flex: 1, padding: "24px 28px" }}>
         <h1 style={{ fontSize: "18px", fontWeight: 600, letterSpacing: 0, margin: "0 0 16px" }}>
-          Settings
+          Pipeline
         </h1>
         <div
           style={{
@@ -37,7 +37,7 @@ function NoWorkspacesState() {
   );
 }
 
-export default async function SettingsPage({
+export default async function PipelinePage({
   searchParams,
 }: {
   searchParams: Promise<{ workspace?: string }>;
@@ -53,36 +53,41 @@ export default async function SettingsPage({
 
   let activeSlug = workspace;
   if (!activeSlug && workspaces.length > 0) {
-    redirect(`/dashboard/settings?workspace=${workspaces[0].slug}`);
+    redirect(`/dashboard/pipeline?workspace=${workspaces[0].slug}`);
   }
 
   if (!activeSlug) {
     return <NoWorkspacesState />;
   }
 
-  const activeWorkspace = workspaces.find((item) => item.slug === activeSlug);
   let config: LlmConfigResponse | null = null;
-  let credentials: CredentialItem[] = [];
   let error: string | null = null;
 
   try {
-    [config, credentials] = await Promise.all([
-      getLlmConfig(activeSlug),
-      listCredentials(activeSlug),
-    ]);
+    config = await getLlmConfig(activeSlug);
   } catch (e) {
     error = (e as Error).message;
   }
 
+  // Best-effort: an unreachable Ollama must not take down the whole page -
+  // it disables editing of the model pickers, with the reason shown
+  // (PipelineClient renders availableModels.error).
+  let availableModels: AvailableModelsResponse = { models: [], error: null };
+  const modelsRes = await getAvailableModels();
+  if (modelsRes.ok) {
+    availableModels = modelsRes.data;
+  } else {
+    availableModels = { models: [], error: modelsRes.error };
+  }
+
   return (
     <>
-      <Topbar section="Settings" workspaceId={activeSlug} />
+      <Topbar section="Pipeline" workspaceId={activeSlug} />
       {config ? (
-        <SettingsClient
+        <PipelineClient
           workspaceSlug={activeSlug}
-          workspaceName={activeWorkspace?.name ?? activeSlug}
           initialConfig={config}
-          initialCredentials={credentials}
+          initialAvailableModels={availableModels}
           loadError={error}
         />
       ) : (
@@ -97,7 +102,7 @@ export default async function SettingsPage({
               padding: "10px 14px",
             }}
           >
-            {error ?? "Unable to load settings."}
+            {error ?? "Unable to load the pipeline configuration."}
           </div>
         </div>
       )}
