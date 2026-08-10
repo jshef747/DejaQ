@@ -99,6 +99,23 @@ def test_llm_config_read_defaults_cover_generalizer_and_adjuster(isolated_org_db
     assert "adjuster_model" not in result.overrides
 
 
+def test_llm_config_read_defaults_cover_enricher_normalizer_validator(isolated_org_db):
+    from app.config import ENRICHER_MODEL_NAME, NORMALIZER_MODEL_NAME, VALIDATOR_MODEL_NAME
+    from app.services.llm_config_service import read_for_workspace
+    from app.services.model_backends import MODEL_RUNTIME_SPECS
+
+    _create_workspace()
+
+    result = read_for_workspace("acme")
+
+    assert result.enricher_model == MODEL_RUNTIME_SPECS[ENRICHER_MODEL_NAME].ollama_model
+    assert result.normalizer_model == MODEL_RUNTIME_SPECS[NORMALIZER_MODEL_NAME].ollama_model
+    assert result.validator_model == MODEL_RUNTIME_SPECS[VALIDATOR_MODEL_NAME].ollama_model
+    assert "enricher_model" not in result.overrides
+    assert "normalizer_model" not in result.overrides
+    assert "validator_model" not in result.overrides
+
+
 # ── Write-time validation against the live Ollama catalog ──
 
 
@@ -133,6 +150,39 @@ def test_llm_config_update_accepts_a_model_present_in_the_ollama_catalog(isolate
 
     assert result.adjuster_model == "llama3.2:3b"
     assert result.overrides == {"adjuster_model": "llama3.2:3b"}
+
+
+@pytest.mark.parametrize("field", ["enricher_model", "normalizer_model", "validator_model"])
+def test_llm_config_update_rejects_a_new_role_model_not_in_the_ollama_catalog(isolated_org_db, monkeypatch, field):
+    from app.services import llm_config_service
+    from app.services.llm_config_service import InvalidLlmConfigUpdate, update_for_workspace
+
+    monkeypatch.setattr(
+        llm_config_service.ollama_catalog, "list_available_models", lambda force_refresh=False: ["qwen2.5:1.5b"]
+    )
+    _create_workspace()
+
+    with pytest.raises(InvalidLlmConfigUpdate) as exc_info:
+        update_for_workspace("acme", {field: "not-a-real-tag"}, {field})
+
+    assert field in str(exc_info.value)
+    assert "not-a-real-tag" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("field", ["enricher_model", "normalizer_model", "validator_model"])
+def test_llm_config_update_accepts_a_new_role_model_present_in_the_ollama_catalog(isolated_org_db, monkeypatch, field):
+    from app.services import llm_config_service
+    from app.services.llm_config_service import update_for_workspace
+
+    monkeypatch.setattr(
+        llm_config_service.ollama_catalog, "list_available_models", lambda force_refresh=False: ["llama3.2:3b"]
+    )
+    _create_workspace()
+
+    result = update_for_workspace("acme", {field: "llama3.2:3b"}, {field})
+
+    assert getattr(result, field) == "llama3.2:3b"
+    assert result.overrides == {field: "llama3.2:3b"}
 
 
 def test_llm_config_update_validates_against_a_forced_refresh_not_the_stale_cache(isolated_org_db, monkeypatch):
@@ -229,4 +279,29 @@ def test_llm_config_two_workspaces_resolve_independently(isolated_org_db, monkey
     assert acme.generalizer_model == "gemma4:e4b"
     assert acme.is_default is False
     assert beta.generalizer_model == MODEL_RUNTIME_SPECS[GENERALIZER_MODEL_NAME].ollama_model
+    assert beta.is_default is True
+
+
+def test_llm_config_two_workspaces_resolve_new_roles_independently(isolated_org_db, monkeypatch):
+    """A validator/enricher/normalizer override in one workspace must never
+    leak into another - same guarantee slice 1 established for generalizer."""
+    from app.config import NORMALIZER_MODEL_NAME
+    from app.services import llm_config_service
+    from app.services.llm_config_service import read_for_workspace, update_for_workspace
+    from app.services.model_backends import MODEL_RUNTIME_SPECS
+
+    monkeypatch.setattr(
+        llm_config_service.ollama_catalog, "list_available_models", lambda force_refresh=False: ["gemma4:e4b"]
+    )
+    _create_workspace("Acme")
+    _create_workspace("Beta")
+
+    update_for_workspace("acme", {"normalizer_model": "gemma4:e4b"}, {"normalizer_model"})
+
+    acme = read_for_workspace("acme")
+    beta = read_for_workspace("beta")
+
+    assert acme.normalizer_model == "gemma4:e4b"
+    assert acme.is_default is False
+    assert beta.normalizer_model == MODEL_RUNTIME_SPECS[NORMALIZER_MODEL_NAME].ollama_model
     assert beta.is_default is True

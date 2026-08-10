@@ -46,11 +46,11 @@ def _doc_id(clean_query: str) -> str:
 
 
 def _workspace_model_override(workspace_slug: str, field: str) -> str | None:
-    """The workspace's override for `field` ("local_model" or
-    "generalizer_model"), or None when there isn't one - including when the
-    workspace can't be resolved at all. None lets callers make the exact
-    same no-override get_*_service() call this module always made before
-    per-workspace pipeline config existed.
+    """The workspace's override for `field` (e.g. "local_model",
+    "generalizer_model", "enricher_model", "normalizer_model"), or None when
+    there isn't one - including when the workspace can't be resolved at all.
+    None lets callers make the exact same no-override get_*_service() call
+    this module always made before per-workspace pipeline config existed.
     """
     try:
         config = pipeline_config_cache.get_effective_config(workspace_slug)
@@ -198,13 +198,25 @@ async def _cache_response_id_for_escalation(
         return None
 
     try:
-        enriched = await get_context_enricher_service().enrich(query, history)
+        enricher_model = _workspace_model_override(interaction.workspace_slug, "enricher_model")
+        enricher_service = (
+            get_context_enricher_service(model_name=enricher_model)
+            if enricher_model
+            else get_context_enricher_service()
+        )
+        enriched = await enricher_service.enrich(query, history)
     except Exception:
         logger.exception("Feedback escalation cache enrich failed")
         enriched = query
 
     try:
-        clean_query = await get_normalizer_service().normalize(enriched)
+        normalizer_model = _workspace_model_override(interaction.workspace_slug, "normalizer_model")
+        normalizer_service = (
+            get_normalizer_service(model_name=normalizer_model)
+            if normalizer_model
+            else get_normalizer_service()
+        )
+        clean_query = await normalizer_service.normalize(enriched)
     except Exception:
         logger.exception("Feedback escalation cache normalize failed")
         clean_query = enriched

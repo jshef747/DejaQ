@@ -68,9 +68,11 @@ from app.config import (
     CACHE_IMAGE_OCR_ENABLED,
     CACHE_IMAGE_OCR_MIN_CONFIDENCE,
     CACHE_IMAGE_TEXT_MIN_JACCARD,
+    ENRICHER_MODEL_NAME,
     EXTERNAL_MODEL_NAME,
     GENERALIZER_MODEL_NAME,
     LOCAL_LLM_MODEL_NAME,
+    NORMALIZER_MODEL_NAME,
     RAG_ENABLED,
     RAG_FORCE_EXTERNAL,
     RAG_MAX_CONTEXT_CHARS,
@@ -78,6 +80,7 @@ from app.config import (
     RAG_TOP_K,
     ROUTING_THRESHOLD,
     USE_CELERY,
+    VALIDATOR_MODEL_NAME,
     VALIDATOR_SKIP_DISTANCE,
 )
 from app.db.session import get_session
@@ -121,7 +124,10 @@ class EffectiveLlmConfig:
     local_model: str = LOCAL_LLM_MODEL_NAME
     generalizer_model: str = GENERALIZER_MODEL_NAME
     adjuster_model: str = CONTEXT_ADJUSTER_MODEL_NAME
-    # Which of the three above are workspace overrides rather than shipped
+    enricher_model: str = ENRICHER_MODEL_NAME
+    normalizer_model: str = NORMALIZER_MODEL_NAME
+    validator_model: str = VALIDATOR_MODEL_NAME
+    # Which of the fields above are workspace overrides rather than shipped
     # defaults - used to decide whether the request path needs a freshly
     # resolved service instance or can reuse the default-model singleton
     # (and stay monkeypatchable by tests that patch openai_compat._llm_router
@@ -129,6 +135,9 @@ class EffectiveLlmConfig:
     local_model_overridden: bool = False
     generalizer_model_overridden: bool = False
     adjuster_model_overridden: bool = False
+    enricher_model_overridden: bool = False
+    normalizer_model_overridden: bool = False
+    validator_model_overridden: bool = False
 
 
 # --- Service singletons (shared with main process; each service is safe to instantiate once per router module) ---
@@ -200,9 +209,15 @@ def _read_effective_llm_config(workspace_slug: str, workspace_id: int | None) ->
         local_model=config.local_model,
         generalizer_model=config.generalizer_model,
         adjuster_model=config.adjuster_model,
+        enricher_model=config.enricher_model,
+        normalizer_model=config.normalizer_model,
+        validator_model=config.validator_model,
         local_model_overridden="local_model" in config.overrides,
         generalizer_model_overridden="generalizer_model" in config.overrides,
         adjuster_model_overridden="adjuster_model" in config.overrides,
+        enricher_model_overridden="enricher_model" in config.overrides,
+        normalizer_model_overridden="normalizer_model" in config.overrides,
+        validator_model_overridden="validator_model" in config.overrides,
     )
 
 
@@ -249,12 +264,27 @@ def _services_for_model_profile(model_profile: str, llm_config: EffectiveLlmConf
         if (llm_config.adjuster_model_overridden or llm_config.generalizer_model_overridden)
         else _adjuster
     )
+    normalizer = (
+        get_normalizer_service(model_name=llm_config.normalizer_model)
+        if llm_config.normalizer_model_overridden
+        else _normalizer
+    )
+    enricher = (
+        get_context_enricher_service(model_name=llm_config.enricher_model)
+        if llm_config.enricher_model_overridden
+        else _enricher
+    )
+    validator = (
+        get_validator_service(model_name=llm_config.validator_model)
+        if llm_config.validator_model_overridden
+        else _validator
+    )
     return ModelServices(
-        normalizer=_normalizer,
+        normalizer=normalizer,
         llm_router=llm_router,
         adjuster=adjuster,
-        enricher=_enricher,
-        validator=_validator,
+        enricher=enricher,
+        validator=validator,
     )
 
 
@@ -606,9 +636,15 @@ def _llm_config_for_workspace_slug(workspace_slug: str) -> EffectiveLlmConfig:
         local_model=config.local_model,
         generalizer_model=config.generalizer_model,
         adjuster_model=config.adjuster_model,
+        enricher_model=config.enricher_model,
+        normalizer_model=config.normalizer_model,
+        validator_model=config.validator_model,
         local_model_overridden="local_model" in config.overrides,
         generalizer_model_overridden="generalizer_model" in config.overrides,
         adjuster_model_overridden="adjuster_model" in config.overrides,
+        enricher_model_overridden="enricher_model" in config.overrides,
+        normalizer_model_overridden="normalizer_model" in config.overrides,
+        validator_model_overridden="validator_model" in config.overrides,
     )
 
 

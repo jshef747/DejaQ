@@ -94,6 +94,9 @@ export type LlmConfigResponse = {
   local_model: string | null;
   generalizer_model: string | null;
   adjuster_model: string | null;
+  enricher_model: string | null;
+  normalizer_model: string | null;
+  validator_model: string | null;
   routing_threshold: number | null;
   overrides: Record<string, unknown>;
   is_default: boolean;
@@ -106,8 +109,21 @@ export type LlmConfigUpdate = Partial<{
   local_model: string | null;
   generalizer_model: string | null;
   adjuster_model: string | null;
+  enricher_model: string | null;
+  normalizer_model: string | null;
+  validator_model: string | null;
   routing_threshold: number | null;
 }>;
+
+/** Pipeline role identifiers - keys into LlmConfigResponse/Update's *_model
+ * fields, used by the Pipeline page's flow + editor to address one stage. */
+export type PipelineRole =
+  | "enricher_model"
+  | "normalizer_model"
+  | "validator_model"
+  | "adjuster_model"
+  | "generalizer_model"
+  | "local_model";
 
 export type AvailableModelsResponse = {
   models: string[];
