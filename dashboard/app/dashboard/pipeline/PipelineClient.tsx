@@ -72,8 +72,15 @@ export default function PipelineClient({ workspaceSlug, initialConfig, initialAv
   useEffect(() => {
     if (!selected || selected === "external_model") return;
     setDraftValue(config[selected] ?? "");
-    setStatus({ kind: "idle", text: "" });
   }, [selected, config]);
+
+  // Separate from the draft seeding above on purpose: every successful save
+  // replaces `config`, so clearing the status alongside the draft would wipe
+  // the "Saved." confirmation on the very next commit. Only switching stages
+  // clears it.
+  useEffect(() => {
+    setStatus({ kind: "idle", text: "" });
+  }, [selected]);
 
   async function handleRefreshModels() {
     setModelsRefreshing(true);

@@ -1,8 +1,12 @@
 import logging
 import time
 
-from app.config import OLLAMA_NUM_CTX
-from app.services.model_backends import CompletionRequest, ModelBackend
+from app.config import OLLAMA_NUM_CTX, VALIDATOR_MODEL_NAME
+from app.services.model_backends import (
+    CompletionRequest,
+    ModelBackend,
+    complete_with_default_fallback,
+)
 
 logger = logging.getLogger("dejaq.services.validator")
 
@@ -239,7 +243,8 @@ class ValidatorService:
         was_truncated = len(cached_answer.split()) >= _MAX_ANSWER_WORDS
 
         start = time.time()
-        raw = (await self.backend.complete(
+        raw = (await complete_with_default_fallback(
+            self.backend,
             CompletionRequest(
                 model_name=self.model_name,
                 messages=messages,
@@ -254,7 +259,9 @@ class ValidatorService:
                 # runs.
                 num_ctx=OLLAMA_NUM_CTX,
                 temperature=0.0,
-            )
+            ),
+            VALIDATOR_MODEL_NAME,
+            "validator",
         )).text
         latency_ms = (time.time() - start) * 1000
 

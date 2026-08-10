@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol, TypedDict
 
 import httpx
@@ -17,9 +17,10 @@ class ModelNotFoundError(Exception):
     is selectable, not just ones in MODEL_RUNTIME_SPECS), validated against
     the live catalog at write time. This is the day-2-drift case that write-
     time validation cannot catch - the tag was uninstalled after it was
-    saved. Callers for the three overridable roles (generalizer, adjuster,
-    local-answering) catch this and fall back to the shipped default rather
-    than surfacing a raw 500 three steps into the pipeline.
+    saved. Every overridable role (generalizer, adjuster, local-answering,
+    enricher, normalizer, validator) catches this - via
+    complete_with_default_fallback() below - and falls back to the shipped
+    default rather than surfacing a raw 500 three steps into the pipeline.
     """
 
     def __init__(self, model_name: str) -> None:
@@ -77,6 +78,32 @@ class CompletionResult:
 class ModelBackend(Protocol):
     async def complete(self, request: CompletionRequest) -> CompletionResult:
         ...
+
+
+async def complete_with_default_fallback(
+    backend: ModelBackend,
+    request: CompletionRequest,
+    default_model_name: str,
+    role: str,
+) -> CompletionResult:
+    """Run `request`, retrying on the shipped default if the model is gone.
+
+    The single place the day-2-drift rule lives, so wiring a new role to a
+    per-workspace override cannot silently ship without it (§
+    ModelNotFoundError above). Re-raises when the shipped default is itself
+    the missing model - that is a broken Ollama install, not drift, and
+    retrying it would only repeat the same 404.
+    """
+    try:
+        return await backend.complete(request)
+    except ModelNotFoundError as exc:
+        if request.model_name == default_model_name:
+            raise
+        logger.warning(
+            "%s model=%s not installed in Ollama; falling back to shipped default=%s",
+            role, exc.model_name, default_model_name,
+        )
+        return await backend.complete(replace(request, model_name=default_model_name))
 
 
 class OllamaBackend:
