@@ -960,17 +960,17 @@ def test_services_for_model_profile_resolves_overridden_new_roles_only(monkeypat
     roles this slice adds."""
     resolved_calls: dict[str, str] = {}
 
-    def _tracking_enricher(model_name=None):
+    def _tracking_enricher(model_name=None, **kwargs):
         if model_name is not None:
             resolved_calls["enricher"] = model_name
         return StubEnricher()
 
-    def _tracking_normalizer(model_name=None):
+    def _tracking_normalizer(model_name=None, **kwargs):
         if model_name is not None:
             resolved_calls["normalizer"] = model_name
         return StubNormalizer()
 
-    def _tracking_validator(model_name=None):
+    def _tracking_validator(model_name=None, **kwargs):
         if model_name is not None:
             resolved_calls["validator"] = model_name
         return object()
@@ -994,6 +994,31 @@ def test_services_for_model_profile_resolves_overridden_new_roles_only(monkeypat
     assert resolved_calls == {"normalizer": "gemma4:e4b", "validator": "gemma4:e4b"}
     assert "enricher" not in resolved_calls
     assert services.enricher is openai_compat._enricher
+
+
+def test_services_for_model_profile_resolves_overridden_prompt_with_no_model_override(monkeypatch):
+    """A workspace that overrides only a role's prompt (model left default)
+    must still get a freshly-resolved service carrying that prompt - not the
+    shared default-model singleton, which would silently ignore it."""
+    captured: dict[str, tuple] = {}
+
+    def _tracking_normalizer(model_name=None, system_prompt=None):
+        captured["normalizer"] = (model_name, system_prompt)
+        return StubNormalizer()
+
+    monkeypatch.setattr(openai_compat, "get_normalizer_service", _tracking_normalizer)
+
+    llm_config = openai_compat.EffectiveLlmConfig(
+        external_model="gemini-2.5-flash",
+        routing_threshold=0.3,
+        normalizer_system_prompt="Custom normalizer prompt.",
+        normalizer_system_prompt_overridden=True,
+        # normalizer_model deliberately left un-overridden.
+    )
+
+    openai_compat._services_for_model_profile(openai_compat.MODEL_PROFILE_DEFAULT, llm_config)
+
+    assert captured["normalizer"] == (None, "Custom normalizer prompt.")
 
 
 def test_celery_store_keeps_legacy_args_and_sends_profile_header(monkeypatch):

@@ -46,7 +46,7 @@ _BEST_FORM = re.compile(r"^best\s+[a-z][a-z\s-]{0,40}$")
 # Opinion rewrite prompt
 # ---------------------------------------------------------------------------
 
-_SYSTEM_PROMPT = """\
+DEFAULT_SYSTEM_PROMPT = """\
 You rewrite user superlative queries into a canonical short form.
 
 RULES:
@@ -110,8 +110,8 @@ def _postprocess(raw: str, original: str) -> str:
     return text
 
 
-def _build_opinion_messages(query: str) -> list[dict]:
-    messages: list[dict] = [{"role": "system", "content": _SYSTEM_PROMPT}]
+def _build_opinion_messages(query: str, system_prompt: str) -> list[dict]:
+    messages: list[dict] = [{"role": "system", "content": system_prompt}]
     for user_input, assistant_output in _FEW_SHOTS:
         messages.append({"role": "user", "content": f"INPUT: {user_input}\nQUERY:"})
         messages.append({"role": "assistant", "content": assistant_output})
@@ -120,9 +120,14 @@ def _build_opinion_messages(query: str) -> list[dict]:
 
 
 class NormalizerService:
-    def __init__(self, backend: ModelBackend, model_name: str):
+    def __init__(self, backend: ModelBackend, model_name: str, system_prompt: str | None = None):
         self.backend = backend
         self.model_name = model_name
+        # The few-shot pairs above stay hardcoded - only the system prompt is
+        # a per-workspace override (see llm_config_service.py). Editing the
+        # prompt fragments the cache key for future opinion-query
+        # normalizations of the same concept - see the module docstring.
+        self.system_prompt = system_prompt if system_prompt is not None else DEFAULT_SYSTEM_PROMPT
 
     async def normalize(self, raw_query: str) -> str:
         """Return the cache key for a query.
@@ -145,7 +150,7 @@ class NormalizerService:
             )
             return normalized
 
-        messages = _build_opinion_messages(raw_query)
+        messages = _build_opinion_messages(raw_query, self.system_prompt)
         raw_output = await complete_with_default_fallback(
             self.backend,
             CompletionRequest(

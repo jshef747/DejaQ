@@ -29,8 +29,11 @@ def _is_suppressed(clean_query: str) -> bool:
 _worker_loop: asyncio.AbstractEventLoop | None = None
 
 
-def _resolve_generalize_model_name(workspace_slug: str | None, model_profile: str) -> str | None:
-    """Resolve the generalizer role's model name fresh, in this worker process.
+def _resolve_generalize_overrides(
+    workspace_slug: str | None, model_profile: str
+) -> tuple[str | None, str | None]:
+    """Resolve the generalizer role's model name and system prompt fresh, in
+    this worker process. Returns (model_name, system_prompt).
 
     Deliberately re-reads the workspace's config on every task execution
     rather than resolving it once in the dispatching FastAPI request and
@@ -38,20 +41,22 @@ def _resolve_generalize_model_name(workspace_slug: str | None, model_profile: st
     the queue for a while, and the task documents "all arguments are plain
     strings" for exactly this reason - the worker resolves its own
     up-to-date configuration instead of trusting a value that may be minutes
-    stale by the time this task actually runs. Returns None (service_factory
-    falls back to the shipped config default) for the dev weak_cpu profile's
-    complement, an unknown workspace, or no workspace at all (e.g. a legacy
-    caller/test that doesn't pass one).
+    stale by the time this task actually runs. Returns (None, None)
+    (service_factory falls back to the shipped config defaults) for the dev
+    weak_cpu profile's complement, an unknown workspace, or no workspace at
+    all (e.g. a legacy caller/test that doesn't pass one).
     """
     if model_profile == "weak_cpu":
-        return "qwen_0_5b"
+        return "qwen_0_5b", None
     if not workspace_slug:
-        return None
+        return None, None
     try:
         config = pipeline_config_cache.get_effective_config(workspace_slug)
     except llm_config_service.WorkspaceNotFound:
-        return None
-    return config.generalizer_model if "generalizer_model" in config.overrides else None
+        return None, None
+    model = config.generalizer_model if "generalizer_model" in config.overrides else None
+    prompt = config.generalizer_system_prompt if "generalizer_system_prompt" in config.overrides else None
+    return model, prompt
 
 
 def _run_async_in_worker(coro):
@@ -119,8 +124,13 @@ def generalize_and_store_task(
         if image_kind or file_kind:
             generalized = answer
         else:
-            generalize_model_name = _resolve_generalize_model_name(workspace_slug, resolved_model_profile)
-            context_adjuster = get_context_adjuster_service(generalize_model_name=generalize_model_name)
+            generalize_model_name, generalize_system_prompt = _resolve_generalize_overrides(
+                workspace_slug, resolved_model_profile
+            )
+            context_adjuster = get_context_adjuster_service(
+                generalize_model_name=generalize_model_name,
+                generalize_system_prompt=generalize_system_prompt,
+            )
             generalized = _run_async_in_worker(context_adjuster.generalize(answer))
         doc_id = memory.store_interaction(
             clean_query, generalized, original_query, user_id,

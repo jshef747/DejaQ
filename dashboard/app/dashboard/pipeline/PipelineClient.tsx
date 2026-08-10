@@ -8,7 +8,13 @@ import Field from "@/components/ui/Field";
 import SectionHeader from "@/components/ui/SectionHeader";
 import { updateLlmConfig } from "@/app/actions/llm-config";
 import { getAvailableModels } from "@/app/actions/available-models";
-import type { AvailableModelsResponse, LlmConfigResponse, PipelineRole } from "@/lib/types";
+import type {
+  AvailableModelsResponse,
+  LlmConfigResponse,
+  LlmConfigUpdate,
+  PipelineRole,
+  PromptField,
+} from "@/lib/types";
 
 interface Props {
   workspaceSlug: string;
@@ -17,23 +23,68 @@ interface Props {
   loadError: string | null;
 }
 
+interface PromptMeta {
+  key: PromptField;
+  label: string;
+}
+
 interface StageMeta {
   key: PipelineRole;
   label: string;
   sub: string;
   calibrated?: boolean;
+  prompts: PromptMeta[];
 }
 
 // Order matches the flow, top to bottom.
 const STAGES: StageMeta[] = [
-  { key: "enricher_model", label: "Context Enricher", sub: "makes a follow-up standalone" },
-  { key: "normalizer_model", label: "Normalizer", sub: "builds the cache key" },
-  { key: "validator_model", label: "Cache Validator", sub: "2 prompts: text & files" },
-  { key: "adjuster_model", label: "Context Adjuster", sub: "rewrites to match phrasing", calibrated: true },
-  { key: "local_model", label: "Local answer", sub: "easy questions" },
-  { key: "generalizer_model", label: "Generalizer", sub: "strips tone before storing", calibrated: true },
+  {
+    key: "enricher_model",
+    label: "Context Enricher",
+    sub: "makes a follow-up standalone",
+    prompts: [{ key: "enricher_system_prompt", label: "System prompt" }],
+  },
+  {
+    key: "normalizer_model",
+    label: "Normalizer",
+    sub: "builds the cache key",
+    prompts: [{ key: "normalizer_system_prompt", label: "System prompt" }],
+  },
+  {
+    key: "validator_model",
+    label: "Cache Validator",
+    sub: "2 prompts: text & files",
+    prompts: [
+      { key: "validator_system_prompt", label: "Text-question prompt" },
+      { key: "validator_image_system_prompt", label: "Image & file-attachment prompt" },
+    ],
+  },
+  {
+    key: "adjuster_model",
+    label: "Context Adjuster",
+    sub: "rewrites to match phrasing",
+    calibrated: true,
+    prompts: [{ key: "adjuster_system_prompt", label: "System prompt" }],
+  },
+  {
+    key: "local_model",
+    label: "Local answer",
+    sub: "easy questions",
+    prompts: [{ key: "local_model_system_prompt", label: "System prompt (used only when the caller sends none)" }],
+  },
+  {
+    key: "generalizer_model",
+    label: "Generalizer",
+    sub: "strips tone before storing",
+    calibrated: true,
+    prompts: [{ key: "generalizer_system_prompt", label: "System prompt" }],
+  },
 ];
 const STAGE_BY_KEY = Object.fromEntries(STAGES.map((s) => [s.key, s])) as Record<PipelineRole, StageMeta>;
+
+function stageOverridden(stage: StageMeta, config: LlmConfigResponse): boolean {
+  return stage.key in config.overrides || stage.prompts.some((p) => p.key in config.overrides);
+}
 
 type SelectedStage = PipelineRole | "external_model" | null;
 type StatusState = { kind: "idle" | "success" | "error"; text: string };
@@ -53,6 +104,7 @@ export default function PipelineClient({ workspaceSlug, initialConfig, initialAv
   const [config, setConfig] = useState(initialConfig);
   const [selected, setSelected] = useState<SelectedStage>(null);
   const [draftValue, setDraftValue] = useState("");
+  const [draftPrompts, setDraftPrompts] = useState<Record<string, string>>({});
 
   const [availableModels, setAvailableModels] = useState(initialAvailableModels);
   const [modelsRefreshing, setModelsRefreshing] = useState(false);
@@ -70,7 +122,11 @@ export default function PipelineClient({ workspaceSlug, initialConfig, initialAv
 
   useEffect(() => {
     if (!selected || selected === "external_model") return;
+    const stage = STAGE_BY_KEY[selected];
     setDraftValue(config[selected] ?? "");
+    const prompts: Record<string, string> = {};
+    for (const p of stage.prompts) prompts[p.key] = config[p.key] ?? "";
+    setDraftPrompts(prompts);
   }, [selected, config]);
 
   // Separate from the draft seeding above on purpose: every successful save
@@ -88,16 +144,26 @@ export default function PipelineClient({ workspaceSlug, initialConfig, initialAv
     setAvailableModels(res.ok ? res.data : { models: [], error: res.error });
   }
 
+  function buildStagePatch(stage: StageMeta): LlmConfigUpdate {
+    const patch: Record<string, string | null> = {};
+    if (draftValue !== (config[stage.key] ?? "")) patch[stage.key] = draftValue;
+    for (const p of stage.prompts) {
+      if (draftPrompts[p.key] !== (config[p.key] ?? "")) patch[p.key] = draftPrompts[p.key];
+    }
+    return patch as LlmConfigUpdate;
+  }
+
   async function handleSaveStage() {
     if (!selected || selected === "external_model") return;
-    const role = selected;
-    if (draftValue === (config[role] ?? "")) {
+    const stage = STAGE_BY_KEY[selected];
+    const patch = buildStagePatch(stage);
+    if (Object.keys(patch).length === 0) {
       setStatus({ kind: "idle", text: "No changes to save." });
       return;
     }
     setSaveBusy(true);
     setStatus({ kind: "idle", text: "" });
-    const res = await updateLlmConfig(workspaceSlug, { [role]: draftValue });
+    const res = await updateLlmConfig(workspaceSlug, patch);
     setSaveBusy(false);
     if (!res.ok) {
       setStatus({ kind: "error", text: res.error });
@@ -108,10 +174,12 @@ export default function PipelineClient({ workspaceSlug, initialConfig, initialAv
     router.refresh();
   }
 
-  async function handleResetStage(role: PipelineRole) {
+  async function handleResetStage(stage: StageMeta) {
     setSaveBusy(true);
     setStatus({ kind: "idle", text: "" });
-    const res = await updateLlmConfig(workspaceSlug, { [role]: null });
+    const patch: Record<string, null> = { [stage.key]: null };
+    for (const p of stage.prompts) patch[p.key] = null;
+    const res = await updateLlmConfig(workspaceSlug, patch as LlmConfigUpdate);
     setSaveBusy(false);
     if (!res.ok) {
       setStatus({ kind: "error", text: res.error });
@@ -126,14 +194,12 @@ export default function PipelineClient({ workspaceSlug, initialConfig, initialAv
     setResetAllBusy(true);
     setResetAllStatus({ kind: "idle", text: "" });
     setStatus({ kind: "idle", text: "" });
-    const res = await updateLlmConfig(workspaceSlug, {
-      enricher_model: null,
-      normalizer_model: null,
-      validator_model: null,
-      adjuster_model: null,
-      local_model: null,
-      generalizer_model: null,
-    });
+    const patch: Record<string, null> = {};
+    for (const stage of STAGES) {
+      patch[stage.key] = null;
+      for (const p of stage.prompts) patch[p.key] = null;
+    }
+    const res = await updateLlmConfig(workspaceSlug, patch as LlmConfigUpdate);
     setResetAllBusy(false);
     if (!res.ok) {
       setResetAllStatus({ kind: "error", text: res.error });
@@ -144,14 +210,14 @@ export default function PipelineClient({ workspaceSlug, initialConfig, initialAv
     router.refresh();
   }
 
-  const overriddenCount = STAGES.filter((s) => s.key in config.overrides).length;
+  const overriddenCount = STAGES.filter((s) => stageOverridden(s, config)).length;
   const modelsUnknown = !!availableModels.error;
 
   return (
     <div className="ds-page">
       <SectionHeader
         title="Pipeline"
-        subtitle="Choose the model for each stage of the request pipeline. Only models installed on this server are selectable."
+        subtitle="Choose the model and system prompt for each stage of the request pipeline. Only models installed on this server are selectable."
       />
 
       {loadError && (
@@ -214,7 +280,7 @@ export default function PipelineClient({ workspaceSlug, initialConfig, initialAv
           <div className="ds-flow-conn" />
 
           <LockedNode name="Vector cache lookup" model="BGE" sub="similarity search, nothing to configure" />
-          <div className="ds-flow-conn" />
+          <FanConnector direction="out" />
 
           <div className="ds-flow-branch">
             <div>
@@ -234,6 +300,7 @@ export default function PipelineClient({ workspaceSlug, initialConfig, initialAv
                 onSelect={() => setSelected(STAGES[3].key)}
                 wide
               />
+              <div className="ds-flow-col-spacer" />
             </div>
             <div>
               <span className="ds-flow-lbl miss">MISS</span>
@@ -267,10 +334,11 @@ export default function PipelineClient({ workspaceSlug, initialConfig, initialAv
                   <span className="ds-flow-sub">hard questions</span>
                 </div>
               </div>
+              <div className="ds-flow-col-spacer" />
             </div>
           </div>
 
-          <div className="ds-flow-conn" />
+          <FanConnector direction="in" />
           <div className="ds-flow-node io out">
             <div className="ds-flow-name" style={{ color: "var(--fg)" }}>Answer to the user</div>
           </div>
@@ -289,21 +357,23 @@ export default function PipelineClient({ workspaceSlug, initialConfig, initialAv
 
         {/* EDITOR */}
         {selected === null ? (
-          <div className="ds-flow-empty">Click a stage in the flow to view or change its model.</div>
+          <div className="ds-flow-empty">Click a stage in the flow to view or change its model and prompt.</div>
         ) : selected === "external_model" ? (
           <ExternalEditor config={config} workspaceSlug={workspaceSlug} />
         ) : (
           <StageEditor
             stage={STAGE_BY_KEY[selected]}
-            overridden={selected in config.overrides}
+            overridden={stageOverridden(STAGE_BY_KEY[selected], config)}
             draftValue={draftValue}
             onDraftChange={setDraftValue}
+            draftPrompts={draftPrompts}
+            onDraftPromptChange={(key, value) => setDraftPrompts((prev) => ({ ...prev, [key]: value }))}
             availableModels={availableModels.models}
             modelsUnknown={modelsUnknown}
             busy={saveBusy}
             status={status}
             onSave={handleSaveStage}
-            onReset={() => handleResetStage(selected)}
+            onReset={() => handleResetStage(STAGE_BY_KEY[selected])}
           />
         )}
       </div>
@@ -326,6 +396,27 @@ function StatusText({ status, style }: { status: StatusState; style?: React.CSSP
   );
 }
 
+// Real elbowed connectors between the trunk and both branch columns:
+// "out" fans one incoming line into two (down, over, down) reaching the
+// HIT/MISS column heads; "in" mirrors it, merging both column tails back
+// into one line. Sized to match .ds-flow-branch (max-width 640px) so
+// x=25/50/75 line up with the branch's left-column/center/right-column
+// positions - the two straight .ds-flow-conn lines this replaces sat in the
+// 14px gutter between the columns and visibly connected to nothing.
+function FanConnector({ direction }: { direction: "out" | "in" }) {
+  const paths =
+    direction === "out"
+      ? ["M50,0 L50,12 L25,12 L25,30", "M50,0 L50,12 L75,12 L75,30"]
+      : ["M25,0 L25,18 L50,18 L50,30", "M75,0 L75,18 L50,18 L50,30"];
+  return (
+    <svg className="ds-flow-fan" viewBox="0 0 100 30" preserveAspectRatio="none" aria-hidden="true">
+      {paths.map((d) => (
+        <path key={d} d={d} vectorEffect="non-scaling-stroke" />
+      ))}
+    </svg>
+  );
+}
+
 function FlowNode({
   stage,
   config,
@@ -341,7 +432,7 @@ function FlowNode({
   wide?: boolean;
   narrow?: boolean;
 }) {
-  const overridden = stage.key in config.overrides;
+  const overridden = stageOverridden(stage, config);
   const value = config[stage.key] ?? "";
   return (
     <div
@@ -391,6 +482,8 @@ function StageEditor({
   overridden,
   draftValue,
   onDraftChange,
+  draftPrompts,
+  onDraftPromptChange,
   availableModels,
   modelsUnknown,
   busy,
@@ -402,6 +495,8 @@ function StageEditor({
   overridden: boolean;
   draftValue: string;
   onDraftChange: (v: string) => void;
+  draftPrompts: Record<string, string>;
+  onDraftPromptChange: (key: string, value: string) => void;
   availableModels: string[];
   modelsUnknown: boolean;
   busy: boolean;
@@ -409,7 +504,11 @@ function StageEditor({
   onSave: () => void;
   onReset: () => void;
 }) {
-  const disabled = busy || (modelsUnknown && availableModels.length === 0);
+  // Ollama reachability only gates the MODEL picker - a system prompt has no
+  // relationship to what's installed, so Save must stay usable for a
+  // prompt-only edit even while Ollama is down (the model select just holds
+  // at its last-known value and won't be part of the patch unless changed).
+  const modelPickerDisabled = busy || (modelsUnknown && availableModels.length === 0);
   return (
     <div className="ds-flow-panel">
       <div className="ds-flow-panel-hd">
@@ -437,11 +536,12 @@ function StageEditor({
 
         <Field label="Model">
           <select
+            name={`${stage.key}-model`}
             value={draftValue}
             onChange={(e) => onDraftChange(e.target.value)}
-            disabled={disabled}
+            disabled={modelPickerDisabled}
             className="ds-input"
-            style={{ cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.62 : 1 }}
+            style={{ cursor: modelPickerDisabled ? "not-allowed" : "pointer", opacity: modelPickerDisabled ? 0.62 : 1 }}
           >
             {draftValue && !modelsUnknown && !availableModels.includes(draftValue) && (
               <option value={draftValue}>{draftValue} (not installed)</option>
@@ -458,8 +558,22 @@ function StageEditor({
           </div>
         )}
 
+        {stage.prompts.map((p) => (
+          <Field key={p.key} label={p.label}>
+            <textarea
+              name={p.key}
+              value={draftPrompts[p.key] ?? ""}
+              onChange={(e) => onDraftPromptChange(p.key, e.target.value)}
+              disabled={busy}
+              className="ds-textarea"
+              rows={7}
+              style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, lineHeight: 1.6, opacity: busy ? 0.62 : 1 }}
+            />
+          </Field>
+        ))}
+
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <Button variant="primary" onClick={onSave} loading={busy} disabled={disabled}>
+          <Button variant="primary" onClick={onSave} loading={busy} disabled={busy}>
             Save
           </Button>
           {overridden && (

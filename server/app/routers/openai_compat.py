@@ -48,6 +48,17 @@ from app.dependencies.auth import ResolvedWorkspace, require_org_key
 from app.services.provider_inference import provider_for_model
 from app.services import cache_filter, llm_config_service, pipeline_config_cache, rag_service
 from app.services.classifier import ClassifierService
+from app.services.context_adjuster import (
+    DEFAULT_ADJUST_SYSTEM_PROMPT,
+    DEFAULT_GENERALIZE_SYSTEM_PROMPT,
+)
+from app.services.context_enricher import DEFAULT_SYSTEM_PROMPT as ENRICHER_DEFAULT_SYSTEM_PROMPT
+from app.services.llm_router import DEFAULT_SYSTEM_PROMPT as LOCAL_DEFAULT_SYSTEM_PROMPT
+from app.services.normalizer import DEFAULT_SYSTEM_PROMPT as NORMALIZER_DEFAULT_SYSTEM_PROMPT
+from app.services.validator import (
+    DEFAULT_IMAGE_SYSTEM_PROMPT as VALIDATOR_DEFAULT_IMAGE_SYSTEM_PROMPT,
+    DEFAULT_SYSTEM_PROMPT as VALIDATOR_DEFAULT_SYSTEM_PROMPT,
+)
 from app.services.service_factory import (
     get_context_adjuster_service,
     get_context_enricher_service,
@@ -127,6 +138,13 @@ class EffectiveLlmConfig:
     enricher_model: str = ENRICHER_MODEL_NAME
     normalizer_model: str = NORMALIZER_MODEL_NAME
     validator_model: str = VALIDATOR_MODEL_NAME
+    enricher_system_prompt: str = ENRICHER_DEFAULT_SYSTEM_PROMPT
+    normalizer_system_prompt: str = NORMALIZER_DEFAULT_SYSTEM_PROMPT
+    validator_system_prompt: str = VALIDATOR_DEFAULT_SYSTEM_PROMPT
+    validator_image_system_prompt: str = VALIDATOR_DEFAULT_IMAGE_SYSTEM_PROMPT
+    adjuster_system_prompt: str = DEFAULT_ADJUST_SYSTEM_PROMPT
+    generalizer_system_prompt: str = DEFAULT_GENERALIZE_SYSTEM_PROMPT
+    local_model_system_prompt: str = LOCAL_DEFAULT_SYSTEM_PROMPT
     # Which of the fields above are workspace overrides rather than shipped
     # defaults - used to decide whether the request path needs a freshly
     # resolved service instance or can reuse the default-model singleton
@@ -138,6 +156,13 @@ class EffectiveLlmConfig:
     enricher_model_overridden: bool = False
     normalizer_model_overridden: bool = False
     validator_model_overridden: bool = False
+    enricher_system_prompt_overridden: bool = False
+    normalizer_system_prompt_overridden: bool = False
+    validator_system_prompt_overridden: bool = False
+    validator_image_system_prompt_overridden: bool = False
+    adjuster_system_prompt_overridden: bool = False
+    generalizer_system_prompt_overridden: bool = False
+    local_model_system_prompt_overridden: bool = False
 
 
 # --- Service singletons (shared with main process; each service is safe to instantiate once per router module) ---
@@ -211,12 +236,26 @@ def _effective_from_config(config) -> EffectiveLlmConfig:
         enricher_model=config.enricher_model,
         normalizer_model=config.normalizer_model,
         validator_model=config.validator_model,
+        enricher_system_prompt=config.enricher_system_prompt,
+        normalizer_system_prompt=config.normalizer_system_prompt,
+        validator_system_prompt=config.validator_system_prompt,
+        validator_image_system_prompt=config.validator_image_system_prompt,
+        adjuster_system_prompt=config.adjuster_system_prompt,
+        generalizer_system_prompt=config.generalizer_system_prompt,
+        local_model_system_prompt=config.local_model_system_prompt,
         local_model_overridden="local_model" in config.overrides,
         generalizer_model_overridden="generalizer_model" in config.overrides,
         adjuster_model_overridden="adjuster_model" in config.overrides,
         enricher_model_overridden="enricher_model" in config.overrides,
         normalizer_model_overridden="normalizer_model" in config.overrides,
         validator_model_overridden="validator_model" in config.overrides,
+        enricher_system_prompt_overridden="enricher_system_prompt" in config.overrides,
+        normalizer_system_prompt_overridden="normalizer_system_prompt" in config.overrides,
+        validator_system_prompt_overridden="validator_system_prompt" in config.overrides,
+        validator_image_system_prompt_overridden="validator_image_system_prompt" in config.overrides,
+        adjuster_system_prompt_overridden="adjuster_system_prompt" in config.overrides,
+        generalizer_system_prompt_overridden="generalizer_system_prompt" in config.overrides,
+        local_model_system_prompt_overridden="local_model_system_prompt" in config.overrides,
     )
 
 
@@ -262,31 +301,73 @@ def _services_for_model_profile(model_profile: str, llm_config: EffectiveLlmConf
     # keeps existing tests that monkeypatch openai_compat._llm_router /
     # _adjuster working unchanged.
     llm_router = (
-        get_llm_router_service(model_name=llm_config.local_model)
-        if llm_config.local_model_overridden
+        get_llm_router_service(
+            model_name=llm_config.local_model if llm_config.local_model_overridden else None,
+            default_system_prompt=(
+                llm_config.local_model_system_prompt if llm_config.local_model_system_prompt_overridden else None
+            ),
+        )
+        if (llm_config.local_model_overridden or llm_config.local_model_system_prompt_overridden)
         else _llm_router
     )
     adjuster = (
         get_context_adjuster_service(
-            adjust_model_name=llm_config.adjuster_model,
-            generalize_model_name=llm_config.generalizer_model,
+            adjust_model_name=llm_config.adjuster_model if llm_config.adjuster_model_overridden else None,
+            generalize_model_name=(
+                llm_config.generalizer_model if llm_config.generalizer_model_overridden else None
+            ),
+            adjust_system_prompt=(
+                llm_config.adjuster_system_prompt if llm_config.adjuster_system_prompt_overridden else None
+            ),
+            generalize_system_prompt=(
+                llm_config.generalizer_system_prompt if llm_config.generalizer_system_prompt_overridden else None
+            ),
         )
-        if (llm_config.adjuster_model_overridden or llm_config.generalizer_model_overridden)
+        if (
+            llm_config.adjuster_model_overridden
+            or llm_config.generalizer_model_overridden
+            or llm_config.adjuster_system_prompt_overridden
+            or llm_config.generalizer_system_prompt_overridden
+        )
         else _adjuster
     )
     normalizer = (
-        get_normalizer_service(model_name=llm_config.normalizer_model)
-        if llm_config.normalizer_model_overridden
+        get_normalizer_service(
+            model_name=llm_config.normalizer_model if llm_config.normalizer_model_overridden else None,
+            system_prompt=(
+                llm_config.normalizer_system_prompt if llm_config.normalizer_system_prompt_overridden else None
+            ),
+        )
+        if (llm_config.normalizer_model_overridden or llm_config.normalizer_system_prompt_overridden)
         else _normalizer
     )
     enricher = (
-        get_context_enricher_service(model_name=llm_config.enricher_model)
-        if llm_config.enricher_model_overridden
+        get_context_enricher_service(
+            model_name=llm_config.enricher_model if llm_config.enricher_model_overridden else None,
+            system_prompt=(
+                llm_config.enricher_system_prompt if llm_config.enricher_system_prompt_overridden else None
+            ),
+        )
+        if (llm_config.enricher_model_overridden or llm_config.enricher_system_prompt_overridden)
         else _enricher
     )
     validator = (
-        get_validator_service(model_name=llm_config.validator_model)
-        if llm_config.validator_model_overridden
+        get_validator_service(
+            model_name=llm_config.validator_model if llm_config.validator_model_overridden else None,
+            system_prompt=(
+                llm_config.validator_system_prompt if llm_config.validator_system_prompt_overridden else None
+            ),
+            image_system_prompt=(
+                llm_config.validator_image_system_prompt
+                if llm_config.validator_image_system_prompt_overridden
+                else None
+            ),
+        )
+        if (
+            llm_config.validator_model_overridden
+            or llm_config.validator_system_prompt_overridden
+            or llm_config.validator_image_system_prompt_overridden
+        )
         else _validator
     )
     return ModelServices(

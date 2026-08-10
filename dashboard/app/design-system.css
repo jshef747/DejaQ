@@ -950,7 +950,10 @@ a { color: inherit; }
 .ds-flow-node.locked { border-style: dashed; opacity: 0.55; cursor: default; }
 .ds-flow-node.locked:hover { border-color: var(--border-2); background: var(--bg-2); }
 .ds-flow-node.locked .ds-flow-model { color: var(--fg-dimmer); }
-.ds-flow-node.io { max-width: 340px; background: var(--bg-3); border-style: solid; cursor: default; text-align: center; }
+/* Trunk (io) nodes match the regular/locked node width (430px) so the spine
+   reads as one consistent column - only the branch itself, a deliberate
+   two-up row, is wider. */
+.ds-flow-node.io { max-width: 430px; background: var(--bg-3); border-style: solid; cursor: default; text-align: center; }
 .ds-flow-node.io:hover { border-color: var(--border-2); background: var(--bg-3); }
 .ds-flow-node.io .ds-flow-name { font-size: 12.5px; color: var(--fg-dim); font-weight: 500; }
 .ds-flow-node.out { background: #141414; border-color: var(--border-2); }
@@ -958,9 +961,22 @@ a { color: inherit; }
 .ds-flow-conn.a { background: var(--accent); opacity: 0.55; }
 .ds-flow-branch { display: flex; gap: 14px; width: 100%; max-width: 640px; align-items: stretch; }
 .ds-flow-branch > div { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; }
+/* Fills the gap below the shorter branch column so its own connector
+   visibly continues down to the fan-in, instead of leaving dead space -
+   the column div is stretched to the taller column's height by
+   .ds-flow-branch's align-items:stretch above, so flex:1 here claims
+   exactly the leftover. */
+.ds-flow-col-spacer { flex: 1; min-height: 0; width: 2px; background: var(--border-2); }
 .ds-flow-lbl { font-size: 10px; padding: 2px 10px; border-radius: 999px; margin-bottom: 8px; font-weight: 700; letter-spacing: 0.06em; }
 .ds-flow-lbl.hit { background: var(--accent-bg); border: 1px solid var(--accent-border); color: var(--accent); }
 .ds-flow-lbl.miss { background: var(--bg-3); border: 1px solid var(--border-2); color: var(--fg-dim); }
+/* Fan connectors: real elbowed lines from the trunk into both branch heads
+   (out) and from both branch tails back into the trunk (in), sized to
+   match .ds-flow-branch exactly so their x=25/50/75 landmarks line up with
+   the branch's own left-column/center/right-column positions. */
+.ds-flow-fan { display: block; width: 100%; max-width: 640px; height: 30px; overflow: visible; }
+.ds-flow-fan path { fill: none; stroke: var(--border-2); stroke-width: 2; stroke-linejoin: round; }
+.ds-flow-fan.a path { stroke: var(--accent); opacity: 0.55; }
 .ds-flow-storepath {
   margin-top: 20px; padding-top: 18px; border-top: 1px dashed var(--border-2);
   width: 100%; display: flex; flex-direction: column; align-items: center;
