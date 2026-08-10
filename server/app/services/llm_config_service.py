@@ -225,10 +225,10 @@ def _validate_ollama_overrides(payload: dict[str, Any], fields_set: set[str]) ->
 
 
 def _validate_prompt_overrides(payload: dict[str, Any], fields_set: set[str]) -> None:
-    """Reject an empty-string prompt override.
+    """Reject a blank (empty or whitespace-only) prompt override.
 
-    Null (reset-to-default) is the only way to clear a prompt override - an
-    empty string would ship a role with no system prompt at all, which is
+    Null (reset-to-default) is the only way to clear a prompt override - a
+    blank string would ship a role with no system prompt at all, which is
     very likely to break a role with a structural output format (e.g. the
     validator's one-word VALID/INVALID verdict). Mirrors the schema-level
     check in schemas/admin/llm_config.py so a direct update_for_workspace()
@@ -236,7 +236,8 @@ def _validate_prompt_overrides(payload: dict[str, Any], fields_set: set[str]) ->
     the Pydantic-validated router does.
     """
     for field in fields_set & _PROMPT_FIELDS:
-        if payload.get(field) == "":
+        value = payload.get(field)
+        if isinstance(value, str) and value.strip() == "":
             raise InvalidLlmConfigUpdate(
                 f"{field}: prompt cannot be empty - reset to null to use the shipped default."
             )

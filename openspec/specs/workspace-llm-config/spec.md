@@ -7,7 +7,7 @@ Define per-workspace LLM routing configuration persistence and the management en
 
 ### Requirement: Per-workspace LLM config is persisted
 
-The system SHALL persist a single LLM configuration record per workspace in a new `workspace_llm_configs` table with columns: `workspace_id` (PK, FK to `workspaces.id`, ON DELETE CASCADE), `external_model` (TEXT, nullable), the six pipeline-role model columns `local_model`, `generalizer_model`, `adjuster_model`, `enricher_model`, `normalizer_model`, `validator_model` (each TEXT, nullable), `routing_threshold` (REAL, nullable), `updated_at` (TIMESTAMP, NOT NULL). Nullable config columns with `NULL` values SHALL fall back to the global defaults defined in `app.config`.
+The system SHALL persist a single LLM configuration record per workspace in a new `workspace_llm_configs` table with columns: `workspace_id` (PK, FK to `workspaces.id`, ON DELETE CASCADE), `external_model` (TEXT, nullable), the six pipeline-role model columns `local_model`, `generalizer_model`, `adjuster_model`, `enricher_model`, `normalizer_model`, `validator_model` (each TEXT, nullable), the seven pipeline-role system prompt columns `enricher_system_prompt`, `normalizer_system_prompt`, `validator_system_prompt`, `validator_image_system_prompt`, `adjuster_system_prompt`, `generalizer_system_prompt`, `local_model_system_prompt` (each TEXT, nullable), `routing_threshold` (REAL, nullable), `updated_at` (TIMESTAMP, NOT NULL). Nullable config columns with `NULL` values SHALL fall back to the global defaults defined in `app.config` (models) or to the owning service module's shipped `DEFAULT_*_SYSTEM_PROMPT` constant (prompts).
 
 #### Scenario: Workspace with no config row uses defaults
 
@@ -21,7 +21,7 @@ The system SHALL persist a single LLM configuration record per workspace in a ne
 
 ### Requirement: Read LLM config endpoint
 
-The system SHALL expose `GET /admin/v1/workspaces/{workspace_slug}/llm-config` returning HTTP 200 with `{external_model, local_model, generalizer_model, adjuster_model, enricher_model, normalizer_model, validator_model, routing_threshold, overrides, updated_at, is_default, credentials_configured}`. The top-level model fields SHALL contain effective values after merging stored overrides with global defaults. The `overrides` object SHALL contain only fields currently overridden by the workspace row. The `is_default` field SHALL be `true` when no row exists or every nullable config column is `NULL`; otherwise `false`. `updated_at` SHALL be `null` when no row exists. If a row exists but all nullable config columns are `NULL`, `is_default=true`, `overrides={}`, and `updated_at` SHALL return the row timestamp. Unknown workspace SHALL return HTTP 404. The `credentials_configured` field SHALL be a list of provider strings for which the workspace has a credential row (may be empty).
+The system SHALL expose `GET /admin/v1/workspaces/{workspace_slug}/llm-config` returning HTTP 200 with `{external_model, local_model, generalizer_model, adjuster_model, enricher_model, normalizer_model, validator_model, enricher_system_prompt, normalizer_system_prompt, validator_system_prompt, validator_image_system_prompt, adjuster_system_prompt, generalizer_system_prompt, local_model_system_prompt, routing_threshold, overrides, updated_at, is_default, credentials_configured}`. The top-level model and system prompt fields SHALL contain effective values after merging stored overrides with the shipped defaults, so a prompt field is never empty. The `overrides` object SHALL contain only fields currently overridden by the workspace row. The `is_default` field SHALL be `true` when no row exists or every nullable config column is `NULL`; otherwise `false`. `updated_at` SHALL be `null` when no row exists. If a row exists but all nullable config columns are `NULL`, `is_default=true`, `overrides={}`, and `updated_at` SHALL return the row timestamp. Unknown workspace SHALL return HTTP 404. The `credentials_configured` field SHALL be a list of provider strings for which the workspace has a credential row (may be empty).
 
 #### Scenario: Read config for workspace with no row
 
@@ -40,7 +40,7 @@ The system SHALL expose `GET /admin/v1/workspaces/{workspace_slug}/llm-config` r
 
 ### Requirement: Update LLM config endpoint
 
-The system SHALL expose `PUT /admin/v1/workspaces/{workspace_slug}/llm-config` accepting any non-empty subset of `{external_model, local_model, generalizer_model, adjuster_model, enricher_model, normalizer_model, validator_model, routing_threshold}` where each field may be omitted, non-null, or explicit `null`. Empty `{}` bodies SHALL return HTTP 422 and SHALL NOT create or update a row. The endpoint SHALL upsert the `workspace_llm_configs` row, set `updated_at = now()`, and return HTTP 200 with the resulting effective config including `credentials_configured`. Fields not present in the request body SHALL retain their previous stored value. Explicit `null` SHALL clear that workspace-level override and make reads fall back to the global default for that field. Unknown workspace SHALL return HTTP 404. Invalid `routing_threshold` (not a number, or outside `[0.0, 1.0]`) SHALL return HTTP 422.
+The system SHALL expose `PUT /admin/v1/workspaces/{workspace_slug}/llm-config` accepting any non-empty subset of `{external_model, local_model, generalizer_model, adjuster_model, enricher_model, normalizer_model, validator_model, enricher_system_prompt, normalizer_system_prompt, validator_system_prompt, validator_image_system_prompt, adjuster_system_prompt, generalizer_system_prompt, local_model_system_prompt, routing_threshold}` where each field may be omitted, non-null, or explicit `null`. Empty `{}` bodies SHALL return HTTP 422 and SHALL NOT create or update a row. The endpoint SHALL upsert the `workspace_llm_configs` row, set `updated_at = now()`, and return HTTP 200 with the resulting effective config including `credentials_configured`. Fields not present in the request body SHALL retain their previous stored value. Explicit `null` SHALL clear that workspace-level override and make reads fall back to the global default for that field. Unknown workspace SHALL return HTTP 404. Invalid `routing_threshold` (not a number, or outside `[0.0, 1.0]`) SHALL return HTTP 422.
 
 #### Scenario: Partial update preserves untouched fields
 
@@ -87,3 +87,17 @@ A role whose stored override names a tag that was later uninstalled SHALL NOT fa
 
 - **WHEN** a workspace has `enricher_model` set to a tag that is no longer installed and a request exercises the context enricher
 - **THEN** the role runs on its shipped default model and a warning is logged, rather than the request failing
+
+### Requirement: Blank system prompt overrides are rejected
+
+A value for any of the seven `*_system_prompt` fields that is empty or contains only whitespace SHALL return HTTP 422 naming the offending field and instructing the caller to send `null` to restore the shipped default, and SHALL NOT be stored. Explicit `null` SHALL clear the override. The same check SHALL apply to a direct service-layer update that bypasses the request schema.
+
+#### Scenario: Blank prompt is rejected
+
+- **WHEN** an authorized client PUTs `{"validator_system_prompt": "   "}`
+- **THEN** the response is HTTP 422 and no override is stored
+
+#### Scenario: Null prompt restores the shipped default
+
+- **WHEN** an authorized client PUTs `{"validator_system_prompt": null}` and the row previously had a custom prompt
+- **THEN** the stored column is `NULL`, the response returns the shipped default text, and the field is absent from `overrides`
