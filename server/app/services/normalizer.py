@@ -11,8 +11,12 @@ import logging
 import re
 import time
 
-from app.config import OLLAMA_NUM_CTX
-from app.services.model_backends import CompletionRequest, ModelBackend
+from app.config import NORMALIZER_MODEL_NAME, OLLAMA_NUM_CTX
+from app.services.model_backends import (
+    CompletionRequest,
+    ModelBackend,
+    complete_with_default_fallback,
+)
 
 logger = logging.getLogger("dejaq.services.normalizer")
 
@@ -142,7 +146,8 @@ class NormalizerService:
             return normalized
 
         messages = _build_opinion_messages(raw_query)
-        raw_output = await self.backend.complete(
+        raw_output = await complete_with_default_fallback(
+            self.backend,
             CompletionRequest(
                 model_name=self.model_name,
                 messages=messages,
@@ -155,7 +160,9 @@ class NormalizerService:
                 # already loaded at this window whenever generalize() runs.
                 num_ctx=OLLAMA_NUM_CTX,
                 temperature=0.0,
-            )
+            ),
+            NORMALIZER_MODEL_NAME,
+            "normalizer",
         )
         normalized = _postprocess(raw_output.text, raw_query)
 

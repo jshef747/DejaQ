@@ -1,8 +1,12 @@
 import logging
 import time
 
-from app.config import OLLAMA_NUM_CTX
-from app.services.model_backends import CompletionRequest, ModelBackend
+from app.config import ENRICHER_MODEL_NAME, OLLAMA_NUM_CTX
+from app.services.model_backends import (
+    CompletionRequest,
+    ModelBackend,
+    complete_with_default_fallback,
+)
 
 logger = logging.getLogger("dejaq.services.context_enricher")
 
@@ -37,7 +41,8 @@ class ContextEnricherService:
 
         start = time.time()
 
-        enriched = await self.backend.complete(
+        enriched = await complete_with_default_fallback(
+            self.backend,
             CompletionRequest(
                 model_name=self.model_name,
                 messages=[
@@ -68,7 +73,9 @@ class ContextEnricherService:
                 # already loaded at this window whenever adjust() runs.
                 num_ctx=OLLAMA_NUM_CTX,
                 temperature=0.0,
-            )
+            ),
+            ENRICHER_MODEL_NAME,
+            "enricher",
         )
         enriched = enriched.text
 

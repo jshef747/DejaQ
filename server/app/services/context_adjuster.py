@@ -20,7 +20,13 @@ from app.config import (
     OLLAMA_NUM_CTX,
     REWRITE_MAX_TOKENS,
 )
-from app.services.model_backends import CompletionRequest, CompletionResult, ModelBackend, ModelNotFoundError
+from app.services.model_backends import (
+    CompletionRequest,
+    CompletionResult,
+    ModelBackend,
+    ModelNotFoundError,
+    complete_with_default_fallback,
+)
 
 logger = logging.getLogger("dejaq.services.context_adjuster")
 
@@ -280,20 +286,12 @@ class ContextAdjusterService:
         self.generalize_model_name = generalize_model_name
 
     async def _complete_adjust(self, request: CompletionRequest) -> CompletionResult:
-        try:
-            return await self.adjust_backend.complete(request)
-        except ModelNotFoundError as exc:
-            # Same day-2-drift case as generalize() above: the workspace's
-            # adjuster override was uninstalled from Ollama after it was
-            # saved. Fall back to the shipped default rather than letting
-            # the cache-hit path fail outright.
-            logger.warning(
-                "adjuster model=%s not installed in Ollama; falling back to shipped default=%s",
-                exc.model_name, CONTEXT_ADJUSTER_MODEL_NAME,
-            )
-            return await self.adjust_backend.complete(
-                replace(request, model_name=CONTEXT_ADJUSTER_MODEL_NAME)
-            )
+        # Same day-2-drift case as generalize() below: the workspace's adjuster
+        # override was uninstalled from Ollama after it was saved. Fall back to
+        # the shipped default rather than letting the cache-hit path fail.
+        return await complete_with_default_fallback(
+            self.adjust_backend, request, CONTEXT_ADJUSTER_MODEL_NAME, "adjuster"
+        )
 
     async def generalize(self, answer: str) -> str:
         logger.debug(f"Generalizing response: {answer[:80]}...")

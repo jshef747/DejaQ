@@ -195,14 +195,13 @@ def _request_routing_mode(raw_request: Request) -> str:
     return ROUTING_MODE_AUTO
 
 
-def _read_effective_llm_config(workspace_slug: str, workspace_id: int | None) -> EffectiveLlmConfig:
-    if workspace_id is None:
-        return EffectiveLlmConfig(external_model=EXTERNAL_MODEL_NAME, routing_threshold=ROUTING_THRESHOLD)
-    try:
-        config = pipeline_config_cache.get_effective_config(workspace_slug)
-    except llm_config_service.WorkspaceNotFound:
-        logger.warning("LLM config requested for missing org slug=%s; using defaults", workspace_slug)
-        return EffectiveLlmConfig(external_model=EXTERNAL_MODEL_NAME, routing_threshold=ROUTING_THRESHOLD)
+def _effective_from_config(config) -> EffectiveLlmConfig:
+    """The one place a stored LlmConfigResult becomes an EffectiveLlmConfig.
+
+    Both resolution paths (the request path and the in-process background-store
+    path below) go through here, so a seventh role wired into one cannot be
+    silently missing from the other.
+    """
     return EffectiveLlmConfig(
         external_model=config.external_model,
         routing_threshold=config.routing_threshold,
@@ -219,6 +218,17 @@ def _read_effective_llm_config(workspace_slug: str, workspace_id: int | None) ->
         normalizer_model_overridden="normalizer_model" in config.overrides,
         validator_model_overridden="validator_model" in config.overrides,
     )
+
+
+def _read_effective_llm_config(workspace_slug: str, workspace_id: int | None) -> EffectiveLlmConfig:
+    if workspace_id is None:
+        return EffectiveLlmConfig(external_model=EXTERNAL_MODEL_NAME, routing_threshold=ROUTING_THRESHOLD)
+    try:
+        config = pipeline_config_cache.get_effective_config(workspace_slug)
+    except llm_config_service.WorkspaceNotFound:
+        logger.warning("LLM config requested for missing org slug=%s; using defaults", workspace_slug)
+        return EffectiveLlmConfig(external_model=EXTERNAL_MODEL_NAME, routing_threshold=ROUTING_THRESHOLD)
+    return _effective_from_config(config)
 
 
 def _services_for_model_profile(model_profile: str, llm_config: EffectiveLlmConfig) -> ModelServices:
@@ -630,22 +640,7 @@ def _llm_config_for_workspace_slug(workspace_slug: str) -> EffectiveLlmConfig:
         config = pipeline_config_cache.get_effective_config(workspace_slug)
     except llm_config_service.WorkspaceNotFound:
         return EffectiveLlmConfig(external_model=EXTERNAL_MODEL_NAME, routing_threshold=ROUTING_THRESHOLD)
-    return EffectiveLlmConfig(
-        external_model=config.external_model,
-        routing_threshold=config.routing_threshold,
-        local_model=config.local_model,
-        generalizer_model=config.generalizer_model,
-        adjuster_model=config.adjuster_model,
-        enricher_model=config.enricher_model,
-        normalizer_model=config.normalizer_model,
-        validator_model=config.validator_model,
-        local_model_overridden="local_model" in config.overrides,
-        generalizer_model_overridden="generalizer_model" in config.overrides,
-        adjuster_model_overridden="adjuster_model" in config.overrides,
-        enricher_model_overridden="enricher_model" in config.overrides,
-        normalizer_model_overridden="normalizer_model" in config.overrides,
-        validator_model_overridden="validator_model" in config.overrides,
-    )
+    return _effective_from_config(config)
 
 
 def _bg_generalize_and_store(
