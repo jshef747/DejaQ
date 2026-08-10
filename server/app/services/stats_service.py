@@ -116,8 +116,9 @@ def _aggregate_sql(where_clause: str, group_by: str = "") -> str:
 def workspace_stats(
     from_date: date | None = None,
     to_date: date | None = None,
+    accessible_workspace_slugs: set[str] | None = None,
 ) -> WorkspaceStatsReport:
-    """Return per-workspace stats."""
+    """Return per-workspace stats. Pass accessible_workspace_slugs=None for system/full access."""
     where_clause, params = _where(from_date, to_date)
     name_map = _workspace_name_map()
     with _connect() as con:
@@ -142,10 +143,43 @@ def workspace_stats(
         total_row = con.execute(_aggregate_sql(where_clause), params).fetchone()
 
     items = []
+    total_items = []
     for row in rows:
         slug = row[0]
+        if accessible_workspace_slugs is not None and slug not in accessible_workspace_slugs:
+            continue
         metrics = _metrics(row[1:])
         items.append(WorkspaceStats(workspace=slug, workspace_name=name_map.get(slug, slug), **metrics.model_dump()))
+        total_items.append(metrics)
+
+    if accessible_workspace_slugs is not None:
+        # Recompute total from visible rows only
+        if not total_items:
+            agg_total = StatsMetrics(
+                requests=0, hits=0, misses=0, hit_rate=0.0,
+                avg_latency_ms=None, est_tokens_saved=0,
+                easy_count=0, hard_count=0, models_used=[],
+            )
+        else:
+            total_requests = sum(m.requests for m in total_items)
+            total_hits = sum(m.hits for m in total_items)
+            total_misses = sum(m.misses for m in total_items)
+            latencies = [m.avg_latency_ms for m in total_items if m.avg_latency_ms is not None]
+            all_models: set[str] = set()
+            for m in total_items:
+                all_models.update(m.models_used)
+            agg_total = StatsMetrics(
+                requests=total_requests,
+                hits=total_hits,
+                misses=total_misses,
+                hit_rate=total_hits / total_requests if total_requests else 0.0,
+                avg_latency_ms=sum(latencies) / len(latencies) if latencies else None,
+                est_tokens_saved=total_hits * _TOKENS_PER_HIT,
+                easy_count=sum(m.easy_count for m in total_items),
+                hard_count=sum(m.hard_count for m in total_items),
+                models_used=sorted(all_models),
+            )
+        return WorkspaceStatsReport(items=items, total=agg_total)
 
     return WorkspaceStatsReport(items=items, total=_metrics(total_row))
 

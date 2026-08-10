@@ -106,7 +106,8 @@ Key properties, by design:
 
 There are **three** equivalent ways in: the dashboard (point-and-click), the
 `dejaq-admin` CLI, and the raw management API. All of them are workspace-scoped and
-require management auth, which is loopback-only, no password.
+require management auth (in local mode that is loopback-only, no password; in
+Supabase mode a signed-in admin with access to that workspace).
 
 ### A. Dashboard — "Knowledge Base"
 
@@ -162,8 +163,8 @@ File: `server/cli/admin.py` (`rag` group) → `services/rag_admin_service.py`.
 ### C. Management API — `/admin/v1/*`
 
 All endpoints are **loopback-only** and follow the workspace-scoped admin
-convention. Auth: `Authorization: Bearer <token>` (ignored — local mode is the
-only mode).
+convention. Auth: `Authorization: Bearer <token>` (ignored in `local` auth mode;
+a Supabase JWT in `supabase` mode).
 
 | Method & path | Body | Purpose |
 |---|---|---|

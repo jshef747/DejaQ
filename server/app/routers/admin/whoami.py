@@ -10,7 +10,16 @@ router = APIRouter()
 def whoami(ctx: ManagementAuthContext = Depends(require_management_auth)):
     return {
         "authorized": True,
-        "actor_type": "system",
+        "actor_type": ctx.actor_type,
+        "supabase_user_id": ctx.supabase_user_id,
         "email": ctx.email,
-        "workspaces": [],
+        "workspaces": [
+            {
+                "id": ws.id,
+                "name": ws.name,
+                "slug": ws.slug,
+                "created_at": ws.created_at,
+            }
+            for ws in ctx.accessible_workspaces
+        ],
     }

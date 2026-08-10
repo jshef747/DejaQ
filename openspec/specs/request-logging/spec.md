@@ -9,7 +9,7 @@ The system SHALL continue logging completed chat requests. In addition, request 
 - optional `parent_interaction_id`
 - `served_tier`
 - `model_used`
-- workspace and department
+- org and department
 - latency
 - whether an external provider was used
 
