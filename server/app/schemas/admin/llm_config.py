@@ -59,7 +59,7 @@ class LlmConfigUpdate(BaseModel):
         # requires one (e.g. the validator's one-word-verdict format) is very
         # likely to break it - force an explicit reset-to-null instead, which
         # restores the shipped default rather than sending an empty prompt.
-        if value is not None and value == "":
+        if value is not None and value.strip() == "":
             raise ValueError("Prompt cannot be empty - reset to null to use the shipped default.")
         return value
 

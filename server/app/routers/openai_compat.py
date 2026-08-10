@@ -1525,15 +1525,17 @@ async def run_chat_pipeline(
                     model_used = ext_response.model_used
                     finish_reason = ext_response.finish_reason
                 else:
-                    llm_system_prompt = (
-                        system_prompt
-                        or "You are a helpful assistant. Answer the user's query concisely and accurately."
-                    )
                     answer, _, done_reason = await services.llm_router.generate_local_response(
                         gen_query,
                         history=history,
                         max_tokens=_max_tokens,
-                        system_prompt=llm_system_prompt,
+                        # None (client sent no system prompt of its own) falls
+                        # through to the router's own default_system_prompt -
+                        # the workspace's local_model_system_prompt override
+                        # when set, otherwise the hardcoded literal. Hardcoding
+                        # the literal here too would silently shadow that
+                        # override (same reasoning as escalation.py).
+                        system_prompt=system_prompt,
                     )
                     model_used = _local_model_used(services.llm_router)
                     finish_reason = "length" if done_reason == "length" else "stop"

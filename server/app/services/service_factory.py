@@ -13,7 +13,7 @@ from app.services.validator import ValidatorService
 logger = logging.getLogger("dejaq.services.service_factory")
 
 _backend: ModelBackend | None = None
-_service_pool: dict[str, object] = {}
+_service_pool: dict[tuple[str, ...], object] = {}
 
 
 def _get_backend() -> ModelBackend:
@@ -32,8 +32,11 @@ def _get_backend() -> ModelBackend:
     return _backend
 
 
-def _service_key(role: str, *parts: str) -> str:
-    return ":".join((role, *parts))
+def _service_key(role: str, *parts: str) -> tuple[str, ...]:
+    # A tuple, not a joined string: both model tags ("gemma4:e2b") and
+    # free-form prompt text can contain the separator, so a joined key is
+    # not injective and two different configs could share one instance.
+    return (role, *parts)
 
 
 def get_normalizer_service(
