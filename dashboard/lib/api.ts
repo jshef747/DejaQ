@@ -1,11 +1,17 @@
 import "server-only";
 
-function assertUsable(response: Response): Response {
+async function assertUsable(response: Response): Promise<Response> {
   if (response.status === 401) {
     throw new Error("API request unauthorized — session may have expired");
   }
   if (response.status >= 500) {
-    throw new Error(`API server error: ${response.status} ${response.statusText}`);
+    const fallback = `API server error: ${response.status} ${response.statusText}`;
+    let detail: string | undefined;
+    try {
+      const body = await response.clone().json();
+      if (typeof body?.detail === "string") detail = body.detail;
+    } catch {}
+    throw new Error(detail ? `${detail} (${response.status})` : fallback);
   }
   return response;
 }
