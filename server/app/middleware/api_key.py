@@ -15,7 +15,7 @@ _ANONYMOUS_NAMESPACE = "dejaq_default"
 
 
 def _db_mtime() -> float:
-    """mtime of the SQLite file backing org/dept/key data.
+    """mtime of the SQLite file backing workspace/dept/key data.
 
     A shared signal any process can produce just by committing a write —
     unlike in-process invalidate(), this is visible to the server even when
