@@ -7,7 +7,7 @@ Define per-workspace LLM routing configuration persistence and the management en
 
 ### Requirement: Per-workspace LLM config is persisted
 
-The system SHALL persist a single LLM configuration record per workspace in a new `workspace_llm_configs` table with columns: `workspace_id` (PK, FK to `workspaces.id`, ON DELETE CASCADE), `external_model` (TEXT, nullable), `local_model` (TEXT, nullable), `routing_threshold` (REAL, nullable), `updated_at` (TIMESTAMP, NOT NULL). Nullable config columns with `NULL` values SHALL fall back to the global defaults defined in `app.config`.
+The system SHALL persist a single LLM configuration record per workspace in a new `workspace_llm_configs` table with columns: `workspace_id` (PK, FK to `workspaces.id`, ON DELETE CASCADE), `external_model` (TEXT, nullable), the six pipeline-role model columns `local_model`, `generalizer_model`, `adjuster_model`, `enricher_model`, `normalizer_model`, `validator_model` (each TEXT, nullable), `routing_threshold` (REAL, nullable), `updated_at` (TIMESTAMP, NOT NULL). Nullable config columns with `NULL` values SHALL fall back to the global defaults defined in `app.config`.
 
 #### Scenario: Workspace with no config row uses defaults
 
@@ -21,7 +21,7 @@ The system SHALL persist a single LLM configuration record per workspace in a ne
 
 ### Requirement: Read LLM config endpoint
 
-The system SHALL expose `GET /admin/v1/workspaces/{workspace_slug}/llm-config` returning HTTP 200 with `{external_model, local_model, routing_threshold, overrides, updated_at, is_default, credentials_configured}`. The top-level model fields SHALL contain effective values after merging stored overrides with global defaults. The `overrides` object SHALL contain only fields currently overridden by the workspace row. The `is_default` field SHALL be `true` when no row exists or every nullable config column is `NULL`; otherwise `false`. `updated_at` SHALL be `null` when no row exists. If a row exists but all nullable config columns are `NULL`, `is_default=true`, `overrides={}`, and `updated_at` SHALL return the row timestamp. Unknown workspace SHALL return HTTP 404. The `credentials_configured` field SHALL be a list of provider strings for which the workspace has a credential row (may be empty).
+The system SHALL expose `GET /admin/v1/workspaces/{workspace_slug}/llm-config` returning HTTP 200 with `{external_model, local_model, generalizer_model, adjuster_model, enricher_model, normalizer_model, validator_model, routing_threshold, overrides, updated_at, is_default, credentials_configured}`. The top-level model fields SHALL contain effective values after merging stored overrides with global defaults. The `overrides` object SHALL contain only fields currently overridden by the workspace row. The `is_default` field SHALL be `true` when no row exists or every nullable config column is `NULL`; otherwise `false`. `updated_at` SHALL be `null` when no row exists. If a row exists but all nullable config columns are `NULL`, `is_default=true`, `overrides={}`, and `updated_at` SHALL return the row timestamp. Unknown workspace SHALL return HTTP 404. The `credentials_configured` field SHALL be a list of provider strings for which the workspace has a credential row (may be empty).
 
 #### Scenario: Read config for workspace with no row
 
@@ -40,7 +40,7 @@ The system SHALL expose `GET /admin/v1/workspaces/{workspace_slug}/llm-config` r
 
 ### Requirement: Update LLM config endpoint
 
-The system SHALL expose `PUT /admin/v1/workspaces/{workspace_slug}/llm-config` accepting any non-empty subset of `{external_model, local_model, routing_threshold}` where each field may be omitted, non-null, or explicit `null`. Empty `{}` bodies SHALL return HTTP 422 and SHALL NOT create or update a row. The endpoint SHALL upsert the `workspace_llm_configs` row, set `updated_at = now()`, and return HTTP 200 with the resulting effective config including `credentials_configured`. Fields not present in the request body SHALL retain their previous stored value. Explicit `null` SHALL clear that workspace-level override and make reads fall back to the global default for that field. Unknown workspace SHALL return HTTP 404. Invalid `routing_threshold` (not a number, or outside `[0.0, 1.0]`) SHALL return HTTP 422.
+The system SHALL expose `PUT /admin/v1/workspaces/{workspace_slug}/llm-config` accepting any non-empty subset of `{external_model, local_model, generalizer_model, adjuster_model, enricher_model, normalizer_model, validator_model, routing_threshold}` where each field may be omitted, non-null, or explicit `null`. Empty `{}` bodies SHALL return HTTP 422 and SHALL NOT create or update a row. The endpoint SHALL upsert the `workspace_llm_configs` row, set `updated_at = now()`, and return HTTP 200 with the resulting effective config including `credentials_configured`. Fields not present in the request body SHALL retain their previous stored value. Explicit `null` SHALL clear that workspace-level override and make reads fall back to the global default for that field. Unknown workspace SHALL return HTTP 404. Invalid `routing_threshold` (not a number, or outside `[0.0, 1.0]`) SHALL return HTTP 422.
 
 #### Scenario: Partial update preserves untouched fields
 
@@ -66,3 +66,24 @@ The system SHALL expose `PUT /admin/v1/workspaces/{workspace_slug}/llm-config` a
 
 - **WHEN** an authorized client PUTs `{"routing_threshold": 1.5}`
 - **THEN** the response is HTTP 422
+
+### Requirement: Pipeline-role model overrides are validated against the live Ollama catalog
+
+A non-null value for any of the six pipeline-role model fields (`local_model`, `generalizer_model`, `adjuster_model`, `enricher_model`, `normalizer_model`, `validator_model`) SHALL be validated on write against a forced (cache-bypassing) `GET /api/tags` call to the configured Ollama host, accepting any installed tag rather than only tags registered in `MODEL_RUNTIME_SPECS`. A value Ollama does not currently report SHALL return HTTP 422 naming the offending field and value, and SHALL NOT be stored. An unreachable Ollama SHALL also return HTTP 422. Explicit `null` (reset to default) SHALL skip this validation, so an override can be cleared while Ollama is down. `external_model` names a provider model string, not an Ollama tag, and SHALL NOT be validated this way.
+
+A role whose stored override names a tag that was later uninstalled SHALL NOT fail the request that uses it: the affected role SHALL fall back to its shipped default and log a warning.
+
+#### Scenario: Model override naming an uninstalled tag
+
+- **WHEN** an authorized client PUTs `{"validator_model": "not-installed:1b"}` and Ollama does not report that tag
+- **THEN** the response is HTTP 422 naming the field and value, and no override is stored
+
+#### Scenario: Clearing an override while Ollama is unreachable
+
+- **WHEN** an authorized client PUTs `{"validator_model": null}` and Ollama is unreachable
+- **THEN** the override is cleared and the response returns the shipped default for that field
+
+#### Scenario: Stored override is uninstalled after the fact
+
+- **WHEN** a workspace has `enricher_model` set to a tag that is no longer installed and a request exercises the context enricher
+- **THEN** the role runs on its shipped default model and a warning is logged, rather than the request failing

@@ -223,11 +223,11 @@ Layering: `routers/` (endpoints) → `services/` (business logic) → `schemas/`
 | `app/main.py`, `config.py`, `celery_app.py` | FastAPI init + CORS + health, centralized settings, Celery broker/queue config |
 | `app/routers/` | `openai_compat.py` (`/v1/chat/completions`, plus the shared `run_chat_pipeline`), `feedback.py`, `departments.py`, `admin/` (`/admin/v1/*`) |
 | `app/routers/openai_responses.py` | `/v1/responses` — its own router (`openai_responses.py:199`, mounted at `main.py:90`); parses `input`/attachments, then delegates into `openai_compat.run_chat_pipeline` |
-| `app/services/` | The pipeline: `normalizer`, `context_enricher`, `context_adjuster`, `validator`, `cache_filter`, `classifier`, `lexical_match`, `memory_chromaDB` (semantic cache), `image_fingerprint` + `image_text` (image gate), `file_text` (PDF/DOCX/text file gate), `rag_service` + `rag_ingest` + `rag_admin_service` (Rug knowledge layer). Plus infra: `model_backends` (OllamaBackend + `MODEL_RUNTIME_SPECS`), `service_factory`, `llm_router`, `external_llm` + `llm_providers/` (Google/OpenAI/Anthropic), `credential_service`, `provider_inference`, `admin_service`, `stats_service`, `llm_config_service`, `feedback_service`, `request_logger` |
+| `app/services/` | The pipeline: `normalizer`, `context_enricher`, `context_adjuster`, `validator`, `cache_filter`, `classifier`, `lexical_match`, `memory_chromaDB` (semantic cache), `image_fingerprint` + `image_text` (image gate), `file_text` (PDF/DOCX/text file gate), `rag_service` + `rag_ingest` + `rag_admin_service` (Rug knowledge layer). Plus infra: `model_backends` (OllamaBackend + `MODEL_RUNTIME_SPECS`), `service_factory`, `llm_router`, `external_llm` + `llm_providers/` (Google/OpenAI/Anthropic), `credential_service`, `provider_inference`, `admin_service`, `stats_service`, `llm_config_service` + `pipeline_config_cache` (per-workspace pipeline model overrides) + `ollama_catalog` (installed-tag discovery), `feedback_service`, `request_logger` |
 | `app/tasks/cache_tasks.py` | Celery `generalize_and_store_task` (Gemma 4 E2B + ChromaDB) |
 | `app/db/` | SQLAlchemy base/session, repos, and `models/` (workspace, department, api_key, workspace_llm_config, workspace_provider_credentials, rag_document) |
 | `app/middleware/`, `app/dependencies/` | Bearer token → workspace/department resolution onto `request.state` |
-| `app/utils/` | `logger.py`, `exceptions.py` (`ExternalLLMError` / `…AuthError` / `…TimeoutError`) |
+| `app/utils/` | `logger.py`, `exceptions.py` (`ExternalLLMError` / `…AuthError` / `…TimeoutError`), `db_freshness.py` (SQLite mtime signal shared by the in-process TTL caches) |
 | `cli/` | `dejaq-admin` (workspace, dept, key, cache, stats, rag) + Rich rendering helpers |
 
 **Key patterns:**
