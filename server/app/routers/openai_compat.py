@@ -294,12 +294,11 @@ def _services_for_model_profile(model_profile: str, llm_config: EffectiveLlmConf
             enricher=get_context_enricher_service(model_name=WEAK_CPU_MODEL_NAME),
             validator=_validator,
         )
-    # Per-workspace pipeline config (dashboard-driven, Slice 1: local
-    # answering, generalizer, adjuster model selection). Only resolve a
-    # fresh service_factory instance when this workspace actually overrides
-    # the role - otherwise reuse the shipped-default singleton below, which
-    # keeps existing tests that monkeypatch openai_compat._llm_router /
-    # _adjuster working unchanged.
+    # Per-workspace pipeline config (dashboard-driven: a model and a system
+    # prompt per role). Only resolve a fresh service_factory instance when
+    # this workspace actually overrides the role - otherwise reuse the
+    # shipped-default singleton below, which keeps existing tests that
+    # monkeypatch openai_compat._llm_router / _adjuster working unchanged.
     llm_router = (
         get_llm_router_service(
             model_name=llm_config.local_model if llm_config.local_model_overridden else None,
