@@ -15,6 +15,10 @@ From `server/`, `uv run --group test pytest`. Two things bite on a fresh worktre
 - Run `uv run alembic upgrade head` first. Without it ~39 tests fail with `no such table: workspaces`.
 - The suite reads the repo's real `server/dejaq.db`, so leftover local workspaces change results - a workspace with id 1 (`demo`) makes routing tests take the configured-LLM path instead of the defaults branch they assert. Start from a freshly migrated DB when tests fail in ways the diff cannot explain.
 
+## Product stance: desktop-only
+
+Neither the dashboard nor the chat app supports narrow viewports, by design (captain decision, 2026-08-10). Neither sidebar has a responsive breakpoint. Do not file this as a defect or add responsive/collapsible-sidebar behavior without a new product decision.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.
