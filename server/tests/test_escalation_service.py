@@ -840,3 +840,72 @@ def test_cache_helper_refuses_to_store_a_truncated_answer(monkeypatch):
 
     assert response_id is None
     assert scheduled == []
+
+
+def test_escalation_local_honours_a_workspace_prompt_override(monkeypatch):
+    """A workspace that overrides only local_model_system_prompt (model left
+    default) must get a router resolved with that prompt, and the call must
+    pass system_prompt=None when the client sent none - hardcoding the shipped
+    literal here would shadow the override and silently ignore it."""
+    from app.services import escalation
+
+    class Router:
+        async def generate_local_response(self, query, history=None, max_tokens=1024, system_prompt=None):
+            self.system_prompt = system_prompt
+            return "answer", 1.0, "stop"
+
+    router = Router()
+    resolved: dict = {}
+
+    def _tracking_router(model_name=None, default_system_prompt=None):
+        resolved["model_name"] = model_name
+        resolved["default_system_prompt"] = default_system_prompt
+        return router
+
+    def _override(workspace_slug, field):
+        return "Workspace-only local prompt." if field == "local_model_system_prompt" else None
+
+    monkeypatch.setattr(escalation, "get_llm_router_service", _tracking_router)
+    monkeypatch.setattr(escalation, "_workspace_config_override", _override)
+    monkeypatch.setattr(escalation, "response_registry", _StubRegistry())
+    monkeypatch.setattr(escalation, "request_logger", _StubLogger())
+
+    async def _cache_response_id_for_escalation(**kwargs):
+        return "acme__eng:doc"
+
+    monkeypatch.setattr(escalation, "_cache_response_id_for_escalation", _cache_response_id_for_escalation)
+
+    result = asyncio.run(
+        escalation.escalate(
+            interaction=_interaction("cache"),
+            messages=[{"role": "user", "content": "Current question"}],
+        )
+    )
+
+    assert result.escalation_status == "answered"
+    assert resolved == {"model_name": None, "default_system_prompt": "Workspace-only local prompt."}
+    assert router.system_prompt is None
+
+
+class _StubRegistry:
+    async def register(self, **kwargs):
+        from app.services.response_registry import ResponseInteraction
+
+        return ResponseInteraction(
+            interaction_id="int_child",
+            workspace_id=kwargs["workspace_id"],
+            workspace_slug=kwargs["workspace_slug"],
+            department=kwargs["department"],
+            cache_namespace=kwargs["cache_namespace"],
+            served_tier=kwargs["served_tier"],
+            response_id=kwargs["response_id"],
+            message_hash="hash",
+            created_at="2026-01-01T00:00:01+00:00",
+            escalation_attempted=False,
+            escalation_attempted_at=None,
+        )
+
+
+class _StubLogger:
+    async def log(self, *args, **kwargs):
+        return None

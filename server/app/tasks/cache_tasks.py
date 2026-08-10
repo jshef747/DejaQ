@@ -95,10 +95,10 @@ def generalize_and_store_task(
 
     All arguments are plain strings — no model objects or unpickleable data.
     cache_namespace selects the ChromaDB collection (department isolation).
-    workspace_slug (added for per-workspace pipeline model config) is used
-    only to resolve the generalizer's model fresh in this worker process -
-    see _resolve_generalize_model_name above for why it isn't resolved once
-    in the dispatching request instead.
+    workspace_slug (added for per-workspace pipeline config) is used only to
+    resolve the generalizer's model and system prompt fresh in this worker
+    process - see _resolve_generalize_overrides above for why they aren't
+    resolved once in the dispatching request instead.
     The image_* args are the scalar fingerprints for image requests (all None
     for text): photos carry dhash+clip, documents carry OCR tokens in image_text.
     The file_* args are the exact identity of an attached file (PDF, DOCX, or
