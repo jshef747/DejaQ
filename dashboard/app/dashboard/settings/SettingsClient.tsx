@@ -8,6 +8,7 @@ import Input from "@/components/ui/Input";
 import Field from "@/components/ui/Field";
 import SectionHeader from "@/components/ui/SectionHeader";
 import { deleteCredential, upsertCredential } from "@/app/actions/credentials";
+import { deleteWorkspace } from "@/app/actions/workspaces";
 import { updateLlmConfig } from "@/app/actions/llm-config";
 import { testProvider } from "@/app/actions/test-provider";
 import {
@@ -70,6 +71,20 @@ export default function SettingsClient({
 
   const [testBusy, setTestBusy] = useState(false);
   const [testResult, setTestResult] = useState<TestResult>(null);
+
+  const [confirmDeleteWorkspace, setConfirmDeleteWorkspace] = useState(false);
+  const [deleteWorkspaceBusy, setDeleteWorkspaceBusy] = useState(false);
+  const [deleteWorkspaceErr, setDeleteWorkspaceErr] = useState<string | null>(null);
+
+  async function handleDeleteWorkspace() {
+    setDeleteWorkspaceBusy(true);
+    setDeleteWorkspaceErr(null);
+    const res = await deleteWorkspace(workspaceSlug);
+    setDeleteWorkspaceBusy(false);
+    if (!res.ok) { setDeleteWorkspaceErr(res.error); return; }
+    setConfirmDeleteWorkspace(false);
+    router.push("/dashboard/workspaces");
+  }
 
   const configKey = JSON.stringify(initialConfig);
   const credsKey = JSON.stringify(initialCredentials);
@@ -342,12 +357,16 @@ export default function SettingsClient({
             </div>
             <Button
               variant="danger"
-              disabled
-              title={`Workspace deletion is currently CLI-only. Run dejaq-admin workspace delete --slug ${workspaceSlug} from a server shell.`}
+              onClick={() => { setDeleteWorkspaceErr(null); setConfirmDeleteWorkspace(true); }}
             >
               Delete workspace
             </Button>
           </div>
+          {deleteWorkspaceErr && (
+            <div className="ds-pill ds-pill-err" style={{ margin: "0 20px 16px", padding: "8px 12px", borderRadius: 5, fontSize: 12 }}>
+              {deleteWorkspaceErr}
+            </div>
+          )}
         </div>
       </section>
 
@@ -360,6 +379,17 @@ export default function SettingsClient({
         busy={removeBusy}
         onCancel={() => setConfirmRemove(false)}
         onConfirm={handleRemoveCredential}
+      />
+
+      <ConfirmDialog
+        open={confirmDeleteWorkspace}
+        title="Delete workspace"
+        message={`Delete workspace "${workspaceName}"? All departments and API keys inside will be permanently removed. This cannot be undone.`}
+        confirmLabel="Delete"
+        destructive
+        busy={deleteWorkspaceBusy}
+        onCancel={() => setConfirmDeleteWorkspace(false)}
+        onConfirm={handleDeleteWorkspace}
       />
     </div>
   );
