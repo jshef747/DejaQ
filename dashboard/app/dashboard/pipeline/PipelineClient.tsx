@@ -36,6 +36,7 @@ const STAGES: StageMeta[] = [
 const STAGE_BY_KEY = Object.fromEntries(STAGES.map((s) => [s.key, s])) as Record<PipelineRole, StageMeta>;
 
 type SelectedStage = PipelineRole | "external_model" | null;
+type StatusState = { kind: "idle" | "success" | "error"; text: string };
 
 function onActivateKey(handler: () => void) {
   return (e: React.KeyboardEvent) => {
@@ -58,10 +59,8 @@ export default function PipelineClient({ workspaceSlug, initialConfig, initialAv
 
   const [saveBusy, setSaveBusy] = useState(false);
   const [resetAllBusy, setResetAllBusy] = useState(false);
-  const [status, setStatus] = useState<{ kind: "idle" | "success" | "error"; text: string }>({
-    kind: "idle",
-    text: "",
-  });
+  const [status, setStatus] = useState<StatusState>({ kind: "idle", text: "" });
+  const [resetAllStatus, setResetAllStatus] = useState<StatusState>({ kind: "idle", text: "" });
 
   const configKey = JSON.stringify(initialConfig);
   useEffect(() => {
@@ -125,6 +124,8 @@ export default function PipelineClient({ workspaceSlug, initialConfig, initialAv
 
   async function handleResetAll() {
     setResetAllBusy(true);
+    setResetAllStatus({ kind: "idle", text: "" });
+    setStatus({ kind: "idle", text: "" });
     const res = await updateLlmConfig(workspaceSlug, {
       enricher_model: null,
       normalizer_model: null,
@@ -135,11 +136,11 @@ export default function PipelineClient({ workspaceSlug, initialConfig, initialAv
     });
     setResetAllBusy(false);
     if (!res.ok) {
-      setStatus({ kind: "error", text: res.error });
+      setResetAllStatus({ kind: "error", text: res.error });
       return;
     }
     setConfig(res.data);
-    setStatus({ kind: "success", text: "All stages reset to default." });
+    setResetAllStatus({ kind: "success", text: "All stages reset to default." });
     router.refresh();
   }
 
@@ -179,6 +180,7 @@ export default function PipelineClient({ workspaceSlug, initialConfig, initialAv
           Refresh list
         </Button>
         <div style={{ flex: 1 }} />
+        <StatusText status={resetAllStatus} />
         <span className={`ds-pill ${overriddenCount > 0 ? "ds-pill-hit" : "ds-pill-neutral"}`}>
           {overriddenCount} stage{overriddenCount === 1 ? "" : "s"} overridden
         </span>
@@ -309,6 +311,21 @@ export default function PipelineClient({ workspaceSlug, initialConfig, initialAv
   );
 }
 
+function StatusText({ status, style }: { status: StatusState; style?: React.CSSProperties }) {
+  if (status.kind === "idle" || !status.text) return null;
+  return (
+    <span
+      style={{
+        fontSize: 12,
+        color: status.kind === "success" ? "var(--green)" : "var(--red)",
+        ...style,
+      }}
+    >
+      {status.text}
+    </span>
+  );
+}
+
 function FlowNode({
   stage,
   config,
@@ -388,7 +405,7 @@ function StageEditor({
   availableModels: string[];
   modelsUnknown: boolean;
   busy: boolean;
-  status: { kind: "idle" | "success" | "error"; text: string };
+  status: StatusState;
   onSave: () => void;
   onReset: () => void;
 }) {
@@ -452,11 +469,7 @@ function StageEditor({
           )}
         </div>
 
-        {status.kind !== "idle" && status.text && (
-          <div style={{ marginTop: 10, fontSize: 12, color: status.kind === "success" ? "var(--green)" : "var(--red)" }}>
-            {status.text}
-          </div>
-        )}
+        <StatusText status={status} style={{ display: "block", marginTop: 10 }} />
       </div>
     </div>
   );
