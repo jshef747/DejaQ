@@ -1,21 +1,4 @@
 import "server-only";
-import { createClient } from "@/lib/supabase/server";
-import { isLocalAuth } from "@/lib/authMode";
-
-async function resolveAuthToken(): Promise<string> {
-  // Local dev bypass: backend grants a dev-admin context and ignores the token.
-  if (isLocalAuth) return "dev-local";
-
-  const supabase = await createClient();
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-
-  if (!session?.access_token) {
-    throw new Error("No active session — cannot make authenticated API request");
-  }
-  return session.access_token;
-}
 
 function assertUsable(response: Response): Response {
   if (response.status === 401) {
@@ -34,13 +17,14 @@ export async function apiFetch(
   const BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL;
   if (!BASE_URL) throw new Error("NEXT_PUBLIC_API_BASE_URL is required");
 
-  const token = await resolveAuthToken();
-
+  // Dev-admin bypass: the backend grants a local dev-admin context and ignores
+  // this token. There is no other auth path — /admin/v1/* is protected by
+  // loopback binding, not by a credential.
   const response = await fetch(`${BASE_URL}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
+      Authorization: "Bearer dev-local",
       ...init.headers,
     },
   });
@@ -55,15 +39,13 @@ export async function apiUpload(
   const BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL;
   if (!BASE_URL) throw new Error("NEXT_PUBLIC_API_BASE_URL is required");
 
-  const token = await resolveAuthToken();
-
   // Same auth as apiFetch, but NO Content-Type header: the browser/undici must
   // set multipart/form-data itself so it can generate the boundary. Setting it
   // by hand breaks the upload.
   const response = await fetch(`${BASE_URL}${path}`, {
     method: "POST",
     body: formData,
-    headers: { Authorization: `Bearer ${token}` },
+    headers: { Authorization: "Bearer dev-local" },
   });
 
   return assertUsable(response);

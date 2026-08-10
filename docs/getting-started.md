@@ -8,9 +8,9 @@
 - [Ollama](https://ollama.com) — generation runs through it (local or remote)
 - Redis (optional — for the background task queue; skip with `DEJAQ_USE_CELERY=false`)
 
-> Supabase is **not** required for local development. The dashboard runs in dev-bypass
-> mode (no login) and the backend grants a dev-admin context. See "Enable dashboard auth"
-> below for deployment.
+> No auth setup is required. The dashboard runs in dev-bypass mode (no login) and the
+> backend grants a dev-admin context — the management API is protected by loopback
+> binding, not a credential.
 
 ---
 
@@ -75,20 +75,9 @@ cd chat && npm run dev                                                   # termi
 | Chat UI | http://localhost:4000 |
 | API health check | http://127.0.0.1:8000/health |
 
-1. Open the dashboard → **Organizations** → create an org → **Keys** → generate an API key (copy it).
-   (Equivalent CLI: `cd server && uv run dejaq-admin org create --name Demo && uv run dejaq-admin key generate --org demo`.)
+1. Open the dashboard → **Workspaces** → create a workspace → **API Keys** → generate an API key (copy it).
+   (Equivalent CLI: `cd server && uv run dejaq-admin workspace create --name Demo && uv run dejaq-admin key generate --workspace demo`.)
 2. Open the chat UI → **Settings** → paste the API key (and an optional department slug).
 3. Start chatting — easy questions route to the local model, hard ones to your configured
    external provider, and repeated questions are answered from the semantic cache.
 
----
-
-## Enable dashboard auth (deployment)
-
-For real login instead of the dev bypass:
-
-1. Create a free [Supabase](https://supabase.com) project; copy the Project URL + anon key.
-2. Set `SUPABASE_URL` / `SUPABASE_ANON_KEY` in `server/.env` and
-   `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` in `dashboard/.env.local`
-   (`DEJAQ_AUTH_MODE` then auto-selects `supabase`).
-3. Users sign up / log in through the dashboard.

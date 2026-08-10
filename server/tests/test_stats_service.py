@@ -28,7 +28,7 @@ def _seed_requests(db_path, rows):
     con.close()
 
 
-def test_workspace_stats_aggregates_identity_rows_and_total(isolated_stats_db):
+def test_workspace_stats_aggregates_identity_rows_and_total(isolated_org_db, isolated_stats_db):
     from app.services import stats_service
 
     _seed_requests(
@@ -52,7 +52,7 @@ def test_workspace_stats_aggregates_identity_rows_and_total(isolated_stats_db):
     assert sorted(report.total.models_used) == ["cache", "gemini"]
 
 
-def test_department_stats_honors_exact_date_boundaries(isolated_stats_db):
+def test_department_stats_honors_exact_date_boundaries(isolated_org_db, isolated_stats_db):
     from app.services import stats_service
 
     _seed_requests(

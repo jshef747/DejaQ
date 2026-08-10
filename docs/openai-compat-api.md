@@ -16,7 +16,7 @@ Gateway calls require a DejaQ workspace API key:
 Authorization: Bearer <dejaq-workspace-api-key>
 ```
 
-Use `dejaq-admin key generate --workspace <slug>` or the dashboard key screen to create keys. `/admin/v1/*` authenticates separately, following `DEJAQ_AUTH_MODE`: it defaults to `local` (an unauthenticated dev-admin context, protected by loopback binding) whenever `SUPABASE_URL` is blank, and validates a Supabase JWT otherwise. Neither an admin token nor a Supabase JWT is accepted by the `/v1/*` gateway, which always uses workspace API keys.
+Use `dejaq-admin key generate --workspace <slug>` or the dashboard key screen to create keys. `/admin/v1/*` authenticates separately: it always grants an unauthenticated dev-admin context, protected by loopback binding rather than a credential. An admin token is never accepted by the `/v1/*` gateway, which always uses workspace API keys.
 
 Optional department isolation:
 
