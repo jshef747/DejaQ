@@ -27,7 +27,7 @@ The dashboard SHALL open directly to `/dashboard/*` routes with no login or sign
 - **THEN** the user is redirected to `/onboarding`
 
 ### Requirement: Sidebar navigation
-The dashboard layout SHALL include a persistent sidebar with a "Workspace" section listing, in order: Analytics, Workspaces, Departments, Workspace Tree, API Keys, Knowledge Base, followed by an external "Chat demo" link to `NEXT_PUBLIC_CHAT_URL` (default `http://localhost:4000`); and an "Account" section containing Settings. Workspace-scoped nav links SHALL carry the active `?workspace=<slug>` query param. The sidebar SHALL display the dev-admin context's email and a 22×22px avatar circle with its initials. The sidebar background SHALL be `#181818` (distinct from the page background `#1c1c1c`).
+The dashboard layout SHALL include a persistent sidebar with a "Workspace" section listing, in order: Analytics, Workspaces, Departments, Workspace Tree, API Keys, Knowledge Base, Pipeline, followed by an external "Chat demo" link to `NEXT_PUBLIC_CHAT_URL` (default `http://localhost:4000`); and an "Account" section containing Settings. Workspace-scoped nav links SHALL carry the active `?workspace=<slug>` query param. The sidebar SHALL display the dev-admin context's email and a 22×22px avatar circle with its initials. The sidebar background SHALL be `#181818` (distinct from the page background `#1c1c1c`).
 
 #### Scenario: Active page highlighted
 - **WHEN** the user is on `/dashboard/workspaces`
@@ -60,7 +60,7 @@ The `/dashboard` route SHALL render a real page — not a placeholder. It SHALL 
 - **THEN** the page renders with a "Backend unavailable" status card, not an error page
 
 ### Requirement: Section pages
-Routes `/dashboard/analytics`, `/dashboard/workspaces`, `/dashboard/departments`, `/dashboard/tree`, `/dashboard/keys`, `/dashboard/rag`, and `/dashboard/settings` SHALL each render a working page — backed by the management API, not a "Coming soon" placeholder — within the dashboard layout.
+Routes `/dashboard/analytics`, `/dashboard/workspaces`, `/dashboard/departments`, `/dashboard/tree`, `/dashboard/keys`, `/dashboard/rag`, `/dashboard/pipeline`, and `/dashboard/settings` SHALL each render a working page — backed by the management API, not a "Coming soon" placeholder — within the dashboard layout.
 
 #### Scenario: Section page renders in layout
 - **WHEN** a user visits `/dashboard/workspaces`

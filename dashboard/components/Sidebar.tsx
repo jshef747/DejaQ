@@ -12,6 +12,7 @@ import {
   MessageSquare,
   GitBranch,
   BookOpen,
+  Workflow,
   ChevronDown,
   Check,
 } from "lucide-react";
@@ -27,12 +28,14 @@ const NAV_ITEMS = [
   { href: "/dashboard/tree",        label: "Workspace Tree", Icon: GitBranch },
   { href: "/dashboard/keys",        label: "API Keys",    Icon: Key },
   { href: "/dashboard/rag",         label: "Knowledge Base", Icon: BookOpen },
+  { href: "/dashboard/pipeline",    label: "Pipeline",    Icon: Workflow },
 ];
 
 const WORKSPACE_SCOPED_PATHS = [
   "/dashboard/departments",
   "/dashboard/keys",
   "/dashboard/rag",
+  "/dashboard/pipeline",
   "/dashboard/workspaces",
   "/dashboard/settings",
   "/dashboard/tree",

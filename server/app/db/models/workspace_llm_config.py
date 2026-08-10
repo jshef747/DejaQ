@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, func
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -18,6 +18,18 @@ class WorkspaceLlmConfig(Base):
     local_model: Mapped[str | None] = mapped_column(String, nullable=True)
     generalizer_model: Mapped[str | None] = mapped_column(String, nullable=True)
     adjuster_model: Mapped[str | None] = mapped_column(String, nullable=True)
+    enricher_model: Mapped[str | None] = mapped_column(String, nullable=True)
+    normalizer_model: Mapped[str | None] = mapped_column(String, nullable=True)
+    validator_model: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Prompt overrides - TEXT, not length-limited String: few-shots pushed some
+    # shipped defaults to 1-2KB, and a custom prompt may run longer.
+    enricher_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    normalizer_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    validator_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    validator_image_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    adjuster_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    generalizer_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    local_model_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     routing_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

@@ -20,9 +20,35 @@ from app.config import (
     OLLAMA_NUM_CTX,
     REWRITE_MAX_TOKENS,
 )
-from app.services.model_backends import CompletionRequest, CompletionResult, ModelBackend, ModelNotFoundError
+from app.services.model_backends import (
+    CompletionRequest,
+    CompletionResult,
+    ModelBackend,
+    ModelNotFoundError,
+    complete_with_default_fallback,
+)
 
 logger = logging.getLogger("dejaq.services.context_adjuster")
+
+DEFAULT_GENERALIZE_SYSTEM_PROMPT = (
+    "Rewrite the ANSWER into a neutral, factual tone. Remove slang, humor, and "
+    "personality. Keep all facts. Output only the rewritten answer."
+)
+
+DEFAULT_ADJUST_SYSTEM_PROMPT = (
+    "Rewrite the ANSWER to match the tone of the QUESTION. Preserve every fact, "
+    "name, number, and detail from the ANSWER, no matter how long or how many "
+    "sections or bullet points it has - only shorten or simplify if the QUESTION "
+    "explicitly asks for that (e.g. \"give me the short version\", \"explain it "
+    "simply\"). A QUESTION that just rephrases or repeats the same ask, even in "
+    "different words, is not a request to shorten. If the ANSWER has sections, "
+    "bullet points, or numbered items, your rewrite must have the same number of "
+    "sections, bullet points, or numbered items, each carrying the same "
+    "information as the original, just reworded - never merge, drop, or "
+    "summarize any of them unless asked to. Keep every named entity from the "
+    "ANSWER - every place, event, organization, and date it mentions - in your "
+    "rewrite. Output only the rewritten answer."
+)
 
 _TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
@@ -273,27 +299,32 @@ class ContextAdjusterService:
         adjust_model_name: str,
         generalize_backend: ModelBackend,
         generalize_model_name: str,
+        adjust_system_prompt: str | None = None,
+        generalize_system_prompt: str | None = None,
     ):
         self.adjust_backend = adjust_backend
         self.adjust_model_name = adjust_model_name
         self.generalize_backend = generalize_backend
         self.generalize_model_name = generalize_model_name
+        # Few-shots for both roles stay hardcoded and inert (see the comments
+        # at each call site below) - only the two system prompts are
+        # per-workspace overrides (see llm_config_service.py). Both roles are
+        # calibrated (is_generalization_sane/is_adjustment_sane): the
+        # dashboard warns that changing either invalidates that calibration.
+        self.adjust_system_prompt = (
+            adjust_system_prompt if adjust_system_prompt is not None else DEFAULT_ADJUST_SYSTEM_PROMPT
+        )
+        self.generalize_system_prompt = (
+            generalize_system_prompt if generalize_system_prompt is not None else DEFAULT_GENERALIZE_SYSTEM_PROMPT
+        )
 
     async def _complete_adjust(self, request: CompletionRequest) -> CompletionResult:
-        try:
-            return await self.adjust_backend.complete(request)
-        except ModelNotFoundError as exc:
-            # Same day-2-drift case as generalize() above: the workspace's
-            # adjuster override was uninstalled from Ollama after it was
-            # saved. Fall back to the shipped default rather than letting
-            # the cache-hit path fail outright.
-            logger.warning(
-                "adjuster model=%s not installed in Ollama; falling back to shipped default=%s",
-                exc.model_name, CONTEXT_ADJUSTER_MODEL_NAME,
-            )
-            return await self.adjust_backend.complete(
-                replace(request, model_name=CONTEXT_ADJUSTER_MODEL_NAME)
-            )
+        # Same day-2-drift case as generalize() below: the workspace's adjuster
+        # override was uninstalled from Ollama after it was saved. Fall back to
+        # the shipped default rather than letting the cache-hit path fail.
+        return await complete_with_default_fallback(
+            self.adjust_backend, request, CONTEXT_ADJUSTER_MODEL_NAME, "adjuster"
+        )
 
     async def generalize(self, answer: str) -> str:
         logger.debug(f"Generalizing response: {answer[:80]}...")
@@ -301,7 +332,7 @@ class ContextAdjusterService:
         start = time.time()
 
         messages = [
-            {"role": "system", "content": "Rewrite the ANSWER into a neutral, factual tone. Remove slang, humor, and personality. Keep all facts. Output only the rewritten answer."},
+            {"role": "system", "content": self.generalize_system_prompt},
             # Few-shot examples must stay inert (no real-world fact in
             # their content): a small instruct model can regurgitate a
             # few-shot's own subject matter instead of conditioning on
@@ -414,7 +445,7 @@ class ContextAdjusterService:
         request = CompletionRequest(
                 model_name=self.adjust_model_name,
                 messages=[
-                {"role": "system", "content": "Rewrite the ANSWER to match the tone of the QUESTION. Preserve every fact, name, number, and detail from the ANSWER, no matter how long or how many sections or bullet points it has - only shorten or simplify if the QUESTION explicitly asks for that (e.g. \"give me the short version\", \"explain it simply\"). A QUESTION that just rephrases or repeats the same ask, even in different words, is not a request to shorten. If the ANSWER has sections, bullet points, or numbered items, your rewrite must have the same number of sections, bullet points, or numbered items, each carrying the same information as the original, just reworded - never merge, drop, or summarize any of them unless asked to. Keep every named entity from the ANSWER - every place, event, organization, and date it mentions - in your rewrite. Output only the rewritten answer."},
+                {"role": "system", "content": self.adjust_system_prompt},
                 # Few-shot examples must stay inert (no real-world fact in
                 # their content): a small instruct model can pattern-match on
                 # the SHAPE of a request and regurgitate a few-shot's own

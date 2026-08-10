@@ -9,6 +9,16 @@ _CONFIG_FIELDS = {
     "local_model",
     "generalizer_model",
     "adjuster_model",
+    "enricher_model",
+    "normalizer_model",
+    "validator_model",
+    "enricher_system_prompt",
+    "normalizer_system_prompt",
+    "validator_system_prompt",
+    "validator_image_system_prompt",
+    "adjuster_system_prompt",
+    "generalizer_system_prompt",
+    "local_model_system_prompt",
     "routing_threshold",
 }
 

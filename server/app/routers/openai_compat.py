@@ -48,6 +48,17 @@ from app.dependencies.auth import ResolvedWorkspace, require_org_key
 from app.services.provider_inference import provider_for_model
 from app.services import cache_filter, llm_config_service, pipeline_config_cache, rag_service
 from app.services.classifier import ClassifierService
+from app.services.context_adjuster import (
+    DEFAULT_ADJUST_SYSTEM_PROMPT,
+    DEFAULT_GENERALIZE_SYSTEM_PROMPT,
+)
+from app.services.context_enricher import DEFAULT_SYSTEM_PROMPT as ENRICHER_DEFAULT_SYSTEM_PROMPT
+from app.services.llm_router import DEFAULT_SYSTEM_PROMPT as LOCAL_DEFAULT_SYSTEM_PROMPT
+from app.services.normalizer import DEFAULT_SYSTEM_PROMPT as NORMALIZER_DEFAULT_SYSTEM_PROMPT
+from app.services.validator import (
+    DEFAULT_IMAGE_SYSTEM_PROMPT as VALIDATOR_DEFAULT_IMAGE_SYSTEM_PROMPT,
+    DEFAULT_SYSTEM_PROMPT as VALIDATOR_DEFAULT_SYSTEM_PROMPT,
+)
 from app.services.service_factory import (
     get_context_adjuster_service,
     get_context_enricher_service,
@@ -68,9 +79,11 @@ from app.config import (
     CACHE_IMAGE_OCR_ENABLED,
     CACHE_IMAGE_OCR_MIN_CONFIDENCE,
     CACHE_IMAGE_TEXT_MIN_JACCARD,
+    ENRICHER_MODEL_NAME,
     EXTERNAL_MODEL_NAME,
     GENERALIZER_MODEL_NAME,
     LOCAL_LLM_MODEL_NAME,
+    NORMALIZER_MODEL_NAME,
     RAG_ENABLED,
     RAG_FORCE_EXTERNAL,
     RAG_MAX_CONTEXT_CHARS,
@@ -78,6 +91,7 @@ from app.config import (
     RAG_TOP_K,
     ROUTING_THRESHOLD,
     USE_CELERY,
+    VALIDATOR_MODEL_NAME,
     VALIDATOR_SKIP_DISTANCE,
 )
 from app.db.session import get_session
@@ -121,7 +135,17 @@ class EffectiveLlmConfig:
     local_model: str = LOCAL_LLM_MODEL_NAME
     generalizer_model: str = GENERALIZER_MODEL_NAME
     adjuster_model: str = CONTEXT_ADJUSTER_MODEL_NAME
-    # Which of the three above are workspace overrides rather than shipped
+    enricher_model: str = ENRICHER_MODEL_NAME
+    normalizer_model: str = NORMALIZER_MODEL_NAME
+    validator_model: str = VALIDATOR_MODEL_NAME
+    enricher_system_prompt: str = ENRICHER_DEFAULT_SYSTEM_PROMPT
+    normalizer_system_prompt: str = NORMALIZER_DEFAULT_SYSTEM_PROMPT
+    validator_system_prompt: str = VALIDATOR_DEFAULT_SYSTEM_PROMPT
+    validator_image_system_prompt: str = VALIDATOR_DEFAULT_IMAGE_SYSTEM_PROMPT
+    adjuster_system_prompt: str = DEFAULT_ADJUST_SYSTEM_PROMPT
+    generalizer_system_prompt: str = DEFAULT_GENERALIZE_SYSTEM_PROMPT
+    local_model_system_prompt: str = LOCAL_DEFAULT_SYSTEM_PROMPT
+    # Which of the fields above are workspace overrides rather than shipped
     # defaults - used to decide whether the request path needs a freshly
     # resolved service instance or can reuse the default-model singleton
     # (and stay monkeypatchable by tests that patch openai_compat._llm_router
@@ -129,6 +153,16 @@ class EffectiveLlmConfig:
     local_model_overridden: bool = False
     generalizer_model_overridden: bool = False
     adjuster_model_overridden: bool = False
+    enricher_model_overridden: bool = False
+    normalizer_model_overridden: bool = False
+    validator_model_overridden: bool = False
+    enricher_system_prompt_overridden: bool = False
+    normalizer_system_prompt_overridden: bool = False
+    validator_system_prompt_overridden: bool = False
+    validator_image_system_prompt_overridden: bool = False
+    adjuster_system_prompt_overridden: bool = False
+    generalizer_system_prompt_overridden: bool = False
+    local_model_system_prompt_overridden: bool = False
 
 
 # --- Service singletons (shared with main process; each service is safe to instantiate once per router module) ---
@@ -186,6 +220,45 @@ def _request_routing_mode(raw_request: Request) -> str:
     return ROUTING_MODE_AUTO
 
 
+def _effective_from_config(config) -> EffectiveLlmConfig:
+    """The one place a stored LlmConfigResult becomes an EffectiveLlmConfig.
+
+    Both resolution paths (the request path and the in-process background-store
+    path below) go through here, so a seventh role wired into one cannot be
+    silently missing from the other.
+    """
+    return EffectiveLlmConfig(
+        external_model=config.external_model,
+        routing_threshold=config.routing_threshold,
+        local_model=config.local_model,
+        generalizer_model=config.generalizer_model,
+        adjuster_model=config.adjuster_model,
+        enricher_model=config.enricher_model,
+        normalizer_model=config.normalizer_model,
+        validator_model=config.validator_model,
+        enricher_system_prompt=config.enricher_system_prompt,
+        normalizer_system_prompt=config.normalizer_system_prompt,
+        validator_system_prompt=config.validator_system_prompt,
+        validator_image_system_prompt=config.validator_image_system_prompt,
+        adjuster_system_prompt=config.adjuster_system_prompt,
+        generalizer_system_prompt=config.generalizer_system_prompt,
+        local_model_system_prompt=config.local_model_system_prompt,
+        local_model_overridden="local_model" in config.overrides,
+        generalizer_model_overridden="generalizer_model" in config.overrides,
+        adjuster_model_overridden="adjuster_model" in config.overrides,
+        enricher_model_overridden="enricher_model" in config.overrides,
+        normalizer_model_overridden="normalizer_model" in config.overrides,
+        validator_model_overridden="validator_model" in config.overrides,
+        enricher_system_prompt_overridden="enricher_system_prompt" in config.overrides,
+        normalizer_system_prompt_overridden="normalizer_system_prompt" in config.overrides,
+        validator_system_prompt_overridden="validator_system_prompt" in config.overrides,
+        validator_image_system_prompt_overridden="validator_image_system_prompt" in config.overrides,
+        adjuster_system_prompt_overridden="adjuster_system_prompt" in config.overrides,
+        generalizer_system_prompt_overridden="generalizer_system_prompt" in config.overrides,
+        local_model_system_prompt_overridden="local_model_system_prompt" in config.overrides,
+    )
+
+
 def _read_effective_llm_config(workspace_slug: str, workspace_id: int | None) -> EffectiveLlmConfig:
     if workspace_id is None:
         return EffectiveLlmConfig(external_model=EXTERNAL_MODEL_NAME, routing_threshold=ROUTING_THRESHOLD)
@@ -194,16 +267,7 @@ def _read_effective_llm_config(workspace_slug: str, workspace_id: int | None) ->
     except llm_config_service.WorkspaceNotFound:
         logger.warning("LLM config requested for missing org slug=%s; using defaults", workspace_slug)
         return EffectiveLlmConfig(external_model=EXTERNAL_MODEL_NAME, routing_threshold=ROUTING_THRESHOLD)
-    return EffectiveLlmConfig(
-        external_model=config.external_model,
-        routing_threshold=config.routing_threshold,
-        local_model=config.local_model,
-        generalizer_model=config.generalizer_model,
-        adjuster_model=config.adjuster_model,
-        local_model_overridden="local_model" in config.overrides,
-        generalizer_model_overridden="generalizer_model" in config.overrides,
-        adjuster_model_overridden="adjuster_model" in config.overrides,
-    )
+    return _effective_from_config(config)
 
 
 def _services_for_model_profile(model_profile: str, llm_config: EffectiveLlmConfig) -> ModelServices:
@@ -230,31 +294,87 @@ def _services_for_model_profile(model_profile: str, llm_config: EffectiveLlmConf
             enricher=get_context_enricher_service(model_name=WEAK_CPU_MODEL_NAME),
             validator=_validator,
         )
-    # Per-workspace pipeline config (dashboard-driven, Slice 1: local
-    # answering, generalizer, adjuster model selection). Only resolve a
-    # fresh service_factory instance when this workspace actually overrides
-    # the role - otherwise reuse the shipped-default singleton below, which
-    # keeps existing tests that monkeypatch openai_compat._llm_router /
-    # _adjuster working unchanged.
+    # Per-workspace pipeline config (dashboard-driven: a model and a system
+    # prompt per role). Only resolve a fresh service_factory instance when
+    # this workspace actually overrides the role - otherwise reuse the
+    # shipped-default singleton below, which keeps existing tests that
+    # monkeypatch openai_compat._llm_router / _adjuster working unchanged.
     llm_router = (
-        get_llm_router_service(model_name=llm_config.local_model)
-        if llm_config.local_model_overridden
+        get_llm_router_service(
+            model_name=llm_config.local_model if llm_config.local_model_overridden else None,
+            default_system_prompt=(
+                llm_config.local_model_system_prompt if llm_config.local_model_system_prompt_overridden else None
+            ),
+        )
+        if (llm_config.local_model_overridden or llm_config.local_model_system_prompt_overridden)
         else _llm_router
     )
     adjuster = (
         get_context_adjuster_service(
-            adjust_model_name=llm_config.adjuster_model,
-            generalize_model_name=llm_config.generalizer_model,
+            adjust_model_name=llm_config.adjuster_model if llm_config.adjuster_model_overridden else None,
+            generalize_model_name=(
+                llm_config.generalizer_model if llm_config.generalizer_model_overridden else None
+            ),
+            adjust_system_prompt=(
+                llm_config.adjuster_system_prompt if llm_config.adjuster_system_prompt_overridden else None
+            ),
+            generalize_system_prompt=(
+                llm_config.generalizer_system_prompt if llm_config.generalizer_system_prompt_overridden else None
+            ),
         )
-        if (llm_config.adjuster_model_overridden or llm_config.generalizer_model_overridden)
+        if (
+            llm_config.adjuster_model_overridden
+            or llm_config.generalizer_model_overridden
+            or llm_config.adjuster_system_prompt_overridden
+            or llm_config.generalizer_system_prompt_overridden
+        )
         else _adjuster
     )
+    normalizer = (
+        get_normalizer_service(
+            model_name=llm_config.normalizer_model if llm_config.normalizer_model_overridden else None,
+            system_prompt=(
+                llm_config.normalizer_system_prompt if llm_config.normalizer_system_prompt_overridden else None
+            ),
+        )
+        if (llm_config.normalizer_model_overridden or llm_config.normalizer_system_prompt_overridden)
+        else _normalizer
+    )
+    enricher = (
+        get_context_enricher_service(
+            model_name=llm_config.enricher_model if llm_config.enricher_model_overridden else None,
+            system_prompt=(
+                llm_config.enricher_system_prompt if llm_config.enricher_system_prompt_overridden else None
+            ),
+        )
+        if (llm_config.enricher_model_overridden or llm_config.enricher_system_prompt_overridden)
+        else _enricher
+    )
+    validator = (
+        get_validator_service(
+            model_name=llm_config.validator_model if llm_config.validator_model_overridden else None,
+            system_prompt=(
+                llm_config.validator_system_prompt if llm_config.validator_system_prompt_overridden else None
+            ),
+            image_system_prompt=(
+                llm_config.validator_image_system_prompt
+                if llm_config.validator_image_system_prompt_overridden
+                else None
+            ),
+        )
+        if (
+            llm_config.validator_model_overridden
+            or llm_config.validator_system_prompt_overridden
+            or llm_config.validator_image_system_prompt_overridden
+        )
+        else _validator
+    )
     return ModelServices(
-        normalizer=_normalizer,
+        normalizer=normalizer,
         llm_router=llm_router,
         adjuster=adjuster,
-        enricher=_enricher,
-        validator=_validator,
+        enricher=enricher,
+        validator=validator,
     )
 
 
@@ -600,16 +720,7 @@ def _llm_config_for_workspace_slug(workspace_slug: str) -> EffectiveLlmConfig:
         config = pipeline_config_cache.get_effective_config(workspace_slug)
     except llm_config_service.WorkspaceNotFound:
         return EffectiveLlmConfig(external_model=EXTERNAL_MODEL_NAME, routing_threshold=ROUTING_THRESHOLD)
-    return EffectiveLlmConfig(
-        external_model=config.external_model,
-        routing_threshold=config.routing_threshold,
-        local_model=config.local_model,
-        generalizer_model=config.generalizer_model,
-        adjuster_model=config.adjuster_model,
-        local_model_overridden="local_model" in config.overrides,
-        generalizer_model_overridden="generalizer_model" in config.overrides,
-        adjuster_model_overridden="adjuster_model" in config.overrides,
-    )
+    return _effective_from_config(config)
 
 
 def _bg_generalize_and_store(
@@ -1413,15 +1524,17 @@ async def run_chat_pipeline(
                     model_used = ext_response.model_used
                     finish_reason = ext_response.finish_reason
                 else:
-                    llm_system_prompt = (
-                        system_prompt
-                        or "You are a helpful assistant. Answer the user's query concisely and accurately."
-                    )
                     answer, _, done_reason = await services.llm_router.generate_local_response(
                         gen_query,
                         history=history,
                         max_tokens=_max_tokens,
-                        system_prompt=llm_system_prompt,
+                        # None (client sent no system prompt of its own) falls
+                        # through to the router's own default_system_prompt -
+                        # the workspace's local_model_system_prompt override
+                        # when set, otherwise the hardcoded literal. Hardcoding
+                        # the literal here too would silently shadow that
+                        # override (same reasoning as escalation.py).
+                        system_prompt=system_prompt,
                     )
                     model_used = _local_model_used(services.llm_router)
                     finish_reason = "length" if done_reason == "length" else "stop"

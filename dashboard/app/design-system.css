@@ -932,6 +932,75 @@ a { color: inherit; }
 .ds-typing span:nth-child(2) { animation-delay: 0.15s; }
 .ds-typing span:nth-child(3) { animation-delay: 0.3s; }
 
+/* ── Pipeline flow ────────────────────────────────────────── */
+.ds-flow { display: flex; flex-direction: column; align-items: center; gap: 0; }
+.ds-flow-node {
+  width: 100%; max-width: 430px;
+  border: 1px solid var(--border-2); border-radius: 9px;
+  background: var(--bg-2); padding: 11px 14px; cursor: pointer;
+  transition: border-color var(--t-base), background var(--t-base);
+}
+.ds-flow-node:hover { border-color: var(--fg-dimmer); background: var(--bg-hover); }
+.ds-flow-node.sel { border-color: var(--accent); background: var(--accent-bg); box-shadow: 0 0 0 1px var(--accent-border); }
+.ds-flow-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.ds-flow-row + .ds-flow-row { margin-top: 4px; }
+.ds-flow-name { font-weight: 600; font-size: 13.5px; }
+.ds-flow-model { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; color: #ffcda1; }
+.ds-flow-sub { font-size: 11px; color: var(--fg-dimmer); }
+.ds-flow-node.locked { border-style: dashed; opacity: 0.55; cursor: default; }
+.ds-flow-node.locked:hover { border-color: var(--border-2); background: var(--bg-2); }
+.ds-flow-node.locked .ds-flow-model { color: var(--fg-dimmer); }
+/* Trunk (io) nodes match the regular/locked node width (430px) so the spine
+   reads as one consistent column - only the branch itself, a deliberate
+   two-up row, is wider. */
+.ds-flow-node.io { max-width: 430px; background: var(--bg-3); border-style: solid; cursor: default; text-align: center; }
+.ds-flow-node.io:hover { border-color: var(--border-2); background: var(--bg-3); }
+.ds-flow-node.io .ds-flow-name { font-size: 12.5px; color: var(--fg-dim); font-weight: 500; }
+.ds-flow-node.out { background: #141414; border-color: var(--border-2); }
+.ds-flow-conn { width: 2px; height: 16px; background: var(--border-2); }
+.ds-flow-conn.a { background: var(--accent); opacity: 0.55; }
+.ds-flow-branch { display: flex; gap: 14px; width: 100%; max-width: 640px; align-items: stretch; }
+.ds-flow-branch > div { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; }
+/* Fills the gap below the shorter branch column so its own connector
+   visibly continues down to the fan-in, instead of leaving dead space -
+   the column div is stretched to the taller column's height by
+   .ds-flow-branch's align-items:stretch above, so flex:1 here claims
+   exactly the leftover. */
+.ds-flow-col-spacer { flex: 1; min-height: 0; width: 2px; background: var(--border-2); }
+.ds-flow-lbl { font-size: 10px; padding: 2px 10px; border-radius: 999px; margin-bottom: 8px; font-weight: 700; letter-spacing: 0.06em; }
+.ds-flow-lbl.hit { background: var(--accent-bg); border: 1px solid var(--accent-border); color: var(--accent); }
+.ds-flow-lbl.miss { background: var(--bg-3); border: 1px solid var(--border-2); color: var(--fg-dim); }
+/* Fan connectors: real elbowed lines from the trunk into both branch heads
+   (out) and from both branch tails back into the trunk (in), sized to
+   match .ds-flow-branch exactly so their x=25/50/75 landmarks line up with
+   the branch's own left-column/center/right-column positions. */
+.ds-flow-fan { display: block; width: 100%; max-width: 640px; height: 30px; overflow: visible; }
+.ds-flow-fan path { fill: none; stroke: var(--border-2); stroke-width: 2; stroke-linejoin: round; }
+.ds-flow-fan.a path { stroke: var(--accent); opacity: 0.55; }
+.ds-flow-storepath {
+  margin-top: 20px; padding-top: 18px; border-top: 1px dashed var(--border-2);
+  width: 100%; display: flex; flex-direction: column; align-items: center;
+}
+.ds-flow-storenote { font-size: 11px; color: var(--fg-dimmer); margin-bottom: 10px; }
+
+.ds-flow-split { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+@media (max-width: 900px) { .ds-flow-split { grid-template-columns: 1fr; } }
+
+.ds-flow-panel { border: 1px solid var(--accent-border); border-radius: 10px; background: var(--bg-2); overflow: hidden; position: sticky; top: 16px; }
+.ds-flow-panel-hd {
+  padding: 13px 17px; background: var(--accent-bg); border-bottom: 1px solid var(--accent-border);
+  display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.ds-flow-panel-bd { padding: 16px 17px 18px; }
+.ds-flow-warnrow {
+  display: flex; gap: 9px; align-items: flex-start; font-size: 11.5px; color: var(--amber);
+  background: var(--amber-bg); border: 1px solid var(--amber-border); border-radius: 7px; padding: 9px 11px; margin-bottom: 14px;
+}
+.ds-flow-empty {
+  border: 1px solid var(--accent-border); border-radius: 10px; background: var(--bg-2);
+  padding: 28px 20px; text-align: center; color: var(--fg-dim); font-size: 12.5px;
+}
+
 /* ── Animations ───────────────────────────────────────────── */
 @keyframes ds-fade-in  { from { opacity: 0; }                    to { opacity: 1; } }
 @keyframes ds-scale-in { from { transform: scale(0.97); opacity: 0.5; } to { transform: scale(1); opacity: 1; } }

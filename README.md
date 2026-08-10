@@ -162,6 +162,18 @@ closest chunks are injected into the prompt as grounding, so answers come from t
 organisation's own facts; the retrieved text never enters the cache key. Setup, tuning, and
 safety rules: [docs/rag-layer.md](docs/rag-layer.md).
 
+## Pipeline customization
+
+The dashboard's **Pipeline** page (`/dashboard/pipeline`) renders the cache pipeline as a
+flow and lets each workspace override, per stage, both the Ollama model it runs on (any tag
+installed on the configured host) and its system prompt - context enricher, normalizer,
+cache validator (a text-question prompt and an image & file-attachment prompt), context
+adjuster, generalizer, and the local answering model. Every override is optional; resetting
+one restores the shipped default. The external answering model stays on **Settings**,
+because it is tied to the provider credential. Editing the context adjuster or generalizer
+prompt invalidates the calibration of their runaway/looping safety-net thresholds, which
+were measured against the shipped prompts - the page warns on those two stages.
+
 ## Bootstrap a workspace + key
 
 Either through the dashboard (Workspaces → create, Keys → generate) or headless via the CLI:

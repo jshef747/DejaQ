@@ -9,7 +9,10 @@ import asyncio
 import pytest
 
 from app.services.context_adjuster import ContextAdjusterService
+from app.services.context_enricher import ContextEnricherService
 from app.services.llm_router import LLMRouterService
+from app.services.normalizer import NormalizerService
+from app.services.validator import ValidatorService
 from app.services.model_backends import (
     CompletionRequest,
     CompletionResult,
@@ -72,7 +75,7 @@ def test_complete_raises_model_not_found_on_ollama_404(monkeypatch):
     assert exc_info.value.model_name == "ghost:1b"
 
 
-# ── Role-level fallback: generalizer, adjuster, local answering ──
+# ── Role-level fallback: every overridable role ──
 
 
 def test_generalize_falls_back_to_shipped_default_when_override_is_uninstalled():
@@ -125,6 +128,64 @@ def test_local_answering_falls_back_to_shipped_default_when_override_is_uninstal
     assert text == "the answer"
     assert done_reason == "stop"
     assert backend.model_names_seen == ["a-since-uninstalled-tag", LOCAL_LLM_MODEL_NAME]
+
+
+def test_enrich_falls_back_to_shipped_default_when_override_is_uninstalled():
+    from app.config import ENRICHER_MODEL_NAME
+
+    backend = _FailThenSucceedBackend(missing_model="a-since-uninstalled-tag", response="standalone question?")
+    service = ContextEnricherService(backend=backend, model_name="a-since-uninstalled-tag")
+
+    result = asyncio.run(
+        service.enrich("tell me more", [{"role": "user", "content": "what is python?"}])
+    )
+
+    assert result == "standalone question?"
+    assert backend.model_names_seen == ["a-since-uninstalled-tag", ENRICHER_MODEL_NAME]
+
+
+def test_normalize_falls_back_to_shipped_default_when_override_is_uninstalled():
+    from app.config import NORMALIZER_MODEL_NAME
+
+    backend = _FailThenSucceedBackend(missing_model="a-since-uninstalled-tag", response="best camera")
+    service = NormalizerService(backend=backend, model_name="a-since-uninstalled-tag")
+
+    # Only the opinion path calls a model at all; everything else is a
+    # lowercase-and-strip passthrough with no backend call to fall back from.
+    result = asyncio.run(service.normalize("What is the best camera?"))
+
+    assert result == "best camera"
+    assert backend.model_names_seen == ["a-since-uninstalled-tag", NORMALIZER_MODEL_NAME]
+
+
+def test_validate_falls_back_to_shipped_default_when_override_is_uninstalled():
+    """Without the fallback, run_chat_pipeline's blanket except swallows this
+    as "validator failed" and the workspace silently loses every band/rescue
+    cache hit for as long as the override stays uninstalled."""
+    from app.config import VALIDATOR_MODEL_NAME
+
+    backend = _FailThenSucceedBackend(missing_model="a-since-uninstalled-tag", response="VALID")
+    service = ValidatorService(backend=backend, model_name="a-since-uninstalled-tag")
+
+    is_valid, _raw = asyncio.run(
+        service.validate("what is the capital of france?", "what is france's capital?", "Paris.")
+    )
+
+    assert is_valid is True
+    assert backend.model_names_seen == ["a-since-uninstalled-tag", VALIDATOR_MODEL_NAME]
+
+
+def test_validate_reraises_when_the_shipped_default_is_also_missing():
+    """A broken Ollama install, not day-2 drift: surface it rather than
+    burning a second doomed call on every band hit."""
+    from app.config import VALIDATOR_MODEL_NAME
+
+    backend = _FailThenSucceedBackend(missing_model=VALIDATOR_MODEL_NAME)
+    service = ValidatorService(backend=backend, model_name=VALIDATOR_MODEL_NAME)
+
+    with pytest.raises(ModelNotFoundError):
+        asyncio.run(service.validate("a?", "b?", "answer"))
+    assert backend.model_names_seen == [VALIDATOR_MODEL_NAME]
 
 
 def test_generalize_reraises_when_the_shipped_default_is_also_missing():

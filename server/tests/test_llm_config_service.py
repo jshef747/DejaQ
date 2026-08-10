@@ -99,6 +99,23 @@ def test_llm_config_read_defaults_cover_generalizer_and_adjuster(isolated_org_db
     assert "adjuster_model" not in result.overrides
 
 
+def test_llm_config_read_defaults_cover_enricher_normalizer_validator(isolated_org_db):
+    from app.config import ENRICHER_MODEL_NAME, NORMALIZER_MODEL_NAME, VALIDATOR_MODEL_NAME
+    from app.services.llm_config_service import read_for_workspace
+    from app.services.model_backends import MODEL_RUNTIME_SPECS
+
+    _create_workspace()
+
+    result = read_for_workspace("acme")
+
+    assert result.enricher_model == MODEL_RUNTIME_SPECS[ENRICHER_MODEL_NAME].ollama_model
+    assert result.normalizer_model == MODEL_RUNTIME_SPECS[NORMALIZER_MODEL_NAME].ollama_model
+    assert result.validator_model == MODEL_RUNTIME_SPECS[VALIDATOR_MODEL_NAME].ollama_model
+    assert "enricher_model" not in result.overrides
+    assert "normalizer_model" not in result.overrides
+    assert "validator_model" not in result.overrides
+
+
 # ── Write-time validation against the live Ollama catalog ──
 
 
@@ -133,6 +150,39 @@ def test_llm_config_update_accepts_a_model_present_in_the_ollama_catalog(isolate
 
     assert result.adjuster_model == "llama3.2:3b"
     assert result.overrides == {"adjuster_model": "llama3.2:3b"}
+
+
+@pytest.mark.parametrize("field", ["enricher_model", "normalizer_model", "validator_model"])
+def test_llm_config_update_rejects_a_new_role_model_not_in_the_ollama_catalog(isolated_org_db, monkeypatch, field):
+    from app.services import llm_config_service
+    from app.services.llm_config_service import InvalidLlmConfigUpdate, update_for_workspace
+
+    monkeypatch.setattr(
+        llm_config_service.ollama_catalog, "list_available_models", lambda force_refresh=False: ["qwen2.5:1.5b"]
+    )
+    _create_workspace()
+
+    with pytest.raises(InvalidLlmConfigUpdate) as exc_info:
+        update_for_workspace("acme", {field: "not-a-real-tag"}, {field})
+
+    assert field in str(exc_info.value)
+    assert "not-a-real-tag" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("field", ["enricher_model", "normalizer_model", "validator_model"])
+def test_llm_config_update_accepts_a_new_role_model_present_in_the_ollama_catalog(isolated_org_db, monkeypatch, field):
+    from app.services import llm_config_service
+    from app.services.llm_config_service import update_for_workspace
+
+    monkeypatch.setattr(
+        llm_config_service.ollama_catalog, "list_available_models", lambda force_refresh=False: ["llama3.2:3b"]
+    )
+    _create_workspace()
+
+    result = update_for_workspace("acme", {field: "llama3.2:3b"}, {field})
+
+    assert getattr(result, field) == "llama3.2:3b"
+    assert result.overrides == {field: "llama3.2:3b"}
 
 
 def test_llm_config_update_validates_against_a_forced_refresh_not_the_stale_cache(isolated_org_db, monkeypatch):
@@ -230,3 +280,163 @@ def test_llm_config_two_workspaces_resolve_independently(isolated_org_db, monkey
     assert acme.is_default is False
     assert beta.generalizer_model == MODEL_RUNTIME_SPECS[GENERALIZER_MODEL_NAME].ollama_model
     assert beta.is_default is True
+
+
+def test_llm_config_two_workspaces_resolve_new_roles_independently(isolated_org_db, monkeypatch):
+    """A validator/enricher/normalizer override in one workspace must never
+    leak into another - same guarantee slice 1 established for generalizer."""
+    from app.config import NORMALIZER_MODEL_NAME
+    from app.services import llm_config_service
+    from app.services.llm_config_service import read_for_workspace, update_for_workspace
+    from app.services.model_backends import MODEL_RUNTIME_SPECS
+
+    monkeypatch.setattr(
+        llm_config_service.ollama_catalog, "list_available_models", lambda force_refresh=False: ["gemma4:e4b"]
+    )
+    _create_workspace("Acme")
+    _create_workspace("Beta")
+
+    update_for_workspace("acme", {"normalizer_model": "gemma4:e4b"}, {"normalizer_model"})
+
+    acme = read_for_workspace("acme")
+    beta = read_for_workspace("beta")
+
+    assert acme.normalizer_model == "gemma4:e4b"
+    assert acme.is_default is False
+    assert beta.normalizer_model == MODEL_RUNTIME_SPECS[NORMALIZER_MODEL_NAME].ollama_model
+    assert beta.is_default is True
+
+
+# ── System prompt overrides ──
+
+_PROMPT_FIELDS = (
+    "enricher_system_prompt",
+    "normalizer_system_prompt",
+    "validator_system_prompt",
+    "validator_image_system_prompt",
+    "adjuster_system_prompt",
+    "generalizer_system_prompt",
+    "local_model_system_prompt",
+)
+
+
+def test_llm_config_read_defaults_cover_all_prompt_fields(isolated_org_db):
+    from app.services.context_adjuster import DEFAULT_ADJUST_SYSTEM_PROMPT, DEFAULT_GENERALIZE_SYSTEM_PROMPT
+    from app.services.context_enricher import DEFAULT_SYSTEM_PROMPT as ENRICHER_DEFAULT
+    from app.services.llm_config_service import read_for_workspace
+    from app.services.llm_router import DEFAULT_SYSTEM_PROMPT as LOCAL_DEFAULT
+    from app.services.normalizer import DEFAULT_SYSTEM_PROMPT as NORMALIZER_DEFAULT
+    from app.services.validator import DEFAULT_IMAGE_SYSTEM_PROMPT as VALIDATOR_IMAGE_DEFAULT, DEFAULT_SYSTEM_PROMPT as VALIDATOR_DEFAULT
+
+    _create_workspace()
+
+    result = read_for_workspace("acme")
+
+    assert result.enricher_system_prompt == ENRICHER_DEFAULT
+    assert result.normalizer_system_prompt == NORMALIZER_DEFAULT
+    assert result.validator_system_prompt == VALIDATOR_DEFAULT
+    assert result.validator_image_system_prompt == VALIDATOR_IMAGE_DEFAULT
+    assert result.adjuster_system_prompt == DEFAULT_ADJUST_SYSTEM_PROMPT
+    assert result.generalizer_system_prompt == DEFAULT_GENERALIZE_SYSTEM_PROMPT
+    assert result.local_model_system_prompt == LOCAL_DEFAULT
+    for field in _PROMPT_FIELDS:
+        assert field not in result.overrides
+
+
+@pytest.mark.parametrize("field", _PROMPT_FIELDS)
+def test_llm_config_update_rejects_an_empty_prompt(isolated_org_db, field):
+    from app.services.llm_config_service import InvalidLlmConfigUpdate, update_for_workspace
+
+    _create_workspace()
+
+    with pytest.raises(InvalidLlmConfigUpdate) as exc_info:
+        update_for_workspace("acme", {field: ""}, {field})
+
+    assert field in str(exc_info.value)
+    assert "empty" in str(exc_info.value).lower()
+
+
+@pytest.mark.parametrize("field", _PROMPT_FIELDS)
+def test_llm_config_update_accepts_a_custom_prompt(isolated_org_db, field):
+    from app.services.llm_config_service import update_for_workspace
+
+    _create_workspace()
+
+    result = update_for_workspace("acme", {field: "Custom prompt text."}, {field})
+
+    assert getattr(result, field) == "Custom prompt text."
+    assert result.overrides == {field: "Custom prompt text."}
+    assert result.is_default is False
+
+
+def test_llm_config_update_prompt_never_queries_ollama(isolated_org_db, monkeypatch):
+    """Unlike *_model fields, a prompt has no relationship to what's installed
+    on the Ollama host - a prompt update must never trigger a catalog check,
+    reachable or not."""
+    from app.services import llm_config_service
+    from app.services.llm_config_service import update_for_workspace
+
+    def _explode(force_refresh=False):
+        raise AssertionError("Ollama catalog must not be queried for a prompt-only update")
+
+    monkeypatch.setattr(llm_config_service.ollama_catalog, "list_available_models", _explode)
+    _create_workspace()
+
+    update_for_workspace("acme", {"generalizer_system_prompt": "Custom."}, {"generalizer_system_prompt"})
+
+
+def test_llm_config_update_reset_prompt_to_null_restores_default(isolated_org_db):
+    from app.services.context_adjuster import DEFAULT_GENERALIZE_SYSTEM_PROMPT
+    from app.services.llm_config_service import read_for_workspace, update_for_workspace
+
+    _create_workspace()
+    update_for_workspace("acme", {"generalizer_system_prompt": "Custom."}, {"generalizer_system_prompt"})
+
+    reset = update_for_workspace("acme", {"generalizer_system_prompt": None}, {"generalizer_system_prompt"})
+
+    assert reset.generalizer_system_prompt == DEFAULT_GENERALIZE_SYSTEM_PROMPT
+    assert "generalizer_system_prompt" not in reset.overrides
+
+    stored = read_for_workspace("acme")
+    assert stored.generalizer_system_prompt == DEFAULT_GENERALIZE_SYSTEM_PROMPT
+
+
+def test_llm_config_two_workspaces_resolve_prompts_independently(isolated_org_db):
+    """A prompt override in one workspace must never leak into another."""
+    from app.services.validator import DEFAULT_SYSTEM_PROMPT as VALIDATOR_DEFAULT
+    from app.services.llm_config_service import read_for_workspace, update_for_workspace
+
+    _create_workspace("Acme")
+    _create_workspace("Beta")
+
+    update_for_workspace("acme", {"validator_system_prompt": "Acme-only prompt."}, {"validator_system_prompt"})
+
+    acme = read_for_workspace("acme")
+    beta = read_for_workspace("beta")
+
+    assert acme.validator_system_prompt == "Acme-only prompt."
+    assert acme.is_default is False
+    assert beta.validator_system_prompt == VALIDATOR_DEFAULT
+    assert beta.is_default is True
+
+
+def test_llm_config_update_rejects_a_model_but_prompt_field_independent(isolated_org_db, monkeypatch):
+    """A prompt field on the same PUT as a rejected *_model field must not be
+    silently applied - the whole update is one transaction."""
+    from app.services import llm_config_service
+    from app.services.llm_config_service import InvalidLlmConfigUpdate, read_for_workspace, update_for_workspace
+
+    monkeypatch.setattr(
+        llm_config_service.ollama_catalog, "list_available_models", lambda force_refresh=False: ["qwen2.5:1.5b"]
+    )
+    _create_workspace()
+
+    with pytest.raises(InvalidLlmConfigUpdate):
+        update_for_workspace(
+            "acme",
+            {"validator_model": "not-a-real-tag", "validator_system_prompt": "Should not be saved."},
+            {"validator_model", "validator_system_prompt"},
+        )
+
+    stored = read_for_workspace("acme")
+    assert stored.is_default is True

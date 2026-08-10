@@ -1,6 +1,6 @@
 """Live discovery of Ollama models actually installed on the configured host.
 
-Backs the per-workspace pipeline model pickers (dashboard Settings): the
+Backs the per-workspace pipeline model pickers (dashboard Pipeline page): the
 captain's decision is that any locally-installed Ollama tag is selectable,
 not just tags already registered in MODEL_RUNTIME_SPECS, so installing a
 model must be enough to make it selectable with no code change. Both the
