@@ -14,7 +14,9 @@ import {
   BookOpen,
   ChevronDown,
   Check,
+  LogOut,
 } from "lucide-react";
+import { signOut } from "@/app/actions/auth";
 import { listWorkspaces } from "@/app/actions/workspaces";
 import type { WorkspaceItem } from "@/lib/types";
 
@@ -188,6 +190,16 @@ export default function Sidebar({ email }: SidebarProps) {
           <div className="ds-sidebar-user-name">{email}</div>
           <div className="ds-sidebar-user-role" style={{ fontFamily: "var(--font-mono)" }}>owner</div>
         </div>
+        <form action={signOut}>
+          <button
+            type="submit"
+            title="Sign out"
+            aria-label="Sign out"
+            className="ds-btn ds-btn-ghost ds-btn-icon"
+          >
+            <LogOut size={13} />
+          </button>
+        </form>
       </div>
     </aside>
   );

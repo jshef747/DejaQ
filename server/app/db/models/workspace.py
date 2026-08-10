@@ -36,3 +36,6 @@ class Workspace(Base):
     rag_documents: Mapped[list["RagDocument"]] = relationship(  # noqa: F821
         "RagDocument", back_populates="workspace", cascade="all, delete-orphan"
     )
+    memberships: Mapped[list["UserWorkspaceMembership"]] = relationship(  # noqa: F821
+        "UserWorkspaceMembership", back_populates="workspace", cascade="all, delete-orphan"
+    )

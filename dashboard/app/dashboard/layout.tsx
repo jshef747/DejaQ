@@ -2,6 +2,8 @@ export const dynamic = "force-dynamic";
 
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
+import { createClient } from "@/lib/supabase/server";
+import { isLocalAuth } from "@/lib/authMode";
 import Sidebar from "@/components/Sidebar";
 import { listWorkspaces } from "@/app/actions/workspaces";
 
@@ -10,7 +12,16 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const email = "dev@localhost";
+  let email = "dev@localhost";
+  if (!isLocalAuth) {
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) redirect("/login");
+    email = user.email ?? "unknown";
+  }
 
   // Onboarding guard: if no workspaces exist, send the user through first-run setup.
   // On backend error, fall through — the dashboard shows its own "unavailable" state.

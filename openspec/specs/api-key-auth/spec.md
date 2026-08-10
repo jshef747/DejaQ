@@ -27,18 +27,18 @@ The system SHALL log a WARNING when a request arrives with a Bearer token that d
 - **THEN** the request proceeds without a warning log
 
 ### Requirement: Attach tenant context to request state
-The system SHALL attach a `workspace_slug` string to `request.state.workspace_slug` on every `/v1/*` request by resolving the Bearer token against the SQLite `api_keys` table (via in-process cache). If the key maps to a known workspace, `workspace_slug` SHALL be that workspace's slug. If the key is unknown or absent, `workspace_slug` SHALL be `"anonymous"`.
+The system SHALL attach an `org_slug` string to `request.state.org_slug` on every `/v1/*` request by resolving the Bearer token against the SQLite `api_keys` table (via in-process cache). If the key maps to a known org, `org_slug` SHALL be that org's slug. If the key is unknown or absent, `org_slug` SHALL be `"anonymous"`.
 
-#### Scenario: Known key maps to workspace slug
+#### Scenario: Known key maps to org slug
 - **WHEN** a request arrives with a recognized Bearer token
-- **THEN** `request.state.workspace_slug` is set to the corresponding workspace's slug (e.g. `"acme-corp"`)
+- **THEN** `request.state.org_slug` is set to the corresponding org's slug (e.g. `"acme-corp"`)
 
 #### Scenario: Unknown or absent key maps to anonymous
 - **WHEN** a request arrives with an unrecognized Bearer token or no token
-- **THEN** `request.state.workspace_slug` is set to `"anonymous"`
+- **THEN** `request.state.org_slug` is set to `"anonymous"`
 
-### Requirement: Resolve cache namespace from workspace and optional department header
-The system SHALL read the `X-DejaQ-Department` request header (value: department slug). If present and the slug is a valid department under the resolved workspace, the system SHALL set `request.state.cache_namespace` to that department's `cache_namespace` (e.g. `"acme-corp__customer-support"`). If the header is absent or the slug is not found, the system SHALL fall back to the workspace default namespace `"{workspace_slug}--default"`.
+### Requirement: Resolve cache namespace from org and optional department header
+The system SHALL read the `X-DejaQ-Department` request header (value: department slug). If present and the slug is a valid department under the resolved org, the system SHALL set `request.state.cache_namespace` to that department's `cache_namespace` (e.g. `"acme-corp__customer-support"`). If the header is absent or the slug is not found, the system SHALL fall back to `"{org_slug}/__default__"`.
 
 #### Scenario: Department header present and valid
 - **WHEN** a request arrives with `Authorization: Bearer <acme-key>` and `X-DejaQ-Department: customer-support`
@@ -46,18 +46,18 @@ The system SHALL read the `X-DejaQ-Department` request header (value: department
 
 #### Scenario: Department header absent — fall back to default namespace
 - **WHEN** a request arrives with `Authorization: Bearer <acme-key>` but no `X-DejaQ-Department` header
-- **THEN** `request.state.cache_namespace` is set to `"acme-corp--default"`
+- **THEN** `request.state.cache_namespace` is set to `"acme-corp/__default__"`
 
-#### Scenario: Department slug not found under workspace — fall back to default namespace
-- **WHEN** a request arrives with `X-DejaQ-Department: nonexistent-dept` for a valid workspace
-- **THEN** a WARNING is logged and `request.state.cache_namespace` falls back to `"{workspace_slug}--default"`
+#### Scenario: Department slug not found under org — fall back to default namespace
+- **WHEN** a request arrives with `X-DejaQ-Department: nonexistent-dept` for a valid org
+- **THEN** a WARNING is logged and `request.state.cache_namespace` falls back to `"{org_slug}/__default__"`
 
 #### Scenario: Anonymous request gets anonymous default namespace
 - **WHEN** a request arrives with no API key
-- **THEN** `request.state.cache_namespace` is set to `"dejaq_default"`
+- **THEN** `request.state.cache_namespace` is set to `"anonymous/__default__"`
 
 ### Requirement: Key registry is loaded from SQLite with in-process cache
-The system SHALL NOT query SQLite on every request. Instead, the middleware SHALL maintain an in-process dict mapping token → (workspace_slug, workspace_id) loaded from `api_keys` (WHERE revoked_at IS NULL). The cache SHALL be refreshed at most once per `DEJAQ_KEY_CACHE_TTL` seconds (default: 60). Department slug → cache_namespace mapping SHALL be cached with the same TTL.
+The system SHALL NOT query SQLite on every request. Instead, the middleware SHALL maintain an in-process dict mapping token → (org_slug, org_id) loaded from `api_keys` (WHERE revoked_at IS NULL). The cache SHALL be refreshed at most once per `DEJAQ_KEY_CACHE_TTL` seconds (default: 60). Department slug → cache_namespace mapping SHALL be cached with the same TTL.
 
 #### Scenario: Cache populated on first request
 - **WHEN** the first `/v1/*` request arrives after server start

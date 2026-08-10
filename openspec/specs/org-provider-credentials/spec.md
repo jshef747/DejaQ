@@ -1,7 +1,7 @@
-# workspace-provider-credentials Specification
+# org-provider-credentials Specification
 
 ## Purpose
-Define encrypted per-workspace external LLM provider credentials, their management API surface, and how hard-query routing uses those credentials.
+Define encrypted per-organization external LLM provider credentials, their management API surface, and how hard-query routing uses those credentials.
 
 ## Requirements
 
@@ -33,21 +33,21 @@ The system SHALL read a `DEJAQ_CREDENTIAL_ENCRYPTION_KEY` environment variable. 
 
 ### Requirement: Provider credentials are stored encrypted with provider whitelist enforced at the DB level
 
-The system SHALL persist per-workspace provider credentials in a new `workspace_provider_credentials` table with columns: `id` (INTEGER PK autoincrement), `workspace_id` (FK to `workspaces.id` ON DELETE CASCADE), `provider` (VARCHAR NOT NULL), `encrypted_key` (TEXT NOT NULL), `created_at` (TIMESTAMP NOT NULL), `updated_at` (TIMESTAMP NOT NULL). The `(workspace_id, provider)` pair SHALL be unique under a constraint named `uq_workspace_provider_credentials_workspace_provider`. Provider values SHALL be restricted to: `google`, `openai`, `anthropic`, `mistral`, `cohere`, `together`, `groq`, `fireworks`. The whitelist SHALL be enforced both in the Pydantic request schema AND by a `CHECK` constraint on the `provider` column (defence-in-depth against direct DB writes). The raw API key SHALL never be written to the database; only the Fernet-encrypted ciphertext SHALL be stored.
+The system SHALL persist per-org provider credentials in a new `org_provider_credentials` table with columns: `id` (INTEGER PK autoincrement), `org_id` (FK to `organizations.id` ON DELETE CASCADE), `provider` (VARCHAR NOT NULL), `encrypted_key` (TEXT NOT NULL), `created_at` (TIMESTAMP NOT NULL), `updated_at` (TIMESTAMP NOT NULL). The `(org_id, provider)` pair SHALL be unique under a constraint named `uq_org_provider_credentials_org_provider`. Provider values SHALL be restricted to: `google`, `openai`, `anthropic`, `mistral`, `cohere`, `together`, `groq`, `fireworks`. The whitelist SHALL be enforced both in the Pydantic request schema AND by a `CHECK` constraint on the `provider` column (defence-in-depth against direct DB writes). The raw API key SHALL never be written to the database; only the Fernet-encrypted ciphertext SHALL be stored.
 
 #### Scenario: Storing a credential encrypts the key
 
-- **WHEN** an operator upserts a credential for workspace `acme` and provider `google` with key `AIzaXXX`
+- **WHEN** an operator upserts a credential for org `acme` and provider `google` with key `AIzaXXX`
 - **THEN** the stored `encrypted_key` column contains Fernet ciphertext, not the plaintext key
 
-#### Scenario: Deleting a workspace cascades its credentials
+#### Scenario: Deleting an org cascades its credentials
 
-- **WHEN** a workspace is deleted via `DELETE /admin/v1/workspaces/{slug}`
-- **THEN** all rows in `workspace_provider_credentials` for that workspace are deleted by FK cascade
+- **WHEN** an org is deleted via `DELETE /admin/v1/orgs/{slug}`
+- **THEN** all rows in `org_provider_credentials` for that org are deleted by FK cascade
 
 #### Scenario: Duplicate provider key is rejected at DB level
 
-- **WHEN** a second INSERT is attempted for the same `(workspace_id, provider)` pair
+- **WHEN** a second INSERT is attempted for the same `(org_id, provider)` pair
 - **THEN** the unique constraint is violated; the service layer MUST use upsert instead of raw INSERT
 
 #### Scenario: Direct DB write with invalid provider is rejected
@@ -57,61 +57,61 @@ The system SHALL persist per-workspace provider credentials in a new `workspace_
 
 ---
 
-### Requirement: All credential endpoints resolve the workspace before touching credentials
+### Requirement: All credential endpoints enforce org-scoped authorization
 
-Every credential endpoint SHALL resolve the workspace by slug before reading or writing any credential, and SHALL return HTTP 404 when the slug is unknown. There is no per-caller authorization: `/admin/v1/*` serves a single unauthenticated dev-admin context protected by loopback binding, so no credential endpoint denies a request on authorization grounds. This matches `/admin/v1/workspaces/{slug}/llm-config`.
+The system SHALL enforce org-scoped authorization on every credential endpoint by calling `ManagementAuthContext.has_org_access(org_id)` after resolving the org by slug. Callers without access to the target org SHALL receive HTTP 403, regardless of whether the org or credentials exist. This mirrors the org-scoping pattern already used by `/admin/v1/orgs/{slug}/llm-config`.
 
-#### Scenario: Unknown workspace returns 404 on list
+#### Scenario: Caller without org access receives 403 on list
 
-- **WHEN** a client calls `GET /admin/v1/workspaces/does-not-exist/credentials`
-- **THEN** the response is HTTP 404 and no credential data is returned
+- **WHEN** an authenticated caller without access to org `acme` calls `GET /admin/v1/orgs/acme/credentials`
+- **THEN** the response is HTTP 403 and no credential data is returned
 
-#### Scenario: Unknown workspace returns 404 on upsert
+#### Scenario: Caller without org access receives 403 on upsert
 
-- **WHEN** a client PUTs to `/admin/v1/workspaces/does-not-exist/credentials/google`
-- **THEN** the response is HTTP 404 and no row is written
+- **WHEN** an authenticated caller without access to org `acme` PUTs to `/admin/v1/orgs/acme/credentials/google`
+- **THEN** the response is HTTP 403 and no row is written
 
-#### Scenario: Unknown workspace returns 404 on delete
+#### Scenario: Caller without org access receives 403 on delete
 
-- **WHEN** a client DELETEs `/admin/v1/workspaces/does-not-exist/credentials/google`
-- **THEN** the response is HTTP 404 and no row is deleted
+- **WHEN** an authenticated caller without access to org `acme` DELETEs `/admin/v1/orgs/acme/credentials/google`
+- **THEN** the response is HTTP 403 and no row is deleted
 
 ---
 
 ### Requirement: List credentials endpoint with safe masking
 
-The system SHALL expose `GET /admin/v1/workspaces/{workspace_slug}/credentials` returning HTTP 200 with an array of `{provider, key_preview, created_at, updated_at}` objects. `key_preview` SHALL mask the key as `<first4>****<last4>` when the underlying key has at least 12 characters; SHALL mask as `********` (eight asterisks) when the key has fewer than 12 characters, to prevent leaking short keys or test stubs. The full decrypted key SHALL NOT appear in any response body. Unknown workspace SHALL return HTTP 404.
+The system SHALL expose `GET /admin/v1/orgs/{org_slug}/credentials` returning HTTP 200 with an array of `{provider, key_preview, created_at, updated_at}` objects. `key_preview` SHALL mask the key as `<first4>****<last4>` when the underlying key has at least 12 characters; SHALL mask as `********` (eight asterisks) when the key has fewer than 12 characters, to prevent leaking short keys or test stubs. The full decrypted key SHALL NOT appear in any response body. Unknown org SHALL return HTTP 404. Org inaccessible to the caller SHALL return HTTP 403.
 
 #### Scenario: List returns masked keys for normal-length keys
 
-- **WHEN** an authorized client calls `GET /admin/v1/workspaces/acme/credentials` and `acme` has a `google` credential with key `AIzaFoo123Bar` (13 chars)
+- **WHEN** an authorized client calls `GET /admin/v1/orgs/acme/credentials` and `acme` has a `google` credential with key `AIzaFoo123Bar` (13 chars)
 - **THEN** the response is HTTP 200 with an array containing `{"provider": "google", "key_preview": "AIza****3Bar", ...}`
 - **THEN** the response does NOT contain the full key string `AIzaFoo123Bar`
 
 #### Scenario: List fully masks short keys
 
-- **WHEN** an authorized client calls `GET /admin/v1/workspaces/acme/credentials` and `acme` has a credential with a key shorter than 12 characters (e.g., `short123`)
+- **WHEN** an authorized client calls `GET /admin/v1/orgs/acme/credentials` and `acme` has a credential with a key shorter than 12 characters (e.g., `short123`)
 - **THEN** the `key_preview` field is `"********"` and does NOT reveal any characters of the underlying key
 
 #### Scenario: List returns empty array when no credentials configured
 
-- **WHEN** an authorized client calls `GET /admin/v1/workspaces/acme/credentials` and no credentials exist
+- **WHEN** an authorized client calls `GET /admin/v1/orgs/acme/credentials` and no credentials exist
 - **THEN** the response is HTTP 200 with `[]`
 
-#### Scenario: List for unknown workspace returns 404
+#### Scenario: List for unknown org returns 404
 
-- **WHEN** an authorized client calls `GET /admin/v1/workspaces/missing/credentials`
+- **WHEN** an authorized client calls `GET /admin/v1/orgs/missing/credentials`
 - **THEN** the response is HTTP 404
 
 ---
 
 ### Requirement: Upsert credential endpoint
 
-The system SHALL expose `PUT /admin/v1/workspaces/{workspace_slug}/credentials/{provider}` accepting `{api_key: str}` and upserting the encrypted credential for that workspace and provider. HTTP 200 SHALL be returned with the masked credential object `{provider, key_preview, created_at, updated_at}`. An empty or whitespace-only `api_key` SHALL return HTTP 422. An invalid provider name SHALL return HTTP 422. Unknown workspace SHALL return HTTP 404.
+The system SHALL expose `PUT /admin/v1/orgs/{org_slug}/credentials/{provider}` accepting `{api_key: str}` and upserting the encrypted credential for that org and provider. HTTP 200 SHALL be returned with the masked credential object `{provider, key_preview, created_at, updated_at}`. An empty or whitespace-only `api_key` SHALL return HTTP 422. An invalid provider name SHALL return HTTP 422. Unknown org SHALL return HTTP 404. Org inaccessible to the caller SHALL return HTTP 403.
 
 #### Scenario: Upsert creates a new credential
 
-- **WHEN** an authorized client PUTs `{"api_key": "AIzaXXXXXXXXX"}` to `/admin/v1/workspaces/acme/credentials/google` and no credential exists
+- **WHEN** an authorized client PUTs `{"api_key": "AIzaXXXXXXXXX"}` to `/admin/v1/orgs/acme/credentials/google` and no credential exists
 - **THEN** the response is HTTP 200 with `{"provider": "google", "key_preview": "AIza****XXXX", ...}`
 - **THEN** the database contains one encrypted row for `(acme, google)`
 
@@ -127,29 +127,29 @@ The system SHALL expose `PUT /admin/v1/workspaces/{workspace_slug}/credentials/{
 
 #### Scenario: Upsert with invalid provider returns 422
 
-- **WHEN** an authorized client PUTs to `/admin/v1/workspaces/acme/credentials/unknown_provider`
+- **WHEN** an authorized client PUTs to `/admin/v1/orgs/acme/credentials/unknown_provider`
 - **THEN** the response is HTTP 422
 
 ---
 
 ### Requirement: Delete credential endpoint
 
-The system SHALL expose `DELETE /admin/v1/workspaces/{workspace_slug}/credentials/{provider}` to remove a configured provider credential. HTTP 200 SHALL be returned with `{"deleted": true}` when a credential existed and was removed. Unknown workspace SHALL return HTTP 404. Missing credential for a known workspace/provider SHALL return HTTP 404.
+The system SHALL expose `DELETE /admin/v1/orgs/{org_slug}/credentials/{provider}` to remove a configured provider credential. HTTP 200 SHALL be returned with `{"deleted": true}` when a credential existed and was removed. Unknown org SHALL return HTTP 404. Missing credential for a known org/provider SHALL return HTTP 404. Org inaccessible to the caller SHALL return HTTP 403.
 
 #### Scenario: Delete existing credential
 
-- **WHEN** an authorized client calls `DELETE /admin/v1/workspaces/acme/credentials/google`
+- **WHEN** an authorized client calls `DELETE /admin/v1/orgs/acme/credentials/google`
 - **THEN** the response is HTTP 200 with `{"deleted": true}`
-- **THEN** subsequent GET of the same workspace's credentials does not include the `google` entry
+- **THEN** subsequent GET of the same org's credentials does not include the `google` entry
 
 #### Scenario: Delete non-existent credential returns 404
 
-- **WHEN** an authorized client calls `DELETE /admin/v1/workspaces/acme/credentials/openai` and no `openai` credential exists
+- **WHEN** an authorized client calls `DELETE /admin/v1/orgs/acme/credentials/openai` and no `openai` credential exists
 - **THEN** the response is HTTP 404
 
 ---
 
-### Requirement: LLM router resolves workspace credential via provider inference; supports google, openai, anthropic
+### Requirement: LLM router resolves org credential via provider inference; supports google, openai, anthropic
 
 The system SHALL derive the target provider from the configured external model name via a `provider_for_model(model_name)` helper. The mapping SHALL cover at minimum:
 
@@ -157,7 +157,7 @@ The system SHALL derive the target provider from the configured external model n
 - `gpt-*`, `o1-*`, `o3-*`, `o4-*`, `chatgpt-*` -> `openai`
 - `claude-*` -> `anthropic`
 
-For each request, the system SHALL look up the calling workspace's encrypted credential for the derived provider and dispatch to the matching provider client. The lookup SHALL decrypt the key using `DEJAQ_CREDENTIAL_ENCRYPTION_KEY`. The system SHALL NOT fall back to any environment variable (`GEMINI_API_KEY` or equivalent) during request processing.
+For each request, the system SHALL look up the calling org's encrypted credential for the derived provider and dispatch to the matching provider client. The lookup SHALL decrypt the key using `DEJAQ_CREDENTIAL_ENCRYPTION_KEY`. The system SHALL NOT fall back to any environment variable (`GEMINI_API_KEY` or equivalent) during request processing.
 
 The system SHALL define `LIVE_PROVIDERS = {"google", "openai", "anthropic"}` - the set of providers wired to a live client. Other entries in `SUPPORTED_PROVIDERS` are storage-only.
 
@@ -165,30 +165,30 @@ Failure modes:
 
 - If `provider_for_model` raises `ValueError` for an unmapped model name, the system SHALL return HTTP 422.
 - If the resolved provider is in `SUPPORTED_PROVIDERS` but NOT in `LIVE_PROVIDERS`, the system SHALL return HTTP 422 - no credential lookup is attempted.
-- If no credential row exists for the workspace and a live provider, the system SHALL return HTTP 402 Payment Required with body `{"detail": "No <provider> API key configured for this organization. Add one via the credentials settings."}`. The wording still says "organization" because that is the shipped string clients match on (`routers/openai_compat.py`).
+- If no credential row exists for the org and a live provider, the system SHALL return HTTP 402 Payment Required with body `{"detail": "No <provider> API key configured for this organization. Add one via the credentials settings."}`.
 - The system SHALL NOT use HTTP 503 for missing-credential or unwired-provider cases (permanent per-tenant config errors must not present as transient server faults).
 
 #### Scenario: Hard query routes to Google provider client
 
-- **WHEN** a workspace has a `google` credential and `EXTERNAL_MODEL_NAME` is `gemini-2.5-flash`
+- **WHEN** an org has a `google` credential and `EXTERNAL_MODEL_NAME` is `gemini-2.5-flash`
 - **THEN** `provider_for_model` resolves `"google"`, the credential is decrypted, and the Google provider client is invoked
 - **THEN** the response is HTTP 200 with the generated answer
 
 #### Scenario: Hard query routes to OpenAI provider client
 
-- **WHEN** a workspace has an `openai` credential and `EXTERNAL_MODEL_NAME` is `gpt-4o`
+- **WHEN** an org has an `openai` credential and `EXTERNAL_MODEL_NAME` is `gpt-4o`
 - **THEN** `provider_for_model` resolves `"openai"`, the credential is decrypted, and the OpenAI provider client is invoked
 - **THEN** the response is HTTP 200 with the generated answer
 
 #### Scenario: Hard query routes to Anthropic provider client
 
-- **WHEN** a workspace has an `anthropic` credential and `EXTERNAL_MODEL_NAME` is `claude-sonnet-4-5`
+- **WHEN** an org has an `anthropic` credential and `EXTERNAL_MODEL_NAME` is `claude-sonnet-4-5`
 - **THEN** `provider_for_model` resolves `"anthropic"`, the credential is decrypted, and the Anthropic provider client is invoked
 - **THEN** the response is HTTP 200 with the generated answer
 
 #### Scenario: Hard query without credential returns 402
 
-- **WHEN** a workspace has NO credential for the resolved provider and sends a hard-classified query
+- **WHEN** an org has NO credential for the resolved provider and sends a hard-classified query
 - **THEN** the response is HTTP 402 with `{"detail": "No <provider> API key configured..."}`
 - **THEN** no provider client is invoked
 
@@ -210,7 +210,7 @@ Failure modes:
 
 #### Scenario: Platform env key is never used at request time
 
-- **WHEN** `GEMINI_API_KEY` is set in the environment but the requesting workspace has no credential
+- **WHEN** `GEMINI_API_KEY` is set in the environment but the requesting org has no credential
 - **THEN** the response is still HTTP 402 - the env key is not used as a fallback
 
 ---

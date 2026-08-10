@@ -161,11 +161,14 @@ def test_org_department_duplicate_and_delete_behaviors_match_service_and_api(
     authed_admin_client,
 ):
     from app.services import admin_service
+    from app.dependencies.management_auth import ManagementAuthContext
 
     client, headers = authed_admin_client
-    admin_service.create_workspace("Service Org")
+    _SYSTEM_CTX = ManagementAuthContext.system()
+
+    admin_service.create_workspace("Service Org", ctx=_SYSTEM_CTX)
     with pytest.raises(admin_service.DuplicateSlug) as org_exc:
-        admin_service.create_workspace("Service Org")
+        admin_service.create_workspace("Service Org", ctx=_SYSTEM_CTX)
     assert org_exc.value.slug == "service-org"
 
     api_org = client.post("/admin/v1/workspaces", json={"name": "API Org"}, headers=headers)
@@ -173,9 +176,9 @@ def test_org_department_duplicate_and_delete_behaviors_match_service_and_api(
     assert api_org.status_code == 201
     assert api_org_duplicate.status_code == 409
 
-    admin_service.create_department("service-org", "Support")
+    admin_service.create_department("service-org", "Support", ctx=_SYSTEM_CTX)
     with pytest.raises(admin_service.DuplicateSlug) as dept_exc:
-        admin_service.create_department("service-org", "Support")
+        admin_service.create_department("service-org", "Support", ctx=_SYSTEM_CTX)
     assert dept_exc.value.slug == "support"
 
     api_dept = client.post(
@@ -191,7 +194,7 @@ def test_org_department_duplicate_and_delete_behaviors_match_service_and_api(
     assert api_dept.status_code == 201
     assert api_dept_duplicate.status_code == 409
 
-    service_dept_deleted = admin_service.delete_department("service-org", "support")
+    service_dept_deleted = admin_service.delete_department("service-org", "support", ctx=_SYSTEM_CTX)
     assert service_dept_deleted.model_dump() == {
         "deleted": True,
         "cache_namespace": "service-org__support",
@@ -206,8 +209,8 @@ def test_org_department_duplicate_and_delete_behaviors_match_service_and_api(
         "cache_namespace": "api-org__support",
     }
 
-    admin_service.create_department("service-org", "Eng")
-    service_org_deleted = admin_service.delete_workspace("service-org")
+    admin_service.create_department("service-org", "Eng", ctx=_SYSTEM_CTX)
+    service_org_deleted = admin_service.delete_workspace("service-org", ctx=_SYSTEM_CTX)
     assert service_org_deleted.model_dump() == {
         "deleted": True,
         "departments_removed": 1,
@@ -227,16 +230,19 @@ def test_key_generate_force_revoke_and_token_visibility_match_service_and_api(
     authed_admin_client,
 ):
     from app.services import admin_service
+    from app.dependencies.management_auth import ManagementAuthContext
 
     client, headers = authed_admin_client
-    admin_service.create_workspace("Service Keys")
-    first = admin_service.generate_key("service-keys", force=False)
+    _SYSTEM_CTX = ManagementAuthContext.system()
+
+    admin_service.create_workspace("Service Keys", ctx=_SYSTEM_CTX)
+    first = admin_service.generate_key("service-keys", force=False, ctx=_SYSTEM_CTX)
     with pytest.raises(admin_service.ActiveKeyExists) as active_exc:
-        admin_service.generate_key("service-keys", force=False)
-    second = admin_service.generate_key("service-keys", force=True)
-    listed = admin_service.list_keys("service-keys")
-    revoked = admin_service.revoke_key(second.id)
-    revoked_again = admin_service.revoke_key(second.id)
+        admin_service.generate_key("service-keys", force=False, ctx=_SYSTEM_CTX)
+    second = admin_service.generate_key("service-keys", force=True, ctx=_SYSTEM_CTX)
+    listed = admin_service.list_keys("service-keys", ctx=_SYSTEM_CTX)
+    revoked = admin_service.revoke_key(second.id, ctx=_SYSTEM_CTX)
+    revoked_again = admin_service.revoke_key(second.id, ctx=_SYSTEM_CTX)
 
     assert active_exc.value.key_id == first.id
     assert second.id != first.id
@@ -274,10 +280,13 @@ def test_stats_windows_match_service_and_api(
     authed_admin_client,
 ):
     from app.services import admin_service, stats_service
+    from app.dependencies.management_auth import ManagementAuthContext
 
     client, headers = authed_admin_client
-    admin_service.create_workspace("Acme")
-    admin_service.create_department("acme", "Eng")
+    _SYSTEM_CTX = ManagementAuthContext.system()
+
+    admin_service.create_workspace("Acme", ctx=_SYSTEM_CTX)
+    admin_service.create_department("acme", "Eng", ctx=_SYSTEM_CTX)
     _seed_requests(
         isolated_stats_db,
         [

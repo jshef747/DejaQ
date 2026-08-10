@@ -14,7 +14,7 @@ The project SHALL document exactly three supported deployment modes in `CLAUDE.m
 - **THEN** they find a complete env var block they can copy without further interpretation
 - **THEN** they find the exact `uv run uvicorn` command to start the server
 
-#### Scenario: Reader picks a mode for an on-prem deployment
+#### Scenario: Reader picks a mode for an on-prem org deployment
 - **WHEN** a developer reads the Deployment Modes section of CLAUDE.md
 - **THEN** they find a `self-hosted` subsection that names Ollama on a LAN host as a prerequisite
 - **THEN** the env var block sets every `DEJAQ_*_BACKEND` value to `ollama` and points `DEJAQ_OLLAMA_URL` at a LAN address

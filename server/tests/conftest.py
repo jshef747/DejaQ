@@ -123,12 +123,43 @@ def authed_admin_client():
     from app.main import app
     from app.dependencies.admin_auth import require_management_auth
 
-    ctx = ManagementAuthContext.local_dev()
+    ctx = ManagementAuthContext.system()
     app.dependency_overrides[require_management_auth] = lambda: ctx
     try:
         yield TestClient(app), {"Authorization": "Bearer test-system-token"}
     finally:
         app.dependency_overrides.pop(require_management_auth, None)
+
+
+@pytest.fixture
+def scoped_admin_client():
+    """
+    Factory fixture that yields a callable: build_client(accessible_workspaces) -> (TestClient, headers).
+
+    Pass a list of WorkspaceRef objects to build a user actor scoped to exactly those workspaces.
+    Used to test that user actors are denied access to workspaces they are not members of.
+    """
+    from app.main import app
+    from app.dependencies.admin_auth import require_management_auth
+    from app.dependencies.management_auth import WorkspaceRef
+
+    _override_key = require_management_auth
+
+    def build_client(accessible_workspaces: list[WorkspaceRef]):
+        ctx = ManagementAuthContext(
+            actor_type="user",
+            local_user_id=1,
+            supabase_user_id="test-supabase-uid",
+            email="test@example.com",
+            accessible_workspaces=accessible_workspaces,
+        )
+        app.dependency_overrides[_override_key] = lambda: ctx
+        return TestClient(app), {"Authorization": "Bearer test-user-token"}
+
+    try:
+        yield build_client
+    finally:
+        app.dependency_overrides.pop(_override_key, None)
 
 
 @pytest.fixture

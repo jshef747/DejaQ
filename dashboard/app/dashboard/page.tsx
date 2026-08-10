@@ -1,3 +1,5 @@
+import { createClient } from "@/lib/supabase/server";
+import { isLocalAuth } from "@/lib/authMode";
 import { apiFetch } from "@/lib/api";
 import Topbar from "@/components/Topbar";
 
@@ -14,7 +16,12 @@ async function getBackendStatus(): Promise<"connected" | "unavailable"> {
 }
 
 export default async function DashboardPage() {
-  const email = "dev@localhost";
+  let email = "dev@localhost";
+  if (!isLocalAuth) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    email = user?.email ?? "unknown";
+  }
   const backendStatus = await getBackendStatus();
   const connected = backendStatus === "connected";
 

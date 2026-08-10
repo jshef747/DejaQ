@@ -20,16 +20,16 @@ The system SHALL provide a CLI command (`uv run python -m app.cli.stats`) that r
 - **WHEN** `dejaq_stats.db` does not exist
 - **THEN** the CLI prints a clear error message and exits with a non-zero code
 
-### Requirement: Table shows per-department rows and a workspace-wide total row
-The system SHALL render one row per unique `(workspace, department)` pair, plus a final **Total** row aggregating all rows across all workspaces and departments. Columns SHALL be: Department, Requests, Hit Rate, Avg Latency, Est. Tokens Saved, Easy Misses, Hard Misses, Models Used.
+### Requirement: Table shows per-department rows and an org-wide total row
+The system SHALL render one row per unique `(org, department)` pair, plus a final **Total** row aggregating all rows across all orgs and departments. Columns SHALL be: Department, Requests, Hit Rate, Avg Latency, Est. Tokens Saved, Easy Misses, Hard Misses, Models Used.
 
 #### Scenario: Multiple departments displayed
-- **WHEN** the log contains requests from two departments in the same workspace
+- **WHEN** the log contains requests from two departments in the same org
 - **THEN** two department rows appear plus one Total row
 
-#### Scenario: Total row aggregates all workspaces
-- **WHEN** the log contains requests from multiple workspaces
-- **THEN** the Total row sums across all workspaces
+#### Scenario: Total row aggregates all orgs
+- **WHEN** the log contains requests from multiple orgs
+- **THEN** the Total row sums across all orgs
 
 ### Requirement: Table rows are color-coded by dominant outcome
 The system SHALL color-code each row based on its cache hit rate: rows where hit rate ≥ 50% SHALL render in green, rows where hit rate < 50% SHALL render in amber/yellow, and any row containing errors (future) SHALL render in red. The Total row SHALL follow the same color rule.
@@ -58,7 +58,7 @@ The system SHALL display a comma-separated list of distinct `model_used` values 
 
 ### Requirement: Stats aggregation logic is shared between CLI and API
 
-The system SHALL extract request-log aggregation queries from `cli/stats.py` into `app/services/stats_service.py`, exposing functions that return typed Pydantic models (e.g., `StatsMetrics`, `WorkspaceStats`, `DepartmentStats`) covering `requests`, `hits`, `misses`, `hit_rate`, `avg_latency_ms`, `est_tokens_saved`, `easy_count`, `hard_count`, `models_used`. `WorkspaceStats` SHALL include workspace identity fields, `DepartmentStats` SHALL include workspace and department identity fields, and report objects SHALL include a `total: StatsMetrics` aggregate. Both the existing CLI rendering and the new `/admin/v1/stats/*` HTTP endpoints SHALL call the same service functions so numeric output stays consistent. The CLI command behavior, layout, color rules, and "150 tokens per hit" heuristic SHALL remain unchanged.
+The system SHALL extract request-log aggregation queries from `cli/stats.py` into `app/services/stats_service.py`, exposing functions that return typed Pydantic models (e.g., `StatsMetrics`, `OrgStats`, `DepartmentStats`) covering `requests`, `hits`, `misses`, `hit_rate`, `avg_latency_ms`, `est_tokens_saved`, `easy_count`, `hard_count`, `models_used`. `OrgStats` SHALL include org identity fields, `DepartmentStats` SHALL include org and department identity fields, and report objects SHALL include a `total: StatsMetrics` aggregate. Both the existing CLI rendering and the new `/admin/v1/stats/*` HTTP endpoints SHALL call the same service functions so numeric output stays consistent. The CLI command behavior, layout, color rules, and "150 tokens per hit" heuristic SHALL remain unchanged.
 
 The service scope is request-log aggregates only. Any existing CLI-only Cache Health panel or ChromaDB inspection remains owned by `cli/stats.py` unless a later change defines a management API contract for cache health.
 
@@ -69,8 +69,8 @@ The service scope is request-log aggregates only. Any existing CLI-only Cache He
 
 #### Scenario: API and CLI return identical numbers for the same window
 
-- **WHEN** the CLI is run and `GET /admin/v1/stats/workspaces` is called over the same time range
-- **THEN** every numeric field for every workspace row matches exactly
+- **WHEN** the CLI is run and `GET /admin/v1/stats/orgs` is called over the same time range
+- **THEN** every numeric field for every org row matches exactly
 
 ### Requirement: Stats service supports optional date range
 
@@ -78,15 +78,15 @@ The stats service functions SHALL accept optional `from_date` and `to_date` para
 
 #### Scenario: Service called with date range
 
-- **WHEN** `stats_service.workspace_stats(from_date=date(2026,4,1), to_date=date(2026,4,15))` is called
+- **WHEN** `stats_service.org_stats(from_date=date(2026,4,1), to_date=date(2026,4,15))` is called
 - **THEN** only rows with `ts` in `[2026-04-01T00:00:00+00:00, 2026-04-15T00:00:00+00:00)` are aggregated
 
 #### Scenario: Service called without date range
 
-- **WHEN** `stats_service.workspace_stats(from_date=None, to_date=None)` is called
+- **WHEN** `stats_service.org_stats(from_date=None, to_date=None)` is called
 - **THEN** all rows in `requests` are aggregated
 
 #### Scenario: Service rejects reversed date range
 
-- **WHEN** `stats_service.workspace_stats(from_date=date(2026,4,15), to_date=date(2026,4,1))` is called
+- **WHEN** `stats_service.org_stats(from_date=date(2026,4,15), to_date=date(2026,4,1))` is called
 - **THEN** a validation error is raised

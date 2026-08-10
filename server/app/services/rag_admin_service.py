@@ -1,7 +1,8 @@
 """Rug (RAG) admin orchestration — the auth + catalog + vector glue.
 
-Mirrors `admin_service`: functions open a `get_session()`, resolve the workspace,
-then coordinate three things per document:
+Mirrors `admin_service`: functions take a `ManagementAuthContext` (defaulting to
+the system context so the CLI can call them), open a `get_session()`, resolve the
+workspace and check access, then coordinate three things per document:
   1. extract text (`rag_ingest`),
   2. record a catalog row (`rag_document_repo` / SQLite),
   3. embed + store chunks in the workspace's RAG collection (`rag_service`).
@@ -18,11 +19,14 @@ from app.config import RAG_ENABLED
 from app.db import rag_document_repo
 from app.db.models.workspace import Workspace
 from app.db.session import get_session
+from app.dependencies.management_auth import ManagementAuthContext
 from app.schemas.admin.rag_documents import RagDocumentItem
 from app.services import rag_ingest, rag_service
-from app.services.admin_service import WorkspaceNotFound
+from app.services.admin_service import WorkspaceForbidden, WorkspaceNotFound
 
 logger = logging.getLogger("dejaq.rag")
+
+_SYSTEM_CTX = ManagementAuthContext.system()
 
 
 class RagDocumentNotFound(Exception):
@@ -46,20 +50,22 @@ class RagDisabledError(Exception):
         super().__init__("RAG is disabled on this server (DEJAQ_RAG_ENABLED=false).")
 
 
-def _resolve_workspace(session, workspace_slug: str) -> Workspace:
+def _resolve_workspace(session, workspace_slug: str, ctx: ManagementAuthContext) -> Workspace:
     workspace = session.query(Workspace).filter_by(slug=workspace_slug).first()
     if workspace is None:
         raise WorkspaceNotFound(workspace_slug)
+    if not ctx.has_workspace_access(workspace.id):
+        raise WorkspaceForbidden(workspace_slug)
     return workspace
 
 
-def _assert_can_add(workspace_slug: str) -> None:
-    """Check RAG is on and the workspace exists.
+def _assert_can_add(workspace_slug: str, ctx: ManagementAuthContext) -> None:
+    """Check RAG is on, the workspace exists, and the caller may write to it.
 
     Runs BEFORE ingest, because ingestion does real work (fetch a URL, OCR an
-    image): a request naming a workspace that does not exist must not be able to
-    make the server fetch a URL on its behalf, and a server with RAG switched off
-    must not accumulate knowledge that retrieval will never read.
+    image): an authenticated user without access to this workspace must not be
+    able to make the server fetch a URL on their behalf, and a server with RAG
+    switched off must not accumulate knowledge that retrieval will never read.
 
     This is the single boundary every add path routes through — the HTTP router
     and the `dejaq-admin rag` CLI both land here — so the kill switch cannot be
@@ -69,12 +75,15 @@ def _assert_can_add(workspace_slug: str) -> None:
     if not RAG_ENABLED:
         raise RagDisabledError()
     with get_session() as session:
-        _resolve_workspace(session, workspace_slug)
+        _resolve_workspace(session, workspace_slug, ctx)
 
 
-def list_documents(workspace_slug: str) -> list[RagDocumentItem]:
+def list_documents(
+    workspace_slug: str,
+    ctx: ManagementAuthContext = _SYSTEM_CTX,
+) -> list[RagDocumentItem]:
     with get_session() as session:
-        workspace = _resolve_workspace(session, workspace_slug)
+        workspace = _resolve_workspace(session, workspace_slug, ctx)
         rows = rag_document_repo.list_for_workspace(session, workspace.id)
         return [RagDocumentItem.model_validate(row) for row in rows]
 
@@ -82,6 +91,7 @@ def list_documents(workspace_slug: str) -> list[RagDocumentItem]:
 def _store(
     workspace_slug: str,
     ingest: rag_ingest.IngestResult,
+    ctx: ManagementAuthContext,
 ) -> RagDocumentItem:
     """Common tail for every add_*: validate, dedupe-by-sha, catalog + index."""
     if not ingest.ok:
@@ -99,7 +109,7 @@ def _store(
     embeddings = rag_service.embed_chunks(chunks)
 
     with get_session() as session:
-        workspace = _resolve_workspace(session, workspace_slug)
+        workspace = _resolve_workspace(session, workspace_slug, ctx)
 
         # Re-adding the same content (same sha) is a replace, not a duplicate,
         # and it updates the existing row IN PLACE. Deleting the row and
@@ -162,9 +172,10 @@ def add_text(
     workspace_slug: str,
     title: str,
     content: str,
+    ctx: ManagementAuthContext = _SYSTEM_CTX,
 ) -> RagDocumentItem:
-    _assert_can_add(workspace_slug)
-    return _store(workspace_slug, rag_ingest.from_text(title, content))
+    _assert_can_add(workspace_slug, ctx)
+    return _store(workspace_slug, rag_ingest.from_text(title, content), ctx)
 
 
 def add_upload(
@@ -173,27 +184,30 @@ def add_upload(
     data: bytes,
     mime: str | None,
     title: str | None = None,
+    ctx: ManagementAuthContext = _SYSTEM_CTX,
 ) -> RagDocumentItem:
-    _assert_can_add(workspace_slug)
-    return _store(workspace_slug, rag_ingest.from_upload(filename, data, mime, title))
+    _assert_can_add(workspace_slug, ctx)
+    return _store(workspace_slug, rag_ingest.from_upload(filename, data, mime, title), ctx)
 
 
 def add_url(
     workspace_slug: str,
     url: str,
     title: str | None = None,
+    ctx: ManagementAuthContext = _SYSTEM_CTX,
 ) -> RagDocumentItem:
-    _assert_can_add(workspace_slug)
-    return _store(workspace_slug, rag_ingest.from_url(url, title))
+    _assert_can_add(workspace_slug, ctx)
+    return _store(workspace_slug, rag_ingest.from_url(url, title), ctx)
 
 
 def delete_document(
     workspace_slug: str,
     doc_id: int,
+    ctx: ManagementAuthContext = _SYSTEM_CTX,
 ) -> bool:
     namespace = rag_service.rag_namespace(workspace_slug)
     with get_session() as session:
-        workspace = _resolve_workspace(session, workspace_slug)
+        workspace = _resolve_workspace(session, workspace_slug, ctx)
         row = rag_document_repo.get(session, workspace.id, doc_id)
         if row is None:
             raise RagDocumentNotFound(doc_id)

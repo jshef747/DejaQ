@@ -22,6 +22,8 @@ import app.db.models.rag_document  # noqa: E402, F401
 import app.db.models.api_key  # noqa: E402, F401
 import app.db.models.workspace_llm_config  # noqa: E402, F401
 import app.db.models.workspace_provider_credentials  # noqa: E402, F401
+import app.db.models.user  # noqa: E402, F401
+import app.db.models.user_workspace_membership  # noqa: E402, F401
 
 target_metadata = Base.metadata
 
