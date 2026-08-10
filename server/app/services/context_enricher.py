@@ -10,13 +10,23 @@ from app.services.model_backends import (
 
 logger = logging.getLogger("dejaq.services.context_enricher")
 
+DEFAULT_SYSTEM_PROMPT = (
+    "You are a query rewriter. Given a conversation history and a follow-up message, "
+    "rewrite the follow-up into a standalone question that includes all necessary "
+    "context. Output ONLY the rewritten question. If the message is already "
+    "standalone, return it unchanged."
+)
+
 
 class ContextEnricherService:
     """Rewrites context-dependent queries into standalone questions using conversation history."""
 
-    def __init__(self, backend: ModelBackend, model_name: str):
+    def __init__(self, backend: ModelBackend, model_name: str, system_prompt: str | None = None):
         self.backend = backend
         self.model_name = model_name
+        # The few-shot turns below stay hardcoded - only the system prompt
+        # is a per-workspace override (see llm_config_service.py).
+        self.system_prompt = system_prompt if system_prompt is not None else DEFAULT_SYSTEM_PROMPT
 
     async def enrich(self, message: str, history: list[dict]) -> str:
         """Enrich a message with conversation context to make it standalone.
@@ -46,7 +56,7 @@ class ContextEnricherService:
             CompletionRequest(
                 model_name=self.model_name,
                 messages=[
-                {"role": "system", "content": "You are a query rewriter. Given a conversation history and a follow-up message, rewrite the follow-up into a standalone question that includes all necessary context. Output ONLY the rewritten question. If the message is already standalone, return it unchanged."},
+                {"role": "system", "content": self.system_prompt},
                 # Example 1: pronoun resolution
                 {"role": "user", "content": "HISTORY:\nUser: What is Python?\nAssistant: Python is a high-level programming language.\n\nFOLLOW-UP: Tell me more about its features"},
                 {"role": "assistant", "content": "What are the main features of the Python programming language?"},

@@ -10,7 +10,7 @@ from app.services.model_backends import (
 
 logger = logging.getLogger("dejaq.services.validator")
 
-_SYSTEM_PROMPT = (
+DEFAULT_SYSTEM_PROMPT = (
     "You decide if a CACHED ANSWER can correctly answer a NEW QUESTION.\n"
     "Reply with exactly one word: VALID or INVALID.\n"
     "VALID = the cached answer covers what the new question is asking — same topic, same "
@@ -135,7 +135,7 @@ _FEW_SHOTS = [
 # thing about that image — and the embedding cannot do it: numbered-item swaps
 # land at distance 0.0867-0.1351, overlapping legitimate paraphrases
 # (0.0753-0.1094). See docs/image-gate.md.
-_IMAGE_SYSTEM_PROMPT = (
+DEFAULT_IMAGE_SYSTEM_PROMPT = (
     "Two questions were asked about THE SAME image. The image has already been verified "
     "identical, so you do NOT need to see it.\n"
     "Decide whether both questions ask for the same thing about that image.\n"
@@ -185,9 +185,21 @@ _MAX_ANSWER_WORDS = 400
 
 
 class ValidatorService:
-    def __init__(self, backend: ModelBackend, model_name: str):
+    def __init__(
+        self,
+        backend: ModelBackend,
+        model_name: str,
+        system_prompt: str | None = None,
+        image_system_prompt: str | None = None,
+    ):
         self.backend = backend
         self.model_name = model_name
+        # Few-shots for both modes stay hardcoded - only the two system
+        # prompts are per-workspace overrides (see llm_config_service.py).
+        self.system_prompt = system_prompt if system_prompt is not None else DEFAULT_SYSTEM_PROMPT
+        self.image_system_prompt = (
+            image_system_prompt if image_system_prompt is not None else DEFAULT_IMAGE_SYSTEM_PROMPT
+        )
 
     async def validate(
         self,
@@ -207,18 +219,18 @@ class ValidatorService:
         attachment_anchored: the image gate (or the file gate, which proves it
         exactly) already established that both requests carry the same attachment,
         so cached_answer is ignored and the two QUESTIONS are compared instead
-        (see _IMAGE_SYSTEM_PROMPT). The prompt is worded around images because
+        (see DEFAULT_IMAGE_SYSTEM_PROMPT). The prompt is worded around images because
         that is where the failure mode was measured — numbered-item siblings like
         "solve part a"/"part b" sit CLOSER in embedding space than legitimate
         paraphrases — but the question it asks ("do these ask for the same thing
         about the same attachment?") is identical for a PDF.
         """
         if attachment_anchored:
-            system_prompt, few_shots = _IMAGE_SYSTEM_PROMPT, _IMAGE_FEW_SHOTS
+            system_prompt, few_shots = self.image_system_prompt, _IMAGE_FEW_SHOTS
             cached_answer = ""  # never sent in this mode
             final = f"CACHED QUESTION: {cached_query}\nNEW QUESTION: {new_query}"
         else:
-            system_prompt, few_shots = _SYSTEM_PROMPT, _FEW_SHOTS
+            system_prompt, few_shots = self.system_prompt, _FEW_SHOTS
             words = cached_answer.split()
             if len(words) > _MAX_ANSWER_WORDS:
                 cached_answer = " ".join(words[:_MAX_ANSWER_WORDS])

@@ -17,7 +17,18 @@ from app.db import credential_repo, llm_config_repo
 from app.db.models.workspace import Workspace
 from app.db.session import get_session
 from app.services import ollama_catalog
+from app.services.context_adjuster import (
+    DEFAULT_ADJUST_SYSTEM_PROMPT,
+    DEFAULT_GENERALIZE_SYSTEM_PROMPT,
+)
+from app.services.context_enricher import DEFAULT_SYSTEM_PROMPT as ENRICHER_DEFAULT_SYSTEM_PROMPT
+from app.services.llm_router import DEFAULT_SYSTEM_PROMPT as LOCAL_DEFAULT_SYSTEM_PROMPT
 from app.services.model_backends import MODEL_RUNTIME_SPECS
+from app.services.normalizer import DEFAULT_SYSTEM_PROMPT as NORMALIZER_DEFAULT_SYSTEM_PROMPT
+from app.services.validator import (
+    DEFAULT_IMAGE_SYSTEM_PROMPT as VALIDATOR_DEFAULT_IMAGE_SYSTEM_PROMPT,
+    DEFAULT_SYSTEM_PROMPT as VALIDATOR_DEFAULT_SYSTEM_PROMPT,
+)
 
 # Fields whose value must name a model actually installed on the configured
 # Ollama host (captain's decision: any installed tag is selectable, not just
@@ -30,6 +41,20 @@ _OLLAMA_ROLE_FIELDS = {
     "enricher_model",
     "normalizer_model",
     "validator_model",
+}
+
+# Prompt override fields - validated for non-empty content only (§
+# _validate_prompt_overrides), never against Ollama. Also the source of
+# truth PROMPT_FIELDS in schemas/admin/llm_config.py mirrors for its own
+# Pydantic-level check.
+_PROMPT_FIELDS = {
+    "enricher_system_prompt",
+    "normalizer_system_prompt",
+    "validator_system_prompt",
+    "validator_image_system_prompt",
+    "adjuster_system_prompt",
+    "generalizer_system_prompt",
+    "local_model_system_prompt",
 }
 
 
@@ -51,6 +76,13 @@ class LlmConfigResult(BaseModel):
     enricher_model: str
     normalizer_model: str
     validator_model: str
+    enricher_system_prompt: str
+    normalizer_system_prompt: str
+    validator_system_prompt: str
+    validator_image_system_prompt: str
+    adjuster_system_prompt: str
+    generalizer_system_prompt: str
+    local_model_system_prompt: str
     routing_threshold: float
     overrides: dict[str, str | float]
     updated_at: datetime | None
@@ -101,6 +133,34 @@ def _effective(row, credentials_configured: list[str] | None = None) -> LlmConfi
             row.validator_model if row and row.validator_model is not None
             else _shipped_default_ollama_tag(VALIDATOR_MODEL_NAME)
         ),
+        "enricher_system_prompt": (
+            row.enricher_system_prompt if row and row.enricher_system_prompt is not None
+            else ENRICHER_DEFAULT_SYSTEM_PROMPT
+        ),
+        "normalizer_system_prompt": (
+            row.normalizer_system_prompt if row and row.normalizer_system_prompt is not None
+            else NORMALIZER_DEFAULT_SYSTEM_PROMPT
+        ),
+        "validator_system_prompt": (
+            row.validator_system_prompt if row and row.validator_system_prompt is not None
+            else VALIDATOR_DEFAULT_SYSTEM_PROMPT
+        ),
+        "validator_image_system_prompt": (
+            row.validator_image_system_prompt if row and row.validator_image_system_prompt is not None
+            else VALIDATOR_DEFAULT_IMAGE_SYSTEM_PROMPT
+        ),
+        "adjuster_system_prompt": (
+            row.adjuster_system_prompt if row and row.adjuster_system_prompt is not None
+            else DEFAULT_ADJUST_SYSTEM_PROMPT
+        ),
+        "generalizer_system_prompt": (
+            row.generalizer_system_prompt if row and row.generalizer_system_prompt is not None
+            else DEFAULT_GENERALIZE_SYSTEM_PROMPT
+        ),
+        "local_model_system_prompt": (
+            row.local_model_system_prompt if row and row.local_model_system_prompt is not None
+            else LOCAL_DEFAULT_SYSTEM_PROMPT
+        ),
         "routing_threshold": (
             row.routing_threshold
             if row and row.routing_threshold is not None
@@ -117,6 +177,13 @@ def _effective(row, credentials_configured: list[str] | None = None) -> LlmConfi
             "enricher_model",
             "normalizer_model",
             "validator_model",
+            "enricher_system_prompt",
+            "normalizer_system_prompt",
+            "validator_system_prompt",
+            "validator_image_system_prompt",
+            "adjuster_system_prompt",
+            "generalizer_system_prompt",
+            "local_model_system_prompt",
             "routing_threshold",
         ):
             stored = getattr(row, field)
@@ -157,6 +224,24 @@ def _validate_ollama_overrides(payload: dict[str, Any], fields_set: set[str]) ->
             )
 
 
+def _validate_prompt_overrides(payload: dict[str, Any], fields_set: set[str]) -> None:
+    """Reject an empty-string prompt override.
+
+    Null (reset-to-default) is the only way to clear a prompt override - an
+    empty string would ship a role with no system prompt at all, which is
+    very likely to break a role with a structural output format (e.g. the
+    validator's one-word VALID/INVALID verdict). Mirrors the schema-level
+    check in schemas/admin/llm_config.py so a direct update_for_workspace()
+    call (as the test suite makes) gets the same guarantee a request through
+    the Pydantic-validated router does.
+    """
+    for field in fields_set & _PROMPT_FIELDS:
+        if payload.get(field) == "":
+            raise InvalidLlmConfigUpdate(
+                f"{field}: prompt cannot be empty - reset to null to use the shipped default."
+            )
+
+
 def _get_workspace(session, workspace_slug: str) -> Workspace:
     workspace = session.query(Workspace).filter_by(slug=workspace_slug).first()
     if workspace is None:
@@ -181,6 +266,7 @@ def update_for_workspace(
         raise InvalidLlmConfigUpdate("At least one config field is required.")
 
     _validate_ollama_overrides(payload, fields_set)
+    _validate_prompt_overrides(payload, fields_set)
 
     with get_session() as session:
         workspace = _get_workspace(session, workspace_slug)

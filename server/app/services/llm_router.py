@@ -10,11 +10,19 @@ from app.services.model_backends import (
 
 logger = logging.getLogger("dejaq.services.llm_router")
 
+DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant. Answer the user's query concisely and accurately."
+
 
 class LLMRouterService:
-    def __init__(self, backend: ModelBackend, model_name: str):
+    def __init__(self, backend: ModelBackend, model_name: str, default_system_prompt: str | None = None):
         self.backend = backend
         self.model_name = model_name
+        # The per-workspace default for this role - only used when a caller
+        # supplies no system_prompt of its own (see generate_local_response
+        # below). A client-sent prompt always wins over this.
+        self.default_system_prompt = (
+            default_system_prompt if default_system_prompt is not None else DEFAULT_SYSTEM_PROMPT
+        )
 
     def is_hard(self, complexity: str) -> bool:
         return complexity == "hard"
@@ -28,7 +36,7 @@ class LLMRouterService:
     ) -> tuple[str, float, str | None]:
         """Generate a response using the local model. Returns (text, latency_ms, done_reason)."""
         if system_prompt is None:
-            system_prompt = "You are a helpful assistant. Answer the user's query concisely and accurately."
+            system_prompt = self.default_system_prompt
         messages = [{"role": "system", "content": system_prompt}]
         if history:
             messages.extend(history)
