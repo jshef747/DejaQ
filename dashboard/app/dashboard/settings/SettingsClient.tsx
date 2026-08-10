@@ -81,9 +81,9 @@ export default function SettingsClient({
     setDeleteWorkspaceErr(null);
     const res = await deleteWorkspace(workspaceSlug);
     setDeleteWorkspaceBusy(false);
-    if (!res.ok) { setDeleteWorkspaceErr(res.error); return; }
     setConfirmDeleteWorkspace(false);
-    router.push("/dashboard/workspaces");
+    if (!res.ok) { setDeleteWorkspaceErr(res.error); return; }
+    router.replace("/dashboard/workspaces");
   }
 
   const configKey = JSON.stringify(initialConfig);
