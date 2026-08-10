@@ -92,6 +92,8 @@ export const LIVE_PROVIDERS: Provider[] = ["google", "openai", "anthropic"];
 export type LlmConfigResponse = {
   external_model: string | null;
   local_model: string | null;
+  generalizer_model: string | null;
+  adjuster_model: string | null;
   routing_threshold: number | null;
   overrides: Record<string, unknown>;
   is_default: boolean;
@@ -102,8 +104,15 @@ export type LlmConfigResponse = {
 export type LlmConfigUpdate = Partial<{
   external_model: string | null;
   local_model: string | null;
+  generalizer_model: string | null;
+  adjuster_model: string | null;
   routing_threshold: number | null;
 }>;
+
+export type AvailableModelsResponse = {
+  models: string[];
+  error: string | null;
+};
 
 export type CredentialItem = {
   provider: string;

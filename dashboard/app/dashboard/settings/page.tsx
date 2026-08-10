@@ -2,9 +2,10 @@ import { redirect } from "next/navigation";
 import Topbar from "@/components/Topbar";
 import { listWorkspaces } from "@/app/actions/workspaces";
 import { getLlmConfig } from "@/app/actions/llm-config";
+import { getAvailableModels } from "@/app/actions/available-models";
 import { listCredentials } from "@/app/actions/credentials";
 import SettingsClient from "./SettingsClient";
-import type { CredentialItem, LlmConfigResponse, WorkspaceItem } from "@/lib/types";
+import type { AvailableModelsResponse, CredentialItem, LlmConfigResponse, WorkspaceItem } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -74,6 +75,17 @@ export default async function SettingsPage({
     error = (e as Error).message;
   }
 
+  // Best-effort: an unreachable Ollama must not take down the whole
+  // settings page - it disables editing of just the three model pickers,
+  // with the reason shown (SettingsClient renders availableModels.error).
+  let availableModels: AvailableModelsResponse = { models: [], error: null };
+  const modelsRes = await getAvailableModels();
+  if (modelsRes.ok) {
+    availableModels = modelsRes.data;
+  } else {
+    availableModels = { models: [], error: modelsRes.error };
+  }
+
   return (
     <>
       <Topbar section="Settings" workspaceId={activeSlug} />
@@ -83,6 +95,7 @@ export default async function SettingsPage({
           workspaceName={activeWorkspace?.name ?? activeSlug}
           initialConfig={config}
           initialCredentials={credentials}
+          initialAvailableModels={availableModels}
           loadError={error}
         />
       ) : (

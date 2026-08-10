@@ -94,7 +94,7 @@ def _patch_pipeline(monkeypatch, *, validator, adjuster, memory):
 
     monkeypatch.setattr(
         openai_compat, "_services_for_model_profile",
-        lambda profile: openai_compat.ModelServices(
+        lambda profile, llm_config=None: openai_compat.ModelServices(
             normalizer=StubNormalizer(), llm_router=None,
             adjuster=adjuster, enricher=StubEnricher(), validator=validator,
         ),

@@ -10,6 +10,7 @@ import SectionHeader from "@/components/ui/SectionHeader";
 import { deleteCredential, upsertCredential } from "@/app/actions/credentials";
 import { deleteWorkspace } from "@/app/actions/workspaces";
 import { updateLlmConfig } from "@/app/actions/llm-config";
+import { getAvailableModels } from "@/app/actions/available-models";
 import { testProvider } from "@/app/actions/test-provider";
 import {
   DEFAULT_EXTERNAL_MODEL,
@@ -18,6 +19,7 @@ import {
   providerForExternalModel,
 } from "@/lib/external-models";
 import type {
+  AvailableModelsResponse,
   CredentialItem,
   LlmConfigResponse,
   LlmConfigUpdate,
@@ -25,7 +27,8 @@ import type {
   TestProviderResponse,
 } from "@/lib/types";
 
-const LOCAL_MODEL = "gemma-4-e4b";
+type PipelineModelField = "local_model" | "generalizer_model" | "adjuster_model";
+
 const PROVIDER_LABEL: Record<Provider, string> = {
   google: "Google",
   openai: "OpenAI",
@@ -43,6 +46,7 @@ interface Props {
   workspaceName: string;
   initialConfig: LlmConfigResponse;
   initialCredentials: CredentialItem[];
+  initialAvailableModels: AvailableModelsResponse;
   loadError: string | null;
 }
 
@@ -51,6 +55,7 @@ export default function SettingsClient({
   workspaceName,
   initialConfig,
   initialCredentials,
+  initialAvailableModels,
   loadError,
 }: Props) {
   const router = useRouter();
@@ -61,8 +66,14 @@ export default function SettingsClient({
     initialConfig.external_model ?? DEFAULT_EXTERNAL_MODEL[initialProvider],
   );
   const [threshold, setThreshold] = useState(initialConfig.routing_threshold ?? 0.75);
+  const [localModel, setLocalModel] = useState(initialConfig.local_model ?? "");
+  const [generalizerModel, setGeneralizerModel] = useState(initialConfig.generalizer_model ?? "");
+  const [adjusterModel, setAdjusterModel] = useState(initialConfig.adjuster_model ?? "");
   const [apiKey, setApiKey] = useState("");
   const [credentials, setCredentials] = useState(initialCredentials);
+
+  const [availableModels, setAvailableModels] = useState(initialAvailableModels);
+  const [modelsRefreshing, setModelsRefreshing] = useState(false);
 
   const [saveBusy, setSaveBusy] = useState(false);
   const [removeBusy, setRemoveBusy] = useState(false);
@@ -94,10 +105,40 @@ export default function SettingsClient({
     setProvider(nextProvider);
     setExternalModel(initialConfig.external_model ?? DEFAULT_EXTERNAL_MODEL[nextProvider]);
     setThreshold(initialConfig.routing_threshold ?? 0.75);
+    setLocalModel(initialConfig.local_model ?? "");
+    setGeneralizerModel(initialConfig.generalizer_model ?? "");
+    setAdjusterModel(initialConfig.adjuster_model ?? "");
     setCredentials(initialCredentials);
     setApiKey("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configKey, credsKey]);
+
+  async function handleRefreshModels() {
+    setModelsRefreshing(true);
+    const res = await getAvailableModels(true);
+    setModelsRefreshing(false);
+    setAvailableModels(res.ok ? res.data : { models: [], error: res.error });
+  }
+
+  async function handleFieldReset(field: PipelineModelField) {
+    setSaveBusy(true);
+    setSaveStatus({ kind: "idle", text: "" });
+    const patch: LlmConfigUpdate =
+      field === "local_model" ? { local_model: null }
+      : field === "generalizer_model" ? { generalizer_model: null }
+      : { adjuster_model: null };
+    const res = await updateLlmConfig(workspaceSlug, patch);
+    setSaveBusy(false);
+    if (!res.ok) {
+      setSaveStatus({ kind: "error", text: res.error });
+      return;
+    }
+    if (field === "local_model") setLocalModel(res.data.local_model ?? "");
+    if (field === "generalizer_model") setGeneralizerModel(res.data.generalizer_model ?? "");
+    if (field === "adjuster_model") setAdjusterModel(res.data.adjuster_model ?? "");
+    setSaveStatus({ kind: "success", text: `Reset to default ${formatTime(new Date())}` });
+    router.refresh();
+  }
 
   const currentCredential = credentials.find((item) => item.provider === provider);
   const models = useMemo(() => {
@@ -128,6 +169,9 @@ export default function SettingsClient({
     const patch: LlmConfigUpdate = {};
     if (externalModel !== initialConfig.external_model) patch.external_model = externalModel;
     if (threshold !== initialConfig.routing_threshold) patch.routing_threshold = threshold;
+    if (localModel !== (initialConfig.local_model ?? "")) patch.local_model = localModel;
+    if (generalizerModel !== (initialConfig.generalizer_model ?? "")) patch.generalizer_model = generalizerModel;
+    if (adjusterModel !== (initialConfig.adjuster_model ?? "")) patch.adjuster_model = adjusterModel;
 
     if (!trimmedKey && Object.keys(patch).length === 0) {
       setSaveStatus({ kind: "info", text: "No changes to save." });
@@ -159,6 +203,9 @@ export default function SettingsClient({
       }
       setThreshold(configRes.data.routing_threshold ?? threshold);
       setExternalModel(configRes.data.external_model ?? externalModel);
+      setLocalModel(configRes.data.local_model ?? localModel);
+      setGeneralizerModel(configRes.data.generalizer_model ?? generalizerModel);
+      setAdjusterModel(configRes.data.adjuster_model ?? adjusterModel);
     }
 
     setApiKey("");
@@ -173,6 +220,8 @@ export default function SettingsClient({
     const res = await updateLlmConfig(workspaceSlug, {
       external_model: null,
       local_model: null,
+      generalizer_model: null,
+      adjuster_model: null,
       routing_threshold: null,
     });
     setSaveBusy(false);
@@ -184,6 +233,9 @@ export default function SettingsClient({
     setProvider(nextProvider);
     setExternalModel(res.data.external_model ?? DEFAULT_EXTERNAL_MODEL[nextProvider]);
     setThreshold(res.data.routing_threshold ?? 0.75);
+    setLocalModel(res.data.local_model ?? "");
+    setGeneralizerModel(res.data.generalizer_model ?? "");
+    setAdjusterModel(res.data.adjuster_model ?? "");
     setApiKey("");
     setSaveStatus({ kind: "success", text: `Defaults restored ${formatTime(new Date())}` });
     router.refresh();
@@ -236,12 +288,53 @@ export default function SettingsClient({
           <p className="ds-settings-sub">Choose where hard queries go, and keep provider credentials scoped to this organization.</p>
         </div>
         <div className="ds-card" style={{ overflow: "hidden" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 20px", borderBottom: "1px solid var(--border)" }}>
+            <span style={{ fontSize: 11, color: "var(--fg-dimmer)" }}>
+              Pickers below reflect what is actually installed on the configured Ollama host.
+            </span>
+            <Button size="sm" onClick={handleRefreshModels} loading={modelsRefreshing}>
+              Refresh models
+            </Button>
+          </div>
+          {availableModels.error && (
+            <div className="ds-pill ds-pill-err" style={{ margin: "12px 20px 0", padding: "8px 12px", borderRadius: 5, fontSize: 12, display: "block" }}>
+              {availableModels.error} — model editing is disabled until Ollama is reachable.
+            </div>
+          )}
           <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 0 }}>
-            <Field label="Local model (easy queries)" hint="Only model available — more coming soon">
-              <select disabled value={LOCAL_MODEL} className="ds-input" style={{ opacity: 0.62, cursor: "not-allowed" }}>
-                <option value={LOCAL_MODEL}>{LOCAL_MODEL}</option>
-              </select>
-            </Field>
+            <ModelPickerField
+              label="Local model (easy queries)"
+              hint="Answers cache misses classified easy"
+              value={localModel}
+              overridden={"local_model" in initialConfig.overrides}
+              models={availableModels.models}
+              modelsUnknown={!!availableModels.error}
+              disabled={saveBusy || !!availableModels.error}
+              onChange={setLocalModel}
+              onResetClick={() => handleFieldReset("local_model")}
+            />
+            <ModelPickerField
+              label="Generalizer model (store-time tone stripping)"
+              hint="Strips tone from a fresh answer before it's cached, in the background"
+              value={generalizerModel}
+              overridden={"generalizer_model" in initialConfig.overrides}
+              models={availableModels.models}
+              modelsUnknown={!!availableModels.error}
+              disabled={saveBusy || !!availableModels.error}
+              onChange={setGeneralizerModel}
+              onResetClick={() => handleFieldReset("generalizer_model")}
+            />
+            <ModelPickerField
+              label="Context adjuster model (serve-time tone rewrite)"
+              hint="Rewrites a cached answer to match a paraphrased question's tone"
+              value={adjusterModel}
+              overridden={"adjuster_model" in initialConfig.overrides}
+              models={availableModels.models}
+              modelsUnknown={!!availableModels.error}
+              disabled={saveBusy || !!availableModels.error}
+              onChange={setAdjusterModel}
+              onResetClick={() => handleFieldReset("adjuster_model")}
+            />
 
             <div style={{ display: "grid", gap: 12, gridTemplateColumns: "220px 1fr" }}>
               <Field label="External provider" hint="Provider is inferred from the selected model">
@@ -392,6 +485,74 @@ export default function SettingsClient({
         onConfirm={handleDeleteWorkspace}
       />
     </div>
+  );
+}
+
+function ModelPickerField({
+  label,
+  hint,
+  value,
+  overridden,
+  models,
+  modelsUnknown,
+  disabled,
+  onChange,
+  onResetClick,
+}: {
+  label: string;
+  hint: string;
+  value: string;
+  overridden: boolean;
+  models: string[];
+  /** True when the catalog couldn't be loaded at all (Ollama unreachable) -
+   * distinct from an empty catalog, so the current value isn't mislabeled
+   * "(not installed)" when we simply don't know. */
+  modelsUnknown: boolean;
+  disabled: boolean;
+  onChange: (value: string) => void;
+  onResetClick: () => void;
+}) {
+  return (
+    <Field
+      label={label}
+      hint={hint}
+      labelRight={
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span className={`ds-pill ${overridden ? "ds-pill-hit" : "ds-pill-neutral"}`}>
+            {overridden ? "Overridden" : "Default"}
+          </span>
+          {overridden && (
+            <button
+              type="button"
+              onClick={onResetClick}
+              disabled={disabled}
+              style={{ background: "none", border: "none", color: "var(--accent)", cursor: disabled ? "not-allowed" : "pointer", fontSize: 11, padding: 0 }}
+            >
+              Reset
+            </button>
+          )}
+        </div>
+      }
+    >
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        className="ds-input"
+        style={{ cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.62 : 1 }}
+      >
+        {/* A saved value no longer in the live catalog (uninstalled since) still
+            shows, so the picker never silently swaps the displayed value out
+            from under the admin - the request-time fallback handles serving.
+            Skipped when the catalog itself couldn't load: "not installed" is a
+            specific, checked claim, not a guess to make while Ollama is down. */}
+        {value && !modelsUnknown && !models.includes(value) && <option value={value}>{value} (not installed)</option>}
+        {value && modelsUnknown && <option value={value}>{value}</option>}
+        {models.map((model) => (
+          <option key={model} value={model}>{model}</option>
+        ))}
+      </select>
+    </Field>
   );
 }
 

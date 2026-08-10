@@ -316,7 +316,7 @@ def test_chat_completions_smoke_preserves_response_shape(monkeypatch):
     assert response.status_code == 200
     payload = response.json()
     assert payload["choices"][0]["message"]["content"] == "Paris is the capital of France."
-    assert response.headers["x-dejaq-model-used"] == openai_compat._LOCAL_MODEL_NAME
+    assert response.headers["x-dejaq-model-used"] == openai_compat.LOCAL_LLM_MODEL_NAME
     assert "x-dejaq-conversation-id" in response.headers
 
 
@@ -672,7 +672,7 @@ def test_force_easy_local_header_skips_classifier(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert response.headers["x-dejaq-model-used"] == openai_compat._LOCAL_MODEL_NAME
+    assert response.headers["x-dejaq-model-used"] == openai_compat.LOCAL_LLM_MODEL_NAME
 
 
 def test_force_hard_external_header_skips_classifier(monkeypatch):
@@ -959,9 +959,10 @@ def test_celery_store_keeps_legacy_args_and_sends_profile_header(monkeypatch):
     captured: dict[str, object] = {}
 
     class FakeTask:
-        def apply_async(self, *, args, headers, ignore_result=False):
+        def apply_async(self, *, args, headers, ignore_result=False, kwargs=None):
             captured["args"] = args
             captured["headers"] = headers
+            captured["kwargs"] = kwargs
 
     monkeypatch.setattr(openai_compat, "get_context_enricher_service", lambda model_name=None: StubEnricher())
     monkeypatch.setattr(openai_compat, "get_normalizer_service", lambda model_name=None: StubNormalizer())
@@ -992,6 +993,10 @@ def test_celery_store_keeps_legacy_args_and_sends_profile_header(monkeypatch):
     # Stored under the raw normalized query — no spell correction anywhere.
     assert captured["args"][0] == "what is the capital of france?"
     assert captured["headers"] == {"dejaq_model_profile": "weak_cpu"}
+    # workspace_slug rides as a kwarg (plain string) so the Celery worker can
+    # resolve its own fresh generalizer config instead of trusting a value
+    # that may be minutes stale by the time the task actually runs.
+    assert captured["kwargs"] == {"workspace_slug": "demo"}
 
 
 def test_chat_completions_logs_compact_miss_summary(monkeypatch, caplog):

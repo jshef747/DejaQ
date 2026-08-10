@@ -9,6 +9,24 @@ import httpx
 logger = logging.getLogger("dejaq.services.model_backends")
 
 
+class ModelNotFoundError(Exception):
+    """Raised when Ollama reports a model tag as not installed.
+
+    Distinct from the logical-name KeyError case: a workspace pipeline
+    override names a raw Ollama tag (captain's decision - any installed tag
+    is selectable, not just ones in MODEL_RUNTIME_SPECS), validated against
+    the live catalog at write time. This is the day-2-drift case that write-
+    time validation cannot catch - the tag was uninstalled after it was
+    saved. Callers for the three overridable roles (generalizer, adjuster,
+    local-answering) catch this and fall back to the shipped default rather
+    than surfacing a raw 500 three steps into the pipeline.
+    """
+
+    def __init__(self, model_name: str) -> None:
+        self.model_name = model_name
+        super().__init__(f"Ollama model not found: {model_name}")
+
+
 class PromptMessage(TypedDict):
     role: str
     content: str
@@ -73,10 +91,16 @@ class OllamaBackend:
         self._client = client
 
     def _resolve_model(self, logical_model_name: str) -> str:
-        try:
-            return MODEL_RUNTIME_SPECS[logical_model_name].ollama_model
-        except KeyError as exc:
-            raise ValueError(f"Unknown logical model name: {logical_model_name}") from exc
+        spec = MODEL_RUNTIME_SPECS.get(logical_model_name)
+        if spec is not None:
+            return spec.ollama_model
+        # Not a registered logical name: a per-workspace pipeline override
+        # (dashboard picker) names a real Ollama tag directly, validated at
+        # write time against a live `/api/tags` call rather than this static
+        # dict - see services/llm_config_service.py. Pass it through as-is;
+        # if it is no longer installed, Ollama's own /api/chat call below
+        # raises ModelNotFoundError for the caller to catch.
+        return logical_model_name
 
     async def complete(self, request: CompletionRequest) -> CompletionResult:
         ollama_model = self._resolve_model(request.model_name)
@@ -119,6 +143,12 @@ class OllamaBackend:
             ) as client:
                 response = await client.post("/api/chat", json=payload)
 
+        if response.status_code == 404:
+            # Ollama's shape for "model not installed" ({"error": "model
+            # 'x' not found"}), confirmed against a live instance - the
+            # day-2-drift case a workspace override cannot be pre-validated
+            # against (§ ModelNotFoundError above).
+            raise ModelNotFoundError(ollama_model)
         response.raise_for_status()
         data = response.json()
         message = data.get("message", {})
