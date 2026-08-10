@@ -256,7 +256,7 @@ MAX_ATTACHMENT_BYTES = int(_get_float("DEJAQ_MAX_ATTACHMENT_BYTES", 10 * 1024 * 
 # A third answer source alongside the Q→A cache and the LLM: admins curate
 # documents into a workspace's own knowledge base ("{workspace_slug}__rag_kb"
 # Chroma collection). On a cache MISS, the closest chunks are retrieved and
-# injected into the prompt as grounding, so the answer comes from the org's own
+# injected into the prompt as grounding, so the answer comes from the workspace's own
 # information — synthesised by whichever model (local/external) the query routes
 # to. See services/rag_service.py and the retrieval step in openai_compat.py.
 # Off switches BOTH retrieval and ingestion: every add path (dashboard, API, CLI)
@@ -337,20 +337,6 @@ OLLAMA_NUM_CTX = int(_get_float("DEJAQ_OLLAMA_NUM_CTX", 32768))
 # and surfaced this exact tension) - a further pass over either number needs a
 # captain decision, not another automated correction.
 ADJUST_TIMEOUT_SECONDS = _get_float("DEJAQ_ADJUST_TIMEOUT_SECONDS", 30.0)
-
-# Supabase management auth
-SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
-# Service-role key: only for explicit setup/seed paths, never for HTTP request auth
-SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
-
-# Management auth mode: "supabase" validates JWTs via Supabase; "local" grants an
-# unauthenticated dev-admin context (local development only — never expose remotely).
-# Defaults to "local" when Supabase is unconfigured, "supabase" otherwise.
-AUTH_MODE = _get_text(
-    "DEJAQ_AUTH_MODE",
-    "local" if not SUPABASE_URL.strip() else "supabase",
-).strip().lower()
 
 # Control-plane access control:
 # DEJAQ_ADMIN_LOOPBACK_ONLY (default True) — /admin/v1/* only accepts loopback peers.
