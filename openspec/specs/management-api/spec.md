@@ -1,3 +1,5 @@
+> **Endpoint inventory lives elsewhere.** This spec states behavioral requirements for the management surface; it is deliberately not a route list, and endpoints added later are not enumerated here. The authoritative, complete inventory of `/admin/v1/*` endpoints is the "Endpoints" section of [CLAUDE.md](../../../CLAUDE.md). Per-capability endpoint contracts belong to that capability's own spec - for example `openspec/specs/workspace-llm-config/spec.md` owns `GET|PUT /admin/v1/workspaces/{slug}/llm-config`, the pipeline-role model overrides, and their validation against the installed-model catalog.
+
 ## ADDED Requirements
 
 ### Requirement: Management endpoints have a single dev-admin caller
@@ -194,27 +196,6 @@ Both endpoints SHALL accept optional `from` and `to` query parameters as ISO-860
 #### Scenario: Stats for unknown workspace
 
 - **WHEN** a client calls `GET /admin/v1/stats/workspaces/missing/departments`
-- **THEN** the response is HTTP 404
-
-### Requirement: Workspace LLM config endpoints
-
-The system SHALL expose workspace LLM configuration endpoints:
-- `GET /admin/v1/workspaces/{workspace_slug}/llm-config` — return routing configuration. Unknown workspace SHALL return HTTP 404.
-- `PUT /admin/v1/workspaces/{workspace_slug}/llm-config` — update routing configuration. Unknown workspace SHALL return HTTP 404. Validation errors SHALL return HTTP 422.
-
-#### Scenario: Read LLM config
-
-- **WHEN** a client calls `GET /admin/v1/workspaces/acme/llm-config`
-- **THEN** the response is HTTP 200 with the workspace's LLM routing configuration
-
-#### Scenario: Update LLM config with an invalid value
-
-- **WHEN** a client calls `PUT /admin/v1/workspaces/acme/llm-config` with a value outside the allowed range
-- **THEN** the response is HTTP 422
-
-#### Scenario: LLM config for unknown workspace
-
-- **WHEN** a client calls `GET /admin/v1/workspaces/missing/llm-config`
 - **THEN** the response is HTTP 404
 
 ### Requirement: Feedback management endpoints
