@@ -59,6 +59,12 @@ CREDENTIAL_ENCRYPTION_KEY = os.getenv("DEJAQ_CREDENTIAL_ENCRYPTION_KEY", "")
 # API key cache
 KEY_CACHE_TTL = int(os.getenv("DEJAQ_KEY_CACHE_TTL", "60"))
 
+# Ollama model-tag discovery cache (per-workspace pipeline model picker).
+# Short on purpose: installing/removing an Ollama model is an operator
+# action, not something needing sub-second freshness - the dashboard's
+# manual "Refresh" bypasses this entirely for "I just ran ollama pull".
+OLLAMA_CATALOG_CACHE_TTL_SECONDS = _get_float("DEJAQ_OLLAMA_CATALOG_TTL_SECONDS", 30.0)
+
 # Stats DB
 STATS_DB_PATH = os.getenv("DEJAQ_STATS_DB", "dejaq_stats.db")
 

@@ -3,6 +3,7 @@ import logging
 import re
 import time
 from collections import Counter
+from dataclasses import replace
 
 from app.config import (
     ADJUST_LENGTH_ABS_FLOOR,
@@ -10,14 +11,16 @@ from app.config import (
     ADJUST_NGRAM_REPEAT_RATIO_MAX,
     ADJUST_TIMEOUT_SECONDS,
     ADJUSTER_MIN_TOPIC_OVERLAP,
+    CONTEXT_ADJUSTER_MODEL_NAME,
     GENERALIZE_LENGTH_ABS_FLOOR,
     GENERALIZE_LENGTH_RATIO_MAX,
     GENERALIZE_NGRAM_REPEAT_RATIO_MAX,
+    GENERALIZER_MODEL_NAME,
     NGRAM_EXEMPT_LENGTH_RATIO,
     OLLAMA_NUM_CTX,
     REWRITE_MAX_TOKENS,
 )
-from app.services.model_backends import CompletionRequest, ModelBackend
+from app.services.model_backends import CompletionRequest, CompletionResult, ModelBackend, ModelNotFoundError
 
 logger = logging.getLogger("dejaq.services.context_adjuster")
 
@@ -276,6 +279,22 @@ class ContextAdjusterService:
         self.generalize_backend = generalize_backend
         self.generalize_model_name = generalize_model_name
 
+    async def _complete_adjust(self, request: CompletionRequest) -> CompletionResult:
+        try:
+            return await self.adjust_backend.complete(request)
+        except ModelNotFoundError as exc:
+            # Same day-2-drift case as generalize() above: the workspace's
+            # adjuster override was uninstalled from Ollama after it was
+            # saved. Fall back to the shipped default rather than letting
+            # the cache-hit path fail outright.
+            logger.warning(
+                "adjuster model=%s not installed in Ollama; falling back to shipped default=%s",
+                exc.model_name, CONTEXT_ADJUSTER_MODEL_NAME,
+            )
+            return await self.adjust_backend.complete(
+                replace(request, model_name=CONTEXT_ADJUSTER_MODEL_NAME)
+            )
+
     async def generalize(self, answer: str) -> str:
         logger.debug(f"Generalizing response: {answer[:80]}...")
 
@@ -314,16 +333,28 @@ class ContextAdjusterService:
         # Deterministic: this is a faithful tone-neutralization
         # rewrite, not creative generation, so temperature buys
         # nothing here (see adjust() below for the same reasoning).
-        generalized = await self.generalize_backend.complete(
-            CompletionRequest(
-                model_name=self.generalize_model_name,
-                messages=messages,
-                max_tokens=REWRITE_MAX_TOKENS,
-                num_ctx=OLLAMA_NUM_CTX,
-                temperature=0,
-                stop=_GENERALIZE_STOP,
-            )
+        request = CompletionRequest(
+            model_name=self.generalize_model_name,
+            messages=messages,
+            max_tokens=REWRITE_MAX_TOKENS,
+            num_ctx=OLLAMA_NUM_CTX,
+            temperature=0,
+            stop=_GENERALIZE_STOP,
         )
+        try:
+            generalized = await self.generalize_backend.complete(request)
+        except ModelNotFoundError as exc:
+            # A workspace override named a model since uninstalled from
+            # Ollama - write-time validation can't catch this day-2 drift.
+            # Fall back to the shipped default for the rest of this call
+            # (including the stop-string retry below) so the miss still
+            # gets generalized instead of storing the raw answer.
+            logger.warning(
+                "generalizer model=%s not installed in Ollama; falling back to shipped default=%s",
+                exc.model_name, GENERALIZER_MODEL_NAME,
+            )
+            request = replace(request, model_name=GENERALIZER_MODEL_NAME)
+            generalized = await self.generalize_backend.complete(request)
 
         # The stop string matches anywhere in the generation, including as
         # part of legitimate content (a faithful rewrite of an answer that
@@ -341,13 +372,7 @@ class ContextAdjusterService:
         # longer cut off at a coincidental marker match.
         if generalized.done_reason == "stop":
             generalized = await self.generalize_backend.complete(
-                CompletionRequest(
-                    model_name=self.generalize_model_name,
-                    messages=messages,
-                    max_tokens=REWRITE_MAX_TOKENS,
-                    num_ctx=OLLAMA_NUM_CTX,
-                    temperature=0,
-                )
+                replace(request, stop=None)
             )
 
         latency = (time.time() - start) * 1000
@@ -386,8 +411,7 @@ class ContextAdjusterService:
 
         start = time.time()
 
-        completion = self.adjust_backend.complete(
-            CompletionRequest(
+        request = CompletionRequest(
                 model_name=self.adjust_model_name,
                 messages=[
                 {"role": "system", "content": "Rewrite the ANSWER to match the tone of the QUESTION. Preserve every fact, name, number, and detail from the ANSWER, no matter how long or how many sections or bullet points it has - only shorten or simplify if the QUESTION explicitly asks for that (e.g. \"give me the short version\", \"explain it simply\"). A QUESTION that just rephrases or repeats the same ask, even in different words, is not a request to shorten. If the ANSWER has sections, bullet points, or numbered items, your rewrite must have the same number of sections, bullet points, or numbered items, each carrying the same information as the original, just reworded - never merge, drop, or summarize any of them unless asked to. Keep every named entity from the ANSWER - every place, event, organization, and date it mentions - in your rewrite. Output only the rewritten answer."},
@@ -479,7 +503,7 @@ class ContextAdjusterService:
                 # regurgitation failure above intermittent and hard to reproduce.
                 temperature=0,
             )
-        )
+        completion = self._complete_adjust(request)
         # Every other guard in this function is post-hoc: they all need the
         # generation to come back before they can reject it, so none of them
         # bounds how long a waiting user holds the cache-hit path open. That is
