@@ -117,49 +117,37 @@ def _disable_admin_loopback(monkeypatch):
     monkeypatch.setattr(_alb, "ADMIN_LOOPBACK_ONLY", False)
 
 
+@pytest.fixture(autouse=True)
+def _reset_pipeline_config_cache():
+    """Clear the in-process per-workspace pipeline config cache around every test.
+
+    pipeline_config_cache._CACHE is a module-level singleton (TTL + db-mtime
+    gated, services/pipeline_config_cache.py) that outlives any single test's
+    monkeypatch of llm_config_service.read_for_workspace. Without this, a test
+    that stubs read_for_workspace to a minimal object can leave that stub
+    cached under a workspace slug (e.g. "acme"), which a later, unrelated test
+    reusing the same slug then reads back - even though the later test never
+    patched anything itself. Reset on both sides of the test so pollution
+    can't leak forward from setup either.
+    """
+    from app.services import pipeline_config_cache
+    pipeline_config_cache.invalidate()
+    yield
+    pipeline_config_cache.invalidate()
+
+
 @pytest.fixture
 def authed_admin_client():
     """TestClient for the main app with management auth pre-satisfied as system actor."""
     from app.main import app
     from app.dependencies.admin_auth import require_management_auth
 
-    ctx = ManagementAuthContext.system()
+    ctx = ManagementAuthContext.local_dev()
     app.dependency_overrides[require_management_auth] = lambda: ctx
     try:
         yield TestClient(app), {"Authorization": "Bearer test-system-token"}
     finally:
         app.dependency_overrides.pop(require_management_auth, None)
-
-
-@pytest.fixture
-def scoped_admin_client():
-    """
-    Factory fixture that yields a callable: build_client(accessible_workspaces) -> (TestClient, headers).
-
-    Pass a list of WorkspaceRef objects to build a user actor scoped to exactly those workspaces.
-    Used to test that user actors are denied access to workspaces they are not members of.
-    """
-    from app.main import app
-    from app.dependencies.admin_auth import require_management_auth
-    from app.dependencies.management_auth import WorkspaceRef
-
-    _override_key = require_management_auth
-
-    def build_client(accessible_workspaces: list[WorkspaceRef]):
-        ctx = ManagementAuthContext(
-            actor_type="user",
-            local_user_id=1,
-            supabase_user_id="test-supabase-uid",
-            email="test@example.com",
-            accessible_workspaces=accessible_workspaces,
-        )
-        app.dependency_overrides[_override_key] = lambda: ctx
-        return TestClient(app), {"Authorization": "Bearer test-user-token"}
-
-    try:
-        yield build_client
-    finally:
-        app.dependency_overrides.pop(_override_key, None)
 
 
 @pytest.fixture

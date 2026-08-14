@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import Button from "@/components/ui/Button";
@@ -8,6 +9,7 @@ import Input from "@/components/ui/Input";
 import Field from "@/components/ui/Field";
 import SectionHeader from "@/components/ui/SectionHeader";
 import { deleteCredential, upsertCredential } from "@/app/actions/credentials";
+import { deleteWorkspace } from "@/app/actions/workspaces";
 import { updateLlmConfig } from "@/app/actions/llm-config";
 import { testProvider } from "@/app/actions/test-provider";
 import {
@@ -24,7 +26,6 @@ import type {
   TestProviderResponse,
 } from "@/lib/types";
 
-const LOCAL_MODEL = "gemma-4-e4b";
 const PROVIDER_LABEL: Record<Provider, string> = {
   google: "Google",
   openai: "OpenAI",
@@ -70,6 +71,20 @@ export default function SettingsClient({
 
   const [testBusy, setTestBusy] = useState(false);
   const [testResult, setTestResult] = useState<TestResult>(null);
+
+  const [confirmDeleteWorkspace, setConfirmDeleteWorkspace] = useState(false);
+  const [deleteWorkspaceBusy, setDeleteWorkspaceBusy] = useState(false);
+  const [deleteWorkspaceErr, setDeleteWorkspaceErr] = useState<string | null>(null);
+
+  async function handleDeleteWorkspace() {
+    setDeleteWorkspaceBusy(true);
+    setDeleteWorkspaceErr(null);
+    const res = await deleteWorkspace(workspaceSlug);
+    setDeleteWorkspaceBusy(false);
+    setConfirmDeleteWorkspace(false);
+    if (!res.ok) { setDeleteWorkspaceErr(res.error); return; }
+    router.replace("/dashboard/workspaces");
+  }
 
   const configKey = JSON.stringify(initialConfig);
   const credsKey = JSON.stringify(initialCredentials);
@@ -157,7 +172,6 @@ export default function SettingsClient({
     setSaveStatus({ kind: "idle", text: "" });
     const res = await updateLlmConfig(workspaceSlug, {
       external_model: null,
-      local_model: null,
       routing_threshold: null,
     });
     setSaveBusy(false);
@@ -221,13 +235,15 @@ export default function SettingsClient({
           <p className="ds-settings-sub">Choose where hard queries go, and keep provider credentials scoped to this organization.</p>
         </div>
         <div className="ds-card" style={{ overflow: "hidden" }}>
+          <div style={{ padding: "10px 20px", borderBottom: "1px solid var(--border)", fontSize: 12, color: "var(--fg-dim)" }}>
+            Model choice for the internal pipeline stages (context enricher, normalizer, cache validator, context
+            adjuster, generalizer, local answering) lives on the{" "}
+            <Link href={`/dashboard/pipeline?workspace=${workspaceSlug}`} style={{ color: "var(--accent)" }}>
+              Pipeline
+            </Link>{" "}
+            page.
+          </div>
           <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 0 }}>
-            <Field label="Local model (easy queries)" hint="Only model available — more coming soon">
-              <select disabled value={LOCAL_MODEL} className="ds-input" style={{ opacity: 0.62, cursor: "not-allowed" }}>
-                <option value={LOCAL_MODEL}>{LOCAL_MODEL}</option>
-              </select>
-            </Field>
-
             <div style={{ display: "grid", gap: 12, gridTemplateColumns: "220px 1fr" }}>
               <Field label="External provider" hint="Provider is inferred from the selected model">
                 <select
@@ -342,12 +358,16 @@ export default function SettingsClient({
             </div>
             <Button
               variant="danger"
-              disabled
-              title={`Workspace deletion is currently CLI-only. Run dejaq-admin workspace delete --slug ${workspaceSlug} from a server shell.`}
+              onClick={() => { setDeleteWorkspaceErr(null); setConfirmDeleteWorkspace(true); }}
             >
               Delete workspace
             </Button>
           </div>
+          {deleteWorkspaceErr && (
+            <div className="ds-pill ds-pill-err" style={{ margin: "0 20px 16px", padding: "8px 12px", borderRadius: 5, fontSize: 12 }}>
+              {deleteWorkspaceErr}
+            </div>
+          )}
         </div>
       </section>
 
@@ -360,6 +380,17 @@ export default function SettingsClient({
         busy={removeBusy}
         onCancel={() => setConfirmRemove(false)}
         onConfirm={handleRemoveCredential}
+      />
+
+      <ConfirmDialog
+        open={confirmDeleteWorkspace}
+        title="Delete workspace"
+        message={`Delete workspace "${workspaceName}"? All departments and API keys inside will be permanently removed. This cannot be undone.`}
+        confirmLabel="Delete"
+        destructive
+        busy={deleteWorkspaceBusy}
+        onCancel={() => setConfirmDeleteWorkspace(false)}
+        onConfirm={handleDeleteWorkspace}
       />
     </div>
   );

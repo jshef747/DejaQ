@@ -12,7 +12,7 @@ class _FeedbackResult(BaseModel):
     escalated_response: object | None = None
 
 
-def test_gateway_route_accepts_org_key_not_supabase_jwt(monkeypatch):
+def test_gateway_route_accepts_org_key_not_arbitrary_bearer_token(monkeypatch):
     from app.main import app
     from app.middleware.api_key import _KEY_CACHE
     from app.routers import departments
@@ -31,15 +31,15 @@ def test_gateway_route_accepts_org_key_not_supabase_jwt(monkeypatch):
         "/departments",
         headers={"Authorization": "Bearer org-key"},
     )
-    # Supabase JWT presented to gateway is treated as org key → invalid → 401
-    supabase_jwt_response = client.get(
+    # Any bearer token that isn't a valid org key → invalid → 401
+    arbitrary_token_response = client.get(
         "/departments",
-        headers={"Authorization": "Bearer supabase-jwt-token"},
+        headers={"Authorization": "Bearer arbitrary-bearer-token"},
     )
 
     assert org_key_response.status_code == 200
     assert org_key_response.json() == []
-    assert supabase_jwt_response.status_code == 401
+    assert arbitrary_token_response.status_code == 401
 
 
 def test_admin_route_does_not_resolve_workspace_key_as_auth(monkeypatch):

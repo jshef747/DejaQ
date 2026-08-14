@@ -79,3 +79,60 @@ def test_one_unreachable_namespace_does_not_stop_the_sweep(monkeypatch):
 
     assert swept == ["acme__eng"]
     assert result == {"status": "ok", "deleted": 1}
+
+
+# ── Generalizer overrides resolved inside the worker process ──
+
+
+def _config(overrides: dict, **values):
+    """Minimal stand-in for llm_config_service.LlmConfigResult - only the two
+    attributes _resolve_generalize_overrides reads."""
+
+    class _Config:
+        pass
+
+    cfg = _Config()
+    cfg.overrides = overrides
+    for key, value in values.items():
+        setattr(cfg, key, value)
+    return cfg
+
+
+def test_worker_resolves_the_generalizer_prompt_override_itself(monkeypatch):
+    """The generalizer's prompt decides what is written to the cache forever, so
+    the worker must read the workspace's current prompt in its own process -
+    the same reason its model is resolved here rather than passed in the task
+    payload."""
+    monkeypatch.setattr(
+        cache_tasks.pipeline_config_cache,
+        "get_effective_config",
+        lambda slug: _config(
+            {"generalizer_system_prompt": "Workspace generalizer prompt."},
+            generalizer_model="gemma4:e2b",
+            generalizer_system_prompt="Workspace generalizer prompt.",
+        ),
+    )
+
+    assert cache_tasks._resolve_generalize_overrides("acme", "default") == (
+        None,
+        "Workspace generalizer prompt.",
+    )
+
+
+def test_worker_resolves_no_generalizer_overrides_for_a_default_workspace(monkeypatch):
+    monkeypatch.setattr(
+        cache_tasks.pipeline_config_cache,
+        "get_effective_config",
+        lambda slug: _config({}, generalizer_model="gemma4:e2b", generalizer_system_prompt="shipped"),
+    )
+
+    assert cache_tasks._resolve_generalize_overrides("acme", "default") == (None, None)
+
+
+def test_worker_resolves_no_generalizer_overrides_for_an_unknown_workspace(monkeypatch):
+    def _missing(slug):
+        raise cache_tasks.llm_config_service.WorkspaceNotFound(slug)
+
+    monkeypatch.setattr(cache_tasks.pipeline_config_cache, "get_effective_config", _missing)
+
+    assert cache_tasks._resolve_generalize_overrides("ghost", "default") == (None, None)

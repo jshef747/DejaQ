@@ -13,7 +13,7 @@ from app.services.validator import ValidatorService
 logger = logging.getLogger("dejaq.services.service_factory")
 
 _backend: ModelBackend | None = None
-_service_pool: dict[str, object] = {}
+_service_pool: dict[tuple[str, ...], object] = {}
 
 
 def _get_backend() -> ModelBackend:
@@ -32,32 +32,46 @@ def _get_backend() -> ModelBackend:
     return _backend
 
 
-def _service_key(role: str, *parts: str) -> str:
-    return ":".join((role, *parts))
+def _service_key(role: str, *parts: str) -> tuple[str, ...]:
+    # A tuple, not a joined string: both model tags ("gemma4:e2b") and
+    # free-form prompt text can contain the separator, so a joined key is
+    # not injective and two different configs could share one instance.
+    return (role, *parts)
 
 
-def get_normalizer_service(model_name: str | None = None) -> NormalizerService:
+def get_normalizer_service(
+    model_name: str | None = None,
+    system_prompt: str | None = None,
+) -> NormalizerService:
     resolved_model_name = model_name or config.NORMALIZER_MODEL_NAME
-    service_key = _service_key("normalizer", resolved_model_name)
+    # The prompt (or "" for "use the class's own shipped default") is part of
+    # the pool key so two workspaces sharing a model but each running a
+    # different custom prompt never collide on one cached instance.
+    service_key = _service_key("normalizer", resolved_model_name, system_prompt or "")
     service = _service_pool.get(service_key)
     if service is None:
         service = NormalizerService(
             backend=_get_backend(),
             model_name=resolved_model_name,
+            system_prompt=system_prompt,
         )
         _service_pool[service_key] = service
         logger.info("Configured service role=normalizer model=%s", resolved_model_name)
     return service  # type: ignore[return-value]
 
 
-def get_context_enricher_service(model_name: str | None = None) -> ContextEnricherService:
+def get_context_enricher_service(
+    model_name: str | None = None,
+    system_prompt: str | None = None,
+) -> ContextEnricherService:
     resolved_model_name = model_name or config.ENRICHER_MODEL_NAME
-    service_key = _service_key("enricher", resolved_model_name)
+    service_key = _service_key("enricher", resolved_model_name, system_prompt or "")
     service = _service_pool.get(service_key)
     if service is None:
         service = ContextEnricherService(
             backend=_get_backend(),
             model_name=resolved_model_name,
+            system_prompt=system_prompt,
         )
         _service_pool[service_key] = service
         logger.info("Configured service role=enricher model=%s", resolved_model_name)
@@ -67,6 +81,8 @@ def get_context_enricher_service(model_name: str | None = None) -> ContextEnrich
 def get_context_adjuster_service(
     adjust_model_name: str | None = None,
     generalize_model_name: str | None = None,
+    adjust_system_prompt: str | None = None,
+    generalize_system_prompt: str | None = None,
 ) -> ContextAdjusterService:
     resolved_adjust_model_name = adjust_model_name or config.CONTEXT_ADJUSTER_MODEL_NAME
     resolved_generalize_model_name = generalize_model_name or config.GENERALIZER_MODEL_NAME
@@ -74,6 +90,8 @@ def get_context_adjuster_service(
         "adjuster",
         resolved_adjust_model_name,
         resolved_generalize_model_name,
+        adjust_system_prompt or "",
+        generalize_system_prompt or "",
     )
     service = _service_pool.get(service_key)
     if service is None:
@@ -82,6 +100,8 @@ def get_context_adjuster_service(
             adjust_model_name=resolved_adjust_model_name,
             generalize_backend=_get_backend(),
             generalize_model_name=resolved_generalize_model_name,
+            adjust_system_prompt=adjust_system_prompt,
+            generalize_system_prompt=generalize_system_prompt,
         )
         _service_pool[service_key] = service
         logger.info(
@@ -92,28 +112,40 @@ def get_context_adjuster_service(
     return service  # type: ignore[return-value]
 
 
-def get_validator_service(model_name: str | None = None) -> ValidatorService:
+def get_validator_service(
+    model_name: str | None = None,
+    system_prompt: str | None = None,
+    image_system_prompt: str | None = None,
+) -> ValidatorService:
     resolved_model_name = model_name or config.VALIDATOR_MODEL_NAME
-    service_key = _service_key("validator", resolved_model_name)
+    service_key = _service_key(
+        "validator", resolved_model_name, system_prompt or "", image_system_prompt or ""
+    )
     service = _service_pool.get(service_key)
     if service is None:
         service = ValidatorService(
             backend=_get_backend(),
             model_name=resolved_model_name,
+            system_prompt=system_prompt,
+            image_system_prompt=image_system_prompt,
         )
         _service_pool[service_key] = service
         logger.info("Configured service role=validator model=%s", resolved_model_name)
     return service  # type: ignore[return-value]
 
 
-def get_llm_router_service(model_name: str | None = None) -> LLMRouterService:
+def get_llm_router_service(
+    model_name: str | None = None,
+    default_system_prompt: str | None = None,
+) -> LLMRouterService:
     resolved_model_name = model_name or config.LOCAL_LLM_MODEL_NAME
-    service_key = _service_key("llm_router", resolved_model_name)
+    service_key = _service_key("llm_router", resolved_model_name, default_system_prompt or "")
     service = _service_pool.get(service_key)
     if service is None:
         service = LLMRouterService(
             backend=_get_backend(),
             model_name=resolved_model_name,
+            default_system_prompt=default_system_prompt,
         )
         _service_pool[service_key] = service
         logger.info("Configured service role=local_llm model=%s", resolved_model_name)

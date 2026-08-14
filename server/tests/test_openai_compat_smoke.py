@@ -316,7 +316,7 @@ def test_chat_completions_smoke_preserves_response_shape(monkeypatch):
     assert response.status_code == 200
     payload = response.json()
     assert payload["choices"][0]["message"]["content"] == "Paris is the capital of France."
-    assert response.headers["x-dejaq-model-used"] == openai_compat._LOCAL_MODEL_NAME
+    assert response.headers["x-dejaq-model-used"] == openai_compat.LOCAL_LLM_MODEL_NAME
     assert "x-dejaq-conversation-id" in response.headers
 
 
@@ -672,7 +672,7 @@ def test_force_easy_local_header_skips_classifier(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert response.headers["x-dejaq-model-used"] == openai_compat._LOCAL_MODEL_NAME
+    assert response.headers["x-dejaq-model-used"] == openai_compat.LOCAL_LLM_MODEL_NAME
 
 
 def test_force_hard_external_header_skips_classifier(monkeypatch):
@@ -952,6 +952,75 @@ def test_weak_cpu_profile_uses_weak_local_services(monkeypatch):
     assert response.headers["x-dejaq-model-used"] == "qwen_0_5b"
 
 
+def test_services_for_model_profile_resolves_overridden_new_roles_only(monkeypatch):
+    """enricher/normalizer/validator each get a freshly-resolved service only
+    when this workspace overrides that specific role - the same
+    resolve-only-if-overridden contract slice 1 established for
+    local_model/generalizer_model/adjuster_model, extended to the three
+    roles this slice adds."""
+    resolved_calls: dict[str, str] = {}
+
+    def _tracking_enricher(model_name=None, **kwargs):
+        if model_name is not None:
+            resolved_calls["enricher"] = model_name
+        return StubEnricher()
+
+    def _tracking_normalizer(model_name=None, **kwargs):
+        if model_name is not None:
+            resolved_calls["normalizer"] = model_name
+        return StubNormalizer()
+
+    def _tracking_validator(model_name=None, **kwargs):
+        if model_name is not None:
+            resolved_calls["validator"] = model_name
+        return object()
+
+    monkeypatch.setattr(openai_compat, "get_context_enricher_service", _tracking_enricher)
+    monkeypatch.setattr(openai_compat, "get_normalizer_service", _tracking_normalizer)
+    monkeypatch.setattr(openai_compat, "get_validator_service", _tracking_validator)
+
+    llm_config = openai_compat.EffectiveLlmConfig(
+        external_model="gemini-2.5-flash",
+        routing_threshold=0.3,
+        normalizer_model="gemma4:e4b",
+        normalizer_model_overridden=True,
+        validator_model="gemma4:e4b",
+        validator_model_overridden=True,
+        # enricher deliberately left un-overridden.
+    )
+
+    services = openai_compat._services_for_model_profile(openai_compat.MODEL_PROFILE_DEFAULT, llm_config)
+
+    assert resolved_calls == {"normalizer": "gemma4:e4b", "validator": "gemma4:e4b"}
+    assert "enricher" not in resolved_calls
+    assert services.enricher is openai_compat._enricher
+
+
+def test_services_for_model_profile_resolves_overridden_prompt_with_no_model_override(monkeypatch):
+    """A workspace that overrides only a role's prompt (model left default)
+    must still get a freshly-resolved service carrying that prompt - not the
+    shared default-model singleton, which would silently ignore it."""
+    captured: dict[str, tuple] = {}
+
+    def _tracking_normalizer(model_name=None, system_prompt=None):
+        captured["normalizer"] = (model_name, system_prompt)
+        return StubNormalizer()
+
+    monkeypatch.setattr(openai_compat, "get_normalizer_service", _tracking_normalizer)
+
+    llm_config = openai_compat.EffectiveLlmConfig(
+        external_model="gemini-2.5-flash",
+        routing_threshold=0.3,
+        normalizer_system_prompt="Custom normalizer prompt.",
+        normalizer_system_prompt_overridden=True,
+        # normalizer_model deliberately left un-overridden.
+    )
+
+    openai_compat._services_for_model_profile(openai_compat.MODEL_PROFILE_DEFAULT, llm_config)
+
+    assert captured["normalizer"] == (None, "Custom normalizer prompt.")
+
+
 def test_celery_store_keeps_legacy_args_and_sends_profile_header(monkeypatch):
     async def _noop_log(*args, **kwargs):
         return None
@@ -959,9 +1028,10 @@ def test_celery_store_keeps_legacy_args_and_sends_profile_header(monkeypatch):
     captured: dict[str, object] = {}
 
     class FakeTask:
-        def apply_async(self, *, args, headers, ignore_result=False):
+        def apply_async(self, *, args, headers, ignore_result=False, kwargs=None):
             captured["args"] = args
             captured["headers"] = headers
+            captured["kwargs"] = kwargs
 
     monkeypatch.setattr(openai_compat, "get_context_enricher_service", lambda model_name=None: StubEnricher())
     monkeypatch.setattr(openai_compat, "get_normalizer_service", lambda model_name=None: StubNormalizer())
@@ -992,6 +1062,10 @@ def test_celery_store_keeps_legacy_args_and_sends_profile_header(monkeypatch):
     # Stored under the raw normalized query — no spell correction anywhere.
     assert captured["args"][0] == "what is the capital of france?"
     assert captured["headers"] == {"dejaq_model_profile": "weak_cpu"}
+    # workspace_slug rides as a kwarg (plain string) so the Celery worker can
+    # resolve its own fresh generalizer config instead of trusting a value
+    # that may be minutes stale by the time the task actually runs.
+    assert captured["kwargs"] == {"workspace_slug": "demo"}
 
 
 def test_chat_completions_logs_compact_miss_summary(monkeypatch, caplog):

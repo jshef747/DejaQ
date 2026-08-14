@@ -92,6 +92,18 @@ export const LIVE_PROVIDERS: Provider[] = ["google", "openai", "anthropic"];
 export type LlmConfigResponse = {
   external_model: string | null;
   local_model: string | null;
+  generalizer_model: string | null;
+  adjuster_model: string | null;
+  enricher_model: string | null;
+  normalizer_model: string | null;
+  validator_model: string | null;
+  enricher_system_prompt: string | null;
+  normalizer_system_prompt: string | null;
+  validator_system_prompt: string | null;
+  validator_image_system_prompt: string | null;
+  adjuster_system_prompt: string | null;
+  generalizer_system_prompt: string | null;
+  local_model_system_prompt: string | null;
   routing_threshold: number | null;
   overrides: Record<string, unknown>;
   is_default: boolean;
@@ -102,8 +114,46 @@ export type LlmConfigResponse = {
 export type LlmConfigUpdate = Partial<{
   external_model: string | null;
   local_model: string | null;
+  generalizer_model: string | null;
+  adjuster_model: string | null;
+  enricher_model: string | null;
+  normalizer_model: string | null;
+  validator_model: string | null;
+  enricher_system_prompt: string | null;
+  normalizer_system_prompt: string | null;
+  validator_system_prompt: string | null;
+  validator_image_system_prompt: string | null;
+  adjuster_system_prompt: string | null;
+  generalizer_system_prompt: string | null;
+  local_model_system_prompt: string | null;
   routing_threshold: number | null;
 }>;
+
+/** Prompt field identifiers - keys into LlmConfigResponse/Update's
+ * *_system_prompt fields. */
+export type PromptField =
+  | "enricher_system_prompt"
+  | "normalizer_system_prompt"
+  | "validator_system_prompt"
+  | "validator_image_system_prompt"
+  | "adjuster_system_prompt"
+  | "generalizer_system_prompt"
+  | "local_model_system_prompt";
+
+/** Pipeline role identifiers - keys into LlmConfigResponse/Update's *_model
+ * fields, used by the Pipeline page's flow + editor to address one stage. */
+export type PipelineRole =
+  | "enricher_model"
+  | "normalizer_model"
+  | "validator_model"
+  | "adjuster_model"
+  | "generalizer_model"
+  | "local_model";
+
+export type AvailableModelsResponse = {
+  models: string[];
+  error: string | null;
+};
 
 export type CredentialItem = {
   provider: string;

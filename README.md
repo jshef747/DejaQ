@@ -30,7 +30,7 @@ OpenAI-compatible request
 
 ```text
 server/              FastAPI app, gateway, management API, dejaq-admin CLI, Celery tasks
-dashboard/           Next.js dashboard (/admin/v1/*; Supabase auth optional)
+dashboard/           Next.js dashboard (/admin/v1/*; dev-admin auth, loopback-only)
 chat/                Standalone Next.js chat app with server-side workspace API key proxy
 evals/               Offline eval harnesses (see evals/README.md for the list)
 docs/                Product/API notes + getting-started.md
@@ -39,7 +39,7 @@ openspec/            Specs and proposal history
 
 ## Quick Start
 
-Local development needs **no Supabase project and no `.env`** — the dashboard runs
+Local development needs **no `.env`** — the dashboard runs
 in dev-bypass mode (no login) and the backend grants a dev-admin context.
 
 Generation runs through **Ollama** (local or remote). Start it and pull the model tags first:
@@ -61,8 +61,8 @@ cd ..
 
 Add `--lan` to expose the chat UI (port 4000) and API (port 8000) on `0.0.0.0` so other
 devices on the same network can reach them (the script prints the LAN URLs). The dashboard
-(3000), ChromaDB (8001), and Redis stay localhost-only. Under the default `AUTH_MODE=local`
-the admin API is unauthenticated, so only use `--lan` on trusted networks.
+(3000), ChromaDB (8001), and Redis stay localhost-only. The admin API is unauthenticated,
+so only use `--lan` on trusted networks.
 
 Then open the dashboard at `http://localhost:3000/dashboard`, create a workspace
 and generate an API key, and use it as `Authorization: Bearer <key>` against the gateway
@@ -85,8 +85,8 @@ uv run celery -A app.celery_app:celery_app worker --queues=background --pool=sol
 DEJAQ_USE_CELERY=false uv run uvicorn app.main:app --reload
 ```
 
-> **Dashboard auth:** blank Supabase env = dev bypass (no login). Fill `SUPABASE_URL` /
-> `SUPABASE_ANON_KEY` (+ the dashboard equivalents) to require real login for deployment.
+> **Dashboard auth:** dev bypass only — no login, no configuration. The management API is
+> protected by loopback binding, not a credential.
 
 ## Frontend
 
@@ -116,7 +116,7 @@ Fill `DEJAQ_API_KEY` in `chat/.env.local`, or leave it blank and paste a key int
 - `POST /v1/chat/completions` — OpenAI Chat Completions-compatible gateway, authenticated by DejaQ workspace API key
 - `POST /v1/responses` — OpenAI Responses API (newer recommended format), same auth, stateless (`previous_response_id` rejected)
 - `POST /v1/feedback` — cache feedback with optional thumbs-down escalation to the next serving tier (cache → local → external), authenticated by DejaQ workspace API key
-- `/admin/v1/*` — management API; Supabase JWT in deployment, dev-admin context in local mode
+- `/admin/v1/*` — management API; unauthenticated dev-admin context, protected by loopback binding
 - `dejaq-admin` — workspace, department, key, stats, and knowledge-base CLI (headless/server-only bootstrap)
 
 Responses include `X-DejaQ-Interaction-Id`, `X-DejaQ-Tier` (`cache`|`local`|`external`), and (when cached) `X-DejaQ-Response-Id` headers. See [docs/getting-started.md](docs/getting-started.md), [docs/openai-compat-api.md](docs/openai-compat-api.md), [docs/cli-instructions.md](docs/cli-instructions.md), [server/README.md](server/README.md), and [dashboard/README.md](dashboard/README.md).
@@ -161,6 +161,18 @@ code / OCR'd images), or web pages through the dashboard's **Knowledge Base** pa
 closest chunks are injected into the prompt as grounding, so answers come from the
 organisation's own facts; the retrieved text never enters the cache key. Setup, tuning, and
 safety rules: [docs/rag-layer.md](docs/rag-layer.md).
+
+## Pipeline customization
+
+The dashboard's **Pipeline** page (`/dashboard/pipeline`) renders the cache pipeline as a
+flow and lets each workspace override, per stage, both the Ollama model it runs on (any tag
+installed on the configured host) and its system prompt - context enricher, normalizer,
+cache validator (a text-question prompt and an image & file-attachment prompt), context
+adjuster, generalizer, and the local answering model. Every override is optional; resetting
+one restores the shipped default. The external answering model stays on **Settings**,
+because it is tied to the provider credential. Editing the context adjuster or generalizer
+prompt invalidates the calibration of their runaway/looping safety-net thresholds, which
+were measured against the shipped prompts - the page warns on those two stages.
 
 ## Bootstrap a workspace + key
 

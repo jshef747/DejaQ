@@ -1,7 +1,12 @@
-import { createClient } from "@/lib/supabase/server";
-import { isLocalAuth } from "@/lib/authMode";
 import { apiFetch } from "@/lib/api";
 import Topbar from "@/components/Topbar";
+import { listWorkspaces } from "@/app/actions/workspaces";
+import { listDeptStatsRange } from "@/app/actions/stats";
+import type { DeptStatsItem } from "@/lib/types";
+
+export const dynamic = "force-dynamic";
+
+const fmtPct = (n: number) => (n * 100).toFixed(1) + "%";
 
 async function getBackendStatus(): Promise<"connected" | "unavailable"> {
   try {
@@ -15,15 +20,43 @@ async function getBackendStatus(): Promise<"connected" | "unavailable"> {
   }
 }
 
-export default async function DashboardPage() {
-  let email = "dev@localhost";
-  if (!isLocalAuth) {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    email = user?.email ?? "unknown";
+async function getTodayStats(): Promise<{ total: DeptStatsItem; hint: string } | null> {
+  try {
+    const workspaces = await listWorkspaces();
+    if (workspaces.length === 0) return null;
+    const to = new Date();
+    const from = new Date();
+    from.setDate(from.getDate() - 1);
+    const report = await listDeptStatsRange(
+      workspaces[0].slug,
+      from.toISOString().slice(0, 10),
+      to.toISOString().slice(0, 10),
+    );
+    return { total: report.total, hint: `workspace ${workspaces[0].slug}` };
+  } catch {
+    return null;
   }
+}
+
+export default async function DashboardPage() {
+  const email = "dev@localhost";
   const backendStatus = await getBackendStatus();
   const connected = backendStatus === "connected";
+  const stats = connected ? await getTodayStats() : null;
+  const total = stats?.total;
+  const noDataHint = connected ? "no workspace yet" : "connect backend";
+  const hint = total ? stats!.hint : noDataHint;
+
+  const tiles = [
+    { label: "Cache Hit Rate", value: total ? fmtPct(total.hit_rate) : "—", hint },
+    { label: "Requests Today", value: total ? total.requests.toLocaleString() : "—", hint },
+    {
+      label: "Avg Latency",
+      value: total?.avg_latency_ms != null ? `${total.avg_latency_ms.toFixed(0)}ms` : "—",
+      hint,
+    },
+    { label: "Cost Saved", value: total ? `$${(total.est_tokens_saved * 0.000003).toFixed(2)}` : "—", hint },
+  ];
 
   return (
     <>
@@ -67,12 +100,7 @@ export default async function DashboardPage() {
 
         {/* KPI metric grid */}
         <div className="ds-metric-grid">
-          {[
-            { label: "Cache Hit Rate", value: "—", delta: null, hint: "connect backend" },
-            { label: "Requests Today",  value: "—", delta: null, hint: "" },
-            { label: "Avg Latency",     value: "—", delta: null, hint: "" },
-            { label: "Cost Saved",      value: "—", delta: null, hint: "" },
-          ].map((m) => (
+          {tiles.map((m) => (
             <div key={m.label} className="ds-metric">
               <div className="ds-metric-label">{m.label}</div>
               <div className="ds-metric-value" style={{ fontFamily: "var(--font-mono)" }}>{m.value}</div>

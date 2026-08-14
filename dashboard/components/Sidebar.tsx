@@ -12,11 +12,10 @@ import {
   MessageSquare,
   GitBranch,
   BookOpen,
+  Workflow,
   ChevronDown,
   Check,
-  LogOut,
 } from "lucide-react";
-import { signOut } from "@/app/actions/auth";
 import { listWorkspaces } from "@/app/actions/workspaces";
 import type { WorkspaceItem } from "@/lib/types";
 
@@ -29,12 +28,14 @@ const NAV_ITEMS = [
   { href: "/dashboard/tree",        label: "Workspace Tree", Icon: GitBranch },
   { href: "/dashboard/keys",        label: "API Keys",    Icon: Key },
   { href: "/dashboard/rag",         label: "Knowledge Base", Icon: BookOpen },
+  { href: "/dashboard/pipeline",    label: "Pipeline",    Icon: Workflow },
 ];
 
 const WORKSPACE_SCOPED_PATHS = [
   "/dashboard/departments",
   "/dashboard/keys",
   "/dashboard/rag",
+  "/dashboard/pipeline",
   "/dashboard/workspaces",
   "/dashboard/settings",
   "/dashboard/tree",
@@ -190,16 +191,6 @@ export default function Sidebar({ email }: SidebarProps) {
           <div className="ds-sidebar-user-name">{email}</div>
           <div className="ds-sidebar-user-role" style={{ fontFamily: "var(--font-mono)" }}>owner</div>
         </div>
-        <form action={signOut}>
-          <button
-            type="submit"
-            title="Sign out"
-            aria-label="Sign out"
-            className="ds-btn ds-btn-ghost ds-btn-icon"
-          >
-            <LogOut size={13} />
-          </button>
-        </form>
       </div>
     </aside>
   );

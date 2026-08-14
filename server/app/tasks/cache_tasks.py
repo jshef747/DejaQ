@@ -7,9 +7,8 @@ import redis as redis_lib
 
 from app.celery_app import celery_app
 from app.config import REDIS_URL, EVICTION_FLOOR
-from app.services.context_adjuster import ContextAdjusterService
 from app.services.memory_chromaDB import derive_doc_id, get_memory_service, list_namespaces, _pool
-from app.services import rag_service
+from app.services import llm_config_service, pipeline_config_cache, rag_service
 from app.services.service_factory import get_context_adjuster_service
 
 logger = logging.getLogger("dejaq.tasks.cache")
@@ -27,23 +26,37 @@ def _is_suppressed(clean_query: str) -> bool:
     except redis_lib.exceptions.RedisError:
         return False  # Redis unavailable: proceed with storage
 
-# Lazy-initialized adjuster (one per worker process; MemoryService is pooled per namespace)
-_context_adjusters: dict[str, ContextAdjusterService] = {}
 _worker_loop: asyncio.AbstractEventLoop | None = None
 
 
-def _get_adjuster(model_profile: str = "default") -> ContextAdjusterService:
-    """Lazy-load ContextAdjusterService on first task execution in this worker process."""
-    if model_profile not in _context_adjusters:
-        logger.info("Initializing ContextAdjusterService in worker profile=%s...", model_profile)
-        if model_profile == "weak_cpu":
-            _context_adjusters[model_profile] = get_context_adjuster_service(
-                adjust_model_name="qwen_0_5b",
-                generalize_model_name="qwen_0_5b",
-            )
-        else:
-            _context_adjusters[model_profile] = get_context_adjuster_service()
-    return _context_adjusters[model_profile]
+def _resolve_generalize_overrides(
+    workspace_slug: str | None, model_profile: str
+) -> tuple[str | None, str | None]:
+    """Resolve the generalizer role's model name and system prompt fresh, in
+    this worker process. Returns (model_name, system_prompt).
+
+    Deliberately re-reads the workspace's config on every task execution
+    rather than resolving it once in the dispatching FastAPI request and
+    serializing the result into the task payload: a Celery task can sit in
+    the queue for a while, and the task documents "all arguments are plain
+    strings" for exactly this reason - the worker resolves its own
+    up-to-date configuration instead of trusting a value that may be minutes
+    stale by the time this task actually runs. Returns (None, None)
+    (service_factory falls back to the shipped config defaults) for the dev
+    weak_cpu profile's complement, an unknown workspace, or no workspace at
+    all (e.g. a legacy caller/test that doesn't pass one).
+    """
+    if model_profile == "weak_cpu":
+        return "qwen_0_5b", None
+    if not workspace_slug:
+        return None, None
+    try:
+        config = pipeline_config_cache.get_effective_config(workspace_slug)
+    except llm_config_service.WorkspaceNotFound:
+        return None, None
+    model = config.generalizer_model if "generalizer_model" in config.overrides else None
+    prompt = config.generalizer_system_prompt if "generalizer_system_prompt" in config.overrides else None
+    return model, prompt
 
 
 def _run_async_in_worker(coro):
@@ -70,6 +83,7 @@ def generalize_and_store_task(
     user_id: str,
     cache_namespace: str = "dejaq_default",
     model_profile: str = "default",
+    workspace_slug: str | None = None,
     image_dhash: str | None = None,
     image_clip: str | None = None,
     image_kind: str | None = None,
@@ -81,6 +95,10 @@ def generalize_and_store_task(
 
     All arguments are plain strings — no model objects or unpickleable data.
     cache_namespace selects the ChromaDB collection (department isolation).
+    workspace_slug (added for per-workspace pipeline config) is used only to
+    resolve the generalizer's model and system prompt fresh in this worker
+    process - see _resolve_generalize_overrides above for why they aren't
+    resolved once in the dispatching request instead.
     The image_* args are the scalar fingerprints for image requests (all None
     for text): photos carry dhash+clip, documents carry OCR tokens in image_text.
     The file_* args are the exact identity of an attached file (PDF, DOCX, or
@@ -106,7 +124,13 @@ def generalize_and_store_task(
         if image_kind or file_kind:
             generalized = answer
         else:
-            context_adjuster = _get_adjuster(resolved_model_profile)
+            generalize_model_name, generalize_system_prompt = _resolve_generalize_overrides(
+                workspace_slug, resolved_model_profile
+            )
+            context_adjuster = get_context_adjuster_service(
+                generalize_model_name=generalize_model_name,
+                generalize_system_prompt=generalize_system_prompt,
+            )
             generalized = _run_async_in_worker(context_adjuster.generalize(answer))
         doc_id = memory.store_interaction(
             clean_query, generalized, original_query, user_id,
