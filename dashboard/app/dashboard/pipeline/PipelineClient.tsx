@@ -644,6 +644,12 @@ function StageEditor({
           </div>
         )}
 
+        {(stage.budgets ?? []).some((b) => b.key === "ollama_num_ctx") && (
+          <div className="ds-field-hint" style={{ marginTop: -8, marginBottom: 14 }}>
+            Changing the model can change what context window is safe - check the Context window setting below still fits it.
+          </div>
+        )}
+
         {stage.prompts.map((p) => (
           <Field key={p.key} label={p.label}>
             <textarea
