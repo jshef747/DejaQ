@@ -317,7 +317,10 @@ OLLAMA_TIMEOUT_SECONDS = _get_float("DEJAQ_OLLAMA_TIMEOUT_SECONDS", 60.0)
 # a reload of the underlying model tag on every alternating request, including on
 # the synchronous serve path. Accepted tradeoff of the per-workspace token-budget
 # feature, not a defect - a deployment that cares should keep the override
-# uniform (or unset) across workspaces sharing a host.
+# uniform (or unset) across workspaces sharing a host. That override can only
+# LOWER this window: because this value is already the smaller model's own
+# maximum, it doubles as the admin-API ceiling for the per-workspace field
+# (schemas/admin/llm_config.py reads it rather than restating a literal).
 OLLAMA_NUM_CTX = int(_get_float("DEJAQ_OLLAMA_NUM_CTX", 32768))
 
 # Deadline for adjust() alone, the one rewrite role on the synchronous

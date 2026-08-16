@@ -683,17 +683,19 @@ def test_llm_config_update_rejects_a_model_but_prompt_field_independent(isolated
     assert stored.is_default is True
 
 
-def test_llm_config_schema_rejects_a_context_window_past_the_largest_model_maximum():
-    """131072 is gemma4:e2b's own context maximum - the largest model that
-    receives this window - so anything above it cannot be honoured and would
-    only size a KV cache on the shared Ollama host."""
+def test_llm_config_schema_rejects_a_context_window_past_the_smallest_model_maximum():
+    """One window is shared by every Ollama-backed role, so the ceiling is the
+    SMALLEST maximum among them (qwen2.5:1.5b's 32768, which is what
+    config.OLLAMA_NUM_CTX already equals), not gemma4:e2b's larger one - above
+    it the enricher and adjuster cannot honour the window at all."""
     import pydantic
 
+    from app import config
     from app.schemas.admin.llm_config import LlmConfigUpdate
 
-    assert LlmConfigUpdate(ollama_num_ctx=131072).ollama_num_ctx == 131072
+    assert LlmConfigUpdate(ollama_num_ctx=config.OLLAMA_NUM_CTX).ollama_num_ctx == config.OLLAMA_NUM_CTX
 
     with pytest.raises(pydantic.ValidationError) as exc_info:
-        LlmConfigUpdate(ollama_num_ctx=131073)
+        LlmConfigUpdate(ollama_num_ctx=config.OLLAMA_NUM_CTX + 1)
 
     assert "ollama_num_ctx" in str(exc_info.value)

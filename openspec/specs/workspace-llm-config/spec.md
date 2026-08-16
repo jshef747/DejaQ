@@ -104,7 +104,7 @@ A value for any of the seven `*_system_prompt` fields that is empty or contains 
 
 ### Requirement: Token budget overrides are validated as a relationship, not per field
 
-Each of `default_max_tokens`, `rewrite_max_tokens`, and `ollama_num_ctx` SHALL be a positive integer, and `ollama_num_ctx` SHALL additionally be at most `131072` (the largest window any model that receives it can honour). Per-field bounds alone are not sufficient: when an update touches any of the three, the system SHALL validate the EFFECTIVE resulting triple (the values the workspace would have after the update lands, taking the stored value, or the `app.config` global default when unset, for any of the three the request does not touch) against all of:
+Each of `default_max_tokens`, `rewrite_max_tokens`, and `ollama_num_ctx` SHALL be a positive integer, and `ollama_num_ctx` SHALL additionally be at most the `app.config.OLLAMA_NUM_CTX` global default (32768 as shipped). One window is sent to every Ollama-backed role, so the ceiling is the SMALLEST context maximum among the models sharing it (`qwen2.5:1.5b`, which runs the enricher and adjuster), not the largest; that is the bound `OLLAMA_NUM_CTX` already encodes, so the ceiling SHALL read it rather than restate a literal. Per-field bounds alone are not sufficient: when an update touches any of the three, the system SHALL validate the EFFECTIVE resulting triple (the values the workspace would have after the update lands, taking the stored value, or the `app.config` global default when unset, for any of the three the request does not touch) against all of:
 
 - `default_max_tokens` SHALL be greater than `1024`, the value `app.config` records as having measurably truncated ordinary answers mid-sentence;
 - `rewrite_max_tokens` SHALL be at least 2x `default_max_tokens`, because `generalize()`/`adjust()` are handed the whole raw answer and must keep every fact, and a truncated STORED copy never self-heals;
@@ -126,3 +126,8 @@ A violating combination SHALL return HTTP 422 whose message names the offending 
 
 - **WHEN** an authorized client PUTs `{"default_max_tokens": 1024}`
 - **THEN** the response is HTTP 422 and no override is stored
+
+#### Scenario: Context window above the smallest sharing model's maximum
+
+- **WHEN** an authorized client PUTs `{"ollama_num_ctx": 65536}` against the shipped `OLLAMA_NUM_CTX` of 32768
+- **THEN** the response is HTTP 422 naming `ollama_num_ctx`, because the enricher and adjuster share that window on a model that cannot honour it - the ceiling is a floor-of-the-two, so the override can only lower the shipped window, never raise it

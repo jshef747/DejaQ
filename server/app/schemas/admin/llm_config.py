@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app import config
+
 PROMPT_FIELDS = (
     "enricher_system_prompt",
     "normalizer_system_prompt",
@@ -61,12 +63,16 @@ class LlmConfigUpdate(BaseModel):
     # Pydantic validator.
     default_max_tokens: int | None = Field(default=None, gt=0)
     rewrite_max_tokens: int | None = Field(default=None, gt=0)
-    # 131072 is gemma4:e2b's own context maximum - the largest model that
-    # receives this window - so nothing above it can be honoured anyway, and an
-    # arbitrary value would size a KV cache on the shared Ollama host. The
-    # relationship rules bound the other two transitively (rewrite <= ctx/2,
-    # answer <= rewrite/2), so this is the only ceiling needed.
-    ollama_num_ctx: int | None = Field(default=None, gt=0, le=131072)
+    # One window is sent to every Ollama-backed role, so the ceiling has to be
+    # the SMALLER of the models sharing it, not the larger: enricher and adjuster
+    # run qwen2.5:1.5b (32768), normalizer and validator gemma4:e2b (131072).
+    # config.OLLAMA_NUM_CTX is already exactly that bound - it is set to
+    # qwen2.5:1.5b's own maximum for this reason (see its comment block) - so it
+    # is the ceiling, not a second literal to keep in sync. Above it the two
+    # qwen roles cannot honour the window at all. The relationship rules bound
+    # the other two transitively (rewrite <= ctx/2, answer <= rewrite/2), so
+    # this is the only ceiling needed.
+    ollama_num_ctx: int | None = Field(default=None, gt=0, le=config.OLLAMA_NUM_CTX)
 
     @field_validator(*PROMPT_FIELDS)
     @classmethod
