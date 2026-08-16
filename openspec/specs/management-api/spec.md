@@ -153,9 +153,9 @@ The system SHALL expose stats aggregation endpoints:
 
 Both endpoints SHALL accept optional `from` and `to` query parameters as ISO-8601 dates (`YYYY-MM-DD`), interpreted as UTC midnight inclusive (`from`) and UTC midnight exclusive (`to`). The service SHALL compare using the same UTC ISO timestamp representation stored in the request log: Python `datetime(..., tzinfo=timezone.utc).isoformat()` strings with `+00:00` offsets, not `Z` suffixes. Invalid date formats and `from > to` SHALL return HTTP 422.
 
-`GET /admin/v1/stats/workspaces` SHALL return `{items: WorkspaceStats[], total: StatsMetrics}`. `WorkspaceStats` SHALL include `{workspace, workspace_name, requests, hits, misses, hit_rate, avg_latency_ms, est_tokens_saved, easy_count, hard_count, models_used}`. `StatsMetrics` SHALL include the aggregate metric fields without identity fields, aggregated over every workspace row.
+`GET /admin/v1/stats/workspaces` SHALL return `{items: WorkspaceStats[], total: StatsMetrics}`. `WorkspaceStats` SHALL include `{workspace, workspace_name, requests, hits, misses, hit_rate, avg_latency_ms, est_tokens_saved, easy_count, hard_count, models_used, truncation_rate}`. `StatsMetrics` SHALL include the aggregate metric fields without identity fields, aggregated over every workspace row. `truncation_rate` SHALL be the fraction of MISS rows whose logged `finish_reason` is `length`, over miss rows only (a cache hit is never truncated, so hits SHALL NOT dilute the denominator), and SHALL be `0.0` when there are no misses.
 
-`GET /admin/v1/stats/workspaces/{workspace_slug}/departments` SHALL return `{workspace, items: DepartmentStats[], total: StatsMetrics}`. `DepartmentStats` SHALL include `{workspace, department, department_name, requests, hits, misses, hit_rate, avg_latency_ms, est_tokens_saved, easy_count, hard_count, models_used}`. Unknown workspace SHALL return HTTP 404.
+`GET /admin/v1/stats/workspaces/{workspace_slug}/departments` SHALL return `{workspace, items: DepartmentStats[], total: StatsMetrics}`. `DepartmentStats` SHALL include `{workspace, department, department_name, requests, hits, misses, hit_rate, avg_latency_ms, est_tokens_saved, easy_count, hard_count, models_used, truncation_rate}`. Unknown workspace SHALL return HTTP 404.
 
 #### Scenario: Per-workspace stats with no date filter
 
