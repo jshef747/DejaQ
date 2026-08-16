@@ -117,6 +117,19 @@ const STAGES: StageMeta[] = [
 ];
 const STAGE_BY_KEY = Object.fromEntries(STAGES.map((s) => [s.key, s])) as Record<PipelineRole, StageMeta>;
 
+// Budgets governing more than one stage. A per-stage "Reset to default" must
+// leave these alone: clearing one from the Normalizer panel would silently
+// shrink the window the Enricher, Validator and Adjuster run on too. Clear a
+// shared budget by emptying its field and saving, or with "Reset all stages".
+// default_max_tokens counts as shared even though only one STAGES entry lists
+// it - the External answer panel consumes it as well.
+const SHARED_BUDGET_KEYS = new Set<TokenBudgetField>([
+  "default_max_tokens",
+  ...STAGES.flatMap((s) => (s.budgets ?? []).map((b) => b.key)).filter(
+    (key, _i, all) => all.filter((k) => k === key).length > 1,
+  ),
+]);
+
 function stageOverridden(stage: StageMeta, config: LlmConfigResponse): boolean {
   return (
     stage.key in config.overrides ||
@@ -232,7 +245,9 @@ export default function PipelineClient({ workspaceSlug, initialConfig, initialAv
     setStatus({ kind: "idle", text: "" });
     const patch: Record<string, null> = { [stage.key]: null };
     for (const p of stage.prompts) patch[p.key] = null;
-    for (const b of stage.budgets ?? []) patch[b.key] = null;
+    for (const b of stage.budgets ?? []) {
+      if (!SHARED_BUDGET_KEYS.has(b.key)) patch[b.key] = null;
+    }
     const res = await updateLlmConfig(workspaceSlug, patch as LlmConfigUpdate);
     setSaveBusy(false);
     if (!res.ok) {
@@ -647,7 +662,15 @@ function StageEditor({
           <Field
             key={b.key}
             label={b.label}
-            hint={`${b.hint} Empty uses the default shown as the placeholder (${config[b.key]} tokens).`}
+            hint={[
+              b.hint,
+              SHARED_BUDGET_KEYS.has(b.key)
+                ? "Shared with every other stage that uses it, so “Reset to default” below leaves it untouched - empty this field and save to clear it."
+                : "",
+              `Empty uses the default shown as the placeholder (${config[b.key]} tokens).`,
+            ]
+              .filter(Boolean)
+              .join(" ")}
           >
             <input
               name={b.key}

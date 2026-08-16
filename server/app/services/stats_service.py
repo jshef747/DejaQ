@@ -12,6 +12,7 @@ from app.schemas.admin.stats import (
     WorkspaceStats,
     WorkspaceStatsReport,
 )
+from app.services.request_logger import ensure_stats_schema
 
 _TOKENS_PER_HIT = 150
 
@@ -86,7 +87,9 @@ def _metrics(row) -> StatsMetrics:
 
 
 def _connect() -> sqlite3.Connection:
-    return sqlite3.connect(config.STATS_DB_PATH)
+    con = sqlite3.connect(config.STATS_DB_PATH)
+    ensure_stats_schema(con)
+    return con
 
 
 def _workspace_name_map() -> dict[str, str]:

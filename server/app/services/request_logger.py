@@ -1,4 +1,5 @@
 import logging
+import sqlite3
 from datetime import datetime, timezone
 
 import aiosqlite
@@ -40,6 +41,25 @@ CREATE TABLE IF NOT EXISTS feedback_log (
 )
 """
 
+# Additive columns applied to an existing table by ensure_stats_schema below.
+# One source of truth: the writer (RequestLogger) and every direct sqlite3
+# reader of this DB (stats_service, feedback_service, the `dejaq-admin` CLI
+# behind them) run the same list, so a reader can never meet a schema the
+# server happens not to have upgraded yet.
+_REQUEST_COLUMNS = {
+    "response_id": "TEXT",
+    "source": "TEXT NOT NULL DEFAULT 'chat'",
+    "interaction_id": "TEXT",
+    "parent_interaction_id": "TEXT",
+    "served_tier": "TEXT",
+    "external_provider_used": "INTEGER NOT NULL DEFAULT 0",
+    "finish_reason": "TEXT",
+}
+
+_FEEDBACK_COLUMNS = {
+    "interaction_id": "TEXT",
+}
+
 _CREATE_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_requests_ts ON requests(ts)",
     "CREATE INDEX IF NOT EXISTS idx_requests_workspace_department_ts ON requests(workspace, department, ts)",
@@ -52,48 +72,47 @@ _CREATE_INDEXES = (
 )
 
 
+def _migrate_table(con: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+    cols = [row[1] for row in con.execute(f"PRAGMA table_info({table})").fetchall()]
+
+    # Rename legacy 'org' column to 'workspace' if present (one-time migration).
+    if "org" in cols and "workspace" not in cols:
+        con.execute(f"ALTER TABLE {table} RENAME COLUMN org TO workspace")
+        logger.info("Migrated %s.org → %s.workspace", table, table)
+
+    for name, definition in columns.items():
+        if name not in cols:
+            con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+
+
+def ensure_stats_schema(con: sqlite3.Connection) -> None:
+    """Create the stats tables and add any additive column still missing.
+
+    Idempotent and cheap - one PRAGMA per table, an ALTER only for what is
+    absent - so any direct sqlite3 reader of this DB can call it on connect
+    rather than depending on the FastAPI lifespan having run first.
+    """
+    con.execute(_CREATE_REQUESTS_TABLE)
+    con.execute(_CREATE_FEEDBACK_TABLE)
+    _migrate_table(con, "requests", _REQUEST_COLUMNS)
+    _migrate_table(con, "feedback_log", _FEEDBACK_COLUMNS)
+    con.commit()
+
+
 class RequestLogger:
     def __init__(self) -> None:
         self._db: aiosqlite.Connection | None = None
 
     async def init(self) -> None:
-        self._db = await aiosqlite.connect(STATS_DB_PATH)
-        await self._db.execute(_CREATE_REQUESTS_TABLE)
-        await self._db.execute(_CREATE_FEEDBACK_TABLE)
-        # Migrate existing tables with additive nullable/default columns.
         try:
-            cols = [row[1] for row in await (await self._db.execute("PRAGMA table_info(requests)")).fetchall()]
-
-            # Rename legacy 'org' column to 'workspace' if present (one-time migration).
-            if "org" in cols and "workspace" not in cols:
-                await self._db.execute("ALTER TABLE requests RENAME COLUMN org TO workspace")
-                logger.info("Migrated requests.org → requests.workspace")
-
-            request_columns = {
-                "response_id": "TEXT",
-                "source": "TEXT NOT NULL DEFAULT 'chat'",
-                "interaction_id": "TEXT",
-                "parent_interaction_id": "TEXT",
-                "served_tier": "TEXT",
-                "external_provider_used": "INTEGER NOT NULL DEFAULT 0",
-                "finish_reason": "TEXT",
-            }
-            for name, definition in request_columns.items():
-                if name not in cols:
-                    await self._db.execute(f"ALTER TABLE requests ADD COLUMN {name} {definition}")
-
-            feedback_cols = [
-                row[1] for row in await (await self._db.execute("PRAGMA table_info(feedback_log)")).fetchall()
-            ]
-            # Rename legacy 'org' column in feedback_log too.
-            if "org" in feedback_cols and "workspace" not in feedback_cols:
-                await self._db.execute("ALTER TABLE feedback_log RENAME COLUMN org TO workspace")
-                logger.info("Migrated feedback_log.org → feedback_log.workspace")
-
-            if "interaction_id" not in feedback_cols:
-                await self._db.execute("ALTER TABLE feedback_log ADD COLUMN interaction_id TEXT")
+            con = sqlite3.connect(STATS_DB_PATH)
+            try:
+                ensure_stats_schema(con)
+            finally:
+                con.close()
         except Exception:
             logger.warning("Could not migrate stats tables", exc_info=True)
+        self._db = await aiosqlite.connect(STATS_DB_PATH)
         for statement in _CREATE_INDEXES:
             await self._db.execute(statement)
         await self._db.commit()

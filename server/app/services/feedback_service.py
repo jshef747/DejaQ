@@ -9,7 +9,7 @@ from app.schemas.feedback import EscalatedResponse
 from app.schemas.admin.feedback import FeedbackItem, FeedbackListResponse
 from app.services.escalation import escalate
 from app.services.memory_chromaDB import get_memory_service
-from app.services.request_logger import request_logger
+from app.services.request_logger import ensure_stats_schema, request_logger
 from app.services.response_registry import compute_messages_hash, response_registry
 
 
@@ -66,6 +66,7 @@ def list_feedback(
     where = "WHERE " + " AND ".join(clauses) if clauses else ""
 
     with sqlite3.connect(config.STATS_DB_PATH) as con:
+        ensure_stats_schema(con)
         total = con.execute(f"SELECT COUNT(*) FROM feedback_log {where}", params).fetchone()[0]
         rows = con.execute(
             f"""

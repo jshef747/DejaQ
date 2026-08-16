@@ -128,3 +128,35 @@ def test_stats_service_rejects_reversed_date_range(isolated_stats_db):
 
     with pytest.raises(stats_service.InvalidDateRange):
         stats_service.workspace_stats(from_date=date(2026, 4, 15), to_date=date(2026, 4, 1))
+
+
+def test_workspace_stats_reads_a_db_that_predates_finish_reason(isolated_org_db, isolated_stats_db):
+    """A stats DB written before this branch has no finish_reason column, and
+    `dejaq-admin stats` may well run before the upgraded server has ever
+    started - so the reader has to apply the additive migration itself."""
+    from app.services import stats_service
+
+    con = sqlite3.connect(isolated_stats_db)
+    con.execute(
+        """CREATE TABLE requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            workspace TEXT NOT NULL,
+            department TEXT NOT NULL,
+            latency_ms INTEGER NOT NULL,
+            cache_hit INTEGER NOT NULL,
+            difficulty TEXT,
+            model_used TEXT
+        )"""
+    )
+    con.execute(
+        "INSERT INTO requests (ts, workspace, department, latency_ms, cache_hit, difficulty, model_used) "
+        "VALUES ('2026-04-01T00:00:00+00:00', 'acme', 'eng', 100, 0, 'hard', 'gemini')",
+    )
+    con.commit()
+    con.close()
+
+    report = stats_service.workspace_stats()
+
+    assert report.total.requests == 1
+    assert report.total.truncation_rate == 0.0

@@ -681,3 +681,19 @@ def test_llm_config_update_rejects_a_model_but_prompt_field_independent(isolated
 
     stored = read_for_workspace("acme")
     assert stored.is_default is True
+
+
+def test_llm_config_schema_rejects_a_context_window_past_the_largest_model_maximum():
+    """131072 is gemma4:e2b's own context maximum - the largest model that
+    receives this window - so anything above it cannot be honoured and would
+    only size a KV cache on the shared Ollama host."""
+    import pydantic
+
+    from app.schemas.admin.llm_config import LlmConfigUpdate
+
+    assert LlmConfigUpdate(ollama_num_ctx=131072).ollama_num_ctx == 131072
+
+    with pytest.raises(pydantic.ValidationError) as exc_info:
+        LlmConfigUpdate(ollama_num_ctx=131073)
+
+    assert "ollama_num_ctx" in str(exc_info.value)

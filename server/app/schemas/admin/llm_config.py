@@ -61,7 +61,12 @@ class LlmConfigUpdate(BaseModel):
     # Pydantic validator.
     default_max_tokens: int | None = Field(default=None, gt=0)
     rewrite_max_tokens: int | None = Field(default=None, gt=0)
-    ollama_num_ctx: int | None = Field(default=None, gt=0)
+    # 131072 is gemma4:e2b's own context maximum - the largest model that
+    # receives this window - so nothing above it can be honoured anyway, and an
+    # arbitrary value would size a KV cache on the shared Ollama host. The
+    # relationship rules bound the other two transitively (rewrite <= ctx/2,
+    # answer <= rewrite/2), so this is the only ceiling needed.
+    ollama_num_ctx: int | None = Field(default=None, gt=0, le=131072)
 
     @field_validator(*PROMPT_FIELDS)
     @classmethod
