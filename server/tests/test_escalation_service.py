@@ -4,6 +4,8 @@ from contextlib import contextmanager
 
 import pytest
 
+from app.config import DEFAULT_MAX_TOKENS
+
 pytestmark = pytest.mark.no_model
 
 
@@ -184,7 +186,9 @@ def test_local_tier_without_credential_returns_no_credential(monkeypatch):
     monkeypatch.setattr(
         escalation.llm_config_service,
         "read_for_workspace",
-        lambda workspace_slug: type("Cfg", (), {"external_model": "gpt-5.4-mini"})(),
+        lambda workspace_slug: type(
+            "Cfg", (), {"external_model": "gpt-5.4-mini", "default_max_tokens": DEFAULT_MAX_TOKENS}
+        )(),
     )
     monkeypatch.setattr(escalation, "provider_for_model", lambda model: "openai")
     monkeypatch.setattr(
@@ -252,7 +256,9 @@ def test_local_tier_escalates_to_external_llm(monkeypatch):
     monkeypatch.setattr(
         escalation.llm_config_service,
         "read_for_workspace",
-        lambda workspace_slug: type("Cfg", (), {"external_model": "gpt-5.4-mini"})(),
+        lambda workspace_slug: type(
+            "Cfg", (), {"external_model": "gpt-5.4-mini", "default_max_tokens": DEFAULT_MAX_TOKENS}
+        )(),
     )
     monkeypatch.setattr(escalation, "provider_for_model", lambda model: "openai")
     monkeypatch.setattr(escalation, "get_session", fake_session)
@@ -373,7 +379,9 @@ def test_truncated_external_escalation_is_answered_but_not_cached(monkeypatch):
     monkeypatch.setattr(
         escalation.llm_config_service,
         "read_for_workspace",
-        lambda workspace_slug: type("Cfg", (), {"external_model": "gpt-5.4-mini"})(),
+        lambda workspace_slug: type(
+            "Cfg", (), {"external_model": "gpt-5.4-mini", "default_max_tokens": DEFAULT_MAX_TOKENS}
+        )(),
     )
     monkeypatch.setattr(escalation, "provider_for_model", lambda model: "openai")
     monkeypatch.setattr(escalation, "get_session", fake_session)
@@ -424,7 +432,9 @@ def test_untruncated_external_escalation_is_still_cached(monkeypatch):
     monkeypatch.setattr(
         escalation.llm_config_service,
         "read_for_workspace",
-        lambda workspace_slug: type("Cfg", (), {"external_model": "gpt-5.4-mini"})(),
+        lambda workspace_slug: type(
+            "Cfg", (), {"external_model": "gpt-5.4-mini", "default_max_tokens": DEFAULT_MAX_TOKENS}
+        )(),
     )
     monkeypatch.setattr(escalation, "provider_for_model", lambda model: "openai")
     monkeypatch.setattr(escalation, "get_session", fake_session)
@@ -470,7 +480,9 @@ def test_local_tier_external_failures_return_status(monkeypatch, raised, expecte
     monkeypatch.setattr(
         escalation.llm_config_service,
         "read_for_workspace",
-        lambda workspace_slug: type("Cfg", (), {"external_model": "gpt-5.4-mini"})(),
+        lambda workspace_slug: type(
+            "Cfg", (), {"external_model": "gpt-5.4-mini", "default_max_tokens": DEFAULT_MAX_TOKENS}
+        )(),
     )
     monkeypatch.setattr(escalation, "provider_for_model", lambda model: "openai")
     monkeypatch.setattr(escalation, "get_session", fake_session)
@@ -786,7 +798,9 @@ def test_external_escalation_uses_default_max_tokens(monkeypatch):
     monkeypatch.setattr(
         escalation.llm_config_service,
         "read_for_workspace",
-        lambda workspace_slug: type("Cfg", (), {"external_model": "gpt-5.4-mini"})(),
+        lambda workspace_slug: type(
+            "Cfg", (), {"external_model": "gpt-5.4-mini", "default_max_tokens": DEFAULT_MAX_TOKENS}
+        )(),
     )
     monkeypatch.setattr(escalation, "provider_for_model", lambda model: "openai")
     monkeypatch.setattr(escalation, "get_session", fake_session)

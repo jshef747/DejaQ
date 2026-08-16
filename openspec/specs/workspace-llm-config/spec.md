@@ -7,7 +7,7 @@ Define per-workspace LLM routing configuration persistence and the management en
 
 ### Requirement: Per-workspace LLM config is persisted
 
-The system SHALL persist a single LLM configuration record per workspace in a new `workspace_llm_configs` table with columns: `workspace_id` (PK, FK to `workspaces.id`, ON DELETE CASCADE), `external_model` (TEXT, nullable), the six pipeline-role model columns `local_model`, `generalizer_model`, `adjuster_model`, `enricher_model`, `normalizer_model`, `validator_model` (each TEXT, nullable), the seven pipeline-role system prompt columns `enricher_system_prompt`, `normalizer_system_prompt`, `validator_system_prompt`, `validator_image_system_prompt`, `adjuster_system_prompt`, `generalizer_system_prompt`, `local_model_system_prompt` (each TEXT, nullable), `routing_threshold` (REAL, nullable), `updated_at` (TIMESTAMP, NOT NULL). Nullable config columns with `NULL` values SHALL fall back to the global defaults defined in `app.config` (models) or to the owning service module's shipped `DEFAULT_*_SYSTEM_PROMPT` constant (prompts).
+The system SHALL persist a single LLM configuration record per workspace in a new `workspace_llm_configs` table with columns: `workspace_id` (PK, FK to `workspaces.id`, ON DELETE CASCADE), `external_model` (TEXT, nullable), the six pipeline-role model columns `local_model`, `generalizer_model`, `adjuster_model`, `enricher_model`, `normalizer_model`, `validator_model` (each TEXT, nullable), the seven pipeline-role system prompt columns `enricher_system_prompt`, `normalizer_system_prompt`, `validator_system_prompt`, `validator_image_system_prompt`, `adjuster_system_prompt`, `generalizer_system_prompt`, `local_model_system_prompt` (each TEXT, nullable), `routing_threshold` (REAL, nullable), the three token-budget columns `default_max_tokens`, `rewrite_max_tokens`, `ollama_num_ctx` (each INTEGER, nullable), `updated_at` (TIMESTAMP, NOT NULL). Nullable config columns with `NULL` values SHALL fall back to the global defaults defined in `app.config` (models, routing threshold, and token budgets - each token-budget column mirrors the `app.config` constant of the same name uppercased) or to the owning service module's shipped `DEFAULT_*_SYSTEM_PROMPT` constant (prompts).
 
 #### Scenario: Workspace with no config row uses defaults
 
@@ -21,7 +21,7 @@ The system SHALL persist a single LLM configuration record per workspace in a ne
 
 ### Requirement: Read LLM config endpoint
 
-The system SHALL expose `GET /admin/v1/workspaces/{workspace_slug}/llm-config` returning HTTP 200 with `{external_model, local_model, generalizer_model, adjuster_model, enricher_model, normalizer_model, validator_model, enricher_system_prompt, normalizer_system_prompt, validator_system_prompt, validator_image_system_prompt, adjuster_system_prompt, generalizer_system_prompt, local_model_system_prompt, routing_threshold, overrides, updated_at, is_default, credentials_configured}`. The top-level model and system prompt fields SHALL contain effective values after merging stored overrides with the shipped defaults, so a prompt field is never empty. The `overrides` object SHALL contain only fields currently overridden by the workspace row. The `is_default` field SHALL be `true` when no row exists or every nullable config column is `NULL`; otherwise `false`. `updated_at` SHALL be `null` when no row exists. If a row exists but all nullable config columns are `NULL`, `is_default=true`, `overrides={}`, and `updated_at` SHALL return the row timestamp. Unknown workspace SHALL return HTTP 404. The `credentials_configured` field SHALL be a list of provider strings for which the workspace has a credential row (may be empty).
+The system SHALL expose `GET /admin/v1/workspaces/{workspace_slug}/llm-config` returning HTTP 200 with `{external_model, local_model, generalizer_model, adjuster_model, enricher_model, normalizer_model, validator_model, enricher_system_prompt, normalizer_system_prompt, validator_system_prompt, validator_image_system_prompt, adjuster_system_prompt, generalizer_system_prompt, local_model_system_prompt, routing_threshold, default_max_tokens, rewrite_max_tokens, ollama_num_ctx, overrides, updated_at, is_default, credentials_configured}`. The top-level model, system prompt, and token-budget fields SHALL contain effective values after merging stored overrides with the shipped defaults, so a prompt field is never empty. The `overrides` object SHALL contain only fields currently overridden by the workspace row. The `is_default` field SHALL be `true` when no row exists or every nullable config column is `NULL`; otherwise `false`. `updated_at` SHALL be `null` when no row exists. If a row exists but all nullable config columns are `NULL`, `is_default=true`, `overrides={}`, and `updated_at` SHALL return the row timestamp. Unknown workspace SHALL return HTTP 404. The `credentials_configured` field SHALL be a list of provider strings for which the workspace has a credential row (may be empty).
 
 #### Scenario: Read config for workspace with no row
 
@@ -40,7 +40,7 @@ The system SHALL expose `GET /admin/v1/workspaces/{workspace_slug}/llm-config` r
 
 ### Requirement: Update LLM config endpoint
 
-The system SHALL expose `PUT /admin/v1/workspaces/{workspace_slug}/llm-config` accepting any non-empty subset of `{external_model, local_model, generalizer_model, adjuster_model, enricher_model, normalizer_model, validator_model, enricher_system_prompt, normalizer_system_prompt, validator_system_prompt, validator_image_system_prompt, adjuster_system_prompt, generalizer_system_prompt, local_model_system_prompt, routing_threshold}` where each field may be omitted, non-null, or explicit `null`. Empty `{}` bodies SHALL return HTTP 422 and SHALL NOT create or update a row. The endpoint SHALL upsert the `workspace_llm_configs` row, set `updated_at = now()`, and return HTTP 200 with the resulting effective config including `credentials_configured`. Fields not present in the request body SHALL retain their previous stored value. Explicit `null` SHALL clear that workspace-level override and make reads fall back to the global default for that field. Unknown workspace SHALL return HTTP 404. Invalid `routing_threshold` (not a number, or outside `[0.0, 1.0]`) SHALL return HTTP 422.
+The system SHALL expose `PUT /admin/v1/workspaces/{workspace_slug}/llm-config` accepting any non-empty subset of `{external_model, local_model, generalizer_model, adjuster_model, enricher_model, normalizer_model, validator_model, enricher_system_prompt, normalizer_system_prompt, validator_system_prompt, validator_image_system_prompt, adjuster_system_prompt, generalizer_system_prompt, local_model_system_prompt, routing_threshold, default_max_tokens, rewrite_max_tokens, ollama_num_ctx}` where each field may be omitted, non-null, or explicit `null`. Empty `{}` bodies SHALL return HTTP 422 and SHALL NOT create or update a row. The endpoint SHALL upsert the `workspace_llm_configs` row, set `updated_at = now()`, and return HTTP 200 with the resulting effective config including `credentials_configured`. Fields not present in the request body SHALL retain their previous stored value. Explicit `null` SHALL clear that workspace-level override and make reads fall back to the global default for that field. Unknown workspace SHALL return HTTP 404. Invalid `routing_threshold` (not a number, or outside `[0.0, 1.0]`) SHALL return HTTP 422.
 
 #### Scenario: Partial update preserves untouched fields
 
@@ -101,3 +101,33 @@ A value for any of the seven `*_system_prompt` fields that is empty or contains 
 
 - **WHEN** an authorized client PUTs `{"validator_system_prompt": null}` and the row previously had a custom prompt
 - **THEN** the stored column is `NULL`, the response returns the shipped default text, and the field is absent from `overrides`
+
+### Requirement: Token budget overrides are validated as a relationship, not per field
+
+Each of `default_max_tokens`, `rewrite_max_tokens`, and `ollama_num_ctx` SHALL be a positive integer, and `ollama_num_ctx` SHALL additionally be at most the `app.config.OLLAMA_NUM_CTX` global default (32768 as shipped). One window is sent to every Ollama-backed role, so the ceiling is the SMALLEST context maximum among the models sharing it (`qwen2.5:1.5b`, which runs the enricher and adjuster), not the largest; that is the bound `OLLAMA_NUM_CTX` already encodes, so the ceiling SHALL read it rather than restate a literal. Per-field bounds alone are not sufficient: when an update touches any of the three, the system SHALL validate the EFFECTIVE resulting triple (the values the workspace would have after the update lands, taking the stored value, or the `app.config` global default when unset, for any of the three the request does not touch) against all of:
+
+- `default_max_tokens` SHALL be greater than `1024`, the value `app.config` records as having measurably truncated ordinary answers mid-sentence;
+- `rewrite_max_tokens` SHALL be at least 2x `default_max_tokens`, because `generalize()`/`adjust()` are handed the whole raw answer and must keep every fact, and a truncated STORED copy never self-heals;
+- `ollama_num_ctx` SHALL be at least 2x `rewrite_max_tokens`, because the context window bounds the prompt as well as the generation.
+
+A violating combination SHALL return HTTP 422 whose message names the offending value and the relationship it breaks, and SHALL NOT be stored; the system SHALL NOT clamp, auto-correct, or accept-and-warn. An update that touches none of the three SHALL NOT re-validate them. Explicit `null` SHALL clear the override, after which the field's global default participates in the relationship.
+
+#### Scenario: Rewrite budget too close to the answer budget
+
+- **WHEN** an authorized client PUTs `{"default_max_tokens": 4096, "rewrite_max_tokens": 5000}`
+- **THEN** the response is HTTP 422 naming `rewrite_max_tokens` and no override is stored
+
+#### Scenario: Violation judged against the effective triple
+
+- **WHEN** a workspace already stores `rewrite_max_tokens = 8192` and an authorized client PUTs `{"default_max_tokens": 8000}` alone
+- **THEN** the response is HTTP 422, because the resulting triple leaves the rewrite budget under 2x the answer budget
+
+#### Scenario: Answer budget at the measured truncation cap
+
+- **WHEN** an authorized client PUTs `{"default_max_tokens": 1024}`
+- **THEN** the response is HTTP 422 and no override is stored
+
+#### Scenario: Context window above the smallest sharing model's maximum
+
+- **WHEN** an authorized client PUTs `{"ollama_num_ctx": 65536}` against the shipped `OLLAMA_NUM_CTX` of 32768
+- **THEN** the response is HTTP 422 naming `ollama_num_ctx`, because the enricher and adjuster share that window on a model that cannot honour it - the ceiling is a floor-of-the-two, so the override can only lower the shipped window, never raise it

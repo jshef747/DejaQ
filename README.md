@@ -174,6 +174,17 @@ because it is tied to the provider credential. Editing the context adjuster or g
 prompt invalidates the calibration of their runaway/looping safety-net thresholds, which
 were measured against the shipped prompts - the page warns on those two stages.
 
+The same page also sets the workspace's three token budgets - the answer budget used when a
+client sends no limit of its own, the rewrite budget for the generalizer and context
+adjuster, and the Ollama context window - each attached to the stages it governs and each
+showing the current effective value as its placeholder, so an empty field means "using the
+shipped default". They are validated together, not one at a time: a combination that would
+leave the rewrite budget or the context window too small to carry the answer being rewritten
+is rejected with an explanatory error rather than clamped, because a too-low budget produces
+no error anywhere - it just silently stops the cache from filling, since a truncated answer
+is never stored. The **Analytics** page shows the resulting truncation rate (over generated
+answers; a cache hit is never truncated) next to hit rate, latency, and tokens saved.
+
 ## Bootstrap a workspace + key
 
 Either through the dashboard (Workspaces → create, Keys → generate) or headless via the CLI:

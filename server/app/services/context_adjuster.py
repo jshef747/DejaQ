@@ -301,11 +301,17 @@ class ContextAdjusterService:
         generalize_model_name: str,
         adjust_system_prompt: str | None = None,
         generalize_system_prompt: str | None = None,
+        rewrite_max_tokens: int | None = None,
+        num_ctx: int | None = None,
     ):
         self.adjust_backend = adjust_backend
         self.adjust_model_name = adjust_model_name
         self.generalize_backend = generalize_backend
         self.generalize_model_name = generalize_model_name
+        # Per-workspace overrides of REWRITE_MAX_TOKENS/OLLAMA_NUM_CTX (see
+        # llm_config_service.py); None (no override) keeps the shipped default.
+        self.rewrite_max_tokens = rewrite_max_tokens if rewrite_max_tokens is not None else REWRITE_MAX_TOKENS
+        self.num_ctx = num_ctx if num_ctx is not None else OLLAMA_NUM_CTX
         # Few-shots for both roles stay hardcoded and inert (see the comments
         # at each call site below) - only the two system prompts are
         # per-workspace overrides (see llm_config_service.py). Both roles are
@@ -367,8 +373,8 @@ class ContextAdjusterService:
         request = CompletionRequest(
             model_name=self.generalize_model_name,
             messages=messages,
-            max_tokens=REWRITE_MAX_TOKENS,
-            num_ctx=OLLAMA_NUM_CTX,
+            max_tokens=self.rewrite_max_tokens,
+            num_ctx=self.num_ctx,
             temperature=0,
             stop=_GENERALIZE_STOP,
         )
@@ -524,11 +530,11 @@ class ContextAdjusterService:
                 # stored answer itself occupies. A smaller cap truncates it
                 # mid-sentence, and nothing downstream notices - the
                 # topic-overlap net passes on a truncated prefix.
-                max_tokens=REWRITE_MAX_TOKENS,
+                max_tokens=self.rewrite_max_tokens,
                 # The other role that needs a window set, for the reason
                 # generalize() above records: this prompt carries the whole
                 # cached answer on top of the same budget.
-                num_ctx=OLLAMA_NUM_CTX,
+                num_ctx=self.num_ctx,
                 # Deterministic: this is a faithful rewrite, not creative
                 # generation, so temperature buys nothing here and only made the
                 # regurgitation failure above intermittent and hard to reproduce.

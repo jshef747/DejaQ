@@ -20,6 +20,9 @@ _CONFIG_FIELDS = {
     "generalizer_system_prompt",
     "local_model_system_prompt",
     "routing_threshold",
+    "default_max_tokens",
+    "rewrite_max_tokens",
+    "ollama_num_ctx",
 }
 
 

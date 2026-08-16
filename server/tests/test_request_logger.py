@@ -289,13 +289,45 @@ class TestRequestLoggerLog:
 
 
 class TestStatsCLI:
+    def _run_cli(self, tmp_path, stats_db_path):
+        """Run `python -m cli.stats` against an isolated pair of DBs.
+
+        The workspace DB path is hardcoded relative to the CWD
+        (app/db/base.py), so the subprocess runs in tmp_path with its own
+        empty-but-created dejaq.db rather than reading whichever one happens
+        to be sitting in the server directory.
+        """
+        import os
+        import subprocess
+        import sys
+
+        from sqlalchemy import create_engine
+
+        from app.db.base import Base
+
+        engine = create_engine(f"sqlite:///{tmp_path / 'dejaq.db'}")
+        Base.metadata.create_all(bind=engine)
+        engine.dispose()
+
+        return subprocess.run(
+            [sys.executable, "-m", "cli.stats"],
+            capture_output=True,
+            text=True,
+            env={
+                **os.environ,
+                "DEJAQ_STATS_DB": str(stats_db_path),
+                "PYTHONPATH": _SERVER_DIR,
+            },
+            cwd=str(tmp_path),
+        )
+
     def _seed(self, db_path, rows):
         con = sqlite3.connect(db_path)
         con.execute("""CREATE TABLE IF NOT EXISTS requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ts TEXT NOT NULL, workspace TEXT NOT NULL, department TEXT NOT NULL,
             latency_ms INTEGER NOT NULL, cache_hit INTEGER NOT NULL,
-            difficulty TEXT, model_used TEXT)""")
+            difficulty TEXT, model_used TEXT, finish_reason TEXT)""")
         con.executemany(
             "INSERT INTO requests (ts,workspace,department,latency_ms,cache_hit,difficulty,model_used) VALUES (?,?,?,?,?,?,?)",
             rows,
@@ -304,46 +336,25 @@ class TestStatsCLI:
         con.close()
 
     def test_no_db_exits_nonzero(self, tmp_path):
-        import subprocess, sys
-        result = subprocess.run(
-            [sys.executable, "-m", "cli.stats"],
-            capture_output=True,
-            text=True,
-            env={**__import__("os").environ, "DEJAQ_STATS_DB": str(tmp_path / "nonexistent.db")},
-            cwd=_SERVER_DIR,
-        )
+        result = self._run_cli(tmp_path, str(tmp_path / "nonexistent.db"))
         assert result.returncode == 1
         assert "not found" in result.stdout.lower() or "not found" in result.stderr.lower()
 
     def test_empty_db_message(self, tmp_path):
-        import subprocess, sys
         db_path = str(tmp_path / "empty.db")
         self._seed(db_path, [])
-        result = subprocess.run(
-            [sys.executable, "-m", "cli.stats"],
-            capture_output=True,
-            text=True,
-            env={**__import__("os").environ, "DEJAQ_STATS_DB": db_path},
-            cwd=_SERVER_DIR,
-        )
+        result = self._run_cli(tmp_path, db_path)
         assert result.returncode == 0
         assert "no requests" in result.stdout.lower()
 
     def test_renders_rows(self, tmp_path):
-        import subprocess, sys
         db_path = str(tmp_path / "stats.db")
         self._seed(db_path, [
             ("2026-04-20T10:00:00Z", "acme", "eng", 120, 1, None, None),
             ("2026-04-20T10:01:00Z", "acme", "eng", 850, 0, "easy", "llama-3.2-1b"),
             ("2026-04-20T10:02:00Z", "acme", "support", 95, 1, None, None),
         ])
-        result = subprocess.run(
-            [sys.executable, "-m", "cli.stats"],
-            capture_output=True,
-            text=True,
-            env={**__import__("os").environ, "DEJAQ_STATS_DB": db_path},
-            cwd=_SERVER_DIR,
-        )
+        result = self._run_cli(tmp_path, db_path)
         assert result.returncode == 0
         out = result.stdout
         assert "acme" in out
@@ -352,7 +363,6 @@ class TestStatsCLI:
         assert "TOTAL" in out
 
     def test_hit_rate_calculation(self, tmp_path):
-        import subprocess, sys
         db_path = str(tmp_path / "stats.db")
         # 2 hits, 2 misses → 50%
         self._seed(db_path, [
@@ -361,18 +371,11 @@ class TestStatsCLI:
             ("2026-04-20T10:02:00Z", "acme", "eng", 800, 0, "easy", "llama-3.2-1b"),
             ("2026-04-20T10:03:00Z", "acme", "eng", 800, 0, "hard", "gemini-2.5-flash"),
         ])
-        result = subprocess.run(
-            [sys.executable, "-m", "cli.stats"],
-            capture_output=True,
-            text=True,
-            env={**__import__("os").environ, "DEJAQ_STATS_DB": db_path},
-            cwd=_SERVER_DIR,
-        )
+        result = self._run_cli(tmp_path, db_path)
         assert result.returncode == 0
         assert "50.0%" in result.stdout
 
     def test_tokens_saved_heuristic(self, tmp_path):
-        import subprocess, sys
         db_path = str(tmp_path / "stats.db")
         # 3 cache hits → 3 × 150 = 450 tokens saved
         self._seed(db_path, [
@@ -380,12 +383,6 @@ class TestStatsCLI:
             ("2026-04-20T10:01:00Z", "acme", "eng", 100, 1, None, None),
             ("2026-04-20T10:02:00Z", "acme", "eng", 100, 1, None, None),
         ])
-        result = subprocess.run(
-            [sys.executable, "-m", "cli.stats"],
-            capture_output=True,
-            text=True,
-            env={**__import__("os").environ, "DEJAQ_STATS_DB": db_path},
-            cwd=_SERVER_DIR,
-        )
+        result = self._run_cli(tmp_path, db_path)
         assert result.returncode == 0
         assert "450" in result.stdout
