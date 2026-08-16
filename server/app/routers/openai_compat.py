@@ -410,14 +410,26 @@ def _diagnostic_prompt(text: str | None, limit: int = 200) -> str | None:
     return prompt[:limit]
 
 
+def _sanitize_headers(headers: dict[str, str]) -> dict[str, str]:
+    """Make every header value Latin-1-safe (RFC 7230; Starlette encodes
+    headers as latin-1 in Response.init_headers). Free-text diagnostic values
+    (nearest/matched cache prompts) can carry characters like em-dashes or
+    curly quotes that raise UnicodeEncodeError there and crash the whole
+    request; replace rather than drop so the header stays useful."""
+    return {
+        key: value.encode("latin-1", errors="replace").decode("latin-1")
+        for key, value in headers.items()
+    }
+
+
 def _nearest_headers(cache_lookup: CacheLookupResult) -> dict[str, str]:
     prompt = _diagnostic_prompt(cache_lookup.nearest_prompt)
     if cache_lookup.nearest_distance is None or prompt is None:
         return {}
-    return {
+    return _sanitize_headers({
         "x-dejaq-nearest-cache-distance": f"{cache_lookup.nearest_distance:.4f}",
         "x-dejaq-nearest-cache-prompt": prompt,
-    }
+    })
 
 
 def _nearest_log_suffix(cache_lookup: CacheLookupResult) -> str:
@@ -1361,7 +1373,7 @@ async def run_chat_pipeline(
                 prompt_tokens = int(len(clean_query.split()) * 1.3)
                 words = answer.split(" ")
                 stream_chunks = [w + " " for w in words[:-1]] + [words[-1]] if words else [answer]
-                hit_headers: dict[str, str] = {
+                hit_headers: dict[str, str] = _sanitize_headers({
                     "x-dejaq-model-used": model_used,
                     "x-dejaq-conversation-id": completion_id,
                     "x-dejaq-interaction-id": interaction.interaction_id,
@@ -1370,7 +1382,7 @@ async def run_chat_pipeline(
                     "x-dejaq-cache-distance": f"{_cache_distance:.4f}",
                     "x-dejaq-cache-matched-query": _cache_matched_query,
                     "x-dejaq-validator-verdict": "valid",
-                }
+                })
                 hit_headers.update(_nearest_headers(cache_lookup))
                 return ChatPipelineResult(
                     answer=answer,
@@ -1745,14 +1757,14 @@ async def run_chat_pipeline(
         words = answer.split(" ")
         stream_chunks = [w + " " for w in words[:-1]] + [words[-1]] if words else [answer]
 
-        miss_headers: dict[str, str] = {
+        miss_headers: dict[str, str] = _sanitize_headers({
             "x-dejaq-model-used": model_used,
             "x-dejaq-conversation-id": completion_id,
             "x-dejaq-interaction-id": interaction.interaction_id,
             "x-dejaq-tier": served_tier,
             "x-dejaq-prompt-difficulty": complexity,
             "x-dejaq-prompt-difficulty-score": f"{diff_score:.4f}",
-        }
+        })
         miss_headers.update(_nearest_headers(cache_lookup))
         if rag_context:
             miss_headers["x-dejaq-rag-chunks"] = str(len(rag_context))
