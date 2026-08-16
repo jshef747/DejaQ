@@ -120,7 +120,13 @@ def _build_opinion_messages(query: str, system_prompt: str) -> list[dict]:
 
 
 class NormalizerService:
-    def __init__(self, backend: ModelBackend, model_name: str, system_prompt: str | None = None):
+    def __init__(
+        self,
+        backend: ModelBackend,
+        model_name: str,
+        system_prompt: str | None = None,
+        num_ctx: int | None = None,
+    ):
         self.backend = backend
         self.model_name = model_name
         # The few-shot pairs above stay hardcoded - only the system prompt is
@@ -128,6 +134,7 @@ class NormalizerService:
         # prompt fragments the cache key for future opinion-query
         # normalizations of the same concept - see the module docstring.
         self.system_prompt = system_prompt if system_prompt is not None else DEFAULT_SYSTEM_PROMPT
+        self.num_ctx = num_ctx if num_ctx is not None else OLLAMA_NUM_CTX
 
     async def normalize(self, raw_query: str) -> str:
         """Return the cache key for a query.
@@ -163,7 +170,7 @@ class NormalizerService:
                 # reload, so two different windows make it unload and reload
                 # the model between roles. Costs no extra memory - the model is
                 # already loaded at this window whenever generalize() runs.
-                num_ctx=OLLAMA_NUM_CTX,
+                num_ctx=self.num_ctx,
                 temperature=0.0,
             ),
             NORMALIZER_MODEL_NAME,

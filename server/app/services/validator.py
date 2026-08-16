@@ -191,6 +191,7 @@ class ValidatorService:
         model_name: str,
         system_prompt: str | None = None,
         image_system_prompt: str | None = None,
+        num_ctx: int | None = None,
     ):
         self.backend = backend
         self.model_name = model_name
@@ -200,6 +201,7 @@ class ValidatorService:
         self.image_system_prompt = (
             image_system_prompt if image_system_prompt is not None else DEFAULT_IMAGE_SYSTEM_PROMPT
         )
+        self.num_ctx = num_ctx if num_ctx is not None else OLLAMA_NUM_CTX
 
     async def validate(
         self,
@@ -269,7 +271,7 @@ class ValidatorService:
                 # path, in front of a waiting user. Costs no extra memory - the
                 # model is already loaded at this window whenever generalize()
                 # runs.
-                num_ctx=OLLAMA_NUM_CTX,
+                num_ctx=self.num_ctx,
                 temperature=0.0,
             ),
             VALIDATOR_MODEL_NAME,

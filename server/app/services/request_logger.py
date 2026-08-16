@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS requests (
     interaction_id TEXT,
     parent_interaction_id TEXT,
     served_tier TEXT,
-    external_provider_used INTEGER NOT NULL DEFAULT 0
+    external_provider_used INTEGER NOT NULL DEFAULT 0,
+    finish_reason TEXT
 )
 """
 
@@ -75,6 +76,7 @@ class RequestLogger:
                 "parent_interaction_id": "TEXT",
                 "served_tier": "TEXT",
                 "external_provider_used": "INTEGER NOT NULL DEFAULT 0",
+                "finish_reason": "TEXT",
             }
             for name, definition in request_columns.items():
                 if name not in cols:
@@ -112,6 +114,14 @@ class RequestLogger:
         parent_interaction_id: str | None = None,
         served_tier: str | None = None,
         external_provider_used: bool = False,
+        # None for a cache hit: adjust()'s own truncation guard already falls
+        # back to the complete cached answer before anything is served, so a
+        # hit is never a cut-off text and has nothing to report here (see
+        # ChatPipelineResult.finish_reason in openai_compat.py). "length" on a
+        # miss/escalation means the generator's own signal reported
+        # truncation - the store guard then correctly skipped caching it, so
+        # this is the only place that failure is visible at all.
+        finish_reason: str | None = None,
     ) -> None:
         if self._db is None:
             return
@@ -132,9 +142,10 @@ class RequestLogger:
                     interaction_id,
                     parent_interaction_id,
                     served_tier,
-                    external_provider_used
+                    external_provider_used,
+                    finish_reason
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     ts,
@@ -150,6 +161,7 @@ class RequestLogger:
                     parent_interaction_id,
                     served_tier,
                     int(external_provider_used),
+                    finish_reason,
                 ),
             )
             await self._db.commit()

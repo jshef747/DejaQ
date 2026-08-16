@@ -14,6 +14,7 @@ import type {
   LlmConfigUpdate,
   PipelineRole,
   PromptField,
+  TokenBudgetField,
 } from "@/lib/types";
 
 interface Props {
@@ -28,13 +29,41 @@ interface PromptMeta {
   label: string;
 }
 
+interface BudgetMeta {
+  key: TokenBudgetField;
+  label: string;
+  hint: string;
+}
+
 interface StageMeta {
   key: PipelineRole;
   label: string;
   sub: string;
   calibrated?: boolean;
   prompts: PromptMeta[];
+  budgets?: BudgetMeta[];
 }
+
+// The three per-workspace token budgets, each mirroring a global default in
+// server/app/config.py. Shared metadata so the label/hint reads identically
+// everywhere the field is attached (a stage can govern more than one).
+const BUDGET_META: Record<TokenBudgetField, BudgetMeta> = {
+  default_max_tokens: {
+    key: "default_max_tokens",
+    label: "Answer generation budget",
+    hint: "Answer length when the caller sends no limit of its own.",
+  },
+  rewrite_max_tokens: {
+    key: "rewrite_max_tokens",
+    label: "Rewrite budget",
+    hint: "Output budget for generalize (store) and adjust (serve) - must stay comfortably above the answer budget.",
+  },
+  ollama_num_ctx: {
+    key: "ollama_num_ctx",
+    label: "Context window",
+    hint: "Must hold the generation above plus the prompt carrying it - must stay comfortably above the rewrite budget.",
+  },
+};
 
 // Order matches the flow, top to bottom.
 const STAGES: StageMeta[] = [
@@ -43,12 +72,14 @@ const STAGES: StageMeta[] = [
     label: "Context Enricher",
     sub: "makes a follow-up standalone",
     prompts: [{ key: "enricher_system_prompt", label: "System prompt" }],
+    budgets: [BUDGET_META.ollama_num_ctx],
   },
   {
     key: "normalizer_model",
     label: "Normalizer",
     sub: "builds the cache key",
     prompts: [{ key: "normalizer_system_prompt", label: "System prompt" }],
+    budgets: [BUDGET_META.ollama_num_ctx],
   },
   {
     key: "validator_model",
@@ -58,6 +89,7 @@ const STAGES: StageMeta[] = [
       { key: "validator_system_prompt", label: "Text-question prompt" },
       { key: "validator_image_system_prompt", label: "Image & file-attachment prompt" },
     ],
+    budgets: [BUDGET_META.ollama_num_ctx],
   },
   {
     key: "adjuster_model",
@@ -65,12 +97,14 @@ const STAGES: StageMeta[] = [
     sub: "rewrites to match phrasing",
     calibrated: true,
     prompts: [{ key: "adjuster_system_prompt", label: "System prompt" }],
+    budgets: [BUDGET_META.rewrite_max_tokens, BUDGET_META.ollama_num_ctx],
   },
   {
     key: "local_model",
     label: "Local answer",
     sub: "easy questions",
     prompts: [{ key: "local_model_system_prompt", label: "System prompt (used only when the caller sends none)" }],
+    budgets: [BUDGET_META.default_max_tokens],
   },
   {
     key: "generalizer_model",
@@ -78,12 +112,17 @@ const STAGES: StageMeta[] = [
     sub: "strips tone before storing",
     calibrated: true,
     prompts: [{ key: "generalizer_system_prompt", label: "System prompt" }],
+    budgets: [BUDGET_META.rewrite_max_tokens],
   },
 ];
 const STAGE_BY_KEY = Object.fromEntries(STAGES.map((s) => [s.key, s])) as Record<PipelineRole, StageMeta>;
 
 function stageOverridden(stage: StageMeta, config: LlmConfigResponse): boolean {
-  return stage.key in config.overrides || stage.prompts.some((p) => p.key in config.overrides);
+  return (
+    stage.key in config.overrides ||
+    stage.prompts.some((p) => p.key in config.overrides) ||
+    (stage.budgets ?? []).some((b) => b.key in config.overrides)
+  );
 }
 
 type SelectedStage = PipelineRole | "external_model" | null;
@@ -105,6 +144,10 @@ export default function PipelineClient({ workspaceSlug, initialConfig, initialAv
   const [selected, setSelected] = useState<SelectedStage>(null);
   const [draftValue, setDraftValue] = useState("");
   const [draftPrompts, setDraftPrompts] = useState<Record<string, string>>({});
+  // Empty string = "no override, use the default" - never the number 0. Seeded
+  // from config.overrides below, never from the resolved value shown as each
+  // field's placeholder.
+  const [draftBudgets, setDraftBudgets] = useState<Record<string, string>>({});
 
   const [availableModels, setAvailableModels] = useState(initialAvailableModels);
   const [modelsRefreshing, setModelsRefreshing] = useState(false);
@@ -127,6 +170,11 @@ export default function PipelineClient({ workspaceSlug, initialConfig, initialAv
     const prompts: Record<string, string> = {};
     for (const p of stage.prompts) prompts[p.key] = config[p.key] ?? "";
     setDraftPrompts(prompts);
+    const budgets: Record<string, string> = {};
+    for (const b of stage.budgets ?? []) {
+      budgets[b.key] = b.key in config.overrides ? String(config[b.key]) : "";
+    }
+    setDraftBudgets(budgets);
   }, [selected, config]);
 
   // Separate from the draft seeding above on purpose: every successful save
@@ -145,10 +193,15 @@ export default function PipelineClient({ workspaceSlug, initialConfig, initialAv
   }
 
   function buildStagePatch(stage: StageMeta): LlmConfigUpdate {
-    const patch: Record<string, string | null> = {};
+    const patch: Record<string, string | number | null> = {};
     if (draftValue !== (config[stage.key] ?? "")) patch[stage.key] = draftValue;
     for (const p of stage.prompts) {
       if (draftPrompts[p.key] !== (config[p.key] ?? "")) patch[p.key] = draftPrompts[p.key];
+    }
+    for (const b of stage.budgets ?? []) {
+      const currentOverride = b.key in config.overrides ? String(config[b.key]) : "";
+      const draft = (draftBudgets[b.key] ?? "").trim();
+      if (draft !== currentOverride) patch[b.key] = draft === "" ? null : Number(draft);
     }
     return patch as LlmConfigUpdate;
   }
@@ -179,6 +232,7 @@ export default function PipelineClient({ workspaceSlug, initialConfig, initialAv
     setStatus({ kind: "idle", text: "" });
     const patch: Record<string, null> = { [stage.key]: null };
     for (const p of stage.prompts) patch[p.key] = null;
+    for (const b of stage.budgets ?? []) patch[b.key] = null;
     const res = await updateLlmConfig(workspaceSlug, patch as LlmConfigUpdate);
     setSaveBusy(false);
     if (!res.ok) {
@@ -198,6 +252,7 @@ export default function PipelineClient({ workspaceSlug, initialConfig, initialAv
     for (const stage of STAGES) {
       patch[stage.key] = null;
       for (const p of stage.prompts) patch[p.key] = null;
+      for (const b of stage.budgets ?? []) patch[b.key] = null;
     }
     const res = await updateLlmConfig(workspaceSlug, patch as LlmConfigUpdate);
     setResetAllBusy(false);
@@ -359,7 +414,14 @@ export default function PipelineClient({ workspaceSlug, initialConfig, initialAv
         {selected === null ? (
           <div className="ds-flow-empty">Click a stage in the flow to view or change its model and prompt.</div>
         ) : selected === "external_model" ? (
-          <ExternalEditor config={config} workspaceSlug={workspaceSlug} />
+          <ExternalEditor
+            config={config}
+            workspaceSlug={workspaceSlug}
+            onConfigUpdate={(next) => {
+              setConfig(next);
+              router.refresh();
+            }}
+          />
         ) : (
           <StageEditor
             stage={STAGE_BY_KEY[selected]}
@@ -368,6 +430,9 @@ export default function PipelineClient({ workspaceSlug, initialConfig, initialAv
             onDraftChange={setDraftValue}
             draftPrompts={draftPrompts}
             onDraftPromptChange={(key, value) => setDraftPrompts((prev) => ({ ...prev, [key]: value }))}
+            draftBudgets={draftBudgets}
+            onDraftBudgetChange={(key, value) => setDraftBudgets((prev) => ({ ...prev, [key]: value }))}
+            config={config}
             availableModels={availableModels.models}
             modelsUnknown={modelsUnknown}
             busy={saveBusy}
@@ -484,6 +549,9 @@ function StageEditor({
   onDraftChange,
   draftPrompts,
   onDraftPromptChange,
+  draftBudgets,
+  onDraftBudgetChange,
+  config,
   availableModels,
   modelsUnknown,
   busy,
@@ -497,6 +565,9 @@ function StageEditor({
   onDraftChange: (v: string) => void;
   draftPrompts: Record<string, string>;
   onDraftPromptChange: (key: string, value: string) => void;
+  draftBudgets: Record<string, string>;
+  onDraftBudgetChange: (key: string, value: string) => void;
+  config: LlmConfigResponse;
   availableModels: string[];
   modelsUnknown: boolean;
   busy: boolean;
@@ -572,6 +643,27 @@ function StageEditor({
           </Field>
         ))}
 
+        {(stage.budgets ?? []).map((b) => (
+          <Field
+            key={b.key}
+            label={b.label}
+            hint={`${b.hint} Empty uses the default shown as the placeholder (${config[b.key]} tokens).`}
+          >
+            <input
+              name={b.key}
+              type="number"
+              min={1}
+              inputMode="numeric"
+              value={draftBudgets[b.key] ?? ""}
+              onChange={(e) => onDraftBudgetChange(b.key, e.target.value)}
+              disabled={busy}
+              placeholder={String(config[b.key])}
+              className="ds-input"
+              style={{ fontFamily: "var(--font-mono)", opacity: busy ? 0.62 : 1 }}
+            />
+          </Field>
+        ))}
+
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <Button variant="primary" onClick={onSave} loading={busy} disabled={busy}>
             Save
@@ -589,14 +681,72 @@ function StageEditor({
   );
 }
 
-function ExternalEditor({ config, workspaceSlug }: { config: LlmConfigResponse; workspaceSlug: string }) {
-  const overridden = "external_model" in config.overrides;
+function ExternalEditor({
+  config,
+  workspaceSlug,
+  onConfigUpdate,
+}: {
+  config: LlmConfigResponse;
+  workspaceSlug: string;
+  onConfigUpdate: (next: LlmConfigResponse) => void;
+}) {
+  // The model itself lives on Settings (tied to the provider credential), but
+  // the answer generation budget governs BOTH the local and external routes
+  // (see BUDGET_META.default_max_tokens / decision.md) - the external panel
+  // owns its own tiny save flow for that one field rather than routing
+  // through the flow-node selection state the model/prompt stages use.
+  const budgetKey: TokenBudgetField = "default_max_tokens";
+  const modelOverridden = "external_model" in config.overrides;
+  const budgetOverridden = budgetKey in config.overrides;
+
+  const [draftBudget, setDraftBudget] = useState(budgetKey in config.overrides ? String(config[budgetKey]) : "");
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<StatusState>({ kind: "idle", text: "" });
+
+  useEffect(() => {
+    setDraftBudget(budgetKey in config.overrides ? String(config[budgetKey]) : "");
+    setStatus({ kind: "idle", text: "" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config]);
+
+  async function handleSave() {
+    const current = budgetOverridden ? String(config[budgetKey]) : "";
+    const draft = draftBudget.trim();
+    if (draft === current) {
+      setStatus({ kind: "idle", text: "No changes to save." });
+      return;
+    }
+    setBusy(true);
+    setStatus({ kind: "idle", text: "" });
+    const res = await updateLlmConfig(workspaceSlug, { [budgetKey]: draft === "" ? null : Number(draft) });
+    setBusy(false);
+    if (!res.ok) {
+      setStatus({ kind: "error", text: res.error });
+      return;
+    }
+    onConfigUpdate(res.data);
+    setStatus({ kind: "success", text: "Saved." });
+  }
+
+  async function handleReset() {
+    setBusy(true);
+    setStatus({ kind: "idle", text: "" });
+    const res = await updateLlmConfig(workspaceSlug, { [budgetKey]: null });
+    setBusy(false);
+    if (!res.ok) {
+      setStatus({ kind: "error", text: res.error });
+      return;
+    }
+    onConfigUpdate(res.data);
+    setStatus({ kind: "success", text: "Reset to default." });
+  }
+
   return (
     <div className="ds-flow-panel">
       <div className="ds-flow-panel-hd">
         <span style={{ fontWeight: 700, fontSize: 14.5 }}>External answer</span>
-        <span className={`ds-pill ${overridden ? "ds-pill-hit" : "ds-pill-neutral"}`}>
-          {overridden ? "Overridden" : "Default"}
+        <span className={`ds-pill ${modelOverridden ? "ds-pill-hit" : "ds-pill-neutral"}`}>
+          {modelOverridden ? "Overridden" : "Default"}
         </span>
       </div>
       <div className="ds-flow-panel-bd">
@@ -612,6 +762,37 @@ function ExternalEditor({ config, workspaceSlug }: { config: LlmConfigResponse; 
         <Link href={`/dashboard/settings?workspace=${workspaceSlug}`}>
           <Button variant="primary">Go to Settings</Button>
         </Link>
+
+        <div style={{ height: 1, background: "var(--border)", margin: "18px 0" }} />
+
+        <Field
+          label={BUDGET_META[budgetKey].label}
+          hint={`${BUDGET_META[budgetKey].hint} Shared with Local answer, below. Empty uses the default shown as the placeholder (${config[budgetKey]} tokens).`}
+        >
+          <input
+            name={budgetKey}
+            type="number"
+            min={1}
+            inputMode="numeric"
+            value={draftBudget}
+            onChange={(e) => setDraftBudget(e.target.value)}
+            disabled={busy}
+            placeholder={String(config[budgetKey])}
+            className="ds-input"
+            style={{ fontFamily: "var(--font-mono)", opacity: busy ? 0.62 : 1 }}
+          />
+        </Field>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Button variant="primary" onClick={handleSave} loading={busy} disabled={busy}>
+            Save
+          </Button>
+          {budgetOverridden && (
+            <Button onClick={handleReset} disabled={busy}>
+              Reset to default
+            </Button>
+          )}
+        </div>
+        <StatusText status={status} style={{ display: "block", marginTop: 10 }} />
       </div>
     </div>
   );

@@ -295,7 +295,7 @@ class TestStatsCLI:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ts TEXT NOT NULL, workspace TEXT NOT NULL, department TEXT NOT NULL,
             latency_ms INTEGER NOT NULL, cache_hit INTEGER NOT NULL,
-            difficulty TEXT, model_used TEXT)""")
+            difficulty TEXT, model_used TEXT, finish_reason TEXT)""")
         con.executemany(
             "INSERT INTO requests (ts,workspace,department,latency_ms,cache_hit,difficulty,model_used) VALUES (?,?,?,?,?,?,?)",
             rows,

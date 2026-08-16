@@ -1002,7 +1002,7 @@ def test_services_for_model_profile_resolves_overridden_prompt_with_no_model_ove
     shared default-model singleton, which would silently ignore it."""
     captured: dict[str, tuple] = {}
 
-    def _tracking_normalizer(model_name=None, system_prompt=None):
+    def _tracking_normalizer(model_name=None, system_prompt=None, num_ctx=None):
         captured["normalizer"] = (model_name, system_prompt)
         return StubNormalizer()
 
@@ -1513,6 +1513,43 @@ def test_untruncated_miss_still_reports_stop_on_chat_completions(monkeypatch):
     )
 
     assert response.json()["choices"][0]["finish_reason"] == "stop"
+
+
+def test_workspace_answer_budget_override_reaches_the_local_generator(monkeypatch):
+    """Proves the override changes real behavior, not just a persisted number:
+    a workspace's default_max_tokens override must be what a no-limit client
+    request actually generates under - not the global DEFAULT_MAX_TOKENS."""
+
+    captured: dict[str, int] = {}
+
+    class RecordingRouter:
+        async def generate_local_response(self, query, history=None, max_tokens=1024, system_prompt=None):
+            captured["max_tokens"] = max_tokens
+            return "Paris is the capital of France.", 12.0, "stop"
+
+    client = _patch_for_truncation(monkeypatch, RecordingRouter())
+    monkeypatch.setattr(
+        openai_compat,
+        "_read_effective_llm_config",
+        lambda workspace_slug, workspace_id: openai_compat.EffectiveLlmConfig(
+            external_model="gemini-2.5-flash",
+            routing_threshold=0.3,
+            default_max_tokens=777,
+        ),
+    )
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["max_tokens"] == 777
+    assert captured["max_tokens"] != openai_compat.DEFAULT_MAX_TOKENS
 
 
 def test_truncated_miss_reports_length_on_the_final_stream_chunk(monkeypatch):

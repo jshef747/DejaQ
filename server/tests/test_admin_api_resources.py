@@ -87,7 +87,7 @@ def test_admin_stats_date_filters_and_unknown_org(isolated_org_db, isolated_stat
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ts TEXT NOT NULL, workspace TEXT NOT NULL, department TEXT NOT NULL,
             latency_ms INTEGER NOT NULL, cache_hit INTEGER NOT NULL,
-            difficulty TEXT, model_used TEXT, response_id TEXT
+            difficulty TEXT, model_used TEXT, response_id TEXT, finish_reason TEXT
         )"""
     )
     con.executemany(
@@ -561,7 +561,7 @@ def test_stats_workspace_name_and_department_name_return_display_name(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ts TEXT NOT NULL, workspace TEXT NOT NULL, department TEXT NOT NULL,
             latency_ms INTEGER NOT NULL, cache_hit INTEGER NOT NULL,
-            difficulty TEXT, model_used TEXT, response_id TEXT
+            difficulty TEXT, model_used TEXT, response_id TEXT, finish_reason TEXT
         )"""
     )
     con.execute(

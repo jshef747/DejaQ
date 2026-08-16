@@ -24,6 +24,7 @@ export type StatsMetrics = {
   easy_count: number;
   hard_count: number;
   models_used: string[];
+  truncation_rate: number;
 };
 
 export type DeptStatsItem = {
@@ -39,6 +40,7 @@ export type DeptStatsItem = {
   easy_count: number;
   hard_count: number;
   models_used: string[];
+  truncation_rate: number;
 };
 
 export type DeptStatsReport = {
@@ -105,6 +107,9 @@ export type LlmConfigResponse = {
   generalizer_system_prompt: string | null;
   local_model_system_prompt: string | null;
   routing_threshold: number | null;
+  default_max_tokens: number;
+  rewrite_max_tokens: number;
+  ollama_num_ctx: number;
   overrides: Record<string, unknown>;
   is_default: boolean;
   updated_at: string | null;
@@ -127,6 +132,9 @@ export type LlmConfigUpdate = Partial<{
   generalizer_system_prompt: string | null;
   local_model_system_prompt: string | null;
   routing_threshold: number | null;
+  default_max_tokens: number | null;
+  rewrite_max_tokens: number | null;
+  ollama_num_ctx: number | null;
 }>;
 
 /** Prompt field identifiers - keys into LlmConfigResponse/Update's
@@ -149,6 +157,11 @@ export type PipelineRole =
   | "adjuster_model"
   | "generalizer_model"
   | "local_model";
+
+/** Token budget field identifiers - keys into LlmConfigResponse/Update's
+ * integer override fields, used by the Pipeline page to attach a budget
+ * editor to every stage it governs. */
+export type TokenBudgetField = "default_max_tokens" | "rewrite_max_tokens" | "ollama_num_ctx";
 
 export type AvailableModelsResponse = {
   models: string[];

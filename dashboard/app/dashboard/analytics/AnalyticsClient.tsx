@@ -136,6 +136,16 @@ function hitRateColor(rate: number) {
   return "var(--amber)";
 }
 
+// Inverted from hitRateColor: here low is good. Any truncation at all means
+// the store guard (openai_compat.py) is refusing to cache generated answers,
+// which is silent everywhere else - a workspace's token budgets need a look
+// once this crosses single digits.
+function truncationRateColor(rate: number) {
+  if (rate === 0) return "var(--fg)";
+  if (rate < 0.05) return "var(--amber)";
+  return "var(--red)";
+}
+
 export default function AnalyticsClient({ workspaceSlug, range, deptStats, error }: AnalyticsClientProps) {
   const router = useRouter();
   const [sortCol, setSortCol] = useState<SortCol>("requests");
@@ -257,6 +267,15 @@ export default function AnalyticsClient({ workspaceSlug, range, deptStats, error
           <div className="ds-metric-label">Tokens saved (est.)</div>
           <div className="ds-metric-value" style={{ fontFamily: "var(--font-mono)" }}>{tokensSavedM}M</div>
           <div className="ds-metric-delta up">≈ ${estCost} in provider cost</div>
+        </div>
+        <div className="ds-metric">
+          <div className="ds-metric-label">Truncation rate</div>
+          <div className="ds-metric-value" style={{ fontFamily: "var(--font-mono)", color: truncationRateColor(total.truncation_rate) }}>
+            {fmtPct(total.truncation_rate)}
+          </div>
+          <div className="ds-metric-delta">
+            of {fmtNum(total.misses)} generated answer{total.misses === 1 ? "" : "s"}
+          </div>
         </div>
       </div>
 

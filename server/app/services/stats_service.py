@@ -63,6 +63,7 @@ def _metrics(row) -> StatsMetrics:
     easy = int(row[4] or 0)
     hard = int(row[5] or 0)
     models = _models(row[6])
+    truncated = int(row[7] or 0)
     return StatsMetrics(
         requests=requests,
         hits=hits,
@@ -73,6 +74,14 @@ def _metrics(row) -> StatsMetrics:
         easy_count=easy,
         hard_count=hard,
         models_used=models,
+        # Cache hits never truncate - adjust()'s own guard falls back to the
+        # complete cached answer before anything is served (finish_reason is
+        # always "stop" on a hit) - so the rate is measured against generated
+        # answers only. A too-low answer/rewrite budget produces no error
+        # anywhere, it just quietly stops the cache from filling (the store
+        # guard at openai_compat.py correctly refuses to cache a truncated
+        # answer) - this is the only place that failure becomes visible.
+        truncation_rate=(truncated / misses if misses else 0.0),
     )
 
 
@@ -106,7 +115,8 @@ def _aggregate_sql(where_clause: str, group_by: str = "") -> str:
             AVG(latency_ms) AS avg_lat,
             SUM(CASE WHEN difficulty = 'easy' THEN 1 ELSE 0 END) AS easy,
             SUM(CASE WHEN difficulty = 'hard' THEN 1 ELSE 0 END) AS hard,
-            GROUP_CONCAT(DISTINCT model_used) AS models
+            GROUP_CONCAT(DISTINCT model_used) AS models,
+            SUM(CASE WHEN finish_reason = 'length' THEN 1 ELSE 0 END) AS truncated
         FROM requests
         {where_clause}
         {group_by}
@@ -131,7 +141,8 @@ def workspace_stats(
                 AVG(latency_ms) AS avg_lat,
                 SUM(CASE WHEN difficulty = 'easy' THEN 1 ELSE 0 END) AS easy,
                 SUM(CASE WHEN difficulty = 'hard' THEN 1 ELSE 0 END) AS hard,
-                GROUP_CONCAT(DISTINCT model_used) AS models
+                GROUP_CONCAT(DISTINCT model_used) AS models,
+                SUM(CASE WHEN finish_reason = 'length' THEN 1 ELSE 0 END) AS truncated
             FROM requests
             {where_clause}
             GROUP BY workspace
@@ -168,7 +179,8 @@ def department_stats(
                 AVG(latency_ms) AS avg_lat,
                 SUM(CASE WHEN difficulty = 'easy' THEN 1 ELSE 0 END) AS easy,
                 SUM(CASE WHEN difficulty = 'hard' THEN 1 ELSE 0 END) AS hard,
-                GROUP_CONCAT(DISTINCT model_used) AS models
+                GROUP_CONCAT(DISTINCT model_used) AS models,
+                SUM(CASE WHEN finish_reason = 'length' THEN 1 ELSE 0 END) AS truncated
             FROM requests
             {where_clause}
             GROUP BY department

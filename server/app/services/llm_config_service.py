@@ -5,11 +5,14 @@ from pydantic import BaseModel
 
 from app.config import (
     CONTEXT_ADJUSTER_MODEL_NAME,
+    DEFAULT_MAX_TOKENS,
     ENRICHER_MODEL_NAME,
     EXTERNAL_MODEL_NAME,
     GENERALIZER_MODEL_NAME,
     LOCAL_LLM_MODEL_NAME,
     NORMALIZER_MODEL_NAME,
+    OLLAMA_NUM_CTX,
+    REWRITE_MAX_TOKENS,
     ROUTING_THRESHOLD,
     VALIDATOR_MODEL_NAME,
 )
@@ -57,6 +60,33 @@ _PROMPT_FIELDS = {
     "local_model_system_prompt",
 }
 
+# Token budget override fields - each mirrors a global default in
+# app/config.py (DEFAULT_MAX_TOKENS, REWRITE_MAX_TOKENS, OLLAMA_NUM_CTX).
+# Validated for the RELATIONSHIP between all three (§
+# _validate_token_budget_overrides), not just per-field bounds - see that
+# function's docstring for why a per-field check alone is not sufficient.
+_TOKEN_BUDGET_FIELDS = {
+    "default_max_tokens",
+    "rewrite_max_tokens",
+    "ollama_num_ctx",
+}
+
+# 1024 is not a guess - it's the exact value config.py records as having
+# measurably truncated ordinary answers mid-sentence before DEFAULT_MAX_TOKENS
+# was raised to 4096 (see the comment there). Refuse it and anything at or
+# below it outright rather than accept a value already known to fail.
+_MIN_ANSWER_MAX_TOKENS = 1024
+
+# The shipped defaults already establish these ratios (8192 / 4096 = 2x,
+# 32768 / 8192 = 4x); enforced here as floors so a custom combination cannot
+# recreate the 2026-08-16 incident (a 300-token generation cap silently
+# stopped the cache from filling - see the PR description for the measured
+# numbers). Using the smaller of the two shipped ratios (2x) as the floor for
+# both relationships keeps real headroom on each side without forcing every
+# workspace to reproduce the shipped numbers exactly.
+_MIN_REWRITE_OVER_ANSWER_RATIO = 2.0
+_MIN_CTX_OVER_REWRITE_RATIO = 2.0
+
 
 class WorkspaceNotFound(Exception):
     def __init__(self, workspace_slug: str) -> None:
@@ -84,7 +114,10 @@ class LlmConfigResult(BaseModel):
     generalizer_system_prompt: str
     local_model_system_prompt: str
     routing_threshold: float
-    overrides: dict[str, str | float]
+    default_max_tokens: int
+    rewrite_max_tokens: int
+    ollama_num_ctx: int
+    overrides: dict[str, str | float | int]
     updated_at: datetime | None
     is_default: bool
     credentials_configured: list[str]
@@ -166,8 +199,17 @@ def _effective(row, credentials_configured: list[str] | None = None) -> LlmConfi
             if row and row.routing_threshold is not None
             else ROUTING_THRESHOLD
         ),
+        "default_max_tokens": (
+            row.default_max_tokens if row and row.default_max_tokens is not None else DEFAULT_MAX_TOKENS
+        ),
+        "rewrite_max_tokens": (
+            row.rewrite_max_tokens if row and row.rewrite_max_tokens is not None else REWRITE_MAX_TOKENS
+        ),
+        "ollama_num_ctx": (
+            row.ollama_num_ctx if row and row.ollama_num_ctx is not None else OLLAMA_NUM_CTX
+        ),
     }
-    overrides: dict[str, str | float] = {}
+    overrides: dict[str, str | float | int] = {}
     if row:
         for field in (
             "external_model",
@@ -185,6 +227,9 @@ def _effective(row, credentials_configured: list[str] | None = None) -> LlmConfi
             "generalizer_system_prompt",
             "local_model_system_prompt",
             "routing_threshold",
+            "default_max_tokens",
+            "rewrite_max_tokens",
+            "ollama_num_ctx",
         ):
             stored = getattr(row, field)
             if stored is not None:
@@ -243,6 +288,87 @@ def _validate_prompt_overrides(payload: dict[str, Any], fields_set: set[str]) ->
             )
 
 
+def _effective_token_value(
+    field: str,
+    payload: dict[str, Any],
+    fields_set: set[str],
+    row,
+    global_default: int,
+) -> int:
+    """The value `field` would have AFTER this update lands, whether or not
+    this call actually touches it - a relationship check must judge the
+    resulting combination of all three budgets, not just whichever one or two
+    fields this particular request happens to change."""
+    if field in fields_set:
+        value = payload.get(field)
+        return value if value is not None else global_default
+    stored = getattr(row, field, None) if row is not None else None
+    return stored if stored is not None else global_default
+
+
+def _validate_token_budget_overrides(
+    payload: dict[str, Any], fields_set: set[str], row
+) -> None:
+    """Reject a token-budget combination that would (re)create the failure
+    measured on 2026-08-16: a generation cap so low that ordinary answers
+    truncate, which the store guard then correctly refuses to cache - so the
+    cache silently stops filling with no error anywhere. Per-field bounds
+    (Pydantic's `gt=` on LlmConfigUpdate) catch an obviously-broken single
+    value; they cannot catch a combination where each field looks reasonable
+    alone but the RELATIONSHIP between them still truncates something:
+
+    - the rewrite budget must be comfortably above the answer budget, because
+      generalize()/adjust() are handed the whole raw answer and told to keep
+      every fact - REWRITE_MAX_TOKENS ships at 2x DEFAULT_MAX_TOKENS for
+      exactly this headroom (see app/config.py and context_adjuster.py);
+    - the context window must be comfortably above the rewrite budget, because
+      num_ctx bounds the PROMPT as well as the generation, and that prompt
+      carries the whole answer being rewritten on top of the rewrite's own
+      output budget - OLLAMA_NUM_CTX ships at 4x REWRITE_MAX_TOKENS;
+    - the answer budget itself must clear the value config.py records as
+      having measurably truncated ordinary answers mid-sentence.
+
+    Only reachable when this update actually touches one of the three fields
+    (see the `fields_set` guard at the call site) - an update to an unrelated
+    field (a model name, a prompt) never re-validates budgets it isn't
+    changing.
+    """
+    answer_budget = _effective_token_value(
+        "default_max_tokens", payload, fields_set, row, DEFAULT_MAX_TOKENS
+    )
+    rewrite_budget = _effective_token_value(
+        "rewrite_max_tokens", payload, fields_set, row, REWRITE_MAX_TOKENS
+    )
+    ctx_window = _effective_token_value(
+        "ollama_num_ctx", payload, fields_set, row, OLLAMA_NUM_CTX
+    )
+
+    if answer_budget <= _MIN_ANSWER_MAX_TOKENS:
+        raise InvalidLlmConfigUpdate(
+            f"default_max_tokens: {answer_budget} is too low - {_MIN_ANSWER_MAX_TOKENS} tokens "
+            "is the exact cap measured to truncate ordinary answers mid-sentence "
+            "(see DEFAULT_MAX_TOKENS in app/config.py). Must be greater than "
+            f"{_MIN_ANSWER_MAX_TOKENS}."
+        )
+    if rewrite_budget < _MIN_REWRITE_OVER_ANSWER_RATIO * answer_budget:
+        raise InvalidLlmConfigUpdate(
+            f"rewrite_max_tokens: {rewrite_budget} must be at least "
+            f"{_MIN_REWRITE_OVER_ANSWER_RATIO:g}x the answer generation budget "
+            f"({answer_budget}, default_max_tokens) - the rewrite prompt carries the "
+            "whole raw answer and must keep every fact, so a rewrite budget too "
+            "close to the answer budget risks truncating the STORED copy, which "
+            "never self-heals."
+        )
+    if ctx_window < _MIN_CTX_OVER_REWRITE_RATIO * rewrite_budget:
+        raise InvalidLlmConfigUpdate(
+            f"ollama_num_ctx: {ctx_window} must be at least "
+            f"{_MIN_CTX_OVER_REWRITE_RATIO:g}x the rewrite budget ({rewrite_budget}, "
+            "rewrite_max_tokens) - the context window bounds the prompt as well as "
+            "the generation, and it has to hold the rewrite's own output on top of "
+            "the prompt carrying the answer being rewritten."
+        )
+
+
 def _get_workspace(session, workspace_slug: str) -> Workspace:
     workspace = session.query(Workspace).filter_by(slug=workspace_slug).first()
     if workspace is None:
@@ -271,6 +397,9 @@ def update_for_workspace(
 
     with get_session() as session:
         workspace = _get_workspace(session, workspace_slug)
+        if fields_set & _TOKEN_BUDGET_FIELDS:
+            existing_row = llm_config_repo.get_for_workspace(session, workspace.id)
+            _validate_token_budget_overrides(payload, fields_set, existing_row)
         row = llm_config_repo.upsert_for_workspace(session, workspace.id, payload, fields_set)
         credentials = [item.provider for item in credential_repo.list_credentials(session, workspace.id)]
         return _effective(row, credentials)

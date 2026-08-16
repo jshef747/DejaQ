@@ -19,6 +19,15 @@ From `server/`, `uv run --group test pytest`. Two things bite on a fresh worktre
 
 Neither the dashboard nor the chat app supports narrow viewports, by design (captain decision, 2026-08-10). Neither sidebar has a responsive breakpoint. Do not file this as a defect or add responsive/collapsible-sidebar behavior without a new product decision.
 
+## The `requests` stats table has no single schema owner
+
+`server/app/services/request_logger.py` is the only place that CREATEs/ALTERs the real `requests`
+table, but several test files hand-roll their own ad-hoc `CREATE TABLE requests (...)` to seed a
+throwaway stats DB directly rather than going through it. Adding a column to the real table (as a
+new `stats_service.py` query will reference it unconditionally) breaks every one of those ad-hoc
+schemas with `no such column: ...` unless each is updated too. `grep -rl "CREATE TABLE.*requests"
+tests/` to find them all before touching that table's columns.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.

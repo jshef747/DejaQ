@@ -42,18 +42,22 @@ def _service_key(role: str, *parts: str) -> tuple[str, ...]:
 def get_normalizer_service(
     model_name: str | None = None,
     system_prompt: str | None = None,
+    num_ctx: int | None = None,
 ) -> NormalizerService:
     resolved_model_name = model_name or config.NORMALIZER_MODEL_NAME
+    resolved_num_ctx = num_ctx if num_ctx is not None else config.OLLAMA_NUM_CTX
     # The prompt (or "" for "use the class's own shipped default") is part of
     # the pool key so two workspaces sharing a model but each running a
-    # different custom prompt never collide on one cached instance.
-    service_key = _service_key("normalizer", resolved_model_name, system_prompt or "")
+    # different custom prompt (or a different num_ctx override) never
+    # collide on one cached instance.
+    service_key = _service_key("normalizer", resolved_model_name, system_prompt or "", str(resolved_num_ctx))
     service = _service_pool.get(service_key)
     if service is None:
         service = NormalizerService(
             backend=_get_backend(),
             model_name=resolved_model_name,
             system_prompt=system_prompt,
+            num_ctx=num_ctx,
         )
         _service_pool[service_key] = service
         logger.info("Configured service role=normalizer model=%s", resolved_model_name)
@@ -63,15 +67,18 @@ def get_normalizer_service(
 def get_context_enricher_service(
     model_name: str | None = None,
     system_prompt: str | None = None,
+    num_ctx: int | None = None,
 ) -> ContextEnricherService:
     resolved_model_name = model_name or config.ENRICHER_MODEL_NAME
-    service_key = _service_key("enricher", resolved_model_name, system_prompt or "")
+    resolved_num_ctx = num_ctx if num_ctx is not None else config.OLLAMA_NUM_CTX
+    service_key = _service_key("enricher", resolved_model_name, system_prompt or "", str(resolved_num_ctx))
     service = _service_pool.get(service_key)
     if service is None:
         service = ContextEnricherService(
             backend=_get_backend(),
             model_name=resolved_model_name,
             system_prompt=system_prompt,
+            num_ctx=num_ctx,
         )
         _service_pool[service_key] = service
         logger.info("Configured service role=enricher model=%s", resolved_model_name)
@@ -83,15 +90,23 @@ def get_context_adjuster_service(
     generalize_model_name: str | None = None,
     adjust_system_prompt: str | None = None,
     generalize_system_prompt: str | None = None,
+    rewrite_max_tokens: int | None = None,
+    num_ctx: int | None = None,
 ) -> ContextAdjusterService:
     resolved_adjust_model_name = adjust_model_name or config.CONTEXT_ADJUSTER_MODEL_NAME
     resolved_generalize_model_name = generalize_model_name or config.GENERALIZER_MODEL_NAME
+    resolved_rewrite_max_tokens = (
+        rewrite_max_tokens if rewrite_max_tokens is not None else config.REWRITE_MAX_TOKENS
+    )
+    resolved_num_ctx = num_ctx if num_ctx is not None else config.OLLAMA_NUM_CTX
     service_key = _service_key(
         "adjuster",
         resolved_adjust_model_name,
         resolved_generalize_model_name,
         adjust_system_prompt or "",
         generalize_system_prompt or "",
+        str(resolved_rewrite_max_tokens),
+        str(resolved_num_ctx),
     )
     service = _service_pool.get(service_key)
     if service is None:
@@ -102,6 +117,8 @@ def get_context_adjuster_service(
             generalize_model_name=resolved_generalize_model_name,
             adjust_system_prompt=adjust_system_prompt,
             generalize_system_prompt=generalize_system_prompt,
+            rewrite_max_tokens=rewrite_max_tokens,
+            num_ctx=num_ctx,
         )
         _service_pool[service_key] = service
         logger.info(
@@ -116,10 +133,12 @@ def get_validator_service(
     model_name: str | None = None,
     system_prompt: str | None = None,
     image_system_prompt: str | None = None,
+    num_ctx: int | None = None,
 ) -> ValidatorService:
     resolved_model_name = model_name or config.VALIDATOR_MODEL_NAME
+    resolved_num_ctx = num_ctx if num_ctx is not None else config.OLLAMA_NUM_CTX
     service_key = _service_key(
-        "validator", resolved_model_name, system_prompt or "", image_system_prompt or ""
+        "validator", resolved_model_name, system_prompt or "", image_system_prompt or "", str(resolved_num_ctx)
     )
     service = _service_pool.get(service_key)
     if service is None:
@@ -128,6 +147,7 @@ def get_validator_service(
             model_name=resolved_model_name,
             system_prompt=system_prompt,
             image_system_prompt=image_system_prompt,
+            num_ctx=num_ctx,
         )
         _service_pool[service_key] = service
         logger.info("Configured service role=validator model=%s", resolved_model_name)

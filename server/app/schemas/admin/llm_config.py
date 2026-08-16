@@ -29,7 +29,10 @@ class LlmConfigResponse(BaseModel):
     generalizer_system_prompt: str
     local_model_system_prompt: str
     routing_threshold: float
-    overrides: dict[str, str | float]
+    default_max_tokens: int
+    rewrite_max_tokens: int
+    ollama_num_ctx: int
+    overrides: dict[str, str | float | int]
     updated_at: datetime | None
     is_default: bool
     credentials_configured: list[str]
@@ -51,6 +54,14 @@ class LlmConfigUpdate(BaseModel):
     generalizer_system_prompt: str | None = None
     local_model_system_prompt: str | None = None
     routing_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    # Per-field bounds only - necessary but not sufficient. The relationship
+    # between all three (rewrite must clear answer, context must clear
+    # rewrite) is enforced in llm_config_service._validate_token_budget_overrides,
+    # which needs all three values at once and so cannot live in a single-field
+    # Pydantic validator.
+    default_max_tokens: int | None = Field(default=None, gt=0)
+    rewrite_max_tokens: int | None = Field(default=None, gt=0)
+    ollama_num_ctx: int | None = Field(default=None, gt=0)
 
     @field_validator(*PROMPT_FIELDS)
     @classmethod

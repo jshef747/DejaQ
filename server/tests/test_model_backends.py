@@ -179,7 +179,12 @@ def test_services_send_logical_model_names_to_backend():
     assert backend.requests[0].model_name == "qwen_1_5b"
     assert backend.requests[1].model_name == "gemma_local"
     assert backend.requests[2].model_name == "phi_generalizer"
-    assert backend.requests[3].model_name == "qwen_1_5b"
+    # generalize()'s stop-string match retries once WITHOUT the stop sequence
+    # (see context_adjuster.py) - FakeBackend always answers done_reason="stop",
+    # so this fires every time here, sending a second phi_generalizer request
+    # before the real adjust() call at index 4.
+    assert backend.requests[3].model_name == "phi_generalizer"
+    assert backend.requests[4].model_name == "qwen_1_5b"
 
 
 def test_service_factory_builds_ollama_backend(monkeypatch):

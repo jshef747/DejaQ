@@ -353,6 +353,28 @@ class TestAdjustSafetyNet:
         for request in backend.requests:
             assert request.num_ctx == OLLAMA_NUM_CTX
 
+    def test_a_workspace_override_actually_changes_the_request_sent(self):
+        """The whole point of the per-workspace budget override (see
+        llm_config_service.py) is that it changes real generation behavior,
+        not just a persisted number - a fresh ContextAdjusterService built
+        with an override must send that override's values to the backend,
+        not the shipped globals."""
+        backend = _FakeBackend("short reply")
+        service = ContextAdjusterService(
+            backend, "qwen_1_5b", backend, "phi_generalizer",
+            rewrite_max_tokens=16000, num_ctx=65536,
+        )
+
+        asyncio.run(service.generalize(CANARY_ANSWER))
+        asyncio.run(service.adjust("explain that in detail", CANARY_ANSWER))
+
+        for request in backend.requests:
+            assert request.max_tokens == 16000
+            assert request.num_ctx == 65536
+        # Confirms the override is real, not coincidentally equal to the default.
+        assert 16000 != REWRITE_MAX_TOKENS
+        assert 65536 != OLLAMA_NUM_CTX
+
     def test_both_rewrite_steps_send_the_same_budget(self):
         """One budget, not two: the same answer passes through generalize() at
         store time and adjust() at serve time, so a gap between them truncates
