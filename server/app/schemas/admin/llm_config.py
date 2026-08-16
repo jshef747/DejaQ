@@ -72,6 +72,12 @@ class LlmConfigUpdate(BaseModel):
     # qwen roles cannot honour the window at all. The relationship rules bound
     # the other two transitively (rewrite <= ctx/2, answer <= rewrite/2), so
     # this is the only ceiling needed.
+    # Accepted limitation: this assumes the shipped qwen2.5:1.5b assignment for
+    # the enricher and adjuster roles. A workspace that also overrides those two
+    # roles to a model with more context headroom is still capped here, because
+    # the ceiling reads the global constant and does not look up per-workspace
+    # model overrides. A deployment that moves those roles to a larger-context
+    # model system-wide raises the ceiling itself by setting DEJAQ_OLLAMA_NUM_CTX.
     ollama_num_ctx: int | None = Field(default=None, gt=0, le=config.OLLAMA_NUM_CTX)
 
     @field_validator(*PROMPT_FIELDS)
