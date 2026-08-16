@@ -110,6 +110,11 @@ export type LlmConfigResponse = {
   default_max_tokens: number;
   rewrite_max_tokens: number;
   ollama_num_ctx: number;
+  // The shipped/global default for each token budget field, regardless of
+  // whether this workspace overrides it - use this for a placeholder/hint
+  // that says what clearing the field restores, never the effective fields
+  // above (those show the override once one is set).
+  token_budget_defaults: Record<TokenBudgetField, number>;
   overrides: Record<string, unknown>;
   is_default: boolean;
   updated_at: string | null;

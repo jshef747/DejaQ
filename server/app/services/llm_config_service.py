@@ -117,6 +117,15 @@ class LlmConfigResult(BaseModel):
     default_max_tokens: int
     rewrite_max_tokens: int
     ollama_num_ctx: int
+    # The shipped/global default for each of the three fields above, ALWAYS -
+    # regardless of whether this workspace overrides it. The three fields
+    # above are the EFFECTIVE value (override-or-default), so once a
+    # workspace has an override set, nothing else in this response still
+    # names what clearing it restores; a client (the dashboard's "empty uses
+    # the default" placeholder) needs the true default value, not the
+    # override, to render that correctly. Hardcoding these client-side would
+    # drift from a deployment that sets DEJAQ_DEFAULT_MAX_TOKENS etc.
+    token_budget_defaults: dict[str, int]
     overrides: dict[str, str | float | int]
     updated_at: datetime | None
     is_default: bool
@@ -237,6 +246,11 @@ def _effective(row, credentials_configured: list[str] | None = None) -> LlmConfi
 
     return LlmConfigResult(
         **values,
+        token_budget_defaults={
+            "default_max_tokens": DEFAULT_MAX_TOKENS,
+            "rewrite_max_tokens": REWRITE_MAX_TOKENS,
+            "ollama_num_ctx": OLLAMA_NUM_CTX,
+        },
         overrides=overrides,
         updated_at=row.updated_at if row else None,
         is_default=not overrides,
@@ -326,7 +340,23 @@ def _validate_token_budget_overrides(
       carries the whole answer being rewritten on top of the rewrite's own
       output budget - OLLAMA_NUM_CTX ships at 4x REWRITE_MAX_TOKENS;
     - the answer budget itself must clear the value config.py records as
-      having measurably truncated ordinary answers mid-sentence.
+      having measurably truncated ordinary answers mid-sentence;
+    - the context window has a ceiling at OLLAMA_NUM_CTX itself: one window is
+      sent to every Ollama-backed role sharing it, so the ceiling has to be
+      the SMALLER of the models sharing it, not the larger - enricher and
+      adjuster run qwen2.5:1.5b, whose own maximum context length is exactly
+      what OLLAMA_NUM_CTX is set to (see its comment in app/config.py), while
+      normalizer and validator run the much larger gemma4:e2b. Above the
+      ceiling the two qwen roles cannot honour the window at all - not merely
+      a bigger KV cache allocation on the shared Ollama host. The other two
+      fields need no ceiling of their own: the relationship rules above
+      already bound them transitively (rewrite <= ctx/2, answer <= rewrite/2).
+      Accepted limitation: this assumes the shipped qwen2.5:1.5b assignment
+      for the enricher/adjuster roles - a workspace that also overrides those
+      roles to a model with more headroom is still capped here, since this
+      reads the global constant rather than looking up per-workspace model
+      overrides. A deployment that moves those roles to a larger-context model
+      system-wide raises the ceiling itself via DEJAQ_OLLAMA_NUM_CTX.
 
     Only reachable when this update actually touches one of the three fields
     (see the `fields_set` guard at the call site) - an update to an unrelated
@@ -366,6 +396,16 @@ def _validate_token_budget_overrides(
             "rewrite_max_tokens) - the context window bounds the prompt as well as "
             "the generation, and it has to hold the rewrite's own output on top of "
             "the prompt carrying the answer being rewritten."
+        )
+    if ctx_window > OLLAMA_NUM_CTX:
+        raise InvalidLlmConfigUpdate(
+            f"ollama_num_ctx: {ctx_window} exceeds the ceiling of {OLLAMA_NUM_CTX} - "
+            "one window is sent to every Ollama-backed role sharing it, so the "
+            "ceiling is the SMALLER of the models sharing it, not the larger: "
+            "enricher and adjuster run qwen2.5:1.5b, whose own maximum context "
+            "length is exactly this value (see the OLLAMA_NUM_CTX comment in "
+            "app/config.py). Above it those two roles cannot honour the window "
+            "at all, not just oversize a KV cache on the shared Ollama host."
         )
 
 

@@ -112,7 +112,7 @@ const STAGES: StageMeta[] = [
     sub: "strips tone before storing",
     calibrated: true,
     prompts: [{ key: "generalizer_system_prompt", label: "System prompt" }],
-    budgets: [BUDGET_META.rewrite_max_tokens],
+    budgets: [BUDGET_META.rewrite_max_tokens, BUDGET_META.ollama_num_ctx],
   },
 ];
 const STAGE_BY_KEY = Object.fromEntries(STAGES.map((s) => [s.key, s])) as Record<PipelineRole, StageMeta>;
@@ -673,7 +673,7 @@ function StageEditor({
               SHARED_BUDGET_KEYS.has(b.key)
                 ? "Shared with every other stage that uses it, so “Reset to default” below leaves it untouched - empty this field and save to clear it."
                 : "",
-              `Empty uses the default shown as the placeholder (${config[b.key]} tokens).`,
+              `Empty uses the default shown as the placeholder (${config.token_budget_defaults[b.key]} tokens).`,
             ]
               .filter(Boolean)
               .join(" ")}
@@ -686,7 +686,7 @@ function StageEditor({
               value={draftBudgets[b.key] ?? ""}
               onChange={(e) => onDraftBudgetChange(b.key, e.target.value)}
               disabled={busy}
-              placeholder={String(config[b.key])}
+              placeholder={String(config.token_budget_defaults[b.key])}
               className="ds-input"
               style={{ fontFamily: "var(--font-mono)", opacity: busy ? 0.62 : 1 }}
             />
@@ -796,7 +796,7 @@ function ExternalEditor({
 
         <Field
           label={BUDGET_META[budgetKey].label}
-          hint={`${BUDGET_META[budgetKey].hint} Shared with Local answer, below. Empty uses the default shown as the placeholder (${config[budgetKey]} tokens).`}
+          hint={`${BUDGET_META[budgetKey].hint} Shared with Local answer, below. Empty uses the default shown as the placeholder (${config.token_budget_defaults[budgetKey]} tokens).`}
         >
           <input
             name={budgetKey}
@@ -806,7 +806,7 @@ function ExternalEditor({
             value={draftBudget}
             onChange={(e) => setDraftBudget(e.target.value)}
             disabled={busy}
-            placeholder={String(config[budgetKey])}
+            placeholder={String(config.token_budget_defaults[budgetKey])}
             className="ds-input"
             style={{ fontFamily: "var(--font-mono)", opacity: busy ? 0.62 : 1 }}
           />

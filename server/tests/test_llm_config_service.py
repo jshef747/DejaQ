@@ -437,6 +437,32 @@ def test_llm_config_read_defaults_cover_token_budgets(isolated_org_db):
     assert "default_max_tokens" not in result.overrides
     assert "rewrite_max_tokens" not in result.overrides
     assert "ollama_num_ctx" not in result.overrides
+    assert result.token_budget_defaults == {
+        "default_max_tokens": DEFAULT_MAX_TOKENS,
+        "rewrite_max_tokens": REWRITE_MAX_TOKENS,
+        "ollama_num_ctx": OLLAMA_NUM_CTX,
+    }
+
+
+def test_llm_config_token_budget_defaults_survive_an_override(isolated_org_db):
+    """token_budget_defaults must always report the shipped/global default,
+    even once a workspace has an override in place - it's what a client (the
+    dashboard's empty-field-uses-the-default placeholder) needs to show what
+    clearing the override restores. The three top-level effective fields
+    can't serve that once overridden, since they report the override itself."""
+    from app.config import DEFAULT_MAX_TOKENS, OLLAMA_NUM_CTX, REWRITE_MAX_TOKENS
+    from app.services.llm_config_service import update_for_workspace
+
+    _create_workspace()
+
+    result = update_for_workspace("acme", {"default_max_tokens": 4000}, {"default_max_tokens"})
+
+    assert result.default_max_tokens == 4000
+    assert result.token_budget_defaults == {
+        "default_max_tokens": DEFAULT_MAX_TOKENS,
+        "rewrite_max_tokens": REWRITE_MAX_TOKENS,
+        "ollama_num_ctx": OLLAMA_NUM_CTX,
+    }
 
 
 def test_llm_config_update_accepts_a_valid_token_budget_combination(isolated_org_db):
@@ -446,17 +472,17 @@ def test_llm_config_update_accepts_a_valid_token_budget_combination(isolated_org
 
     result = update_for_workspace(
         "acme",
-        {"default_max_tokens": 6000, "rewrite_max_tokens": 16000, "ollama_num_ctx": 40000},
+        {"default_max_tokens": 6000, "rewrite_max_tokens": 16000, "ollama_num_ctx": 32000},
         {"default_max_tokens", "rewrite_max_tokens", "ollama_num_ctx"},
     )
 
     assert result.default_max_tokens == 6000
     assert result.rewrite_max_tokens == 16000
-    assert result.ollama_num_ctx == 40000
+    assert result.ollama_num_ctx == 32000
     assert result.overrides == {
         "default_max_tokens": 6000,
         "rewrite_max_tokens": 16000,
-        "ollama_num_ctx": 40000,
+        "ollama_num_ctx": 32000,
     }
 
     stored = read_for_workspace("acme")
@@ -536,7 +562,7 @@ def test_llm_config_update_validates_the_relationship_against_existing_stored_va
     _create_workspace()
     update_for_workspace(
         "acme",
-        {"default_max_tokens": 6000, "rewrite_max_tokens": 16000, "ollama_num_ctx": 40000},
+        {"default_max_tokens": 6000, "rewrite_max_tokens": 16000, "ollama_num_ctx": 32000},
         {"default_max_tokens", "rewrite_max_tokens", "ollama_num_ctx"},
     )
 
@@ -573,7 +599,7 @@ def test_llm_config_update_reset_never_needs_the_other_two_fields_to_be_valid(is
     _create_workspace()
     update_for_workspace(
         "acme",
-        {"default_max_tokens": 6000, "rewrite_max_tokens": 16000, "ollama_num_ctx": 40000},
+        {"default_max_tokens": 6000, "rewrite_max_tokens": 16000, "ollama_num_ctx": 32000},
         {"default_max_tokens", "rewrite_max_tokens", "ollama_num_ctx"},
     )
 
@@ -601,7 +627,7 @@ def test_llm_config_update_token_budgets_never_queries_ollama(isolated_org_db, m
 
     update_for_workspace(
         "acme",
-        {"default_max_tokens": 6000, "rewrite_max_tokens": 16000, "ollama_num_ctx": 40000},
+        {"default_max_tokens": 6000, "rewrite_max_tokens": 16000, "ollama_num_ctx": 32000},
         {"default_max_tokens", "rewrite_max_tokens", "ollama_num_ctx"},
     )
 
@@ -683,19 +709,37 @@ def test_llm_config_update_rejects_a_model_but_prompt_field_independent(isolated
     assert stored.is_default is True
 
 
-def test_llm_config_schema_rejects_a_context_window_past_the_smallest_model_maximum():
+def test_llm_config_update_accepts_a_context_window_at_the_smallest_model_maximum(isolated_org_db):
+    from app.config import OLLAMA_NUM_CTX
+    from app.services.llm_config_service import update_for_workspace
+
+    _create_workspace()
+
+    result = update_for_workspace("acme", {"ollama_num_ctx": OLLAMA_NUM_CTX}, {"ollama_num_ctx"})
+
+    assert result.ollama_num_ctx == OLLAMA_NUM_CTX
+
+
+def test_llm_config_update_rejects_a_context_window_past_the_smallest_model_maximum(isolated_org_db):
     """One window is shared by every Ollama-backed role, so the ceiling is the
     SMALLEST maximum among them (qwen2.5:1.5b's 32768, which is what
-    config.OLLAMA_NUM_CTX already equals), not gemma4:e2b's larger one - above
-    it the enricher and adjuster cannot honour the window at all."""
-    import pydantic
+    OLLAMA_NUM_CTX already equals), not gemma4:e2b's larger one - above it the
+    enricher and adjuster cannot honour the window at all. Goes through
+    update_for_workspace (the relationship-validation layer), not the bare
+    Pydantic schema: a per-field `le=` there would fail before
+    _validate_token_budget_overrides ever runs and surface only a generic
+    "Input should be less than or equal to N", with no field name and no
+    reason - inconsistent with every other rejection this feature raises."""
+    from app.config import OLLAMA_NUM_CTX
+    from app.services.llm_config_service import InvalidLlmConfigUpdate, update_for_workspace
 
-    from app import config
-    from app.schemas.admin.llm_config import LlmConfigUpdate
+    _create_workspace()
 
-    assert LlmConfigUpdate(ollama_num_ctx=config.OLLAMA_NUM_CTX).ollama_num_ctx == config.OLLAMA_NUM_CTX
+    with pytest.raises(InvalidLlmConfigUpdate) as exc_info:
+        update_for_workspace("acme", {"ollama_num_ctx": OLLAMA_NUM_CTX + 1}, {"ollama_num_ctx"})
 
-    with pytest.raises(pydantic.ValidationError) as exc_info:
-        LlmConfigUpdate(ollama_num_ctx=config.OLLAMA_NUM_CTX + 1)
-
-    assert "ollama_num_ctx" in str(exc_info.value)
+    message = str(exc_info.value)
+    assert "ollama_num_ctx" in message
+    assert str(OLLAMA_NUM_CTX + 1) in message
+    assert f"exceeds the ceiling of {OLLAMA_NUM_CTX}" in message
+    assert "qwen2.5:1.5b" in message

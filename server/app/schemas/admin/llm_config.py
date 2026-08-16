@@ -2,8 +2,6 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from app import config
-
 PROMPT_FIELDS = (
     "enricher_system_prompt",
     "normalizer_system_prompt",
@@ -34,6 +32,11 @@ class LlmConfigResponse(BaseModel):
     default_max_tokens: int
     rewrite_max_tokens: int
     ollama_num_ctx: int
+    # The shipped/global default for each token budget field, regardless of
+    # whether this workspace overrides it - see LlmConfigResult in
+    # llm_config_service.py for why the effective fields above can't serve
+    # this on their own once an override is set.
+    token_budget_defaults: dict[str, int]
     overrides: dict[str, str | float | int]
     updated_at: datetime | None
     is_default: bool
@@ -58,27 +61,16 @@ class LlmConfigUpdate(BaseModel):
     routing_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     # Per-field bounds only - necessary but not sufficient. The relationship
     # between all three (rewrite must clear answer, context must clear
-    # rewrite) is enforced in llm_config_service._validate_token_budget_overrides,
-    # which needs all three values at once and so cannot live in a single-field
-    # Pydantic validator.
+    # rewrite, and ollama_num_ctx's own ceiling) is enforced in
+    # llm_config_service._validate_token_budget_overrides, which needs all
+    # three values at once (or, for the ceiling, a value-specific error
+    # message) and so cannot live in a single-field Pydantic validator - a
+    # bare `le=` here would fail before that function ever runs and surface
+    # only a generic "Input should be less than or equal to N", with no field
+    # name and no reason, unlike every other rejection this feature raises.
     default_max_tokens: int | None = Field(default=None, gt=0)
     rewrite_max_tokens: int | None = Field(default=None, gt=0)
-    # One window is sent to every Ollama-backed role, so the ceiling has to be
-    # the SMALLER of the models sharing it, not the larger: enricher and adjuster
-    # run qwen2.5:1.5b (32768), normalizer and validator gemma4:e2b (131072).
-    # config.OLLAMA_NUM_CTX is already exactly that bound - it is set to
-    # qwen2.5:1.5b's own maximum for this reason (see its comment block) - so it
-    # is the ceiling, not a second literal to keep in sync. Above it the two
-    # qwen roles cannot honour the window at all. The relationship rules bound
-    # the other two transitively (rewrite <= ctx/2, answer <= rewrite/2), so
-    # this is the only ceiling needed.
-    # Accepted limitation: this assumes the shipped qwen2.5:1.5b assignment for
-    # the enricher and adjuster roles. A workspace that also overrides those two
-    # roles to a model with more context headroom is still capped here, because
-    # the ceiling reads the global constant and does not look up per-workspace
-    # model overrides. A deployment that moves those roles to a larger-context
-    # model system-wide raises the ceiling itself by setting DEJAQ_OLLAMA_NUM_CTX.
-    ollama_num_ctx: int | None = Field(default=None, gt=0, le=config.OLLAMA_NUM_CTX)
+    ollama_num_ctx: int | None = Field(default=None, gt=0)
 
     @field_validator(*PROMPT_FIELDS)
     @classmethod
