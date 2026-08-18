@@ -1,38 +1,78 @@
 "use client";
 
-import { AssistantAvatar } from "./ChatMessage";
 import TurnShell from "./ReadingColumn";
+import { WaitRing } from "./RouteMarker";
+import { ROUTE_STYLE, type Route } from "./provenance";
 
-// Shown while waiting for the assistant's response. It renders through the
-// same TurnShell, with the same avatar, as the answer that replaces it —
-// so nothing moves when the first token lands.
-export default function TypingIndicator() {
+// Shown while waiting for the assistant's response. The rail marker appears
+// immediately in a neutral "deciding" state; once the route is known (as soon
+// as the gateway sends headers - see the note in the body) it adopts that
+// route's colour and narrates what's happening, so an 18-second local
+// generation reads as the product explaining its decision rather than as dead air.
+export default function TypingIndicator({
+  route,
+  modelUsed,
+  sinceMs,
+}: {
+  route: Route | null;
+  modelUsed: string | null;
+  sinceMs: number | null;
+}) {
   return (
-    <TurnShell gap={40} marker={<AssistantAvatar />}>
-      <div
-        style={{
-          alignItems: "center",
-          display: "flex",
-          gap: "5px",
-          // Centres the dots on the first line of the serif answer that
-          // will take this spot (16.5/27).
-          height: "27px",
-        }}
-      >
-        {[0, 1, 2].map((i) => (
-          <span
-            key={i}
-            style={{
-              animation: `bounce-dot 1.2s ease-in-out ${i * 0.2}s infinite`,
-              background: "var(--fg-dimmer)",
-              borderRadius: "50%",
-              display: "block",
-              height: "6px",
-              width: "6px",
-            }}
-          />
-        ))}
-      </div>
+    <TurnShell gap={40} marker={<WaitRing route={route} sinceMs={sinceMs} />}>
+      {/*
+        Not dead code, but currently unreachable against the shipped backend:
+        server/app/routers/openai_compat.py's _stream_generator materialises the
+        whole answer before yielding its first chunk, so the X-DejaQ-* headers
+        this branch (and WaitRing's ticking counter) needs only reach the browser
+        together with the first token - by which point the wait is over and the
+        neutral "Checking cache…" state below is all that ever renders. Keep it:
+        it is correct, and it lights up as soon as the gateway streams headers
+        early. Fixing that ordering is tracked separately, not here.
+      */}
+      {route === "local" || route === "cloud" ? (
+        <div
+          style={{
+            alignItems: "center",
+            background: "var(--bg-3)",
+            borderRadius: "9px",
+            display: "flex",
+            gap: "12px",
+            height: "34px",
+            padding: "0 12px",
+          }}
+        >
+          <span style={{ alignItems: "center", color: "var(--fg-dimmer)", display: "flex", fontSize: "12px", gap: "6px" }}>
+            <CheckIcon />
+            Cache checked
+          </span>
+          <span style={{ background: "var(--border-2)", height: "14px", width: "1px" }} />
+          <span style={{ color: "var(--fg-dim)", fontSize: "12.5px" }}>No stored answer close enough — generating on</span>
+          <span style={{ color: ROUTE_STYLE[route].ink, fontFamily: "var(--font-mono)", fontSize: "12px", fontWeight: 500 }}>
+            {modelUsed}
+          </span>
+        </div>
+      ) : (
+        <div
+          style={{
+            alignItems: "center",
+            color: "var(--fg-dimmer)",
+            display: "flex",
+            fontSize: "12.5px",
+            height: "27px",
+          }}
+        >
+          Checking cache…
+        </div>
+      )}
     </TurnShell>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="var(--green)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3.2 8.4 6.4 11.6 12.8 5" />
+    </svg>
   );
 }

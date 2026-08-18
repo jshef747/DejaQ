@@ -36,6 +36,19 @@ export interface ChatSuccess {
   completionTokens: number;
   latencyMs: number;
   cacheHit: boolean;
+  // Already forwarded by /api/chat's SSE_HEADERS_TO_FORWARD — just not
+  // surfaced to callers before. Both come straight from the cache lookup on
+  // a hit; neither is fabricated or inferred.
+  cacheDistance: number | null;
+  cacheMatchedQuery: string | null;
+}
+
+// Route + model become known as soon as the response headers land, well
+// before the first content delta — the wait strip narrates from this, not
+// from a client-side guess.
+export interface ChatMeta {
+  modelUsed: string | null;
+  tier: "cache" | "local" | "external" | null;
 }
 
 export interface ApiError {
@@ -84,6 +97,7 @@ export async function sendChatMessage(
   routingMode: RoutingMode = "auto",
   attachment: Attachment | null = null,
   onDelta?: (chunk: string) => void,
+  onMeta?: (meta: ChatMeta) => void,
 ): Promise<ChatResult> {
   let response: Response;
   try {
@@ -110,6 +124,11 @@ export async function sendChatMessage(
   const conversationId = response.headers.get("x-dejaq-conversation-id") ?? null;
   const promptDifficulty = response.headers.get("x-dejaq-prompt-difficulty") ?? null;
   const latencyMs = Number(response.headers.get("x-dejaq-latency-ms") ?? "0");
+  const rawDistance = response.headers.get("x-dejaq-cache-distance");
+  const cacheDistance = rawDistance !== null ? Number(rawDistance) : null;
+  const cacheMatchedQuery = response.headers.get("x-dejaq-cache-matched-query") ?? null;
+
+  onMeta?.({ modelUsed, tier });
 
   // Parse SSE stream.
   const reader = response.body!.getReader();
@@ -167,6 +186,8 @@ export async function sendChatMessage(
     completionTokens,
     latencyMs,
     cacheHit: modelUsed === "cache",
+    cacheDistance,
+    cacheMatchedQuery,
   };
 }
 

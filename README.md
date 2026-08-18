@@ -209,4 +209,5 @@ npm run build
 cd ../chat
 npx tsc --noEmit --pretty false
 npm run build
+npm test
 ```

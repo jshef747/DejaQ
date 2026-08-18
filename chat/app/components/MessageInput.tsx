@@ -149,7 +149,7 @@ export default function MessageInput({
             // A pinned attachment rides along with every message from here on,
             // which costs money and shapes the cache lookup. Make that state
             // impossible to miss rather than letting it look like a fresh pick.
-            border: `1px solid ${attachment.sticky ? "var(--accent-border)" : "var(--border-2)"}`,
+            border: `1px solid ${attachment.sticky ? "var(--fg-dimmer)" : "var(--border-2)"}`,
             borderRadius: "8px",
             marginBottom: "8px",
             padding: "8px 10px",
@@ -170,7 +170,7 @@ export default function MessageInput({
                 alignItems: "center",
                 background: "var(--bg-3)",
                 borderRadius: "6px",
-                color: "var(--accent)",
+                color: "var(--fg-dim)",
                 display: "flex",
                 flexShrink: 0,
                 height: "44px",
@@ -195,7 +195,7 @@ export default function MessageInput({
             }}
           >
             {attachment.sticky && (
-              <span style={{ color: "var(--accent)", display: "flex", flexShrink: 0 }}>
+              <span style={{ color: "var(--fg-dim)", display: "flex", flexShrink: 0 }}>
                 <PinIcon />
               </span>
             )}
@@ -246,7 +246,7 @@ export default function MessageInput({
         onDragOver={(e) => e.preventDefault()}
         onDrop={handleDrop}
         onFocusCapture={(e) =>
-          (e.currentTarget.style.borderColor = "var(--accent-border)")
+          (e.currentTarget.style.borderColor = "var(--fg-dimmer)")
         }
         onBlurCapture={(e) =>
           (e.currentTarget.style.borderColor = "var(--border-2)")
@@ -274,7 +274,7 @@ export default function MessageInput({
             background: "transparent",
             border: "none",
             borderRadius: "6px",
-            color: attachment ? "var(--accent)" : "var(--fg-dim)",
+            color: attachment ? "var(--fg)" : "var(--fg-dim)",
             cursor: disabled ? "not-allowed" : "pointer",
             display: "flex",
             flexShrink: 0,
@@ -314,10 +314,10 @@ export default function MessageInput({
           title="Send (Enter)"
           style={{
             alignItems: "center",
-            background: canSend ? "var(--accent-solid)" : "var(--bg-3)",
+            background: canSend ? "var(--fg)" : "var(--bg-3)",
             border: "none",
             borderRadius: "6px",
-            color: canSend ? "var(--on-accent)" : "var(--fg-dimmer)",
+            color: canSend ? "var(--bg)" : "var(--fg-dimmer)",
             cursor: canSend ? "pointer" : "not-allowed",
             display: "flex",
             flexShrink: 0,
