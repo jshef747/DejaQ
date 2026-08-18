@@ -49,7 +49,7 @@ export default function ToastStack({ toasts, onDismiss }: Props) {
             background: t.kind === "error" ? "var(--red-bg)" : t.kind === "success" ? "var(--green-bg)" : "var(--bg-3)",
             border: `1px solid ${t.kind === "error" ? "var(--red-border)" : t.kind === "success" ? "var(--green-border)" : "var(--border-2)"}`,
             borderRadius: "6px",
-            boxShadow: "var(--shadow)",
+            boxShadow: "var(--shadow-sm)",
             color: t.kind === "error" ? "var(--red)" : t.kind === "success" ? "var(--green)" : "var(--fg)",
             display: "flex",
             fontSize: "13px",

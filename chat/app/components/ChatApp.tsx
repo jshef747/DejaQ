@@ -27,6 +27,7 @@ import MessageInput from "./MessageInput";
 import SettingsModal from "./SettingsModal";
 import TypingIndicator from "./TypingIndicator";
 import ToastStack, { type ToastData } from "./Toast";
+import { copyText } from "./copy-text";
 
 const WELCOME_PROMPTS = [
   "What are the main benefits of semantic caching for LLM APIs?",
@@ -64,14 +65,15 @@ interface InspectorProps {
 type InspectorTone = "green" | "amber" | "red" | "blue" | "neutral";
 
 function RequestInspector({ message, onClose, asDrawer }: InspectorProps) {
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const difficulty = difficultyMeta(message?.promptDifficulty, message?.cacheHit);
+  const copied = copyState === "copied";
 
   function copyResponseId() {
     if (!message?.responseId) return;
-    navigator.clipboard.writeText(message.responseId).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+    copyText(message.responseId).then((ok) => {
+      setCopyState(ok ? "copied" : "failed");
+      setTimeout(() => setCopyState("idle"), 1500);
     });
   }
 
@@ -87,7 +89,7 @@ function RequestInspector({ message, onClose, asDrawer }: InspectorProps) {
         position: "fixed",
         right: 0,
         zIndex: 40,
-        boxShadow: "var(--shadow)",
+        boxShadow: "var(--shadow-up)",
       }
     : {
         background: "var(--bg-2)",
@@ -196,10 +198,10 @@ function RequestInspector({ message, onClose, asDrawer }: InspectorProps) {
                     title="Copy response ID"
                     style={{
                       alignItems: "center",
-                      background: copied ? "var(--green-bg)" : "var(--bg-3)",
-                      border: `1px solid ${copied ? "var(--green-border)" : "var(--border)"}`,
+                      background: copied ? "var(--green-bg)" : copyState === "failed" ? "var(--red-bg)" : "var(--bg-3)",
+                      border: `1px solid ${copied ? "var(--green-border)" : copyState === "failed" ? "var(--red-border)" : "var(--border)"}`,
                       borderRadius: "4px",
-                      color: copied ? "var(--green)" : "var(--fg-dimmer)",
+                      color: copied ? "var(--green)" : copyState === "failed" ? "var(--red)" : "var(--fg-dimmer)",
                       cursor: "pointer",
                       display: "flex",
                       flexShrink: 0,
@@ -208,7 +210,7 @@ function RequestInspector({ message, onClose, asDrawer }: InspectorProps) {
                       transition: "background 0.15s, color 0.15s",
                     }}
                   >
-                    {copied ? "Copied" : "Copy"}
+                    {copied ? "Copied" : copyState === "failed" ? "Failed" : "Copy"}
                   </button>
                 }
               >

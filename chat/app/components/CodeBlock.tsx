@@ -1,6 +1,7 @@
 "use client";
 
 import { isValidElement, useState, type ReactNode } from "react";
+import { copyText } from "./copy-text";
 
 // react-markdown hands <pre> a single <code className="language-x"> child.
 // Both the label and the copy text come from that child, so the block
@@ -20,14 +21,16 @@ function plainText(node: ReactNode): string {
   return "";
 }
 
+type CopyState = "idle" | "copied" | "failed";
+
 export default function CodeBlock({ children }: { children?: ReactNode }) {
-  const [copied, setCopied] = useState(false);
+  const [state, setState] = useState<CopyState>("idle");
   const { lang, text } = codeChild(children);
 
   function copy() {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+    copyText(text).then((ok) => {
+      setState(ok ? "copied" : "failed");
+      setTimeout(() => setState("idle"), 1500);
     });
   }
 
@@ -39,13 +42,13 @@ export default function CodeBlock({ children }: { children?: ReactNode }) {
         <button
           type="button"
           className="dq-code-copy"
-          data-copied={copied}
+          data-state={state}
           onClick={copy}
           title="Copy code"
           aria-label="Copy code"
         >
           <CopyIcon />
-          {copied ? "Copied" : "Copy"}
+          {state === "copied" ? "Copied" : state === "failed" ? "Copy failed" : "Copy"}
         </button>
       </div>
       <pre>{children}</pre>

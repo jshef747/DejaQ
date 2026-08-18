@@ -198,8 +198,12 @@
   color: var(--fg);
 }
 
-.dq-code-copy[data-copied="true"] {
+.dq-code-copy[data-state="copied"] {
   color: var(--green);
+}
+
+.dq-code-copy[data-state="failed"] {
+  color: var(--red);
 }
 
 .dq-code pre {

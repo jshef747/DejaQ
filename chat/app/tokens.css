@@ -38,7 +38,7 @@
   --accent-solid: #f2661f;
   --accent-bg: rgba(242, 102, 31, 0.15);
   --accent-border: rgba(242, 102, 31, 0.38);
-  --on-accent: #fff3eb;
+  --on-accent: #1a0d00;
 
   --green: #57c08a;
   --green-bg: rgba(87, 192, 138, 0.14);
@@ -58,6 +58,7 @@
 
   --shadow: 0 20px 48px rgba(0, 0, 0, 0.55);
   --shadow-sm: 0 2px 10px rgba(0, 0, 0, 0.35);
+  --shadow-up: 0 -6px 24px rgba(0, 0, 0, 0.45);
   --scrim: rgba(0, 0, 0, 0.6);
 
   /* Three faces, three jobs: the product talks in sans, the model in
@@ -123,6 +124,7 @@
 
     --shadow: 0 20px 48px rgba(20, 22, 28, 0.11);
     --shadow-sm: 0 1px 3px rgba(20, 22, 28, 0.09);
+    --shadow-up: 0 -6px 24px rgba(20, 22, 28, 0.12);
     --scrim: rgba(20, 22, 28, 0.32);
   }
 }
@@ -167,6 +169,7 @@
 
   --shadow: 0 20px 48px rgba(20, 22, 28, 0.11);
   --shadow-sm: 0 1px 3px rgba(20, 22, 28, 0.09);
+  --shadow-up: 0 -6px 24px rgba(20, 22, 28, 0.12);
   --scrim: rgba(20, 22, 28, 0.32);
 }
 
