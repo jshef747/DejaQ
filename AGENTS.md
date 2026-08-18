@@ -21,7 +21,7 @@ Neither the dashboard nor the chat app supports narrow viewports, by design (cap
 
 ## Chat styling
 
-The chat owns its own token layer at `chat/app/tokens.css` (light + dark, via `prefers-color-scheme` with a `data-theme` override) and must not import the dashboard's `design-system.css` again. Components reference the tokens by name in inline styles, so change a token's value, never its name. Three fonts carry three jobs - `--font-sans` for the interface, `--font-serif` for model answers only, `--font-mono` for machine facts - and answer prose lives in `.dq-markdown` in `chat/app/globals.css`.
+The chat owns its own token layer (`chat/app/tokens.css`, light + dark) and must not import the dashboard's `design-system.css` again. Every component reads those tokens by name from inline styles, so change a token's value, never its name. Read that file's header, and the one on `chat/app/globals.css`, before changing anything about how the chat looks.
 
 ## Maintaining this file
 
