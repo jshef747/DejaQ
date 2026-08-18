@@ -43,17 +43,23 @@ function newId() {
   return `msg_${++msgCounter}_${Date.now()}`;
 }
 
-// The reading column is never reflowed and never covered. The side panel is
-// only used when the window can hold the sidebar, the whole turn shell and
-// the panel side by side — then the transcript reserves the panel's width and
-// the column simply recentres in what is left, still at its full measure.
-// Below that the panel becomes the bottom drawer, which never touches the
-// column horizontally at all. Reserving the width at narrower windows would
-// squeeze the shell and rewrap every line; overlaying it would hide the text
-// being inspected. Neither is acceptable, so the treatment switches instead.
+// The side panel takes what is left over once the sidebar and the whole turn
+// shell have been reserved, so it neither overlays the reading column nor
+// squeezes it: the transcript reserves exactly the panel's width and the
+// column recentres in the rest. Wide windows give it its full width; narrower
+// ones hand it the remainder, down to the width below which the panel is too
+// thin to read. Only below DRAWER_MAX_WIDTH — where the shell no longer fits
+// beside anything at all — does it become the bottom sheet.
 const SIDEBAR_WIDTH = 221; // 220px + its 1px right border
-const SHELL_WIDTH = 812; // --shell (780px) + TurnShell's own 2 × 16px padding
-const SIDE_PANEL_MIN_WIDTH = SIDEBAR_WIDTH + SHELL_WIDTH + DETAIL_PANEL_WIDTH;
+const SHELL_WIDTH = 812; // --shell (780px) + TurnShell's own 2 × 16px padding, pinned by tokens.test.ts
+const PANEL_GAP = 8;
+const MIN_SIDE_PANEL_WIDTH = 280;
+const DRAWER_MAX_WIDTH = 1024;
+
+function sidePanelWidth(windowWidth: number): number {
+  const leftover = windowWidth - SIDEBAR_WIDTH - SHELL_WIDTH - PANEL_GAP;
+  return Math.min(DETAIL_PANEL_WIDTH, Math.max(MIN_SIDE_PANEL_WIDTH, leftover));
+}
 
 // ─── useWindowWidth hook ────────────────────────────────────────────────────
 
@@ -96,7 +102,8 @@ export default function ChatApp() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<AppMessage[]>([]);
   const windowWidth = useWindowWidth();
-  const useSidePanel = windowWidth >= SIDE_PANEL_MIN_WIDTH;
+  const isNarrow = windowWidth < DRAWER_MAX_WIDTH;
+  const panelWidth = sidePanelWidth(windowWidth);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -636,9 +643,7 @@ export default function ChatApp() {
               of the composer, which stays reachable. The padding reserves the
               panel's own width: an absolutely positioned child is laid out
               against the padding box, so the panel stays flush right while the
-              transcript inside recentres clear of it. Only ever applied at
-              widths where the shell still fits beside it — see
-              SIDE_PANEL_MIN_WIDTH. */}
+              transcript inside recentres clear of it. */}
           <div
             style={{
               display: "flex",
@@ -646,7 +651,7 @@ export default function ChatApp() {
               flexDirection: "column",
               minWidth: 0,
               overflow: "hidden",
-              paddingRight: inspectorOpen && useSidePanel ? `${DETAIL_PANEL_WIDTH}px` : 0,
+              paddingRight: inspectorOpen && !isNarrow ? `${panelWidth}px` : 0,
               position: "relative",
             }}
           >
@@ -686,11 +691,11 @@ export default function ChatApp() {
               <div ref={bottomRef} />
             </main>
 
-            {/* Response detail panel — a reserved side column here; on
-                narrower viewports it drops to a fixed bottom sheet instead
+            {/* Response detail panel — a reserved side column here; below
+                DRAWER_MAX_WIDTH it drops to a fixed bottom sheet instead
                 (rendered outside this column so it isn't clipped by
                 overflow:hidden here). */}
-            {inspectorOpen && useSidePanel && (
+            {inspectorOpen && !isNarrow && (
               <ResponseDetail
                 message={inspectedMessage}
                 typedQuery={inspectedMessage ? typedQueryFor(inspectedMessage) : null}
@@ -699,6 +704,7 @@ export default function ChatApp() {
                 baselineSampleCount={baselineLatencies.length}
                 onClose={() => { setInspectorOpen(false); setInspectedMsgId(null); }}
                 asDrawer={false}
+                sideWidth={panelWidth}
               />
             )}
           </div>
@@ -716,7 +722,7 @@ export default function ChatApp() {
         </div>
       </div>
 
-      {inspectorOpen && !useSidePanel && (
+      {inspectorOpen && isNarrow && (
         <ResponseDetail
           message={inspectedMessage}
           typedQuery={inspectedMessage ? typedQueryFor(inspectedMessage) : null}
@@ -725,6 +731,7 @@ export default function ChatApp() {
           baselineSampleCount={baselineLatencies.length}
           onClose={() => { setInspectorOpen(false); setInspectedMsgId(null); }}
           asDrawer={true}
+          sideWidth={panelWidth}
         />
       )}
 

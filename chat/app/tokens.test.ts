@@ -32,4 +32,16 @@ describe("tokens.css", () => {
     expect(Object.keys(media).length).toBeGreaterThan(20);
     expect(forced).toEqual(media);
   });
+
+  // ChatApp hand-copies these into SHELL_WIDTH (--shell + TurnShell's 2 x 16px
+  // padding), which decides whether the response detail panel can sit beside
+  // the reading column without covering or rewrapping it. A token moving here
+  // silently makes that decision wrong.
+  it("pins the layout tokens the panel-fit constants are derived from", () => {
+    const root = block(/^:root \{([\s\S]*?)\n\}/m);
+    expect(root["--shell"]).toBe("780px");
+    expect(root["--col"]).toBe("704px");
+    expect(root["--rail"]).toBe("52px");
+    expect(root["--gutter"]).toBe("24px");
+  });
 });

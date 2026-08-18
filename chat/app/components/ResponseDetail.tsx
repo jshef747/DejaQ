@@ -18,9 +18,9 @@ const BAND_MAX_DISTANCE = 0.2;
 const RESCUE_MAX_DISTANCE = 0.6;
 const VALIDATOR_SKIP_DISTANCE = 0.05;
 
-// The side panel's width. Exported because ChatApp reserves exactly this much
-// room for it rather than letting it overlay the reading column, and the two
-// numbers drifting apart is what would put the panel back on top of the text.
+// The side panel's widest form. ChatApp reserves the width it actually gives
+// the panel, which is this or whatever narrower remainder the window leaves
+// once the sidebar and the turn shell have had theirs.
 export const DETAIL_PANEL_WIDTH = 384;
 
 interface Props {
@@ -37,6 +37,9 @@ interface Props {
   baselineSampleCount: number;
   onClose: () => void;
   asDrawer: boolean;
+  // What ChatApp reserved for the side variant; ignored by the drawer, which
+  // spans the viewport.
+  sideWidth: number;
 }
 
 export default function ResponseDetail({
@@ -47,6 +50,7 @@ export default function ResponseDetail({
   baselineSampleCount,
   onClose,
   asDrawer,
+  sideWidth,
 }: Props) {
   const route = message ? classifyRoute(message.tier, message.modelUsed) : null;
   const style = routeStyle(route);
@@ -75,7 +79,7 @@ export default function ResponseDetail({
         position: "absolute",
         right: 0,
         top: 0,
-        width: `${DETAIL_PANEL_WIDTH}px`,
+        width: `${sideWidth}px`,
         zIndex: 30,
       };
 
@@ -351,7 +355,7 @@ function WhyItMatched({ typedQuery, message }: { typedQuery: string | null; mess
     );
   }
 
-  const lossy = isLossyHeaderText(stored);
+  const lossy = isLossyHeaderText(stored, typedQuery);
   const diff = typedQuery && !lossy ? diffQueries(typedQuery, stored) : null;
   const tier = distance <= TRUST_DISTANCE ? "Trusted" : distance <= BAND_MAX_DISTANCE ? "Band" : "Rescue";
   const validatorNeeded = distance > VALIDATOR_SKIP_DISTANCE;
@@ -400,9 +404,9 @@ function WhyItMatched({ typedQuery, message }: { typedQuery: string | null; mess
           </div>
           {lossy && (
             <div style={{ color: "var(--fg-dimmer)", fontSize: "11.5px", lineHeight: "17px", marginTop: "7px" }}>
-              Shown as the server reported it — this diagnostic value is shortened and stripped of
-              characters it cannot carry, so it may differ from the stored question. Not compared
-              word by word for that reason.
+              Shown as the server reported it. This diagnostic value may be shortened, or carry
+              replacements for characters the header cannot hold, so it is not compared word by
+              word.
             </div>
           )}
         </>

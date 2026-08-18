@@ -56,13 +56,19 @@ export function diffQueries(typed: string, stored: string): { typed: DiffWord[];
 // no ellipsis, and latin-1-replaces every character outside that range with
 // "?" (openai_compat.py _diagnostic_prompt / _sanitize_headers). Diffing
 // against a value mangled either way underlines words as "changed" that were
-// never typed differently, so a value that shows either mark is shown plainly
-// instead of diffed.
+// never typed differently.
+//
+// Truncation shows in the length alone: the value is whitespace-collapsed
+// before the cut, so only a truncated one reaches the limit. Replacement is
+// not readable from the value by itself — a literal "?" is ordinary in the
+// questions this product is asked ("what does foo?.bar do") — so it is only
+// claimed when the typed question carries a character the header could not
+// have survived, which is the only case where a "?" in the stored value is
+// evidence of anything.
 const HEADER_TRUNCATE_LIMIT = 200;
+const NON_LATIN1 = /[^\u0000-\u00ff]/;
 
-export function isLossyHeaderText(text: string): boolean {
-  if (text.length >= HEADER_TRUNCATE_LIMIT) return true;
-  // A genuine question mark closes a word. One that opens a token or sits
-  // inside one is a replaced character.
-  return /(^|\s)\?|\?\S/.test(text);
+export function isLossyHeaderText(stored: string, typed: string | null): boolean {
+  if (stored.length >= HEADER_TRUNCATE_LIMIT) return true;
+  return typed !== null && NON_LATIN1.test(typed) && stored.includes("?");
 }
