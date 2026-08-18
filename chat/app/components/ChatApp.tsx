@@ -24,7 +24,7 @@ import {
 import ChatMessage, { type AppMessage, type FeedbackPhase } from "./ChatMessage";
 import ConversationSidebar from "./ConversationSidebar";
 import MessageInput from "./MessageInput";
-import ResponseDetail, { DETAIL_PANEL_WIDTH } from "./ResponseDetail";
+import ResponseDetail from "./ResponseDetail";
 import SettingsModal from "./SettingsModal";
 import TypingIndicator from "./TypingIndicator";
 import ToastStack, { type ToastData } from "./Toast";
@@ -43,23 +43,14 @@ function newId() {
   return `msg_${++msgCounter}_${Date.now()}`;
 }
 
-// The side panel takes what is left over once the sidebar and the whole turn
-// shell have been reserved, so it neither overlays the reading column nor
-// squeezes it: the transcript reserves exactly the panel's width and the
-// column recentres in the rest. Wide windows give it its full width; narrower
-// ones hand it the remainder, down to the width below which the panel is too
-// thin to read. Only below DRAWER_MAX_WIDTH — where the shell no longer fits
-// beside anything at all — does it become the bottom sheet.
-const SIDEBAR_WIDTH = 221; // 220px + its 1px right border
-const SHELL_WIDTH = 812; // --shell (780px) + TurnShell's own 2 × 16px padding, pinned by tokens.test.ts
-const PANEL_GAP = 8;
-const MIN_SIDE_PANEL_WIDTH = 280;
+// The response detail panel floats above the layout and reserves no room in
+// it, so opening it cannot move or rewrap anything: the reading column, the
+// sidebar and the composer are laid out identically whether it is open or
+// shut. Every attempt to carve space out instead ended up narrowing the very
+// measure the panel exists to explain. It covers the right margin, and the
+// gutter before it, which is the accepted cost. Below DRAWER_MAX_WIDTH it
+// becomes the bottom sheet.
 const DRAWER_MAX_WIDTH = 1024;
-
-function sidePanelWidth(windowWidth: number): number {
-  const leftover = windowWidth - SIDEBAR_WIDTH - SHELL_WIDTH - PANEL_GAP;
-  return Math.min(DETAIL_PANEL_WIDTH, Math.max(MIN_SIDE_PANEL_WIDTH, leftover));
-}
 
 // ─── useWindowWidth hook ────────────────────────────────────────────────────
 
@@ -103,7 +94,6 @@ export default function ChatApp() {
   const messagesRef = useRef<AppMessage[]>([]);
   const windowWidth = useWindowWidth();
   const isNarrow = windowWidth < DRAWER_MAX_WIDTH;
-  const panelWidth = sidePanelWidth(windowWidth);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -639,11 +629,10 @@ export default function ChatApp() {
         {/* Main chat area: message list + input. */}
         <div style={{ display: "flex", flex: 1, flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
           {/* Transcript region. This — not the whole column — is the response
-              detail panel's positioning context, so the panel stops at the top
-              of the composer, which stays reachable. The padding reserves the
-              panel's own width: an absolutely positioned child is laid out
-              against the padding box, so the panel stays flush right while the
-              transcript inside recentres clear of it. */}
+              detail panel's positioning context, which is what keeps the panel
+              off the composer: it can only ever span from below the header to
+              the top of the input, so the attach control, the textarea and the
+              send button stay visible and clickable at every width. */}
           <div
             style={{
               display: "flex",
@@ -651,7 +640,6 @@ export default function ChatApp() {
               flexDirection: "column",
               minWidth: 0,
               overflow: "hidden",
-              paddingRight: inspectorOpen && !isNarrow ? `${panelWidth}px` : 0,
               position: "relative",
             }}
           >
@@ -691,8 +679,8 @@ export default function ChatApp() {
               <div ref={bottomRef} />
             </main>
 
-            {/* Response detail panel — a reserved side column here; below
-                DRAWER_MAX_WIDTH it drops to a fixed bottom sheet instead
+            {/* Response detail panel — an overlay over the transcript here;
+                below DRAWER_MAX_WIDTH it drops to a fixed bottom sheet instead
                 (rendered outside this column so it isn't clipped by
                 overflow:hidden here). */}
             {inspectorOpen && !isNarrow && (
@@ -704,7 +692,6 @@ export default function ChatApp() {
                 baselineSampleCount={baselineLatencies.length}
                 onClose={() => { setInspectorOpen(false); setInspectedMsgId(null); }}
                 asDrawer={false}
-                sideWidth={panelWidth}
               />
             )}
           </div>
@@ -731,7 +718,6 @@ export default function ChatApp() {
           baselineSampleCount={baselineLatencies.length}
           onClose={() => { setInspectorOpen(false); setInspectedMsgId(null); }}
           asDrawer={true}
-          sideWidth={panelWidth}
         />
       )}
 

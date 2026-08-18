@@ -18,10 +18,9 @@ const BAND_MAX_DISTANCE = 0.2;
 const RESCUE_MAX_DISTANCE = 0.6;
 const VALIDATOR_SKIP_DISTANCE = 0.05;
 
-// The side panel's widest form. ChatApp reserves the width it actually gives
-// the panel, which is this or whatever narrower remainder the window leaves
-// once the sidebar and the turn shell have had theirs.
-export const DETAIL_PANEL_WIDTH = 384;
+// The side panel's width. It overlays the transcript rather than taking room
+// from it, so nothing else in the layout is derived from this number.
+const DETAIL_PANEL_WIDTH = 384;
 
 interface Props {
   // Null when the panel was opened from the header with no turn selected —
@@ -37,9 +36,6 @@ interface Props {
   baselineSampleCount: number;
   onClose: () => void;
   asDrawer: boolean;
-  // What ChatApp reserved for the side variant; ignored by the drawer, which
-  // spans the viewport.
-  sideWidth: number;
 }
 
 export default function ResponseDetail({
@@ -50,7 +46,6 @@ export default function ResponseDetail({
   baselineSampleCount,
   onClose,
   asDrawer,
-  sideWidth,
 }: Props) {
   const route = message ? classifyRoute(message.tier, message.modelUsed) : null;
   const style = routeStyle(route);
@@ -79,7 +74,7 @@ export default function ResponseDetail({
         position: "absolute",
         right: 0,
         top: 0,
-        width: `${sideWidth}px`,
+        width: `${DETAIL_PANEL_WIDTH}px`,
         zIndex: 30,
       };
 
