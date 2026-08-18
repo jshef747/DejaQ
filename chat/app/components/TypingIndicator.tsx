@@ -5,10 +5,10 @@ import { WaitRing } from "./RouteMarker";
 import { ROUTE_STYLE, type Route } from "./provenance";
 
 // Shown while waiting for the assistant's response. The rail marker appears
-// immediately in a neutral "deciding" state; once the route is known
-// (headers land before any content does) it adopts that route's colour and
-// narrates what's happening, so an 18-second local generation reads as the
-// product explaining its decision rather than as dead air.
+// immediately in a neutral "deciding" state; once the route is known (as soon
+// as the gateway sends headers - see the note in the body) it adopts that
+// route's colour and narrates what's happening, so an 18-second local
+// generation reads as the product explaining its decision rather than as dead air.
 export default function TypingIndicator({
   route,
   modelUsed,
@@ -20,6 +20,16 @@ export default function TypingIndicator({
 }) {
   return (
     <TurnShell gap={40} marker={<WaitRing route={route} sinceMs={sinceMs} />}>
+      {/*
+        Not dead code, but currently unreachable against the shipped backend:
+        server/app/routers/openai_compat.py's _stream_generator materialises the
+        whole answer before yielding its first chunk, so the X-DejaQ-* headers
+        this branch (and WaitRing's ticking counter) needs only reach the browser
+        together with the first token - by which point the wait is over and the
+        neutral "Checking cache…" state below is all that ever renders. Keep it:
+        it is correct, and it lights up as soon as the gateway streams headers
+        early. Fixing that ordering is tracked separately, not here.
+      */}
       {route === "local" || route === "cloud" ? (
         <div
           style={{

@@ -240,8 +240,12 @@ export default function ChatMessage({
             borderRadius: "9px",
             display: "flex",
             gap: "10px",
-            height: "34px",
+            // min-height, not height: the cache line ("You asked this before -
+            // Nx faster than this session's average generated answer.") wraps to
+            // two lines in the 704px reading column, and a fixed 34px box clipped
+            // it. Single-line strips (local, cloud) still measure exactly 34px.
             marginBottom: "16px",
+            minHeight: "34px",
             padding: "0 12px",
           }}
         >

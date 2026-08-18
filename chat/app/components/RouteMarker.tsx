@@ -58,6 +58,10 @@ export function RouteRing({
 // ring adopts that route's colour and an elapsed counter starts ticking —
 // so an 18-second local generation reads as the product counting its own
 // wait, not as a stalled spinner.
+// The `route !== null` half of this (the coloured ring and its ticking elapsed
+// counter) is unreachable against the shipped backend for the reason documented
+// in TypingIndicator.tsx: headers arrive with the first token, never before it.
+// Not dead code - keep it.
 export function WaitRing({ route, sinceMs }: { route: Route | null; sinceMs: number | null }) {
   const [now, setNow] = useState(sinceMs);
   useEffect(() => {
