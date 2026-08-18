@@ -27,6 +27,7 @@ import MessageInput from "./MessageInput";
 import SettingsModal from "./SettingsModal";
 import TypingIndicator from "./TypingIndicator";
 import ToastStack, { type ToastData } from "./Toast";
+import { copyText } from "./copy-text";
 
 const WELCOME_PROMPTS = [
   "What are the main benefits of semantic caching for LLM APIs?",
@@ -64,14 +65,15 @@ interface InspectorProps {
 type InspectorTone = "green" | "amber" | "red" | "blue" | "neutral";
 
 function RequestInspector({ message, onClose, asDrawer }: InspectorProps) {
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const difficulty = difficultyMeta(message?.promptDifficulty, message?.cacheHit);
+  const copied = copyState === "copied";
 
   function copyResponseId() {
     if (!message?.responseId) return;
-    navigator.clipboard.writeText(message.responseId).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+    copyText(message.responseId).then((ok) => {
+      setCopyState(ok ? "copied" : "failed");
+      setTimeout(() => setCopyState("idle"), 1500);
     });
   }
 
@@ -87,10 +89,10 @@ function RequestInspector({ message, onClose, asDrawer }: InspectorProps) {
         position: "fixed",
         right: 0,
         zIndex: 40,
-        boxShadow: "0 -4px 24px rgba(0,0,0,0.4)",
+        boxShadow: "var(--shadow-up)",
       }
     : {
-        background: "#161616",
+        background: "var(--bg-2)",
         borderLeft: "1px solid var(--border)",
         display: "flex",
         flexDirection: "column",
@@ -196,10 +198,10 @@ function RequestInspector({ message, onClose, asDrawer }: InspectorProps) {
                     title="Copy response ID"
                     style={{
                       alignItems: "center",
-                      background: copied ? "var(--green-bg)" : "var(--bg-3)",
-                      border: `1px solid ${copied ? "rgba(34,197,94,0.3)" : "var(--border)"}`,
+                      background: copied ? "var(--green-bg)" : copyState === "failed" ? "var(--red-bg)" : "var(--bg-3)",
+                      border: `1px solid ${copied ? "var(--green-border)" : copyState === "failed" ? "var(--red-border)" : "var(--border)"}`,
                       borderRadius: "4px",
-                      color: copied ? "var(--green)" : "var(--fg-dimmer)",
+                      color: copied ? "var(--green)" : copyState === "failed" ? "var(--red)" : "var(--fg-dimmer)",
                       cursor: "pointer",
                       display: "flex",
                       flexShrink: 0,
@@ -208,7 +210,7 @@ function RequestInspector({ message, onClose, asDrawer }: InspectorProps) {
                       transition: "background 0.15s, color 0.15s",
                     }}
                   >
-                    {copied ? "Copied" : "Copy"}
+                    {copied ? "Copied" : copyState === "failed" ? "Failed" : "Copy"}
                   </button>
                 }
               >
@@ -216,7 +218,7 @@ function RequestInspector({ message, onClose, asDrawer }: InspectorProps) {
                   style={{
                     color: "var(--fg-dim)",
                     display: "block",
-                    fontFamily: "var(--font-jetbrains-mono, ui-monospace, 'SF Mono', Menlo, monospace)",
+                    fontFamily: "var(--font-mono)",
                     fontSize: "11px",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
@@ -234,7 +236,7 @@ function RequestInspector({ message, onClose, asDrawer }: InspectorProps) {
                   style={{
                     color: "var(--fg-dim)",
                     display: "block",
-                    fontFamily: "var(--font-jetbrains-mono, ui-monospace, 'SF Mono', Menlo, monospace)",
+                    fontFamily: "var(--font-mono)",
                     fontSize: "11px",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
@@ -329,7 +331,7 @@ function MonoValue({ children }: { children: React.ReactNode }) {
       style={{
         color: "var(--fg)",
         display: "block",
-        fontFamily: "var(--font-jetbrains-mono, ui-monospace, 'SF Mono', Menlo, monospace)",
+        fontFamily: "var(--font-mono)",
         fontSize: "12px",
         overflow: "hidden",
         textOverflow: "ellipsis",
@@ -350,7 +352,7 @@ function StatusPill({
   tone: InspectorTone;
 }) {
   const toneStyles: Record<InspectorTone, React.CSSProperties> = {
-    green: { background: "var(--green-bg)", border: "1px solid rgba(34,197,94,0.3)", color: "var(--green)" },
+    green: { background: "var(--green-bg)", border: "1px solid var(--green-border)", color: "var(--green)" },
     amber: { background: "var(--amber-bg)", border: "1px solid var(--amber-border)", color: "var(--amber)" },
     red: { background: "var(--red-bg)", border: "1px solid var(--red-border)", color: "var(--red)" },
     blue: { background: "var(--blue-bg)", border: "1px solid var(--blue-border)", color: "var(--blue)" },
@@ -781,7 +783,7 @@ export default function ChatApp() {
       <header
         style={{
           alignItems: "center",
-          background: "#181818",
+          background: "var(--bg)",
           borderBottom: "1px solid var(--border)",
           display: "flex",
           flexShrink: 0,
@@ -795,9 +797,9 @@ export default function ChatApp() {
           <div
             style={{
               alignItems: "center",
-              background: "var(--accent)",
+              background: "var(--accent-solid)",
               borderRadius: "4px",
-              color: "#0a0a0a",
+              color: "var(--on-accent)",
               display: "flex",
               flexShrink: 0,
               fontFamily: "var(--font-mono)",
@@ -819,7 +821,7 @@ export default function ChatApp() {
           style={{
             alignItems: "center",
             background: hasDepartment ? "var(--green-bg)" : "var(--bg-3)",
-            border: `1px solid ${hasDepartment ? "rgba(34,197,94,0.3)" : "var(--border)"}`,
+            border: `1px solid ${hasDepartment ? "var(--green-border)" : "var(--border)"}`,
             borderRadius: "4px",
             color: hasDepartment ? "var(--green)" : "var(--fg-dim)",
             display: "flex",

@@ -31,9 +31,13 @@ npm run dev
 
 Open `http://localhost:4000`.
 
+The app follows your OS light/dark setting and has no in-app toggle; set
+`data-theme="light"` or `data-theme="dark"` on `<html>` to force one (`app/tokens.css`).
+
 ## Verify
 
 ```bash
 npx tsc --noEmit --pretty false
 npm run build
+npm test
 ```

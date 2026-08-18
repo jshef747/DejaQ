@@ -1,28 +1,22 @@
 "use client";
 
-// Animated three-dot indicator shown while waiting for the assistant's response.
+import { AssistantAvatar } from "./ChatMessage";
+import TurnShell from "./ReadingColumn";
+
+// Shown while waiting for the assistant's response. It renders through the
+// same TurnShell, with the same avatar, as the answer that replaces it —
+// so nothing moves when the first token lands.
 export default function TypingIndicator() {
   return (
-    <div
-      style={{
-        display: "flex",
-        gap: "28px",
-        justifyContent: "flex-start",
-        padding: "0 24px 16px",
-      }}
-    >
-      {/* Spacer that matches the avatar width in ChatMessage */}
-      <div style={{ flexShrink: 0, width: "28px" }} />
-
+    <TurnShell gap={40} marker={<AssistantAvatar />}>
       <div
         style={{
           alignItems: "center",
-          background: "var(--bg-2)",
-          border: "1px solid var(--border)",
-          borderRadius: "12px 12px 12px 3px",
           display: "flex",
           gap: "5px",
-          padding: "12px 16px",
+          // Centres the dots on the first line of the serif answer that
+          // will take this spot (16.5/27).
+          height: "27px",
         }}
       >
         {[0, 1, 2].map((i) => (
@@ -39,6 +33,6 @@ export default function TypingIndicator() {
           />
         ))}
       </div>
-    </div>
+    </TurnShell>
   );
 }

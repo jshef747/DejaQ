@@ -19,6 +19,10 @@ From `server/`, `uv run --group test pytest`. Two things bite on a fresh worktre
 
 Neither the dashboard nor the chat app supports narrow viewports, by design (captain decision, 2026-08-10). Neither sidebar has a responsive breakpoint. Do not file this as a defect or add responsive/collapsible-sidebar behavior without a new product decision.
 
+## Chat styling
+
+The chat owns its own token layer (`chat/app/tokens.css`, light + dark) and must not import the dashboard's `design-system.css` again. Every component reads those tokens by name from inline styles, so change a token's value, never its name. Read that file's header, and the one on `chat/app/globals.css`, before changing anything about how the chat looks.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.

@@ -5,6 +5,8 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
+import CodeBlock from "./CodeBlock";
+import TurnShell from "./ReadingColumn";
 import type { FeedbackRating } from "./chat-api";
 
 // The full feedback lifecycle for a single assistant message.
@@ -19,7 +21,7 @@ export interface AppMessage {
   sourceLabel?: string;
   // Data URL of an image the user attached to this message (user messages only).
   imageUrl?: string | null;
-  // A non-image attachment (PDF/Markdown) has nothing to preview, so the bubble
+  // A non-image attachment (PDF/Markdown) has nothing to preview, so the card
   // shows a named chip instead.
   fileName?: string | null;
   // True when the attachment was carried over from an earlier turn rather than
@@ -90,7 +92,7 @@ function modelBadgeStyle(source: ModelSource): React.CSSProperties {
     return {
       ...base,
       background: "var(--green-bg)",
-      border: "1px solid rgba(34,197,94,0.3)",
+      border: "1px solid var(--green-border)",
       color: "var(--green)",
     };
   }
@@ -123,91 +125,61 @@ export default function ChatMessage({ message, onFeedback, onInspect, inspected 
     await onFeedback(message.id, rating, "");
   }
 
-  return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        alignItems: isUser ? "flex-end" : "flex-start",
-        gap: "4px",
-        padding: "0 24px 16px",
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "flex-end",
-          gap: "10px",
-          maxWidth: "82%",
-          flexDirection: isUser ? "row-reverse" : "row",
-        }}
-      >
-        {/* Avatar */}
-        <div
-          style={{
-            alignItems: "center",
-            background: isUser ? "var(--accent-bg)" : "var(--bg-3)",
-            border: `1px solid ${isUser ? "var(--accent-border)" : "var(--border)"}`,
-            borderRadius: "50%",
-            color: isUser ? "var(--accent)" : "var(--fg-dim)",
-            display: "flex",
-            flexShrink: 0,
-            fontSize: "10px",
-            fontWeight: 700,
-            height: "28px",
-            justifyContent: "center",
-            width: "28px",
-          }}
-        >
-          {isUser ? "U" : <BotIcon />}
-        </div>
-
-        {/* Message bubble */}
-        <div
-          style={{
-            background: isUser ? "var(--accent-bg)" : "var(--bg-2)",
-            border: `1px solid ${isUser ? "var(--accent-border)" : inspected ? "var(--accent-border)" : "var(--border)"}`,
-            borderRadius: isUser ? "12px 12px 3px 12px" : "12px 12px 12px 3px",
-            color: "var(--fg)",
-            fontSize: "13px",
-            lineHeight: 1.6,
-            padding: "10px 14px",
-            whiteSpace: isUser ? "pre-wrap" : "normal",
-            wordBreak: "break-word",
-          }}
-        >
-          {isUser ? (
-            <>
-              {message.imageUrl && !message.attachmentSticky && (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={message.imageUrl}
-                  alt="Attached"
-                  style={{
-                    borderRadius: "8px",
-                    display: "block",
-                    marginBottom: message.content ? "8px" : 0,
-                    maxHeight: "240px",
-                    maxWidth: "100%",
-                    objectFit: "contain",
-                  }}
-                />
-              )}
-              {(message.fileName || (message.imageUrl && message.attachmentSticky)) && (
+  // The user's turn is a card in the interface sans; the model's turn is
+  // typeset prose in the serif. The two voices separate by register, not
+  // by alignment alone.
+  if (isUser) {
+    return (
+      <TurnShell gap={26}>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+          <div
+            style={{
+              background: "var(--bg-3)",
+              border: "1px solid var(--border)",
+              borderRadius: "14px 14px 5px 14px",
+              color: "var(--fg)",
+              fontSize: "13.5px",
+              lineHeight: "21px",
+              maxWidth: "78%",
+              padding: "10px 15px",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+            }}
+          >
+            {message.imageUrl && !message.attachmentSticky && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={message.imageUrl}
+                alt="Attached"
+                style={{
+                  borderRadius: "9px",
+                  display: "block",
+                  marginBottom: message.content ? "8px" : 0,
+                  maxHeight: "240px",
+                  maxWidth: "100%",
+                  objectFit: "contain",
+                }}
+              />
+            )}
+            {(message.fileName || (message.imageUrl && message.attachmentSticky)) && (
+              // Its own line: the chip names what the turn carried, it is not
+              // part of the sentence.
+              <div style={{ marginBottom: message.content ? "8px" : 0 }}>
                 <span
                   style={{
                     alignItems: "center",
-                    background: message.attachmentSticky ? "transparent" : "rgba(0,0,0,0.15)",
-                    border: message.attachmentSticky ? "1px dashed var(--accent-border)" : "none",
-                    borderRadius: "6px",
+                    background: message.attachmentSticky ? "transparent" : "var(--bg-2)",
+                    border: message.attachmentSticky
+                      ? "1px dashed var(--accent-border)"
+                      : "1px solid var(--border-2)",
+                    borderRadius: "7px",
+                    color: message.attachmentSticky ? "var(--accent)" : "var(--fg-dim)",
                     display: "inline-flex",
-                    fontSize: message.attachmentSticky ? "11px" : "12px",
+                    fontSize: message.attachmentSticky ? "11px" : "11.5px",
                     gap: "6px",
-                    marginBottom: message.content ? "8px" : 0,
                     maxWidth: "100%",
-                    opacity: message.attachmentSticky ? 0.75 : 1,
                     overflow: "hidden",
-                    padding: "4px 8px",
+                    padding: "4px 9px",
                     textOverflow: "ellipsis",
                     whiteSpace: "nowrap",
                   }}
@@ -226,65 +198,59 @@ export default function ChatMessage({ message, onFeedback, onInspect, inspected 
                   )}
                   {message.fileName ?? "same image"}
                 </span>
-              )}
-              {message.content}
-            </>
-          ) : (
-            <MarkdownContent content={message.content} />
-          )}
-        </div>
-      </div>
-
-      {/* Metadata row — color-coded model badge + timestamp */}
-      {!isUser && (
-        <div
-          style={{
-            alignItems: "center",
-            display: "flex",
-            gap: "8px",
-            paddingLeft: "38px", // aligns under the bubble (avatar 28px + gap 10px)
-          }}
-        >
-          {message.modelUsed !== undefined && (
-            <span style={modelBadgeStyle(message.tier ?? classifyModelSource(message.modelUsed))}>
-              {tierLabel(message.tier, message.modelUsed)}
-            </span>
-          )}
-          {message.sourceLabel && (
-            <span style={{ color: "var(--fg-dimmer)", fontSize: "10px" }}>
-              {message.sourceLabel}
-            </span>
-          )}
-          <span style={{ color: "var(--fg-dimmer)", fontSize: "10px" }}>
+              </div>
+            )}
+            {message.content}
+          </div>
+          <span style={{ color: "var(--fg-dimmer)", fontSize: "10.5px", marginTop: "6px" }}>
             {formatTs(message.ts)}
           </span>
-          {/* Inspect button for assistant messages */}
-          {onInspect && (
-            <button
-              onClick={() => onInspect(message.id)}
-              title={inspected ? "Currently inspecting" : "Inspect request metadata"}
-              style={{
-                alignItems: "center",
-                background: inspected ? "var(--accent-bg)" : "transparent",
-                border: `1px solid ${inspected ? "var(--accent-border)" : "var(--border)"}`,
-                borderRadius: "4px",
-                color: inspected ? "var(--accent)" : "var(--fg-dimmer)",
-                cursor: "pointer",
-                display: "flex",
-                padding: "2px 5px",
-                transition: "background 0.15s, border-color 0.15s, color 0.15s",
-              }}
-              aria-label="Inspect request metadata"
-            >
-              <InspectIcon />
-            </button>
-          )}
         </div>
-      )}
+      </TurnShell>
+    );
+  }
+
+  return (
+    <TurnShell gap={40} marker={<AssistantAvatar />}>
+      <MarkdownContent content={message.content} />
+
+      {/* Metadata row — color-coded model badge + timestamp */}
+      <div style={{ alignItems: "center", display: "flex", gap: "8px", marginTop: "16px" }}>
+        {message.modelUsed !== undefined && (
+          <span style={modelBadgeStyle(message.tier ?? classifyModelSource(message.modelUsed))}>
+            {tierLabel(message.tier, message.modelUsed)}
+          </span>
+        )}
+        {message.sourceLabel && (
+          <span style={{ color: "var(--fg-dimmer)", fontSize: "10.5px" }}>{message.sourceLabel}</span>
+        )}
+        <span style={{ color: "var(--fg-dimmer)", fontSize: "10.5px" }}>{formatTs(message.ts)}</span>
+        {/* Inspect button for assistant messages */}
+        {onInspect && (
+          <button
+            onClick={() => onInspect(message.id)}
+            title={inspected ? "Currently inspecting" : "Inspect request metadata"}
+            style={{
+              alignItems: "center",
+              background: inspected ? "var(--accent-bg)" : "transparent",
+              border: `1px solid ${inspected ? "var(--accent-border)" : "var(--border)"}`,
+              borderRadius: "5px",
+              color: inspected ? "var(--accent)" : "var(--fg-dimmer)",
+              cursor: "pointer",
+              display: "flex",
+              padding: "2px 5px",
+              transition: "background var(--t-base), border-color var(--t-base), color var(--t-base)",
+            }}
+            aria-label="Inspect request metadata"
+          >
+            <InspectIcon />
+          </button>
+        )}
+      </div>
 
       {/* Feedback row — icon-only thumbs, no comment box, immediate submit on click */}
-      {!isUser && (message.responseId || message.interactionId) && (
-        <div style={{ alignItems: "center", display: "flex", gap: "4px", paddingLeft: "38px" }}>
+      {(message.responseId || message.interactionId) && (
+        <div style={{ alignItems: "center", display: "flex", gap: "4px", marginTop: "8px" }}>
           {(phase === "idle" || phase === "error" || phase === "submitting") && (
             <>
               <button
@@ -316,20 +282,11 @@ export default function ChatMessage({ message, onFeedback, onInspect, inspected 
             </span>
           )}
           {typeof message.feedbackScore === "number" && (phase === "positive" || phase === "negative") && (
-            <span style={feedbackScoreStyle()}>
-              score {message.feedbackScore.toFixed(1)}
-            </span>
+            <span style={feedbackScoreStyle()}>score {message.feedbackScore.toFixed(1)}</span>
           )}
         </div>
       )}
-
-      {/* Timestamp for user messages */}
-      {isUser && (
-        <span style={{ color: "var(--fg-dimmer)", fontSize: "10px", paddingRight: "38px" }}>
-          {formatTs(message.ts)}
-        </span>
-      )}
-    </div>
+    </TurnShell>
   );
 }
 
@@ -344,6 +301,14 @@ function MarkdownContent({ content }: { content: string }) {
             <a {...props} target="_blank" rel="noreferrer">
               {children}
             </a>
+          ),
+          // A code block gets a language label and a copy control; a table
+          // gets a scroller of its own so a wide one never widens the page.
+          pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
+          table: ({ children }) => (
+            <div className="dq-table-scroll">
+              <table>{children}</table>
+            </div>
           ),
         }}
       >
@@ -364,7 +329,7 @@ function thumbBtn(disabled: boolean): React.CSSProperties {
     alignItems: "center",
     background: "var(--bg-3)",
     border: "1px solid var(--border)",
-    borderRadius: "4px",
+    borderRadius: "5px",
     color: "var(--fg-dimmer)",
     cursor: disabled ? "not-allowed" : "pointer",
     display: "flex",
@@ -378,8 +343,8 @@ function feedbackDoneStyle(rating: FeedbackRating): React.CSSProperties {
   return {
     alignItems: "center",
     background: ok ? "var(--green-bg)" : "var(--red-bg)",
-    border: `1px solid ${ok ? "rgba(34,197,94,0.3)" : "var(--red-border)"}`,
-    borderRadius: "4px",
+    border: `1px solid ${ok ? "var(--green-border)" : "var(--red-border)"}`,
+    borderRadius: "5px",
     color: ok ? "var(--green)" : "var(--red)",
     display: "flex",
     padding: "4px 6px",
@@ -390,12 +355,35 @@ function feedbackScoreStyle(): React.CSSProperties {
   return {
     color: "var(--fg-dimmer)",
     fontFamily: "var(--font-mono)",
-    fontSize: "10px",
+    fontSize: "10.5px",
     padding: "0 4px",
   };
 }
 
 // ─── Icons ─────────────────────────────────────────────────────────────────────
+
+// Exported so TypingIndicator holds the same 28px mark in the same column;
+// the wait and the answer must not differ by a pixel.
+export function AssistantAvatar() {
+  return (
+    <div
+      style={{
+        alignItems: "center",
+        background: "var(--bg-3)",
+        border: "1px solid var(--border-2)",
+        borderRadius: "50%",
+        color: "var(--fg-dim)",
+        display: "flex",
+        flexShrink: 0,
+        height: "28px",
+        justifyContent: "center",
+        width: "28px",
+      }}
+    >
+      <BotIcon />
+    </div>
+  );
+}
 
 function BotIcon() {
   return (
