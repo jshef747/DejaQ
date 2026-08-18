@@ -1620,6 +1620,16 @@ async def run_chat_pipeline(
         # The id this answer WOULD be stored under. Known before a single token
         # exists, because it is derived from the normalized query and the
         # attachment hash - never from the answer.
+        #
+        # A streaming request therefore advertises it in headers that go out
+        # before generation, and one of the three answer-dependent guards below
+        # can still refuse the store afterwards (a failed, empty or truncated
+        # answer). The header then names an entry nobody wrote, and /v1/feedback
+        # answers 404 "response_id not found" - the same answer it already gives
+        # for an entry that was evicted, which every client has to handle. The
+        # alternative is worse: withholding the id until the answer is complete
+        # means withholding the whole response head, which is the bug this
+        # change exists to fix.
         _planned_response_id: str | None = None
         if will_cache:
             _planned_response_id = f"{cache_namespace}:" + _doc_id(

@@ -192,3 +192,110 @@ def test_streamed_truncation_still_reaches_the_final_chunk(monkeypatch):
         if line.startswith("data: ") and line != "data: [DONE]"
     ]
     assert finish_reasons[-1] == "length"
+
+
+def _patch_for_external(monkeypatch, external, credential=None):
+    """Minimum wiring for a hard-routed cache miss answered by `external`."""
+    from app.routers import openai_compat
+    from tests.test_openai_compat_smoke import (
+        HardClassifier,
+        StubEnricher,
+        StubMemory,
+        StubNormalizer,
+        no_stored_credential,
+        stored_credential,
+    )
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_classifier", HardClassifier())
+    monkeypatch.setattr(openai_compat, "_external_llm", external)
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
+    monkeypatch.setattr(
+        openai_compat,
+        "get_workspace_provider_key",
+        stored_credential(credential, providers=("anthropic",)) if credential else no_stored_credential,
+    )
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
+    monkeypatch.setattr(openai_compat, "USE_CELERY", False)
+    monkeypatch.setattr(
+        openai_compat,
+        "_read_effective_llm_config",
+        lambda workspace_slug, workspace_id: openai_compat.EffectiveLlmConfig(
+            external_model="claude-sonnet-4-6",
+            routing_threshold=0.75,
+        ),
+    )
+    return TestClient(app, headers=_AUTH)
+
+
+class StreamingExternalLLM:
+    """Cloud client that streams, and reports usage only on its final chunk."""
+
+    def __init__(self) -> None:
+        self.streamed = False
+
+    async def generate_response(self, request, provider=None, api_key=None):
+        raise AssertionError("a streaming request must take stream_response")
+
+    async def stream_response(self, request, provider=None, api_key=None):
+        from app.schemas.chat import ExternalLLMResponse, ExternalStreamChunk
+
+        self.streamed = True
+        for piece in ("The ", "cloud ", "answer."):
+            yield ExternalStreamChunk(text=piece)
+        yield ExternalStreamChunk(final=ExternalLLMResponse(
+            text="The cloud answer.",
+            model_used="claude-sonnet-4-6",
+            prompt_tokens=44,
+            completion_tokens=300,
+            latency_ms=10.0,
+        ))
+
+
+def test_external_route_streams_too(monkeypatch):
+    """The cloud path is not allowed to stay buffered while the local one streams."""
+    external = StreamingExternalLLM()
+    client = _patch_for_external(monkeypatch, external, credential="sk-ant-live")
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "Prove the Riemann hypothesis."}],
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert external.streamed is True
+    assert _content_deltas(response.text) == ["The ", "cloud ", "answer."]
+    assert response.headers["x-dejaq-tier"] == "external"
+    assert response.headers["x-dejaq-model-used"] == "claude-sonnet-4-6"
+
+
+def test_missing_credential_is_still_402_on_a_streaming_request(monkeypatch):
+    """Credential resolution has to happen before the headers are flushed.
+
+    Resolved after that point it could only be reported as a 200 carrying an
+    apology, because the response head has already left.
+    """
+    client = _patch_for_external(monkeypatch, StreamingExternalLLM(), credential=None)
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "Prove the Riemann hypothesis."}],
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 402
+    assert "API key" in response.json()["detail"]
