@@ -20,7 +20,7 @@ export default function ConversationSidebar({
   return (
     <aside
       style={{
-        background: "#161616",
+        background: "var(--bg-2)",
         borderRight: "1px solid var(--border-2)",
         display: "flex",
         flexDirection: "column",

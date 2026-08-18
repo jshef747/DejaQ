@@ -47,9 +47,9 @@ export default function ToastStack({ toasts, onDismiss }: Props) {
           style={{
             alignItems: "center",
             background: t.kind === "error" ? "var(--red-bg)" : t.kind === "success" ? "var(--green-bg)" : "var(--bg-3)",
-            border: `1px solid ${t.kind === "error" ? "var(--red-border)" : t.kind === "success" ? "rgba(34,197,94,0.3)" : "var(--border-2)"}`,
+            border: `1px solid ${t.kind === "error" ? "var(--red-border)" : t.kind === "success" ? "var(--green-border)" : "var(--border-2)"}`,
             borderRadius: "6px",
-            boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+            boxShadow: "var(--shadow)",
             color: t.kind === "error" ? "var(--red)" : t.kind === "success" ? "var(--green)" : "var(--fg)",
             display: "flex",
             fontSize: "13px",

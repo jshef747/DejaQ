@@ -87,10 +87,10 @@ function RequestInspector({ message, onClose, asDrawer }: InspectorProps) {
         position: "fixed",
         right: 0,
         zIndex: 40,
-        boxShadow: "0 -4px 24px rgba(0,0,0,0.4)",
+        boxShadow: "var(--shadow)",
       }
     : {
-        background: "#161616",
+        background: "var(--bg-2)",
         borderLeft: "1px solid var(--border)",
         display: "flex",
         flexDirection: "column",
@@ -197,7 +197,7 @@ function RequestInspector({ message, onClose, asDrawer }: InspectorProps) {
                     style={{
                       alignItems: "center",
                       background: copied ? "var(--green-bg)" : "var(--bg-3)",
-                      border: `1px solid ${copied ? "rgba(34,197,94,0.3)" : "var(--border)"}`,
+                      border: `1px solid ${copied ? "var(--green-border)" : "var(--border)"}`,
                       borderRadius: "4px",
                       color: copied ? "var(--green)" : "var(--fg-dimmer)",
                       cursor: "pointer",
@@ -216,7 +216,7 @@ function RequestInspector({ message, onClose, asDrawer }: InspectorProps) {
                   style={{
                     color: "var(--fg-dim)",
                     display: "block",
-                    fontFamily: "var(--font-jetbrains-mono, ui-monospace, 'SF Mono', Menlo, monospace)",
+                    fontFamily: "var(--font-mono)",
                     fontSize: "11px",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
@@ -234,7 +234,7 @@ function RequestInspector({ message, onClose, asDrawer }: InspectorProps) {
                   style={{
                     color: "var(--fg-dim)",
                     display: "block",
-                    fontFamily: "var(--font-jetbrains-mono, ui-monospace, 'SF Mono', Menlo, monospace)",
+                    fontFamily: "var(--font-mono)",
                     fontSize: "11px",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
@@ -329,7 +329,7 @@ function MonoValue({ children }: { children: React.ReactNode }) {
       style={{
         color: "var(--fg)",
         display: "block",
-        fontFamily: "var(--font-jetbrains-mono, ui-monospace, 'SF Mono', Menlo, monospace)",
+        fontFamily: "var(--font-mono)",
         fontSize: "12px",
         overflow: "hidden",
         textOverflow: "ellipsis",
@@ -350,7 +350,7 @@ function StatusPill({
   tone: InspectorTone;
 }) {
   const toneStyles: Record<InspectorTone, React.CSSProperties> = {
-    green: { background: "var(--green-bg)", border: "1px solid rgba(34,197,94,0.3)", color: "var(--green)" },
+    green: { background: "var(--green-bg)", border: "1px solid var(--green-border)", color: "var(--green)" },
     amber: { background: "var(--amber-bg)", border: "1px solid var(--amber-border)", color: "var(--amber)" },
     red: { background: "var(--red-bg)", border: "1px solid var(--red-border)", color: "var(--red)" },
     blue: { background: "var(--blue-bg)", border: "1px solid var(--blue-border)", color: "var(--blue)" },
@@ -781,7 +781,7 @@ export default function ChatApp() {
       <header
         style={{
           alignItems: "center",
-          background: "#181818",
+          background: "var(--bg)",
           borderBottom: "1px solid var(--border)",
           display: "flex",
           flexShrink: 0,
@@ -795,9 +795,9 @@ export default function ChatApp() {
           <div
             style={{
               alignItems: "center",
-              background: "var(--accent)",
+              background: "var(--accent-solid)",
               borderRadius: "4px",
-              color: "#0a0a0a",
+              color: "var(--on-accent)",
               display: "flex",
               flexShrink: 0,
               fontFamily: "var(--font-mono)",
@@ -819,7 +819,7 @@ export default function ChatApp() {
           style={{
             alignItems: "center",
             background: hasDepartment ? "var(--green-bg)" : "var(--bg-3)",
-            border: `1px solid ${hasDepartment ? "rgba(34,197,94,0.3)" : "var(--border)"}`,
+            border: `1px solid ${hasDepartment ? "var(--green-border)" : "var(--border)"}`,
             borderRadius: "4px",
             color: hasDepartment ? "var(--green)" : "var(--fg-dim)",
             display: "flex",

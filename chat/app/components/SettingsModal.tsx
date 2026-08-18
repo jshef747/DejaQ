@@ -134,7 +134,7 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
       style={{
         alignItems: "center",
         backdropFilter: "blur(2px)",
-        background: "rgba(0,0,0,0.6)",
+        background: "var(--scrim)",
         bottom: 0,
         display: "flex",
         justifyContent: "center",
@@ -150,7 +150,7 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
           background: "var(--bg-2)",
           border: "1px solid var(--border-2)",
           borderRadius: "10px",
-          boxShadow: "0 20px 60px rgba(0,0,0,0.6)",
+          boxShadow: "var(--shadow)",
           display: "flex",
           flexDirection: "column",
           gap: 0,
@@ -421,7 +421,7 @@ function btn(kind: "primary" | "secondary", disabled = false) {
     whiteSpace: "nowrap" as const,
   };
   if (kind === "primary")
-    return { ...base, background: "var(--accent)", border: "1px solid var(--accent)", color: "#1a0d00" };
+    return { ...base, background: "var(--accent-solid)", border: "1px solid var(--accent-solid)", color: "var(--on-accent)" };
   return { ...base, background: "var(--bg-3)", border: "1px solid var(--border-2)", color: "var(--fg-dim)" };
 }
 
