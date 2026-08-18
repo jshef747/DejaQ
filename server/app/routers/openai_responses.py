@@ -30,7 +30,12 @@ from app.schemas.openai_responses import (
     ResponseOutputTextDeltaEvent,
     ResponseOutputTextDoneEvent,
 )
-from app.routers.openai_compat import ChatPipelineResult, PipelineError, run_chat_pipeline
+from app.routers.openai_compat import (
+    ChatPipelineResult,
+    PipelineError,
+    answer_pieces,
+    run_chat_pipeline,
+)
 from app.services.file_text import kind_for as file_kind_for
 
 logger = logging.getLogger("dejaq.router.openai_responses")
@@ -218,7 +223,7 @@ async def _stream_responses_generator(
     yield f"event: response.content_part.added\ndata: {ResponseContentPartAddedEvent(item_id=item_id, part=part_stub).model_dump_json()}\n\n"
 
     full_text = ""
-    for piece in result.stream_chunks:
+    async for piece in answer_pieces(result):
         full_text += piece
         yield (
             f"event: response.output_text.delta\n"
@@ -268,6 +273,7 @@ async def responses(
             background_tasks=background_tasks,
             image=image,
             file=file,
+            stream=bool(oai_request.stream),
         )
     except PipelineError as exc:
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})

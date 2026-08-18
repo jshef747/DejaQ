@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.routers import openai_compat
 from app.services.memory_chromaDB import CacheLookupResult
+from tests.conftest import StreamingLocalRouterMixin
 from tests.test_openai_compat_smoke import (
     _AUTH,
     StubAdjuster,
@@ -33,14 +34,14 @@ def _stub_api_key(monkeypatch):
     )
 
 
-class ExplodingRouter:
+class ExplodingRouter(StreamingLocalRouterMixin):
     """Local generation fails — the pipeline should answer with an apology and NOT cache it."""
 
     async def generate_local_response(self, query, history=None, max_tokens=1024, system_prompt=None):
         raise RuntimeError("model unavailable")
 
 
-class TruncatingRouter:
+class TruncatingRouter(StreamingLocalRouterMixin):
     """Local generation hits the token budget — the answer reaches the user but
     the cut-off text must never be stored (a stored truncation never heals: it
     is what every later match is served, reported as finish_reason=stop)."""

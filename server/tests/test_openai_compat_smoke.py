@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.routers import openai_compat
 from app.services.memory_chromaDB import CacheLookupResult
+from tests.conftest import StreamingLocalRouterMixin
 
 # /v1/chat/completions requires a valid workspace API key (401 otherwise).
 # Every test client sends this token; the autouse fixture below makes the key
@@ -55,12 +56,12 @@ class MarkerAdjuster:
         return "ADJUSTED: " + general_answer
 
 
-class StubRouter:
+class StubRouter(StreamingLocalRouterMixin):
     async def generate_local_response(self, query: str, history=None, max_tokens=1024, system_prompt=None):
         return "Paris is the capital of France.", 12.0, "stop"
 
 
-class TruncatedStubRouter:
+class TruncatedStubRouter(StreamingLocalRouterMixin):
     """Generation that spent its whole token budget: Ollama's own signal says
     "length", and the text itself reads as a clean prefix."""
 
@@ -957,7 +958,7 @@ def test_weak_cpu_profile_uses_weak_local_services(monkeypatch):
     async def _noop_log(*args, **kwargs):
         return None
 
-    class WeakRouter:
+    class WeakRouter(StreamingLocalRouterMixin):
         model_name = "qwen_0_5b"
 
         async def generate_local_response(self, query: str, history=None, max_tokens=1024, system_prompt=None):
@@ -1563,7 +1564,7 @@ def test_workspace_answer_budget_override_reaches_the_local_generator(monkeypatc
 
     captured: dict[str, int] = {}
 
-    class RecordingRouter:
+    class RecordingRouter(StreamingLocalRouterMixin):
         async def generate_local_response(self, query, history=None, max_tokens=1024, system_prompt=None):
             captured["max_tokens"] = max_tokens
             return "Paris is the capital of France.", 12.0, "stop"
