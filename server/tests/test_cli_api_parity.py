@@ -115,7 +115,8 @@ def _seed_requests(db_path, rows):
             cache_hit INTEGER NOT NULL,
             difficulty TEXT,
             model_used TEXT,
-            response_id TEXT
+            response_id TEXT,
+            finish_reason TEXT
         )"""
     )
     con.executemany(

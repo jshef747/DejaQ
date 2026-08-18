@@ -88,6 +88,7 @@ export default async function AnalyticsPage({
       easy_count: 0,
       hard_count: 0,
       models_used: [],
+      truncation_rate: 0,
     },
   };
   let error: string | null = null;

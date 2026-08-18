@@ -84,11 +84,13 @@ from app.config import (
     GENERALIZER_MODEL_NAME,
     LOCAL_LLM_MODEL_NAME,
     NORMALIZER_MODEL_NAME,
+    OLLAMA_NUM_CTX,
     RAG_ENABLED,
     RAG_FORCE_EXTERNAL,
     RAG_MAX_CONTEXT_CHARS,
     RAG_MAX_DISTANCE,
     RAG_TOP_K,
+    REWRITE_MAX_TOKENS,
     ROUTING_THRESHOLD,
     USE_CELERY,
     VALIDATOR_MODEL_NAME,
@@ -145,6 +147,14 @@ class EffectiveLlmConfig:
     adjuster_system_prompt: str = DEFAULT_ADJUST_SYSTEM_PROMPT
     generalizer_system_prompt: str = DEFAULT_GENERALIZE_SYSTEM_PROMPT
     local_model_system_prompt: str = LOCAL_DEFAULT_SYSTEM_PROMPT
+    # Token budgets - always the resolved EFFECTIVE value (override or
+    # shipped default), unlike the model/prompt fields above: these are
+    # passed straight through as scalars, never used to decide whether a
+    # fresh service instance is needed, except rewrite_max_tokens/ollama_num_ctx
+    # below which also gate the adjuster/enricher/normalizer/validator pool.
+    default_max_tokens: int = DEFAULT_MAX_TOKENS
+    rewrite_max_tokens: int = REWRITE_MAX_TOKENS
+    ollama_num_ctx: int = OLLAMA_NUM_CTX
     # Which of the fields above are workspace overrides rather than shipped
     # defaults - used to decide whether the request path needs a freshly
     # resolved service instance or can reuse the default-model singleton
@@ -163,6 +173,8 @@ class EffectiveLlmConfig:
     adjuster_system_prompt_overridden: bool = False
     generalizer_system_prompt_overridden: bool = False
     local_model_system_prompt_overridden: bool = False
+    rewrite_max_tokens_overridden: bool = False
+    ollama_num_ctx_overridden: bool = False
 
 
 # --- Service singletons (shared with main process; each service is safe to instantiate once per router module) ---
@@ -243,6 +255,9 @@ def _effective_from_config(config) -> EffectiveLlmConfig:
         adjuster_system_prompt=config.adjuster_system_prompt,
         generalizer_system_prompt=config.generalizer_system_prompt,
         local_model_system_prompt=config.local_model_system_prompt,
+        default_max_tokens=config.default_max_tokens,
+        rewrite_max_tokens=config.rewrite_max_tokens,
+        ollama_num_ctx=config.ollama_num_ctx,
         local_model_overridden="local_model" in config.overrides,
         generalizer_model_overridden="generalizer_model" in config.overrides,
         adjuster_model_overridden="adjuster_model" in config.overrides,
@@ -256,6 +271,8 @@ def _effective_from_config(config) -> EffectiveLlmConfig:
         adjuster_system_prompt_overridden="adjuster_system_prompt" in config.overrides,
         generalizer_system_prompt_overridden="generalizer_system_prompt" in config.overrides,
         local_model_system_prompt_overridden="local_model_system_prompt" in config.overrides,
+        rewrite_max_tokens_overridden="rewrite_max_tokens" in config.overrides,
+        ollama_num_ctx_overridden="ollama_num_ctx" in config.overrides,
     )
 
 
@@ -321,12 +338,18 @@ def _services_for_model_profile(model_profile: str, llm_config: EffectiveLlmConf
             generalize_system_prompt=(
                 llm_config.generalizer_system_prompt if llm_config.generalizer_system_prompt_overridden else None
             ),
+            rewrite_max_tokens=(
+                llm_config.rewrite_max_tokens if llm_config.rewrite_max_tokens_overridden else None
+            ),
+            num_ctx=llm_config.ollama_num_ctx if llm_config.ollama_num_ctx_overridden else None,
         )
         if (
             llm_config.adjuster_model_overridden
             or llm_config.generalizer_model_overridden
             or llm_config.adjuster_system_prompt_overridden
             or llm_config.generalizer_system_prompt_overridden
+            or llm_config.rewrite_max_tokens_overridden
+            or llm_config.ollama_num_ctx_overridden
         )
         else _adjuster
     )
@@ -336,8 +359,13 @@ def _services_for_model_profile(model_profile: str, llm_config: EffectiveLlmConf
             system_prompt=(
                 llm_config.normalizer_system_prompt if llm_config.normalizer_system_prompt_overridden else None
             ),
+            num_ctx=llm_config.ollama_num_ctx if llm_config.ollama_num_ctx_overridden else None,
         )
-        if (llm_config.normalizer_model_overridden or llm_config.normalizer_system_prompt_overridden)
+        if (
+            llm_config.normalizer_model_overridden
+            or llm_config.normalizer_system_prompt_overridden
+            or llm_config.ollama_num_ctx_overridden
+        )
         else _normalizer
     )
     enricher = (
@@ -346,8 +374,13 @@ def _services_for_model_profile(model_profile: str, llm_config: EffectiveLlmConf
             system_prompt=(
                 llm_config.enricher_system_prompt if llm_config.enricher_system_prompt_overridden else None
             ),
+            num_ctx=llm_config.ollama_num_ctx if llm_config.ollama_num_ctx_overridden else None,
         )
-        if (llm_config.enricher_model_overridden or llm_config.enricher_system_prompt_overridden)
+        if (
+            llm_config.enricher_model_overridden
+            or llm_config.enricher_system_prompt_overridden
+            or llm_config.ollama_num_ctx_overridden
+        )
         else _enricher
     )
     validator = (
@@ -361,11 +394,13 @@ def _services_for_model_profile(model_profile: str, llm_config: EffectiveLlmConf
                 if llm_config.validator_image_system_prompt_overridden
                 else None
             ),
+            num_ctx=llm_config.ollama_num_ctx if llm_config.ollama_num_ctx_overridden else None,
         )
         if (
             llm_config.validator_model_overridden
             or llm_config.validator_system_prompt_overridden
             or llm_config.validator_image_system_prompt_overridden
+            or llm_config.ollama_num_ctx_overridden
         )
         else _validator
     )
@@ -410,14 +445,26 @@ def _diagnostic_prompt(text: str | None, limit: int = 200) -> str | None:
     return prompt[:limit]
 
 
+def _sanitize_headers(headers: dict[str, str]) -> dict[str, str]:
+    """Make every header value Latin-1-safe (RFC 7230; Starlette encodes
+    headers as latin-1 in Response.init_headers). Free-text diagnostic values
+    (nearest/matched cache prompts) can carry characters like em-dashes or
+    curly quotes that raise UnicodeEncodeError there and crash the whole
+    request; replace rather than drop so the header stays useful."""
+    return {
+        key: value.encode("latin-1", errors="replace").decode("latin-1")
+        for key, value in headers.items()
+    }
+
+
 def _nearest_headers(cache_lookup: CacheLookupResult) -> dict[str, str]:
     prompt = _diagnostic_prompt(cache_lookup.nearest_prompt)
     if cache_lookup.nearest_distance is None or prompt is None:
         return {}
-    return {
+    return _sanitize_headers({
         "x-dejaq-nearest-cache-distance": f"{cache_lookup.nearest_distance:.4f}",
         "x-dejaq-nearest-cache-prompt": prompt,
-    }
+    })
 
 
 def _nearest_log_suffix(cache_lookup: CacheLookupResult) -> str:
@@ -928,13 +975,15 @@ async def run_chat_pipeline(
 
     completion_id = _new_completion_id()
     request_token = set_request_id(_short_request_id(completion_id))
-    # 4096, not 1024: clients that send no limit (the chat app is one) were
-    # getting answers cut off mid-sentence with done_reason=length on ordinary
-    # coursework questions — one measured answer needed ~3,700 tokens.
-    _max_tokens = max_tokens or DEFAULT_MAX_TOKENS
     model_profile = _request_model_profile(raw_request)
     routing_mode = _request_routing_mode(raw_request)
     llm_config = await run_in_threadpool(_read_effective_llm_config, workspace_slug, workspace_id)
+    # 4096, not 1024, by default: clients that send no limit (the chat app is
+    # one) were getting answers cut off mid-sentence with done_reason=length
+    # on ordinary coursework questions — one measured answer needed ~3,700
+    # tokens. llm_config.default_max_tokens is DEFAULT_MAX_TOKENS unless this
+    # workspace overrides it (see llm_config_service.py).
+    _max_tokens = max_tokens or llm_config.default_max_tokens
     services = _services_for_model_profile(model_profile, llm_config)
 
     try:
@@ -1330,7 +1379,12 @@ async def run_chat_pipeline(
                     request_messages=list(messages),
                 )
                 _latency = int((time.monotonic() - _t0) * 1000)
-                asyncio.create_task(request_logger.log(workspace_slug, dept, _latency, True, None, None, response_id))
+                asyncio.create_task(
+                    request_logger.log(
+                        workspace_slug, dept, _latency, True, None, None, response_id,
+                        finish_reason="stop",
+                    )
+                )
                 asyncio.create_task(_increment_hit_count_bg(cache_namespace, _entry_id))
                 # Alias learning: the validator vouched for this band/rescue hit,
                 # so remember the typo'd phrasing — next time it's a trusted hit.
@@ -1361,7 +1415,7 @@ async def run_chat_pipeline(
                 prompt_tokens = int(len(clean_query.split()) * 1.3)
                 words = answer.split(" ")
                 stream_chunks = [w + " " for w in words[:-1]] + [words[-1]] if words else [answer]
-                hit_headers: dict[str, str] = {
+                hit_headers: dict[str, str] = _sanitize_headers({
                     "x-dejaq-model-used": model_used,
                     "x-dejaq-conversation-id": completion_id,
                     "x-dejaq-interaction-id": interaction.interaction_id,
@@ -1370,7 +1424,7 @@ async def run_chat_pipeline(
                     "x-dejaq-cache-distance": f"{_cache_distance:.4f}",
                     "x-dejaq-cache-matched-query": _cache_matched_query,
                     "x-dejaq-validator-verdict": "valid",
-                }
+                })
                 hit_headers.update(_nearest_headers(cache_lookup))
                 return ChatPipelineResult(
                     answer=answer,
@@ -1717,7 +1771,10 @@ async def run_chat_pipeline(
             request_messages=list(messages),
         )
         asyncio.create_task(
-            request_logger.log(workspace_slug, dept, _latency, False, complexity, model_used, miss_response_id)
+            request_logger.log(
+                workspace_slug, dept, _latency, False, complexity, model_used, miss_response_id,
+                finish_reason=finish_reason,
+            )
         )
         diff_score = float(classification.get("score", 0.0))
         logger.info(
@@ -1745,14 +1802,14 @@ async def run_chat_pipeline(
         words = answer.split(" ")
         stream_chunks = [w + " " for w in words[:-1]] + [words[-1]] if words else [answer]
 
-        miss_headers: dict[str, str] = {
+        miss_headers: dict[str, str] = _sanitize_headers({
             "x-dejaq-model-used": model_used,
             "x-dejaq-conversation-id": completion_id,
             "x-dejaq-interaction-id": interaction.interaction_id,
             "x-dejaq-tier": served_tier,
             "x-dejaq-prompt-difficulty": complexity,
             "x-dejaq-prompt-difficulty-score": f"{diff_score:.4f}",
-        }
+        })
         miss_headers.update(_nearest_headers(cache_lookup))
         if rag_context:
             miss_headers["x-dejaq-rag-chunks"] = str(len(rag_context))

@@ -5,6 +5,9 @@ import pytest
 
 
 def _seed_requests(db_path, rows):
+    """Each row is (ts, workspace, department, latency_ms, cache_hit,
+    difficulty, model_used, response_id[, finish_reason]) - finish_reason
+    defaults to "stop" (untruncated) when omitted."""
     con = sqlite3.connect(db_path)
     con.execute(
         """CREATE TABLE IF NOT EXISTS requests (
@@ -16,13 +19,16 @@ def _seed_requests(db_path, rows):
             cache_hit INTEGER NOT NULL,
             difficulty TEXT,
             model_used TEXT,
-            response_id TEXT
+            response_id TEXT,
+            finish_reason TEXT
         )"""
     )
+    normalized = [row if len(row) == 9 else (*row, "stop") for row in rows]
     con.executemany(
-        "INSERT INTO requests (ts, workspace, department, latency_ms, cache_hit, difficulty, model_used, response_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        rows,
+        "INSERT INTO requests "
+        "(ts, workspace, department, latency_ms, cache_hit, difficulty, model_used, response_id, finish_reason) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        normalized,
     )
     con.commit()
     con.close()
@@ -81,8 +87,76 @@ def test_department_stats_honors_exact_date_boundaries(isolated_org_db, isolated
     assert sorted(row.models_used) == ["cache", "gemini"]
 
 
+def test_workspace_stats_reports_truncation_rate_over_misses_only(isolated_org_db, isolated_stats_db):
+    """A cache hit is never truncated - adjust()'s own guard falls back to the
+    complete cached answer before anything is served - so the rate must be
+    measured against generated (miss) answers only, not diluted by hits."""
+    from app.services import stats_service
+
+    _seed_requests(
+        isolated_stats_db,
+        [
+            # A trusted-tier hit: always finish_reason="stop", never counted below.
+            ("2026-04-01T00:00:00+00:00", "acme", "eng", 100, 1, "easy", "cache", "r1", "stop"),
+            ("2026-04-01T01:00:00+00:00", "acme", "eng", 300, 0, "hard", "gemini", "r2", "length"),
+            ("2026-04-01T02:00:00+00:00", "acme", "eng", 300, 0, "hard", "gemini", "r3", "stop"),
+        ],
+    )
+
+    report = stats_service.workspace_stats()
+
+    assert report.total.misses == 2
+    assert report.total.truncation_rate == pytest.approx(0.5)
+
+
+def test_workspace_stats_truncation_rate_is_zero_with_no_misses(isolated_org_db, isolated_stats_db):
+    from app.services import stats_service
+
+    _seed_requests(
+        isolated_stats_db,
+        [("2026-04-01T00:00:00+00:00", "acme", "eng", 100, 1, "easy", "cache", "r1", "stop")],
+    )
+
+    report = stats_service.workspace_stats()
+
+    assert report.total.misses == 0
+    assert report.total.truncation_rate == 0.0
+
+
 def test_stats_service_rejects_reversed_date_range(isolated_stats_db):
     from app.services import stats_service
 
     with pytest.raises(stats_service.InvalidDateRange):
         stats_service.workspace_stats(from_date=date(2026, 4, 15), to_date=date(2026, 4, 1))
+
+
+def test_workspace_stats_reads_a_db_that_predates_finish_reason(isolated_org_db, isolated_stats_db):
+    """A stats DB written before this branch has no finish_reason column, and
+    `dejaq-admin stats` may well run before the upgraded server has ever
+    started - so the reader has to apply the additive migration itself."""
+    from app.services import stats_service
+
+    con = sqlite3.connect(isolated_stats_db)
+    con.execute(
+        """CREATE TABLE requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            workspace TEXT NOT NULL,
+            department TEXT NOT NULL,
+            latency_ms INTEGER NOT NULL,
+            cache_hit INTEGER NOT NULL,
+            difficulty TEXT,
+            model_used TEXT
+        )"""
+    )
+    con.execute(
+        "INSERT INTO requests (ts, workspace, department, latency_ms, cache_hit, difficulty, model_used) "
+        "VALUES ('2026-04-01T00:00:00+00:00', 'acme', 'eng', 100, 0, 'hard', 'gemini')",
+    )
+    con.commit()
+    con.close()
+
+    report = stats_service.workspace_stats()
+
+    assert report.total.requests == 1
+    assert report.total.truncation_rate == 0.0

@@ -45,6 +45,18 @@ def _doc_id(clean_query: str) -> str:
     return hashlib.sha256(clean_query.encode()).hexdigest()[:16]
 
 
+def _effective_default_max_tokens(workspace_slug: str) -> int:
+    """The workspace's effective answer-generation budget (override or the
+    shipped DEFAULT_MAX_TOKENS) - unlike _workspace_config_override below,
+    this always returns a usable value since there's no "no override, pass
+    None and let the callee's own default apply" path for a call-time
+    max_tokens argument the way there is for a pooled service's model_name."""
+    try:
+        return pipeline_config_cache.get_effective_config(workspace_slug).default_max_tokens
+    except llm_config_service.WorkspaceNotFound:
+        return DEFAULT_MAX_TOKENS
+
+
 def _workspace_config_override(workspace_slug: str, field: str) -> str | None:
     """The workspace's override for `field` (e.g. "local_model",
     "generalizer_model", "enricher_model", "normalizer_model", or any of the
@@ -108,12 +120,16 @@ async def _store_escalation_cache_entry(
     try:
         generalizer_model = _workspace_config_override(tenant_id, "generalizer_model")
         generalizer_prompt = _workspace_config_override(tenant_id, "generalizer_system_prompt")
+        rewrite_max_tokens = _workspace_config_override(tenant_id, "rewrite_max_tokens")
+        ollama_num_ctx = _workspace_config_override(tenant_id, "ollama_num_ctx")
         adjuster_service = (
             get_context_adjuster_service(
                 generalize_model_name=generalizer_model,
                 generalize_system_prompt=generalizer_prompt,
+                rewrite_max_tokens=rewrite_max_tokens,
+                num_ctx=ollama_num_ctx,
             )
-            if (generalizer_model or generalizer_prompt)
+            if (generalizer_model or generalizer_prompt or rewrite_max_tokens or ollama_num_ctx)
             else get_context_adjuster_service()
         )
         generalized = await adjuster_service.generalize(answer)
@@ -205,9 +221,12 @@ async def _cache_response_id_for_escalation(
     try:
         enricher_model = _workspace_config_override(interaction.workspace_slug, "enricher_model")
         enricher_prompt = _workspace_config_override(interaction.workspace_slug, "enricher_system_prompt")
+        enricher_num_ctx = _workspace_config_override(interaction.workspace_slug, "ollama_num_ctx")
         enricher_service = (
-            get_context_enricher_service(model_name=enricher_model, system_prompt=enricher_prompt)
-            if (enricher_model or enricher_prompt)
+            get_context_enricher_service(
+                model_name=enricher_model, system_prompt=enricher_prompt, num_ctx=enricher_num_ctx
+            )
+            if (enricher_model or enricher_prompt or enricher_num_ctx)
             else get_context_enricher_service()
         )
         enriched = await enricher_service.enrich(query, history)
@@ -218,9 +237,12 @@ async def _cache_response_id_for_escalation(
     try:
         normalizer_model = _workspace_config_override(interaction.workspace_slug, "normalizer_model")
         normalizer_prompt = _workspace_config_override(interaction.workspace_slug, "normalizer_system_prompt")
+        normalizer_num_ctx = _workspace_config_override(interaction.workspace_slug, "ollama_num_ctx")
         normalizer_service = (
-            get_normalizer_service(model_name=normalizer_model, system_prompt=normalizer_prompt)
-            if (normalizer_model or normalizer_prompt)
+            get_normalizer_service(
+                model_name=normalizer_model, system_prompt=normalizer_prompt, num_ctx=normalizer_num_ctx
+            )
+            if (normalizer_model or normalizer_prompt or normalizer_num_ctx)
             else get_normalizer_service()
         )
         clean_query = await normalizer_service.normalize(enriched)
@@ -257,6 +279,7 @@ async def _log_escalation_usage(
     model_used: str | None,
     served_tier: str,
     external_provider_used: bool,
+    finish_reason: str,
 ) -> None:
     try:
         await request_logger.log(
@@ -272,6 +295,7 @@ async def _log_escalation_usage(
             parent_interaction_id=interaction.interaction_id,
             served_tier=served_tier,
             external_provider_used=external_provider_used,
+            finish_reason=finish_reason,
         )
     except Exception:
         logger.exception("Failed to log feedback escalation usage interaction_id=%s", interaction.interaction_id)
@@ -324,7 +348,7 @@ async def _escalate_to_local(
             router_service.generate_local_response(
                 query,
                 history=history,
-                max_tokens=DEFAULT_MAX_TOKENS,
+                max_tokens=_effective_default_max_tokens(interaction.workspace_slug),
                 # None (client sent no system prompt of its own) falls
                 # through to router_service.default_system_prompt - the
                 # workspace's local_model_system_prompt override when set,
@@ -363,6 +387,7 @@ async def _escalate_to_local(
         model_used="local",
         served_tier="local",
         external_provider_used=False,
+        finish_reason="length" if done_reason == "length" else "stop",
     )
     return EscalationResult(
         escalated_response=EscalatedResponse(
@@ -405,7 +430,7 @@ async def _escalate_to_external(
         query=query,
         history=history,
         model=config.external_model,
-        max_tokens=DEFAULT_MAX_TOKENS,
+        max_tokens=config.default_max_tokens,
         system_prompt=system_prompt
         or "You are a helpful assistant. Answer the user's query concisely and accurately.",
     )
@@ -448,6 +473,7 @@ async def _escalate_to_external(
         model_used=response.model_used,
         served_tier="external",
         external_provider_used=True,
+        finish_reason=response.finish_reason,
     )
     return EscalationResult(
         escalated_response=EscalatedResponse(

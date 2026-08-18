@@ -111,6 +111,22 @@ class StubNearestMissMemory:
         return None
 
 
+class StubNonLatin1NearestMissMemory:
+    """Nearest cache prompt contains an em-dash (U+2014) - not Latin-1
+    encodable, which used to crash Starlette's header encoding (report
+    dejaq-big-eval-v2 section 9.1, queries q265/q369)."""
+
+    def lookup_cache(self, clean_query: str):
+        return CacheLookupResult(
+            hit=False,
+            nearest_distance=0.23456,
+            nearest_prompt="the treaty — signed in 1848 — ended the war",
+        )
+
+    def check_cache(self, clean_query: str):
+        return None
+
+
 class StubHitMemory:
     def lookup_cache(self, clean_query: str):
         return CacheLookupResult(
@@ -125,6 +141,31 @@ class StubHitMemory:
 
     def check_cache(self, clean_query: str):
         return ("Cached Paris answer.", "doc123", 0.04, "capital of france")
+
+    def increment_hit_count(self, doc_id: str):
+        return None
+
+
+class StubNonLatin1HitMemory:
+    """Matched cache query contains a curly apostrophe (U+2019) - the sibling
+    free-text header (x-dejaq-cache-matched-query) that carries the same risk
+    as x-dejaq-nearest-cache-prompt but wasn't the one that crashed first."""
+
+    MATCHED_QUERY = "what’s the capital of france?"  # curly apostrophe, U+2019
+
+    def lookup_cache(self, clean_query: str):
+        return CacheLookupResult(
+            hit=True,
+            generalized_answer="Cached Paris answer.",
+            entry_id="doc123",
+            distance=0.04,
+            matched_query=self.MATCHED_QUERY,
+            nearest_distance=0.04,
+            nearest_prompt=self.MATCHED_QUERY,
+        )
+
+    def check_cache(self, clean_query: str):
+        return ("Cached Paris answer.", "doc123", 0.04, self.MATCHED_QUERY)
 
     def increment_hit_count(self, doc_id: str):
         return None
@@ -1002,7 +1043,7 @@ def test_services_for_model_profile_resolves_overridden_prompt_with_no_model_ove
     shared default-model singleton, which would silently ignore it."""
     captured: dict[str, tuple] = {}
 
-    def _tracking_normalizer(model_name=None, system_prompt=None):
+    def _tracking_normalizer(model_name=None, system_prompt=None, num_ctx=None):
         captured["normalizer"] = (model_name, system_prompt)
         return StubNormalizer()
 
@@ -1515,6 +1556,43 @@ def test_untruncated_miss_still_reports_stop_on_chat_completions(monkeypatch):
     assert response.json()["choices"][0]["finish_reason"] == "stop"
 
 
+def test_workspace_answer_budget_override_reaches_the_local_generator(monkeypatch):
+    """Proves the override changes real behavior, not just a persisted number:
+    a workspace's default_max_tokens override must be what a no-limit client
+    request actually generates under - not the global DEFAULT_MAX_TOKENS."""
+
+    captured: dict[str, int] = {}
+
+    class RecordingRouter:
+        async def generate_local_response(self, query, history=None, max_tokens=1024, system_prompt=None):
+            captured["max_tokens"] = max_tokens
+            return "Paris is the capital of France.", 12.0, "stop"
+
+    client = _patch_for_truncation(monkeypatch, RecordingRouter())
+    monkeypatch.setattr(
+        openai_compat,
+        "_read_effective_llm_config",
+        lambda workspace_slug, workspace_id: openai_compat.EffectiveLlmConfig(
+            external_model="gemini-2.5-flash",
+            routing_threshold=0.3,
+            default_max_tokens=777,
+        ),
+    )
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["max_tokens"] == 777
+    assert captured["max_tokens"] != openai_compat.DEFAULT_MAX_TOKENS
+
+
 def test_truncated_miss_reports_length_on_the_final_stream_chunk(monkeypatch):
     client = _patch_for_truncation(monkeypatch, TruncatedStubRouter())
 
@@ -1639,3 +1717,103 @@ def test_hard_query_unmapped_external_model_returns_422(monkeypatch):
 
     assert response.status_code == 422
     assert "not mapped to a supported provider" in response.json()["detail"]
+
+
+def test_cache_miss_with_non_latin1_nearest_prompt_does_not_crash(monkeypatch):
+    """Regression for dejaq-big-eval-v2 report section 9.1 (q265/q369): an
+    em-dash in the nearest cached prompt used to raise UnicodeEncodeError
+    inside Starlette's header encoding and turn the whole request into a 500.
+    Must now return 200 with a sanitized (not dropped) header."""
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "_llm_router", StubRouter())
+    monkeypatch.setattr(openai_compat, "_classifier", StubClassifier())
+    monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubNonLatin1NearestMissMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+    monkeypatch.setattr(openai_compat.cache_filter, "should_cache", lambda enriched, clean, **kw: (False, "test"))
+    monkeypatch.setattr(openai_compat, "USE_CELERY", False)
+
+    client = TestClient(app, headers=_AUTH)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    header = response.headers["x-dejaq-nearest-cache-prompt"]
+    assert "—" not in header
+    header.encode("latin-1")  # must not raise
+
+
+def test_cache_hit_with_non_latin1_matched_query_does_not_crash(monkeypatch):
+    """Sibling of the em-dash regression above: x-dejaq-cache-matched-query
+    carries the same kind of free text (from the same stored-prompt source)
+    and must go through the same sanitizing path, not just the header that
+    happened to crash first."""
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubNonLatin1HitMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+
+    client = TestClient(app, headers=_AUTH)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    header = response.headers["x-dejaq-cache-matched-query"]
+    assert "’" not in header
+    header.encode("latin-1")  # must not raise
+    assert response.headers["x-dejaq-nearest-cache-prompt"].encode("latin-1")
+
+
+def test_sanitize_headers_covers_every_free_text_diagnostic_header():
+    """Proves the shared choke point, not per-site patching: every free-text
+    header declared in app/main.py's CORS expose_headers list must survive
+    _sanitize_headers unencodable-latin1-safe. Numeric/enum headers are
+    trivially safe by construction; this asserts the ones that carry raw
+    stored/query text specifically. A new free-text header added to a headers
+    dict without going through _sanitize_headers would not be caught by this
+    test directly, but the two end-to-end tests above prove the two known
+    free-text headers both route through it."""
+    from app.main import app as fastapi_app
+
+    expose_headers = None
+    for middleware in fastapi_app.user_middleware:
+        if middleware.kwargs.get("expose_headers"):
+            expose_headers = middleware.kwargs["expose_headers"]
+            break
+    assert expose_headers is not None
+
+    free_text_headers = {"x-dejaq-nearest-cache-prompt", "x-dejaq-cache-matched-query"}
+    assert free_text_headers.issubset(set(expose_headers))
+
+    poisoned = {name: "em—dash and curly ’ quote" for name in expose_headers}
+    sanitized = openai_compat._sanitize_headers(poisoned)
+
+    for name, value in sanitized.items():
+        value.encode("latin-1")  # must not raise for any declared header
+    for name in free_text_headers:
+        assert "—" not in sanitized[name]
+        assert "'" not in sanitized[name]
+
+    clean = {"x-dejaq-tier": "cache", "x-dejaq-cache-distance": "0.0400"}
+    assert openai_compat._sanitize_headers(clean) == clean

@@ -11,6 +11,12 @@ class StatsMetrics(BaseModel):
     easy_count: int
     hard_count: int
     models_used: list[str]
+    # Fraction of MISSES (generated answers, not cache hits - a hit is never
+    # truncated) whose generator reported finish_reason="length". The store
+    # guard already refuses to cache a truncated answer with no error raised
+    # anywhere, so this is the only visible signal that a workspace's token
+    # budgets are too tight for the answers it's actually generating.
+    truncation_rate: float
 
 
 class WorkspaceStats(StatsMetrics):

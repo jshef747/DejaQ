@@ -21,12 +21,19 @@ DEFAULT_SYSTEM_PROMPT = (
 class ContextEnricherService:
     """Rewrites context-dependent queries into standalone questions using conversation history."""
 
-    def __init__(self, backend: ModelBackend, model_name: str, system_prompt: str | None = None):
+    def __init__(
+        self,
+        backend: ModelBackend,
+        model_name: str,
+        system_prompt: str | None = None,
+        num_ctx: int | None = None,
+    ):
         self.backend = backend
         self.model_name = model_name
         # The few-shot turns below stay hardcoded - only the system prompt
         # is a per-workspace override (see llm_config_service.py).
         self.system_prompt = system_prompt if system_prompt is not None else DEFAULT_SYSTEM_PROMPT
+        self.num_ctx = num_ctx if num_ctx is not None else OLLAMA_NUM_CTX
 
     async def enrich(self, message: str, history: list[dict]) -> str:
         """Enrich a message with conversation context to make it standalone.
@@ -81,7 +88,7 @@ class ContextEnricherService:
                 # enrich() and adjust() on every multi-turn cache hit, in front
                 # of a waiting user. Costs no extra memory - the model is
                 # already loaded at this window whenever adjust() runs.
-                num_ctx=OLLAMA_NUM_CTX,
+                num_ctx=self.num_ctx,
                 temperature=0.0,
             ),
             ENRICHER_MODEL_NAME,

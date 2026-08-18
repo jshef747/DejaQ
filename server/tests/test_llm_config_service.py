@@ -420,6 +420,273 @@ def test_llm_config_two_workspaces_resolve_prompts_independently(isolated_org_db
     assert beta.is_default is True
 
 
+# ── Token budget overrides ──
+
+
+def test_llm_config_read_defaults_cover_token_budgets(isolated_org_db):
+    from app.config import DEFAULT_MAX_TOKENS, OLLAMA_NUM_CTX, REWRITE_MAX_TOKENS
+    from app.services.llm_config_service import read_for_workspace
+
+    _create_workspace()
+
+    result = read_for_workspace("acme")
+
+    assert result.default_max_tokens == DEFAULT_MAX_TOKENS
+    assert result.rewrite_max_tokens == REWRITE_MAX_TOKENS
+    assert result.ollama_num_ctx == OLLAMA_NUM_CTX
+    assert "default_max_tokens" not in result.overrides
+    assert "rewrite_max_tokens" not in result.overrides
+    assert "ollama_num_ctx" not in result.overrides
+    assert result.token_budget_defaults == {
+        "default_max_tokens": DEFAULT_MAX_TOKENS,
+        "rewrite_max_tokens": REWRITE_MAX_TOKENS,
+        "ollama_num_ctx": OLLAMA_NUM_CTX,
+    }
+
+
+def test_llm_config_token_budget_defaults_survive_an_override(isolated_org_db):
+    """token_budget_defaults must always report the shipped/global default,
+    even once a workspace has an override in place - it's what a client (the
+    dashboard's empty-field-uses-the-default placeholder) needs to show what
+    clearing the override restores. The three top-level effective fields
+    can't serve that once overridden, since they report the override itself."""
+    from app.config import DEFAULT_MAX_TOKENS, OLLAMA_NUM_CTX, REWRITE_MAX_TOKENS
+    from app.services.llm_config_service import update_for_workspace
+
+    _create_workspace()
+
+    result = update_for_workspace("acme", {"default_max_tokens": 4000}, {"default_max_tokens"})
+
+    assert result.default_max_tokens == 4000
+    assert result.token_budget_defaults == {
+        "default_max_tokens": DEFAULT_MAX_TOKENS,
+        "rewrite_max_tokens": REWRITE_MAX_TOKENS,
+        "ollama_num_ctx": OLLAMA_NUM_CTX,
+    }
+
+
+def test_llm_config_update_accepts_a_valid_token_budget_combination(isolated_org_db):
+    from app.services.llm_config_service import read_for_workspace, update_for_workspace
+
+    _create_workspace()
+
+    result = update_for_workspace(
+        "acme",
+        {"default_max_tokens": 6000, "rewrite_max_tokens": 16000, "ollama_num_ctx": 32000},
+        {"default_max_tokens", "rewrite_max_tokens", "ollama_num_ctx"},
+    )
+
+    assert result.default_max_tokens == 6000
+    assert result.rewrite_max_tokens == 16000
+    assert result.ollama_num_ctx == 32000
+    assert result.overrides == {
+        "default_max_tokens": 6000,
+        "rewrite_max_tokens": 16000,
+        "ollama_num_ctx": 32000,
+    }
+
+    stored = read_for_workspace("acme")
+    assert stored.default_max_tokens == 6000
+
+
+def test_llm_config_update_rejects_an_answer_budget_at_the_measured_truncation_cap(isolated_org_db):
+    """1024 is the exact cap config.py records as having truncated ordinary
+    answers mid-sentence before DEFAULT_MAX_TOKENS was raised to 4096 - it
+    must be refused, not merely discouraged."""
+    from app.services.llm_config_service import InvalidLlmConfigUpdate, update_for_workspace
+
+    _create_workspace()
+
+    with pytest.raises(InvalidLlmConfigUpdate) as exc_info:
+        update_for_workspace("acme", {"default_max_tokens": 1024}, {"default_max_tokens"})
+
+    assert "default_max_tokens" in str(exc_info.value)
+    assert "1024" in str(exc_info.value)
+
+
+def test_llm_config_update_rejects_a_rewrite_budget_too_close_to_the_answer_budget(isolated_org_db):
+    """The rewrite prompt carries the whole raw answer and must keep every
+    fact - a rewrite budget barely above the answer budget risks truncating
+    the STORED copy, which never self-heals."""
+    from app.services.llm_config_service import InvalidLlmConfigUpdate, update_for_workspace
+
+    _create_workspace()
+
+    with pytest.raises(InvalidLlmConfigUpdate) as exc_info:
+        update_for_workspace(
+            "acme",
+            {"default_max_tokens": 4096, "rewrite_max_tokens": 5000},
+            {"default_max_tokens", "rewrite_max_tokens"},
+        )
+
+    assert "rewrite_max_tokens" in str(exc_info.value)
+
+
+def test_llm_config_update_rejects_a_context_window_too_close_to_the_rewrite_budget(isolated_org_db):
+    """num_ctx bounds the prompt as well as the generation - it has to hold
+    the rewrite's own output on top of the prompt carrying the answer being
+    rewritten."""
+    from app.services.llm_config_service import InvalidLlmConfigUpdate, update_for_workspace
+
+    _create_workspace()
+
+    with pytest.raises(InvalidLlmConfigUpdate) as exc_info:
+        update_for_workspace(
+            "acme",
+            {"rewrite_max_tokens": 8192, "ollama_num_ctx": 10000},
+            {"rewrite_max_tokens", "ollama_num_ctx"},
+        )
+
+    assert "ollama_num_ctx" in str(exc_info.value)
+
+
+def test_llm_config_update_rejects_the_measured_incident_configuration(isolated_org_db):
+    """The exact failure mode this feature exists to prevent: a generation
+    cap low enough to truncate 85% of answers (measured 2026-08-16) must be
+    refused outright, not silently accepted."""
+    from app.services.llm_config_service import InvalidLlmConfigUpdate, update_for_workspace
+
+    _create_workspace()
+
+    with pytest.raises(InvalidLlmConfigUpdate):
+        update_for_workspace("acme", {"default_max_tokens": 300}, {"default_max_tokens"})
+
+
+def test_llm_config_update_validates_the_relationship_against_existing_stored_values(isolated_org_db):
+    """A change to only ONE of the three fields must still be validated
+    against the other two as they currently stand - not just against the
+    shipped global defaults - so a change that breaks an existing custom
+    combination is caught too."""
+    from app.services.llm_config_service import InvalidLlmConfigUpdate, update_for_workspace
+
+    _create_workspace()
+    update_for_workspace(
+        "acme",
+        {"default_max_tokens": 6000, "rewrite_max_tokens": 16000, "ollama_num_ctx": 32000},
+        {"default_max_tokens", "rewrite_max_tokens", "ollama_num_ctx"},
+    )
+
+    # rewrite_max_tokens alone changes here, but the existing default_max_tokens
+    # (6000, from the update above) is what it must be checked against.
+    with pytest.raises(InvalidLlmConfigUpdate) as exc_info:
+        update_for_workspace("acme", {"rewrite_max_tokens": 7000}, {"rewrite_max_tokens"})
+
+    assert "rewrite_max_tokens" in str(exc_info.value)
+
+
+def test_llm_config_update_reset_token_budget_to_null_restores_default(isolated_org_db):
+    from app.config import DEFAULT_MAX_TOKENS
+    from app.services.llm_config_service import read_for_workspace, update_for_workspace
+
+    _create_workspace()
+    update_for_workspace("acme", {"default_max_tokens": 4000}, {"default_max_tokens"})
+
+    reset = update_for_workspace("acme", {"default_max_tokens": None}, {"default_max_tokens"})
+
+    assert reset.default_max_tokens == DEFAULT_MAX_TOKENS
+    assert "default_max_tokens" not in reset.overrides
+
+    stored = read_for_workspace("acme")
+    assert stored.default_max_tokens == DEFAULT_MAX_TOKENS
+
+
+def test_llm_config_update_reset_never_needs_the_other_two_fields_to_be_valid(isolated_org_db):
+    """Resetting an override to null (falling back to the global default) must
+    never itself be rejected - a null always resolves to a value the shipped
+    defaults already prove is valid together."""
+    from app.services.llm_config_service import update_for_workspace
+
+    _create_workspace()
+    update_for_workspace(
+        "acme",
+        {"default_max_tokens": 6000, "rewrite_max_tokens": 16000, "ollama_num_ctx": 32000},
+        {"default_max_tokens", "rewrite_max_tokens", "ollama_num_ctx"},
+    )
+
+    result = update_for_workspace(
+        "acme",
+        {"default_max_tokens": None, "rewrite_max_tokens": None, "ollama_num_ctx": None},
+        {"default_max_tokens", "rewrite_max_tokens", "ollama_num_ctx"},
+    )
+
+    assert result.overrides == {}
+
+
+def test_llm_config_update_token_budgets_never_queries_ollama(isolated_org_db, monkeypatch):
+    """Token budgets have no relationship to what's installed on the Ollama
+    host - unlike *_model fields, a budget update must never trigger a
+    catalog check."""
+    from app.services import llm_config_service
+    from app.services.llm_config_service import update_for_workspace
+
+    def _explode(force_refresh=False):
+        raise AssertionError("Ollama catalog must not be queried for a token-budget update")
+
+    monkeypatch.setattr(llm_config_service.ollama_catalog, "list_available_models", _explode)
+    _create_workspace()
+
+    update_for_workspace(
+        "acme",
+        {"default_max_tokens": 6000, "rewrite_max_tokens": 16000, "ollama_num_ctx": 32000},
+        {"default_max_tokens", "rewrite_max_tokens", "ollama_num_ctx"},
+    )
+
+
+def test_llm_config_two_workspaces_resolve_token_budgets_independently(isolated_org_db):
+    """A token budget override in one workspace must never leak into another."""
+    from app.config import DEFAULT_MAX_TOKENS
+    from app.services.llm_config_service import read_for_workspace, update_for_workspace
+
+    _create_workspace("Acme")
+    _create_workspace("Beta")
+
+    update_for_workspace("acme", {"default_max_tokens": 4000}, {"default_max_tokens"})
+
+    acme = read_for_workspace("acme")
+    beta = read_for_workspace("beta")
+
+    assert acme.default_max_tokens == 4000
+    assert beta.default_max_tokens == DEFAULT_MAX_TOKENS
+
+
+def test_llm_config_update_rejects_a_token_budget_but_model_field_independent(isolated_org_db, monkeypatch):
+    """A model field on the same PUT as a rejected token-budget combination
+    must not be silently applied - the whole update is one transaction."""
+    from app.services import llm_config_service
+    from app.services.llm_config_service import InvalidLlmConfigUpdate, read_for_workspace, update_for_workspace
+
+    monkeypatch.setattr(
+        llm_config_service.ollama_catalog, "list_available_models", lambda force_refresh=False: ["gemma4:e4b"]
+    )
+    _create_workspace()
+
+    with pytest.raises(InvalidLlmConfigUpdate):
+        update_for_workspace(
+            "acme",
+            {"generalizer_model": "gemma4:e4b", "default_max_tokens": 300},
+            {"generalizer_model", "default_max_tokens"},
+        )
+
+    stored = read_for_workspace("acme")
+    assert stored.is_default is True
+
+
+def test_llm_config_update_rejects_a_token_budget_but_prompt_field_independent(isolated_org_db):
+    from app.services.llm_config_service import InvalidLlmConfigUpdate, read_for_workspace, update_for_workspace
+
+    _create_workspace()
+
+    with pytest.raises(InvalidLlmConfigUpdate):
+        update_for_workspace(
+            "acme",
+            {"default_max_tokens": 300, "generalizer_system_prompt": "Should not be saved."},
+            {"default_max_tokens", "generalizer_system_prompt"},
+        )
+
+    stored = read_for_workspace("acme")
+    assert stored.is_default is True
+
+
 def test_llm_config_update_rejects_a_model_but_prompt_field_independent(isolated_org_db, monkeypatch):
     """A prompt field on the same PUT as a rejected *_model field must not be
     silently applied - the whole update is one transaction."""
@@ -440,3 +707,39 @@ def test_llm_config_update_rejects_a_model_but_prompt_field_independent(isolated
 
     stored = read_for_workspace("acme")
     assert stored.is_default is True
+
+
+def test_llm_config_update_accepts_a_context_window_at_the_smallest_model_maximum(isolated_org_db):
+    from app.config import OLLAMA_NUM_CTX
+    from app.services.llm_config_service import update_for_workspace
+
+    _create_workspace()
+
+    result = update_for_workspace("acme", {"ollama_num_ctx": OLLAMA_NUM_CTX}, {"ollama_num_ctx"})
+
+    assert result.ollama_num_ctx == OLLAMA_NUM_CTX
+
+
+def test_llm_config_update_rejects_a_context_window_past_the_smallest_model_maximum(isolated_org_db):
+    """One window is shared by every Ollama-backed role, so the ceiling is the
+    SMALLEST maximum among them (qwen2.5:1.5b's 32768, which is what
+    OLLAMA_NUM_CTX already equals), not gemma4:e2b's larger one - above it the
+    enricher and adjuster cannot honour the window at all. Goes through
+    update_for_workspace (the relationship-validation layer), not the bare
+    Pydantic schema: a per-field `le=` there would fail before
+    _validate_token_budget_overrides ever runs and surface only a generic
+    "Input should be less than or equal to N", with no field name and no
+    reason - inconsistent with every other rejection this feature raises."""
+    from app.config import OLLAMA_NUM_CTX
+    from app.services.llm_config_service import InvalidLlmConfigUpdate, update_for_workspace
+
+    _create_workspace()
+
+    with pytest.raises(InvalidLlmConfigUpdate) as exc_info:
+        update_for_workspace("acme", {"ollama_num_ctx": OLLAMA_NUM_CTX + 1}, {"ollama_num_ctx"})
+
+    message = str(exc_info.value)
+    assert "ollama_num_ctx" in message
+    assert str(OLLAMA_NUM_CTX + 1) in message
+    assert f"exceeds the ceiling of {OLLAMA_NUM_CTX}" in message
+    assert "qwen2.5:1.5b" in message

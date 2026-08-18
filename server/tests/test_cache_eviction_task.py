@@ -85,7 +85,7 @@ def test_one_unreachable_namespace_does_not_stop_the_sweep(monkeypatch):
 
 
 def _config(overrides: dict, **values):
-    """Minimal stand-in for llm_config_service.LlmConfigResult - only the two
+    """Minimal stand-in for llm_config_service.LlmConfigResult - only the
     attributes _resolve_generalize_overrides reads."""
 
     class _Config:
@@ -93,6 +93,8 @@ def _config(overrides: dict, **values):
 
     cfg = _Config()
     cfg.overrides = overrides
+    cfg.rewrite_max_tokens = values.pop("rewrite_max_tokens", 8192)
+    cfg.ollama_num_ctx = values.pop("ollama_num_ctx", 32768)
     for key, value in values.items():
         setattr(cfg, key, value)
     return cfg
@@ -116,6 +118,32 @@ def test_worker_resolves_the_generalizer_prompt_override_itself(monkeypatch):
     assert cache_tasks._resolve_generalize_overrides("acme", "default") == (
         None,
         "Workspace generalizer prompt.",
+        None,
+        None,
+    )
+
+
+def test_worker_resolves_the_token_budget_overrides_itself(monkeypatch):
+    """Same reasoning as the prompt override above: the rewrite budget and
+    context window decide whether the STORED copy is truncated, so the worker
+    must read the workspace's current values in its own process."""
+    monkeypatch.setattr(
+        cache_tasks.pipeline_config_cache,
+        "get_effective_config",
+        lambda slug: _config(
+            {"rewrite_max_tokens": 16384, "ollama_num_ctx": 65536},
+            generalizer_model="gemma4:e2b",
+            generalizer_system_prompt="shipped",
+            rewrite_max_tokens=16384,
+            ollama_num_ctx=65536,
+        ),
+    )
+
+    assert cache_tasks._resolve_generalize_overrides("acme", "default") == (
+        None,
+        None,
+        16384,
+        65536,
     )
 
 
@@ -126,7 +154,7 @@ def test_worker_resolves_no_generalizer_overrides_for_a_default_workspace(monkey
         lambda slug: _config({}, generalizer_model="gemma4:e2b", generalizer_system_prompt="shipped"),
     )
 
-    assert cache_tasks._resolve_generalize_overrides("acme", "default") == (None, None)
+    assert cache_tasks._resolve_generalize_overrides("acme", "default") == (None, None, None, None)
 
 
 def test_worker_resolves_no_generalizer_overrides_for_an_unknown_workspace(monkeypatch):
@@ -135,4 +163,4 @@ def test_worker_resolves_no_generalizer_overrides_for_an_unknown_workspace(monke
 
     monkeypatch.setattr(cache_tasks.pipeline_config_cache, "get_effective_config", _missing)
 
-    assert cache_tasks._resolve_generalize_overrides("ghost", "default") == (None, None)
+    assert cache_tasks._resolve_generalize_overrides("ghost", "default") == (None, None, None, None)

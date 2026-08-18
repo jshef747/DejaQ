@@ -49,7 +49,7 @@ def test_cli_smoke_flow_uses_shared_services(isolated_org_db, isolated_stats_db,
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ts TEXT NOT NULL, workspace TEXT NOT NULL, department TEXT NOT NULL,
             latency_ms INTEGER NOT NULL, cache_hit INTEGER NOT NULL,
-            difficulty TEXT, model_used TEXT, response_id TEXT
+            difficulty TEXT, model_used TEXT, response_id TEXT, finish_reason TEXT
         )"""
     )
     con.execute(

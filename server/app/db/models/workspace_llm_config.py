@@ -31,6 +31,13 @@ class WorkspaceLlmConfig(Base):
     generalizer_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     local_model_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     routing_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Per-workspace token budget overrides - each mirrors the global default
+    # of the same name (lowercased) in app/config.py; NULL falls back to it.
+    # See services/llm_config_service.py for the relationship validation
+    # between the three (rewrite budget vs answer budget vs context window).
+    default_max_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rewrite_max_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ollama_num_ctx: Mapped[int | None] = mapped_column(Integer, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

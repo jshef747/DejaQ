@@ -29,7 +29,15 @@ class LlmConfigResponse(BaseModel):
     generalizer_system_prompt: str
     local_model_system_prompt: str
     routing_threshold: float
-    overrides: dict[str, str | float]
+    default_max_tokens: int
+    rewrite_max_tokens: int
+    ollama_num_ctx: int
+    # The shipped/global default for each token budget field, regardless of
+    # whether this workspace overrides it - see LlmConfigResult in
+    # llm_config_service.py for why the effective fields above can't serve
+    # this on their own once an override is set.
+    token_budget_defaults: dict[str, int]
+    overrides: dict[str, str | float | int]
     updated_at: datetime | None
     is_default: bool
     credentials_configured: list[str]
@@ -51,6 +59,18 @@ class LlmConfigUpdate(BaseModel):
     generalizer_system_prompt: str | None = None
     local_model_system_prompt: str | None = None
     routing_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    # Per-field bounds only - necessary but not sufficient. The relationship
+    # between all three (rewrite must clear answer, context must clear
+    # rewrite, and ollama_num_ctx's own ceiling) is enforced in
+    # llm_config_service._validate_token_budget_overrides, which needs all
+    # three values at once (or, for the ceiling, a value-specific error
+    # message) and so cannot live in a single-field Pydantic validator - a
+    # bare `le=` here would fail before that function ever runs and surface
+    # only a generic "Input should be less than or equal to N", with no field
+    # name and no reason, unlike every other rejection this feature raises.
+    default_max_tokens: int | None = Field(default=None, gt=0)
+    rewrite_max_tokens: int | None = Field(default=None, gt=0)
+    ollama_num_ctx: int | None = Field(default=None, gt=0)
 
     @field_validator(*PROMPT_FIELDS)
     @classmethod
