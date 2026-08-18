@@ -188,8 +188,9 @@ const MAX_DASHES = 6;
 
 function RouteDashes({ conv }: { conv: StoredConversation }) {
   const dashes = conv.messages
-    .filter((m) => m.role === "assistant" && m.modelUsed !== undefined)
+    .filter((m) => m.role === "assistant")
     .map((m) => classifyRoute(m.tier, m.modelUsed))
+    .filter((route) => route !== null)
     .slice(0, MAX_DASHES);
   if (dashes.length === 0) return null;
   return (

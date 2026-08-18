@@ -7,8 +7,8 @@ import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 import CodeBlock from "./CodeBlock";
 import TurnShell from "./ReadingColumn";
-import { RouteRing } from "./RouteMarker";
-import { classifyRoute, ROUTE_STYLE, type Route } from "./provenance";
+import { RouteRing, WaitRing } from "./RouteMarker";
+import { cacheSpeedup, classifyRoute, formatMultiplier, ROUTE_STYLE, type Route } from "./provenance";
 import type { FeedbackRating } from "./chat-api";
 
 // The full feedback lifecycle for a single assistant message.
@@ -55,11 +55,27 @@ interface Props {
   onFeedback: (messageId: string, rating: FeedbackRating, comment: string) => Promise<void>;
   onInspect?: (messageId: string) => void;
   inspected?: boolean;
+  // This session's rolling average non-cache latency, and how many answers
+  // it averages. Null/0 means the session has generated nothing yet, so the
+  // cache line states the fact without a speed claim rather than defaulting
+  // to an invented one.
+  baselineMs: number | null;
+  baselineSampleCount: number;
 }
 
-function routeAnswerLine(route: Route, modelUsed: string | null | undefined): { title: string; body: string } {
+function routeAnswerLine(
+  route: Route,
+  modelUsed: string | null | undefined,
+  speedup: number | null,
+): { title: string; body: string } {
   if (route === "cache") {
-    return { title: "Answered from cache", body: "You asked this before — 125× faster than generating it again." };
+    return {
+      title: "Answered from cache",
+      body:
+        speedup === null
+          ? "You asked this before — served straight from the store."
+          : `You asked this before — ${formatMultiplier(speedup)} faster than generating it again.`,
+    };
   }
   if (route === "local") {
     return { title: "Answered locally", body: `Generated on ${modelUsed ?? "the local model"}.` };
@@ -69,7 +85,14 @@ function routeAnswerLine(route: Route, modelUsed: string | null | undefined): { 
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function ChatMessage({ message, onFeedback, onInspect, inspected }: Props) {
+export default function ChatMessage({
+  message,
+  onFeedback,
+  onInspect,
+  inspected,
+  baselineMs,
+  baselineSampleCount,
+}: Props) {
   const isUser = message.role === "user";
   const phase = message.feedbackPhase ?? "idle";
 
@@ -164,14 +187,28 @@ export default function ChatMessage({ message, onFeedback, onInspect, inspected 
     );
   }
 
+  // Null until the route is known — a streaming answer before its headers
+  // land, or a response that carried none. Neither the strip nor a coloured
+  // ring may guess at it.
   const route = classifyRoute(message.tier, message.modelUsed);
-  const style = ROUTE_STYLE[route];
-  const line = routeAnswerLine(route, message.modelUsed);
-  const showStrip = message.modelUsed !== undefined;
+  const style = route === null ? null : ROUTE_STYLE[route];
+  const line =
+    route === null
+      ? null
+      : routeAnswerLine(route, message.modelUsed, cacheSpeedup(message.latencyMs, baselineMs, baselineSampleCount));
 
   return (
-    <TurnShell gap={40} marker={<RouteRing route={route} latencyMs={message.latencyMs} active={inspected} />}>
-      {showStrip && (
+    <TurnShell
+      gap={40}
+      marker={
+        route === null ? (
+          <WaitRing route={null} sinceMs={null} />
+        ) : (
+          <RouteRing route={route} latencyMs={message.latencyMs} active={inspected} />
+        )
+      }
+    >
+      {style && line && (
         <div
           style={{
             alignItems: "center",

@@ -239,6 +239,10 @@ export default function ChatApp() {
     setWaitSinceMs(null);
 
     let firstDelta = true;
+    // The route/model arrive with the headers, before the first delta. The
+    // placeholder carries them from birth so the rail marker is never drawn
+    // in a route the answer didn't take while the stream replays.
+    let streamMeta: { modelUsed: string | null; tier: "cache" | "local" | "external" | null } | null = null;
     const result = await sendChatMessage(
       history,
       settings.deptSlug,
@@ -250,7 +254,7 @@ export default function ChatApp() {
           // Show the placeholder bubble and hide the typing indicator on first byte.
           firstDelta = false;
           setIsLoading(false);
-          setMessages((prev) => [...prev, { ...assistantPlaceholder, content: delta }]);
+          setMessages((prev) => [...prev, { ...assistantPlaceholder, ...streamMeta, content: delta }]);
         } else {
           setMessages((prev) =>
             prev.map((m) => (m.id === assistantId ? { ...m, content: m.content + delta } : m))
@@ -260,6 +264,7 @@ export default function ChatApp() {
       (meta) => {
         // Headers land before the first delta, so the wait strip can name the
         // route and model while the answer is still generating.
+        streamMeta = { modelUsed: meta.modelUsed, tier: meta.tier };
         const route = classifyRoute(meta.tier, meta.modelUsed);
         setWaitRoute(route);
         setWaitModel(meta.modelUsed);
@@ -624,10 +629,10 @@ export default function ChatApp() {
               flexDirection: "column",
               minWidth: 0,
               overflow: "hidden",
-              // Reserves room for the overlay panel so the centred reading
-              // column recentres into the remaining space instead of
-              // narrowing — its measure never changes, so nothing rewraps.
-              paddingRight: inspectorOpen && !isNarrow ? "384px" : 0,
+              // No room is reserved for the panel: it overlays. Reserving it
+              // with padding on this column narrows the same box that centres
+              // the 704px measure, so every line rewrapped below ~1417px.
+              // Covering part of the column is not reflowing it.
             }}
           >
             {/* Message list */}
@@ -656,6 +661,8 @@ export default function ChatApp() {
                       onFeedback={handleFeedback}
                       onInspect={msg.role === "assistant" ? handleInspect : undefined}
                       inspected={msg.id === inspectedMsgId && inspectorOpen}
+                      baselineMs={baselineMs}
+                      baselineSampleCount={baselineLatencies.length}
                     />
                   ))}
                   {isLoading && <TypingIndicator route={waitRoute} modelUsed={waitModel} sinceMs={waitSinceMs} />}
@@ -679,10 +686,10 @@ export default function ChatApp() {
           {/* Response detail panel — overlays; on narrow viewports it drops
               to a fixed bottom sheet instead (rendered outside this column
               so it isn't clipped by overflow:hidden here). */}
-          {inspectorOpen && !isNarrow && inspectedMessage && (
+          {inspectorOpen && !isNarrow && (
             <ResponseDetail
               message={inspectedMessage}
-              typedQuery={typedQueryFor(inspectedMessage)}
+              typedQuery={inspectedMessage ? typedQueryFor(inspectedMessage) : null}
               deptSlug={settings.deptSlug}
               baselineMs={baselineMs}
               baselineSampleCount={baselineLatencies.length}
@@ -693,10 +700,10 @@ export default function ChatApp() {
         </div>
       </div>
 
-      {inspectorOpen && isNarrow && inspectedMessage && (
+      {inspectorOpen && isNarrow && (
         <ResponseDetail
           message={inspectedMessage}
-          typedQuery={typedQueryFor(inspectedMessage)}
+          typedQuery={inspectedMessage ? typedQueryFor(inspectedMessage) : null}
           deptSlug={settings.deptSlug}
           baselineMs={baselineMs}
           baselineSampleCount={baselineLatencies.length}

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { AppMessage } from "./ChatMessage";
 import { copyText } from "./copy-text";
-import { classifyRoute, formatLatency, ROUTE_STYLE } from "./provenance";
+import { cacheSpeedup, classifyRoute, formatLatency, formatMultiplier, routeStyle } from "./provenance";
 import { RouteIcon } from "./RouteMarker";
 import { diffQueries } from "./word-diff";
 
@@ -19,7 +19,10 @@ const RESCUE_MAX_DISTANCE = 0.6;
 const VALIDATOR_SKIP_DISTANCE = 0.05;
 
 interface Props {
-  message: AppMessage;
+  // Null when the panel was opened from the header with no turn selected —
+  // the panel still renders, with an explicit empty state, rather than
+  // leaving the toggle looking active over nothing.
+  message: AppMessage | null;
   // The typed question that produced this answer — needed to diff against
   // the stored one for "why it matched". Looked up by the caller from the
   // preceding user turn.
@@ -40,8 +43,8 @@ export default function ResponseDetail({
   onClose,
   asDrawer,
 }: Props) {
-  const route = classifyRoute(message.tier, message.modelUsed);
-  const style = ROUTE_STYLE[route];
+  const route = message ? classifyRoute(message.tier, message.modelUsed) : null;
+  const style = routeStyle(route);
 
   const panelStyle: React.CSSProperties = asDrawer
     ? {
@@ -103,6 +106,32 @@ export default function ResponseDetail({
         </button>
       </div>
 
+      {!message ? (
+        <div
+          style={{
+            alignItems: "center",
+            display: "flex",
+            flex: 1,
+            justifyContent: "center",
+            minHeight: 0,
+            padding: "24px",
+          }}
+        >
+          <p
+            style={{
+              color: "var(--fg-dimmer)",
+              fontSize: "12.5px",
+              lineHeight: "19px",
+              margin: 0,
+              maxWidth: "250px",
+              textAlign: "center",
+            }}
+          >
+            No answer selected. Pick one — &ldquo;Why this matched&rdquo; on a cache hit, or the detail
+            control under any other answer — to see where it came from.
+          </p>
+        </div>
+      ) : (
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "20px" }}>
         {/* Verdict */}
         <div style={{ alignItems: "center", display: "flex", gap: "13px" }}>
@@ -121,12 +150,18 @@ export default function ResponseDetail({
             }}
           >
             <span style={{ transform: "scale(1.35)" }}>
-              <RouteIcon route={route} />
+              {route !== null && <RouteIcon route={route} />}
             </span>
           </div>
           <div>
             <div style={{ fontSize: "19px", fontWeight: 600, letterSpacing: "-0.018em", lineHeight: "24px" }}>
-              {route === "cache" ? "Cache hit" : route === "local" ? "Answered locally" : "Answered by cloud"}
+              {route === "cache"
+                ? "Cache hit"
+                : route === "local"
+                  ? "Answered locally"
+                  : route === "cloud"
+                    ? "Answered by cloud"
+                    : "Still answering"}
             </div>
             {deptSlug && (
               <div style={{ color: "var(--fg-dimmer)", fontFamily: "var(--font-mono)", fontSize: "11.5px", marginTop: "2px" }}>
@@ -192,6 +227,7 @@ export default function ResponseDetail({
           )}
         </Section>
       </div>
+      )}
 
       {route === "cache" && (
         <div
@@ -222,7 +258,9 @@ function CacheSpeed({
 }) {
   if (latencyMs === undefined) return <span style={{ color: "var(--fg-dimmer)", fontSize: "12px" }}>No latency recorded.</span>;
 
-  if (baselineMs === null || sampleCount === 0) {
+  const multiplier = cacheSpeedup(latencyMs, baselineMs, sampleCount);
+
+  if (baselineMs === null || multiplier === null) {
     return (
       <>
         <SpeedBar label="This answer" ms={latencyMs} widthPct={100} tone="var(--accent-solid)" valueColor="var(--accent)" />
@@ -234,7 +272,6 @@ function CacheSpeed({
   }
 
   const thisPct = Math.max(2, Math.min(100, (latencyMs / baselineMs) * 100));
-  const multiplier = baselineMs / Math.max(latencyMs, 1);
 
   return (
     <>
@@ -243,7 +280,7 @@ function CacheSpeed({
         <SpeedBar label="If generated" ms={baselineMs} widthPct={100} tone="var(--border-2)" valueColor="var(--fg-dim)" />
       </div>
       <p style={{ color: "var(--fg-dim)", fontSize: "12px", margin: "11px 0 0" }}>
-        <span style={{ color: "var(--accent)", fontWeight: 600 }}>{multiplier.toFixed(multiplier >= 10 ? 0 : 1)}× faster.</span>{" "}
+        <span style={{ color: "var(--accent)", fontWeight: 600 }}>{formatMultiplier(multiplier)} faster.</span>{" "}
         One model call avoided.{" "}
         {sampleCount < 3 && (
           <span style={{ color: "var(--fg-dimmer)" }}>
