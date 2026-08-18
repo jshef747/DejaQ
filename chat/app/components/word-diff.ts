@@ -50,3 +50,19 @@ export function diffQueries(typed: string, stored: string): { typed: DiffWord[];
   const { a, b } = diffTokens(tokenize(typed), tokenize(stored));
   return { typed: a, stored: b };
 }
+
+// x-dejaq-cache-matched-query is a diagnostic header, not the stored text:
+// the server collapses whitespace, hard-truncates it at 200 characters with
+// no ellipsis, and latin-1-replaces every character outside that range with
+// "?" (openai_compat.py _diagnostic_prompt / _sanitize_headers). Diffing
+// against a value mangled either way underlines words as "changed" that were
+// never typed differently, so a value that shows either mark is shown plainly
+// instead of diffed.
+const HEADER_TRUNCATE_LIMIT = 200;
+
+export function isLossyHeaderText(text: string): boolean {
+  if (text.length >= HEADER_TRUNCATE_LIMIT) return true;
+  // A genuine question mark closes a word. One that opens a token or sits
+  // inside one is a replaced character.
+  return /(^|\s)\?|\?\S/.test(text);
+}

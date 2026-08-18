@@ -31,7 +31,6 @@ export interface RouteStyle {
   solid: string;
   bg: string;
   border: string;
-  label: string;
 }
 
 // var() strings, not resolved colours — these follow the active theme automatically.
@@ -41,21 +40,18 @@ export const ROUTE_STYLE: Record<Route, RouteStyle> = {
     solid: "var(--accent-solid)",
     bg: "var(--accent-bg)",
     border: "var(--accent-border)",
-    label: "cache",
   },
   local: {
     ink: "var(--local)",
     solid: "var(--local)",
     bg: "var(--local-bg)",
     border: "var(--local-border)",
-    label: "local",
   },
   cloud: {
     ink: "var(--blue)",
     solid: "var(--blue)",
     bg: "var(--blue-bg)",
     border: "var(--blue-border)",
-    label: "cloud",
   },
 };
 
@@ -66,7 +62,6 @@ export const NEUTRAL_STYLE: RouteStyle = {
   solid: "var(--border-2)",
   bg: "var(--bg-3)",
   border: "var(--border-2)",
-  label: "pending",
 };
 
 export function routeStyle(route: Route | null): RouteStyle {

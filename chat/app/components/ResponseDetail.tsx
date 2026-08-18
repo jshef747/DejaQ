@@ -5,7 +5,7 @@ import type { AppMessage } from "./ChatMessage";
 import { copyText } from "./copy-text";
 import { cacheComparison, classifyRoute, formatLatency, formatMultiplier, routeStyle } from "./provenance";
 import { RouteIcon } from "./RouteMarker";
-import { diffQueries } from "./word-diff";
+import { diffQueries, isLossyHeaderText } from "./word-diff";
 
 // Server-side cache-tier thresholds (DEJAQ_CACHE_TRUST_DISTANCE,
 // DEJAQ_CACHE_BAND_MAX_DISTANCE, DEJAQ_CACHE_RESCUE_MAX_DISTANCE, and
@@ -17,6 +17,11 @@ const TRUST_DISTANCE = 0.15;
 const BAND_MAX_DISTANCE = 0.2;
 const RESCUE_MAX_DISTANCE = 0.6;
 const VALIDATOR_SKIP_DISTANCE = 0.05;
+
+// The side panel's width. Exported because ChatApp reserves exactly this much
+// room for it rather than letting it overlay the reading column, and the two
+// numbers drifting apart is what would put the panel back on top of the text.
+export const DETAIL_PANEL_WIDTH = 384;
 
 interface Props {
   // Null when the panel was opened from the header with no turn selected —
@@ -70,7 +75,7 @@ export default function ResponseDetail({
         position: "absolute",
         right: 0,
         top: 0,
-        width: "384px",
+        width: `${DETAIL_PANEL_WIDTH}px`,
         zIndex: 30,
       };
 
@@ -287,11 +292,14 @@ function CacheSpeed({
       <p style={{ color: "var(--fg-dim)", fontSize: "12px", lineHeight: 1.5, margin: "11px 0 0" }}>
         {comparison.kind === "faster" ? (
           <>
-            <span style={{ color: "var(--accent)", fontWeight: 600 }}>{formatMultiplier(comparison.multiplier)} faster.</span>{" "}
-            One model call avoided.{" "}
+            <span style={{ color: "var(--accent)", fontWeight: 600 }}>{formatMultiplier(comparison.multiplier)} faster</span>{" "}
+            than this session&rsquo;s average generated answer.{" "}
           </>
         ) : (
-          <>Not faster than this session&rsquo;s generated answers, but no model call was made. </>
+          <>
+            Served in {formatLatency(latencyMs)}, against a {formatLatency(baselineMs)} average for this
+            session&rsquo;s generated answers.{" "}
+          </>
         )}
         {sampleCount < 3 && (
           <span style={{ color: "var(--fg-dimmer)" }}>
@@ -343,7 +351,8 @@ function WhyItMatched({ typedQuery, message }: { typedQuery: string | null; mess
     );
   }
 
-  const diff = typedQuery ? diffQueries(typedQuery, stored) : null;
+  const lossy = isLossyHeaderText(stored);
+  const diff = typedQuery && !lossy ? diffQueries(typedQuery, stored) : null;
   const tier = distance <= TRUST_DISTANCE ? "Trusted" : distance <= BAND_MAX_DISTANCE ? "Band" : "Rescue";
   const validatorNeeded = distance > VALIDATOR_SKIP_DISTANCE;
 
@@ -384,9 +393,19 @@ function WhyItMatched({ typedQuery, message }: { typedQuery: string | null; mess
         </>
       )}
       {!diff && (
-        <div style={{ color: "var(--fg)", fontFamily: "var(--font-serif)", fontSize: "14px", lineHeight: "21px" }}>
-          &ldquo;{stored}&rdquo;
-        </div>
+        <>
+          <div style={{ color: "var(--fg-dimmer)", fontSize: "11.5px" }}>Stored answer for</div>
+          <div style={{ color: "var(--fg)", fontFamily: "var(--font-serif)", fontSize: "14px", lineHeight: "21px", marginTop: "3px" }}>
+            &ldquo;{stored}&rdquo;
+          </div>
+          {lossy && (
+            <div style={{ color: "var(--fg-dimmer)", fontSize: "11.5px", lineHeight: "17px", marginTop: "7px" }}>
+              Shown as the server reported it — this diagnostic value is shortened and stripped of
+              characters it cannot carry, so it may differ from the stored question. Not compared
+              word by word for that reason.
+            </div>
+          )}
+        </>
       )}
 
       <div style={{ marginTop: "16px" }}>

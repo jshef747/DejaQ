@@ -39,7 +39,6 @@
   --accent-solid: #f2661f;
   --accent-bg: rgba(242, 102, 31, 0.15);
   --accent-border: rgba(242, 102, 31, 0.38);
-  --on-accent: #1a0d00;
 
   /* The local route's colour. Teal, so cache/local/cloud read as three
      distinct hues on the provenance rail. */

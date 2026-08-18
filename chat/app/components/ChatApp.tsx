@@ -24,7 +24,7 @@ import {
 import ChatMessage, { type AppMessage, type FeedbackPhase } from "./ChatMessage";
 import ConversationSidebar from "./ConversationSidebar";
 import MessageInput from "./MessageInput";
-import ResponseDetail from "./ResponseDetail";
+import ResponseDetail, { DETAIL_PANEL_WIDTH } from "./ResponseDetail";
 import SettingsModal from "./SettingsModal";
 import TypingIndicator from "./TypingIndicator";
 import ToastStack, { type ToastData } from "./Toast";
@@ -42,6 +42,18 @@ let msgCounter = 0;
 function newId() {
   return `msg_${++msgCounter}_${Date.now()}`;
 }
+
+// The reading column is never reflowed and never covered. The side panel is
+// only used when the window can hold the sidebar, the whole turn shell and
+// the panel side by side — then the transcript reserves the panel's width and
+// the column simply recentres in what is left, still at its full measure.
+// Below that the panel becomes the bottom drawer, which never touches the
+// column horizontally at all. Reserving the width at narrower windows would
+// squeeze the shell and rewrap every line; overlaying it would hide the text
+// being inspected. Neither is acceptable, so the treatment switches instead.
+const SIDEBAR_WIDTH = 221; // 220px + its 1px right border
+const SHELL_WIDTH = 812; // --shell (780px) + TurnShell's own 2 × 16px padding
+const SIDE_PANEL_MIN_WIDTH = SIDEBAR_WIDTH + SHELL_WIDTH + DETAIL_PANEL_WIDTH;
 
 // ─── useWindowWidth hook ────────────────────────────────────────────────────
 
@@ -84,7 +96,7 @@ export default function ChatApp() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<AppMessage[]>([]);
   const windowWidth = useWindowWidth();
-  const isNarrow = windowWidth < 1024;
+  const useSidePanel = windowWidth >= SIDE_PANEL_MIN_WIDTH;
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -431,7 +443,6 @@ export default function ChatApp() {
             role: "assistant",
             content: result.escalatedResponse.content,
             ts: Date.now(),
-            modelUsed: result.escalatedResponse.tier,
             interactionId: result.escalatedResponse.interactionId,
             tier: result.escalatedResponse.tier,
             responseId: result.escalatedResponse.responseId,
@@ -621,11 +632,13 @@ export default function ChatApp() {
         {/* Main chat area: message list + input. */}
         <div style={{ display: "flex", flex: 1, flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
           {/* Transcript region. This — not the whole column — is the response
-              detail panel's positioning context: the panel overlays the
-              reading column (no room is reserved for it, since reserving it
-              with padding narrows the same box that centres the 704px measure
-              and rewraps every line) but stops at the top of the composer,
-              which stays reachable. */}
+              detail panel's positioning context, so the panel stops at the top
+              of the composer, which stays reachable. The padding reserves the
+              panel's own width: an absolutely positioned child is laid out
+              against the padding box, so the panel stays flush right while the
+              transcript inside recentres clear of it. Only ever applied at
+              widths where the shell still fits beside it — see
+              SIDE_PANEL_MIN_WIDTH. */}
           <div
             style={{
               display: "flex",
@@ -633,6 +646,7 @@ export default function ChatApp() {
               flexDirection: "column",
               minWidth: 0,
               overflow: "hidden",
+              paddingRight: inspectorOpen && useSidePanel ? `${DETAIL_PANEL_WIDTH}px` : 0,
               position: "relative",
             }}
           >
@@ -672,11 +686,11 @@ export default function ChatApp() {
               <div ref={bottomRef} />
             </main>
 
-            {/* Response detail panel — overlays the transcript; on narrow
-                viewports it drops to a fixed bottom sheet instead (rendered
-                outside this column so it isn't clipped by overflow:hidden
-                here). */}
-            {inspectorOpen && !isNarrow && (
+            {/* Response detail panel — a reserved side column here; on
+                narrower viewports it drops to a fixed bottom sheet instead
+                (rendered outside this column so it isn't clipped by
+                overflow:hidden here). */}
+            {inspectorOpen && useSidePanel && (
               <ResponseDetail
                 message={inspectedMessage}
                 typedQuery={inspectedMessage ? typedQueryFor(inspectedMessage) : null}
@@ -702,7 +716,7 @@ export default function ChatApp() {
         </div>
       </div>
 
-      {inspectorOpen && isNarrow && (
+      {inspectorOpen && !useSidePanel && (
         <ResponseDetail
           message={inspectedMessage}
           typedQuery={inspectedMessage ? typedQueryFor(inspectedMessage) : null}

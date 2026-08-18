@@ -93,7 +93,7 @@ function cacheAnswerBody(
   baselineMs: number | null,
 ): string {
   if (comparison.kind === "faster") {
-    return `You asked this before — ${formatMultiplier(comparison.multiplier)} faster than generating it again.`;
+    return `You asked this before — ${formatMultiplier(comparison.multiplier)} faster than this session's average generated answer.`;
   }
   if (comparison.kind === "not-faster" && latencyMs !== undefined && baselineMs !== null) {
     return `You asked this before — served in ${formatLatency(latencyMs)}, against a ${formatLatency(baselineMs)} average for this session's generated answers.`;
