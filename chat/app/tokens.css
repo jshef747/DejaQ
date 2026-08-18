@@ -32,13 +32,20 @@
   --fg-dim: #a8aeb8;
   --fg-dimmer: #6e7581;
 
-  /* DejaQ orange. --accent is the readable ink tone, --accent-solid the
-     fill; on dark they must differ or orange text on near-black is muddy. */
+  /* DejaQ orange — reserved for the cache route and nothing else. --accent
+     is the readable ink tone, --accent-solid the fill; on dark they must
+     differ or orange text on near-black is muddy. */
   --accent: #ff8f5c;
   --accent-solid: #f2661f;
   --accent-bg: rgba(242, 102, 31, 0.15);
   --accent-border: rgba(242, 102, 31, 0.38);
   --on-accent: #1a0d00;
+
+  /* The local route's colour. Teal, so cache/local/cloud read as three
+     distinct hues on the provenance rail. */
+  --local: #63c3ac;
+  --local-bg: rgba(99, 195, 172, 0.12);
+  --local-border: rgba(99, 195, 172, 0.3);
 
   --green: #57c08a;
   --green-bg: rgba(87, 192, 138, 0.14);
@@ -52,6 +59,7 @@
   --red-bg: rgba(240, 113, 103, 0.13);
   --red-border: rgba(240, 113, 103, 0.34);
 
+  /* Also the cloud route's colour on the provenance rail. */
   --blue: #9096f2;
   --blue-bg: rgba(144, 150, 242, 0.13);
   --blue-border: rgba(144, 150, 242, 0.32);
@@ -106,6 +114,10 @@
     --accent-bg: #fbede4;
     --accent-border: #efc6ac;
 
+    --local: #22705f;
+    --local-bg: #e6f2ef;
+    --local-border: #b9dad1;
+
     --green: #2c8757;
     --green-bg: #e7f3ec;
     --green-border: #b9dcc8;
@@ -150,6 +162,10 @@
   --accent-solid: #e85f1b;
   --accent-bg: #fbede4;
   --accent-border: #efc6ac;
+
+  --local: #22705f;
+  --local-bg: #e6f2ef;
+  --local-border: #b9dad1;
 
   --green: #2c8757;
   --green-bg: #e7f3ec;
@@ -214,14 +230,15 @@ a {
   color: inherit;
 }
 
+/* Neutral, not orange — the focus ring is not a cache signal. */
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--fg-dim);
   outline-offset: 2px;
   border-radius: 3px;
 }
 
 ::selection {
-  background: var(--accent-bg);
+  background: var(--border-2);
   color: var(--fg);
 }
 

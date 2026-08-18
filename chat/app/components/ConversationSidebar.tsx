@@ -1,6 +1,7 @@
 "use client";
 
 import type { StoredConversation } from "./conversation-store";
+import { classifyRoute, ROUTE_STYLE } from "./provenance";
 
 interface Props {
   conversations: StoredConversation[];
@@ -58,7 +59,7 @@ export default function ConversationSidebar({
             e.currentTarget.style.borderColor = "var(--border)";
           }}
         >
-          <span style={{ color: "var(--accent)" }}><PlusIcon /></span>
+          <span style={{ color: "var(--fg-dim)" }}><PlusIcon /></span>
           New chat
         </button>
       </div>
@@ -110,8 +111,8 @@ function ConversationRow({
       onClick={onSelect}
       style={{
         alignItems: "center",
-        background: active ? "var(--accent-bg)" : "transparent",
-        border: `1px solid ${active ? "var(--accent-border)" : "transparent"}`,
+        background: active ? "var(--bg-3)" : "transparent",
+        border: `1px solid ${active ? "var(--border-2)" : "transparent"}`,
         borderRadius: "6px",
         cursor: "pointer",
         display: "flex",
@@ -127,11 +128,11 @@ function ConversationRow({
         if (!active) e.currentTarget.style.background = "transparent";
       }}
     >
-      {/* Title and relative date */}
+      {/* Title, route dashes, and relative date */}
       <div style={{ flex: 1, minWidth: 0 }}>
         <p
           style={{
-            color: active ? "var(--accent)" : "var(--fg)",
+            color: "var(--fg)",
             fontSize: "12px",
             fontWeight: active ? 500 : 400,
             margin: 0,
@@ -142,9 +143,12 @@ function ConversationRow({
         >
           {conv.title}
         </p>
-        <p style={{ color: "var(--fg-dimmer)", fontSize: "10px", margin: "1px 0 0" }}>
-          {formatRelativeDate(conv.lastUpdated)}
-        </p>
+        <div style={{ alignItems: "center", display: "flex", gap: "7px", marginTop: "6px" }}>
+          <RouteDashes conv={conv} />
+          <p style={{ color: "var(--fg-dimmer)", fontSize: "10px", margin: 0 }}>
+            {formatRelativeDate(conv.lastUpdated)}
+          </p>
+        </div>
       </div>
 
       {/* Delete button — faint by default, full opacity when hovered */}
@@ -173,6 +177,34 @@ function ConversationRow({
       >
         <SmallTrashIcon />
       </button>
+    </div>
+  );
+}
+
+// The same colour vocabulary as the provenance rail, compressed to a row of
+// dashes: one per assistant turn, in order, so a glance says which chats
+// spent money. Capped so a long conversation doesn't overrun the row.
+const MAX_DASHES = 6;
+
+function RouteDashes({ conv }: { conv: StoredConversation }) {
+  const dashes = conv.messages
+    .filter((m) => m.role === "assistant" && m.modelUsed !== undefined)
+    .map((m) => classifyRoute(m.tier, m.modelUsed))
+    .slice(0, MAX_DASHES);
+  if (dashes.length === 0) return null;
+  return (
+    <div style={{ display: "flex", gap: "3px" }}>
+      {dashes.map((route, i) => (
+        <span
+          key={i}
+          style={{
+            background: ROUTE_STYLE[route].solid,
+            borderRadius: "2px",
+            height: "3px",
+            width: "12px",
+          }}
+        />
+      ))}
     </div>
   );
 }

@@ -23,6 +23,8 @@ Neither the dashboard nor the chat app supports narrow viewports, by design (cap
 
 The chat owns its own token layer (`chat/app/tokens.css`, light + dark) and must not import the dashboard's `design-system.css` again. Every component reads those tokens by name from inline styles, so change a token's value, never its name. Read that file's header, and the one on `chat/app/globals.css`, before changing anything about how the chat looks.
 
+`--accent` is reserved for the cache route only (stage 2 of the chat redesign) — never reach for it for a button, link, active row, or any other non-cache UI; use a neutral (`--fg`/`--border-2`/`--bg-3`) or the appropriate route colour instead (`--local` for local, `--blue` for cloud — see `chat/app/components/provenance.ts`). `chat/app/components/RouteMarker.tsx`, `ResponseDetail.tsx`, and `TypingIndicator.tsx` are the provenance rail, the response detail panel, and the wait strip; read those before touching per-message routing UI.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.

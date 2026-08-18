@@ -113,9 +113,9 @@
 }
 
 .dq-markdown a {
-  color: var(--accent);
+  color: var(--fg);
   text-decoration: underline;
-  text-decoration-color: var(--accent-border);
+  text-decoration-color: var(--border-2);
   text-underline-offset: 3px;
 }
 
@@ -317,6 +317,20 @@
   overflow-x: auto;
   overflow-y: hidden;
   padding: 4px 2px;
+}
+
+/* ── Per-turn hover reveal ────────────────────────────────── */
+
+/* Two 10px timestamps per exchange are noise in a column that already
+   reads chronologically — kept, just not always painted. */
+.dq-hover-meta {
+  opacity: 0;
+  transition: opacity var(--t-fast);
+}
+
+.dq-turn:hover .dq-hover-meta,
+.dq-turn:focus-within .dq-hover-meta {
+  opacity: 1;
 }
 
 /* ── Motion ───────────────────────────────────────────────── */

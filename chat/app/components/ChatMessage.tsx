@@ -7,6 +7,8 @@ import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 import CodeBlock from "./CodeBlock";
 import TurnShell from "./ReadingColumn";
+import { RouteRing } from "./RouteMarker";
+import { classifyRoute, ROUTE_STYLE, type Route } from "./provenance";
 import type { FeedbackRating } from "./chat-api";
 
 // The full feedback lifecycle for a single assistant message.
@@ -41,6 +43,10 @@ export interface AppMessage {
   latencyMs?: number;
   cacheHit?: boolean;
   promptDifficulty?: string | null;
+  // Already-forwarded headers the cache lookup produces on a hit; null on a
+  // miss (local/cloud) or before the pipeline resolves either.
+  cacheDistance?: number | null;
+  cacheMatchedQuery?: string | null;
 }
 
 interface Props {
@@ -51,66 +57,14 @@ interface Props {
   inspected?: boolean;
 }
 
-// ─── Model source classification ──────────────────────────────────────────────
-
-// The server sends "cache" for cache hits; external models use well-known
-// vendor prefixes (gemini-, gpt-, claude-, o4-, etc.); everything else is local.
-type ModelSource = "cache" | "local" | "external";
-
-function classifyModelSource(modelUsed: string | null | undefined): ModelSource {
-  if (!modelUsed || modelUsed === "cache") return "cache";
-  const m = modelUsed.toLowerCase();
-  if (
-    m.startsWith("gemini-") ||
-    m.startsWith("gpt-") ||
-    m.startsWith("claude-") ||
-    m.startsWith("o1-") ||
-    m.startsWith("o3-") ||
-    m.startsWith("o4-")
-  ) {
-    return "external";
+function routeAnswerLine(route: Route, modelUsed: string | null | undefined): { title: string; body: string } {
+  if (route === "cache") {
+    return { title: "Answered from cache", body: "You asked this before — 125× faster than generating it again." };
   }
-  return "local";
-}
-
-function tierLabel(tier: AppMessage["tier"], modelUsed: string | null | undefined): string {
-  if (tier === "cache") return "cache";
-  if (tier === "local") return modelUsed ?? "local";
-  if (tier === "external") return modelUsed ?? "external";
-  return modelUsed ?? "cache";
-}
-
-// Color scheme: green = cache hit, amber = local model, red = external provider.
-function modelBadgeStyle(source: ModelSource): React.CSSProperties {
-  const base: React.CSSProperties = {
-    borderRadius: "4px",
-    fontFamily: "var(--font-mono)",
-    fontSize: "10px",
-    padding: "2px 6px",
-  };
-  if (source === "cache") {
-    return {
-      ...base,
-      background: "var(--green-bg)",
-      border: "1px solid var(--green-border)",
-      color: "var(--green)",
-    };
+  if (route === "local") {
+    return { title: "Answered locally", body: `Generated on ${modelUsed ?? "the local model"}.` };
   }
-  if (source === "external") {
-    return {
-      ...base,
-      background: "var(--red-bg)",
-      border: "1px solid var(--red-border)",
-      color: "var(--red)",
-    };
-  }
-  // local model
-  return {
-    ...base,
-    background: "var(--amber-bg)",
-    border: "1px solid var(--amber-border)",
-    color: "var(--amber)",
-  };
+  return { title: "Answered by cloud", body: `Generated on ${modelUsed ?? "the external provider"}.` };
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -170,10 +124,10 @@ export default function ChatMessage({ message, onFeedback, onInspect, inspected 
                     alignItems: "center",
                     background: message.attachmentSticky ? "transparent" : "var(--bg-2)",
                     border: message.attachmentSticky
-                      ? "1px dashed var(--accent-border)"
+                      ? "1px dashed var(--border-2)"
                       : "1px solid var(--border-2)",
                     borderRadius: "7px",
-                    color: message.attachmentSticky ? "var(--accent)" : "var(--fg-dim)",
+                    color: "var(--fg-dim)",
                     display: "inline-flex",
                     fontSize: message.attachmentSticky ? "11px" : "11.5px",
                     gap: "6px",
@@ -202,7 +156,7 @@ export default function ChatMessage({ message, onFeedback, onInspect, inspected 
             )}
             {message.content}
           </div>
-          <span style={{ color: "var(--fg-dimmer)", fontSize: "10.5px", marginTop: "6px" }}>
+          <span className="dq-hover-meta" style={{ color: "var(--fg-dimmer)", fontSize: "10.5px", marginTop: "6px" }}>
             {formatTs(message.ts)}
           </span>
         </div>
@@ -210,38 +164,79 @@ export default function ChatMessage({ message, onFeedback, onInspect, inspected 
     );
   }
 
+  const route = classifyRoute(message.tier, message.modelUsed);
+  const style = ROUTE_STYLE[route];
+  const line = routeAnswerLine(route, message.modelUsed);
+  const showStrip = message.modelUsed !== undefined;
+
   return (
-    <TurnShell gap={40} marker={<AssistantAvatar />}>
+    <TurnShell gap={40} marker={<RouteRing route={route} latencyMs={message.latencyMs} active={inspected} />}>
+      {showStrip && (
+        <div
+          style={{
+            alignItems: "center",
+            background: style.bg,
+            borderRadius: "9px",
+            display: "flex",
+            gap: "10px",
+            height: "34px",
+            marginBottom: "16px",
+            padding: "0 12px",
+          }}
+        >
+          <span style={{ color: style.ink, fontSize: "12.5px", fontWeight: 600 }}>{line.title}</span>
+          <span style={{ color: "var(--fg-dim)", fontSize: "12.5px" }}>{line.body}</span>
+          <div style={{ flex: 1 }} />
+          {route === "cache" && onInspect && (
+            <button
+              onClick={() => onInspect(message.id)}
+              style={{
+                alignItems: "center",
+                background: "transparent",
+                border: "none",
+                color: style.ink,
+                cursor: "pointer",
+                display: "flex",
+                fontSize: "12px",
+                fontWeight: 600,
+                gap: "4px",
+                padding: 0,
+              }}
+            >
+              Why this matched
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M6 3.5 10.5 8 6 12.5" />
+              </svg>
+            </button>
+          )}
+        </div>
+      )}
+
       <MarkdownContent content={message.content} />
 
-      {/* Metadata row — color-coded model badge + timestamp */}
-      <div style={{ alignItems: "center", display: "flex", gap: "8px", marginTop: "16px" }}>
-        {message.modelUsed !== undefined && (
-          <span style={modelBadgeStyle(message.tier ?? classifyModelSource(message.modelUsed))}>
-            {tierLabel(message.tier, message.modelUsed)}
-          </span>
-        )}
+      {/* Timestamp + response-detail affordance — hover-revealed; the strip
+          above already carries the route, so this row is pure metadata. */}
+      <div className="dq-hover-meta" style={{ alignItems: "center", display: "flex", gap: "8px", marginTop: "16px" }}>
         {message.sourceLabel && (
           <span style={{ color: "var(--fg-dimmer)", fontSize: "10.5px" }}>{message.sourceLabel}</span>
         )}
         <span style={{ color: "var(--fg-dimmer)", fontSize: "10.5px" }}>{formatTs(message.ts)}</span>
-        {/* Inspect button for assistant messages */}
-        {onInspect && (
+        {onInspect && route !== "cache" && (
           <button
             onClick={() => onInspect(message.id)}
-            title={inspected ? "Currently inspecting" : "Inspect request metadata"}
+            title={inspected ? "Currently inspecting" : "Response detail"}
             style={{
               alignItems: "center",
-              background: inspected ? "var(--accent-bg)" : "transparent",
-              border: `1px solid ${inspected ? "var(--accent-border)" : "var(--border)"}`,
+              background: inspected ? "var(--bg-3)" : "transparent",
+              border: `1px solid ${inspected ? "var(--border-2)" : "var(--border)"}`,
               borderRadius: "5px",
-              color: inspected ? "var(--accent)" : "var(--fg-dimmer)",
+              color: inspected ? "var(--fg)" : "var(--fg-dimmer)",
               cursor: "pointer",
               display: "flex",
               padding: "2px 5px",
               transition: "background var(--t-base), border-color var(--t-base), color var(--t-base)",
             }}
-            aria-label="Inspect request metadata"
+            aria-label="Response detail"
           >
             <InspectIcon />
           </button>
@@ -282,7 +277,9 @@ export default function ChatMessage({ message, onFeedback, onInspect, inspected 
             </span>
           )}
           {typeof message.feedbackScore === "number" && (phase === "positive" || phase === "negative") && (
-            <span style={feedbackScoreStyle()}>score {message.feedbackScore.toFixed(1)}</span>
+            <span style={feedbackScoreStyle()}>
+              Recorded — this answer now scores {message.feedbackScore.toFixed(1)} in the cache.
+            </span>
           )}
         </div>
       )}
@@ -354,47 +351,12 @@ function feedbackDoneStyle(rating: FeedbackRating): React.CSSProperties {
 function feedbackScoreStyle(): React.CSSProperties {
   return {
     color: "var(--fg-dimmer)",
-    fontFamily: "var(--font-mono)",
-    fontSize: "10.5px",
+    fontSize: "11.5px",
     padding: "0 4px",
   };
 }
 
 // ─── Icons ─────────────────────────────────────────────────────────────────────
-
-// Exported so TypingIndicator holds the same 28px mark in the same column;
-// the wait and the answer must not differ by a pixel.
-export function AssistantAvatar() {
-  return (
-    <div
-      style={{
-        alignItems: "center",
-        background: "var(--bg-3)",
-        border: "1px solid var(--border-2)",
-        borderRadius: "50%",
-        color: "var(--fg-dim)",
-        display: "flex",
-        flexShrink: 0,
-        height: "28px",
-        justifyContent: "center",
-        width: "28px",
-      }}
-    >
-      <BotIcon />
-    </div>
-  );
-}
-
-function BotIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-      <rect x="2" y="4" width="12" height="10" rx="2" />
-      <circle cx="5.5" cy="9" r="1" fill="currentColor" stroke="none" />
-      <circle cx="10.5" cy="9" r="1" fill="currentColor" stroke="none" />
-      <path d="M6 12h4M8 4V2M6 2h4" strokeLinecap="round" />
-    </svg>
-  );
-}
 
 function ThumbUpIcon() {
   return (

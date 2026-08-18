@@ -24,10 +24,12 @@ import {
 import ChatMessage, { type AppMessage, type FeedbackPhase } from "./ChatMessage";
 import ConversationSidebar from "./ConversationSidebar";
 import MessageInput from "./MessageInput";
+import ResponseDetail from "./ResponseDetail";
 import SettingsModal from "./SettingsModal";
 import TypingIndicator from "./TypingIndicator";
 import ToastStack, { type ToastData } from "./Toast";
-import { copyText } from "./copy-text";
+import { RailTrack } from "./ReadingColumn";
+import { classifyRoute, type Route } from "./provenance";
 
 const WELCOME_PROMPTS = [
   "What are the main benefits of semantic caching for LLM APIs?",
@@ -54,339 +56,6 @@ function useWindowWidth(): number {
   return width;
 }
 
-// ─── RequestInspector ──────────────────────────────────────────────────────────
-
-interface InspectorProps {
-  message: AppMessage | null;
-  onClose: () => void;
-  asDrawer: boolean;
-}
-
-type InspectorTone = "green" | "amber" | "red" | "blue" | "neutral";
-
-function RequestInspector({ message, onClose, asDrawer }: InspectorProps) {
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
-  const difficulty = difficultyMeta(message?.promptDifficulty, message?.cacheHit);
-  const copied = copyState === "copied";
-
-  function copyResponseId() {
-    if (!message?.responseId) return;
-    copyText(message.responseId).then((ok) => {
-      setCopyState(ok ? "copied" : "failed");
-      setTimeout(() => setCopyState("idle"), 1500);
-    });
-  }
-
-  const panelStyle: React.CSSProperties = asDrawer
-    ? {
-        background: "var(--bg-2)",
-        borderTop: "1px solid var(--border-2)",
-        bottom: 0,
-        display: "flex",
-        flexDirection: "column",
-        left: 0,
-        maxHeight: "48vh",
-        position: "fixed",
-        right: 0,
-        zIndex: 40,
-        boxShadow: "var(--shadow-up)",
-      }
-    : {
-        background: "var(--bg-2)",
-        borderLeft: "1px solid var(--border)",
-        display: "flex",
-        flexDirection: "column",
-        flexShrink: 0,
-        minWidth: "320px",
-        overflow: "hidden",
-        width: "340px",
-      };
-
-  return (
-    <aside style={panelStyle}>
-      {/* Header */}
-      <div
-        style={{
-          alignItems: "center",
-          borderBottom: "1px solid var(--border)",
-          display: "flex",
-          flexShrink: 0,
-          gap: "8px",
-          padding: asDrawer ? "12px 18px" : "12px 14px",
-        }}
-      >
-        <span
-          style={{
-            color: "var(--fg-dim)",
-            fontSize: "11px",
-            fontWeight: 600,
-            letterSpacing: "0.06em",
-            textTransform: "uppercase",
-          }}
-        >
-          Request Inspector
-        </span>
-        <div style={{ flex: 1 }} />
-        <button
-          onClick={onClose}
-          title="Close inspector"
-          style={{
-            alignItems: "center",
-            background: "transparent",
-            border: "none",
-            borderRadius: "4px",
-            color: "var(--fg-dimmer)",
-            cursor: "pointer",
-            display: "flex",
-            fontSize: "14px",
-            padding: "2px 6px",
-          }}
-          aria-label="Close inspector"
-        >
-          ✕
-        </button>
-      </div>
-
-      <div
-        style={{
-          flex: 1,
-          minHeight: 0,
-          overflowY: "auto",
-          padding: asDrawer ? "14px 18px 18px" : "14px",
-        }}
-      >
-        {!message ? (
-          <p style={{ color: "var(--fg-dimmer)", fontSize: "12px", lineHeight: 1.5, margin: 0 }}>
-            Click the inspect icon on an assistant message to view its metadata here.
-          </p>
-        ) : (
-          <div style={{ display: "grid", gap: "12px" }}>
-            <div
-              style={{
-                display: "grid",
-                gap: "10px",
-                gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-              }}
-            >
-              <MetricCard label="Cache">
-                <StatusPill tone={message.cacheHit ? "green" : "amber"}>
-                  {message.cacheHit ? "HIT" : "MISS"}
-                </StatusPill>
-              </MetricCard>
-              <MetricCard label="Difficulty">
-                <StatusPill tone={difficulty.tone}>{difficulty.label}</StatusPill>
-              </MetricCard>
-              <MetricCard label="Model" wide>
-                <MonoValue>{message.modelUsed ?? "-"}</MonoValue>
-              </MetricCard>
-              <MetricCard label="Tier">
-                <StatusPill tone={message.tier === "cache" ? "green" : message.tier === "external" ? "red" : "amber"}>
-                  {message.tier?.toUpperCase() ?? "-"}
-                </StatusPill>
-              </MetricCard>
-              <MetricCard label="Latency">
-                <MonoValue>{message.latencyMs !== undefined ? `${message.latencyMs} ms` : "-"}</MonoValue>
-              </MetricCard>
-            </div>
-
-            {message.responseId && (
-              <InspectorSection
-                title="Response ID"
-                action={
-                  <button
-                    onClick={copyResponseId}
-                    title="Copy response ID"
-                    style={{
-                      alignItems: "center",
-                      background: copied ? "var(--green-bg)" : copyState === "failed" ? "var(--red-bg)" : "var(--bg-3)",
-                      border: `1px solid ${copied ? "var(--green-border)" : copyState === "failed" ? "var(--red-border)" : "var(--border)"}`,
-                      borderRadius: "4px",
-                      color: copied ? "var(--green)" : copyState === "failed" ? "var(--red)" : "var(--fg-dimmer)",
-                      cursor: "pointer",
-                      display: "flex",
-                      flexShrink: 0,
-                      fontSize: "10px",
-                      padding: "3px 7px",
-                      transition: "background 0.15s, color 0.15s",
-                    }}
-                  >
-                    {copied ? "Copied" : copyState === "failed" ? "Failed" : "Copy"}
-                  </button>
-                }
-              >
-                <span
-                  style={{
-                    color: "var(--fg-dim)",
-                    display: "block",
-                    fontFamily: "var(--font-mono)",
-                    fontSize: "11px",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                  title={message.responseId}
-                >
-                  {message.responseId}
-                </span>
-              </InspectorSection>
-            )}
-            {message.interactionId && (
-              <InspectorSection title="Interaction ID">
-                <span
-                  style={{
-                    color: "var(--fg-dim)",
-                    display: "block",
-                    fontFamily: "var(--font-mono)",
-                    fontSize: "11px",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                  title={message.interactionId}
-                >
-                  {message.interactionId}
-                </span>
-              </InspectorSection>
-            )}
-          </div>
-        )}
-      </div>
-    </aside>
-  );
-}
-
-function MetricCard({
-  label,
-  children,
-  wide = false,
-}: {
-  label: string;
-  children: React.ReactNode;
-  wide?: boolean;
-}) {
-  return (
-    <div
-      style={{
-        background: "var(--bg-2)",
-        border: "1px solid var(--border)",
-        borderRadius: "7px",
-        gridColumn: wide ? "span 2" : undefined,
-        minWidth: 0,
-        padding: "10px",
-      }}
-    >
-      <InspectorLabel>{label}</InspectorLabel>
-      <div style={{ marginTop: "6px", minWidth: 0 }}>{children}</div>
-    </div>
-  );
-}
-
-function InspectorSection({
-  title,
-  children,
-  action,
-}: {
-  title: string;
-  children: React.ReactNode;
-  action?: React.ReactNode;
-}) {
-  return (
-    <section
-      style={{
-        background: "var(--bg-2)",
-        border: "1px solid var(--border)",
-        borderRadius: "7px",
-        padding: "10px",
-      }}
-    >
-      <div style={{ alignItems: "center", display: "flex", gap: "8px", marginBottom: "8px" }}>
-        <InspectorLabel>{title}</InspectorLabel>
-        <div style={{ flex: 1 }} />
-        {action}
-      </div>
-      {children}
-    </section>
-  );
-}
-
-function InspectorLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      style={{
-        color: "var(--fg-dimmer)",
-        fontSize: "10px",
-        fontWeight: 600,
-        letterSpacing: "0.05em",
-        textTransform: "uppercase",
-      }}
-    >
-      {children}
-    </div>
-  );
-}
-
-function MonoValue({ children }: { children: React.ReactNode }) {
-  return (
-    <span
-      style={{
-        color: "var(--fg)",
-        display: "block",
-        fontFamily: "var(--font-mono)",
-        fontSize: "12px",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
-      }}
-      title={typeof children === "string" ? children : undefined}
-    >
-      {children}
-    </span>
-  );
-}
-
-function StatusPill({
-  children,
-  tone,
-}: {
-  children: React.ReactNode;
-  tone: InspectorTone;
-}) {
-  const toneStyles: Record<InspectorTone, React.CSSProperties> = {
-    green: { background: "var(--green-bg)", border: "1px solid var(--green-border)", color: "var(--green)" },
-    amber: { background: "var(--amber-bg)", border: "1px solid var(--amber-border)", color: "var(--amber)" },
-    red: { background: "var(--red-bg)", border: "1px solid var(--red-border)", color: "var(--red)" },
-    blue: { background: "var(--blue-bg)", border: "1px solid var(--blue-border)", color: "var(--blue)" },
-    neutral: { background: "var(--bg-3)", border: "1px solid var(--border)", color: "var(--fg-dim)" },
-  };
-  return (
-    <span
-      style={{
-        borderRadius: "5px",
-        display: "inline-flex",
-        fontSize: "11px",
-        fontWeight: 700,
-        letterSpacing: "0.04em",
-        maxWidth: "100%",
-        padding: "3px 8px",
-        ...toneStyles[tone],
-      }}
-    >
-      {children}
-    </span>
-  );
-}
-
-function difficultyMeta(
-  difficulty: string | null | undefined,
-  cacheHit: boolean | undefined,
-): { label: string; tone: InspectorTone } {
-  const normalized = difficulty?.toLowerCase();
-  if (normalized === "easy") return { label: "EASY", tone: "green" };
-  if (normalized === "hard") return { label: "HARD", tone: "red" };
-  if (cacheHit) return { label: "CACHED", tone: "blue" };
-  return { label: "-", tone: "neutral" };
-}
-
 // ─── ChatApp ───────────────────────────────────────────────────────────────────
 
 export default function ChatApp() {
@@ -401,6 +70,17 @@ export default function ChatApp() {
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
   const [inspectedMsgId, setInspectedMsgId] = useState<string | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  // The route/model become known as soon as headers land, well before the
+  // first content delta — the wait strip narrates from this. sinceMs is set
+  // the instant the route resolves, so the rail's elapsed counter reflects
+  // actual generation time, not time spent waiting on the cache lookup.
+  const [waitRoute, setWaitRoute] = useState<Route | null>(null);
+  const [waitModel, setWaitModel] = useState<string | null>(null);
+  const [waitSinceMs, setWaitSinceMs] = useState<number | null>(null);
+  // A client-side rolling average of this session's non-cache latencies —
+  // the only source for "if generated" in the response detail panel. No
+  // server field for it; empty until the session has a generated answer.
+  const [baselineLatencies, setBaselineLatencies] = useState<number[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<AppMessage[]>([]);
   const windowWidth = useWindowWidth();
@@ -554,6 +234,10 @@ export default function ChatApp() {
     // Send the full conversation history so the model has context.
     const history = withUserMsg.map((m) => ({ role: m.role, content: m.content }));
 
+    setWaitRoute(null);
+    setWaitModel(null);
+    setWaitSinceMs(null);
+
     let firstDelta = true;
     const result = await sendChatMessage(
       history,
@@ -573,8 +257,19 @@ export default function ChatApp() {
           );
         }
       },
+      (meta) => {
+        // Headers land before the first delta, so the wait strip can name the
+        // route and model while the answer is still generating.
+        const route = classifyRoute(meta.tier, meta.modelUsed);
+        setWaitRoute(route);
+        setWaitModel(meta.modelUsed);
+        setWaitSinceMs(Date.now());
+      },
     );
     setIsLoading(false);
+    setWaitRoute(null);
+    setWaitModel(null);
+    setWaitSinceMs(null);
 
     if (isApiError(result)) {
       addToast("error", result.message);
@@ -630,6 +325,8 @@ export default function ChatApp() {
                 latencyMs: result.latencyMs,
                 cacheHit: result.cacheHit,
                 promptDifficulty: result.promptDifficulty,
+                cacheDistance: result.cacheDistance,
+                cacheMatchedQuery: result.cacheMatchedQuery,
               }
             : m
         );
@@ -637,6 +334,13 @@ export default function ChatApp() {
         return updated;
       });
     });
+
+    // The response detail panel's "if generated" comparison is a rolling
+    // average of this session's own non-cache latencies — never the cache
+    // path itself, or every comparison would trivially be "1x".
+    if (!result.cacheHit && result.latencyMs > 0) {
+      setBaselineLatencies((prev) => [...prev, result.latencyMs]);
+    }
 
     // Assign a conversation ID on the first reply and persist to localStorage.
     const convId = activeConvId ?? `conv_${Date.now()}`;
@@ -768,6 +472,18 @@ export default function ChatApp() {
   const hasDepartment = Boolean(settings.deptSlug);
   const dashboardUrl = process.env.NEXT_PUBLIC_DASHBOARD_URL ?? "http://localhost:3000/dashboard";
   const inspectedMessage = messages.find((m) => m.id === inspectedMsgId) ?? null;
+  const baselineMs =
+    baselineLatencies.length > 0
+      ? baselineLatencies.reduce((sum, ms) => sum + ms, 0) / baselineLatencies.length
+      : null;
+
+  // The question as typed, for the "why it matched" diff — looked up from
+  // the user turn immediately before the given assistant message.
+  function typedQueryFor(message: AppMessage): string | null {
+    const index = messages.findIndex((m) => m.id === message.id);
+    if (index < 0) return null;
+    return [...messages.slice(0, index)].reverse().find((m) => m.role === "user")?.content ?? null;
+  }
 
   return (
     <div
@@ -797,9 +513,9 @@ export default function ChatApp() {
           <div
             style={{
               alignItems: "center",
-              background: "var(--accent-solid)",
+              background: "var(--fg)",
               borderRadius: "4px",
-              color: "var(--on-accent)",
+              color: "var(--bg)",
               display: "flex",
               flexShrink: 0,
               fontFamily: "var(--font-mono)",
@@ -844,19 +560,20 @@ export default function ChatApp() {
 
         <div style={{ flex: 1 }} />
 
-        {/* Inspector toggle button */}
+        {/* Response detail toggle button — neutral, not orange: it opens for
+            every route, not just a cache hit. */}
         <button
           onClick={() => setInspectorOpen((v) => !v)}
-          title={inspectorOpen ? "Hide inspector" : "Show request inspector"}
+          title={inspectorOpen ? "Hide response detail" : "Show response detail"}
           style={{
             ...iconBtn(),
-            color: inspectorOpen ? "var(--accent)" : "var(--fg-dim)",
-            borderColor: inspectorOpen ? "var(--accent-border)" : "var(--border)",
-            background: inspectorOpen ? "var(--accent-bg)" : "transparent",
+            color: inspectorOpen ? "var(--fg)" : "var(--fg-dim)",
+            borderColor: inspectorOpen ? "var(--border-2)" : "var(--border)",
+            background: inspectorOpen ? "var(--bg-3)" : "transparent",
           }}
         >
           <InspectorPanelIcon />
-          <span>Inspector</span>
+          <span>Response detail</span>
         </button>
 
         {/* Header action buttons */}
@@ -896,67 +613,93 @@ export default function ChatApp() {
           onDelete={handleDeleteConversation}
         />
 
-        {/* Main chat area: message list + input */}
-        <div style={{ display: "flex", flex: 1, flexDirection: "column", overflow: "hidden" }}>
-          {/* Message list */}
-          <main
+        {/* Main chat area: message list + input. Relative so the response
+            detail panel can overlay it without this column ever resizing —
+            it used to shrink by 340px and re-wrap every line on screen. */}
+        <div style={{ display: "flex", flex: 1, flexDirection: "column", overflow: "hidden", position: "relative" }}>
+          <div
             style={{
               display: "flex",
               flex: 1,
               flexDirection: "column",
-              overflowY: "auto",
-              paddingTop: "16px",
+              minWidth: 0,
+              overflow: "hidden",
+              // Reserves room for the overlay panel so the centred reading
+              // column recentres into the remaining space instead of
+              // narrowing — its measure never changes, so nothing rewraps.
+              paddingRight: inspectorOpen && !isNarrow ? "384px" : 0,
             }}
           >
-            {messages.length === 0 ? (
-              <WelcomeScreen
-                hasDepartment={hasDepartment}
-                onOpenSettings={() => setSettingsOpen(true)}
-                onSelectPrompt={handleWelcomePrompt}
-              />
-            ) : (
-              <>
-                {messages.map((msg) => (
-                  <ChatMessage
-                    key={msg.id}
-                    message={msg}
-                    onFeedback={handleFeedback}
-                    onInspect={msg.role === "assistant" ? handleInspect : undefined}
-                    inspected={msg.id === inspectedMsgId && inspectorOpen}
-                  />
-                ))}
-                {isLoading && <TypingIndicator />}
-              </>
-            )}
-            <div ref={bottomRef} />
-          </main>
+            {/* Message list */}
+            <main
+              style={{
+                display: "flex",
+                flex: 1,
+                flexDirection: "column",
+                overflowY: "auto",
+                paddingTop: "16px",
+              }}
+            >
+              {messages.length === 0 ? (
+                <WelcomeScreen
+                  hasDepartment={hasDepartment}
+                  onOpenSettings={() => setSettingsOpen(true)}
+                  onSelectPrompt={handleWelcomePrompt}
+                />
+              ) : (
+                <div style={{ position: "relative" }}>
+                  <RailTrack />
+                  {messages.map((msg) => (
+                    <ChatMessage
+                      key={msg.id}
+                      message={msg}
+                      onFeedback={handleFeedback}
+                      onInspect={msg.role === "assistant" ? handleInspect : undefined}
+                      inspected={msg.id === inspectedMsgId && inspectorOpen}
+                    />
+                  ))}
+                  {isLoading && <TypingIndicator route={waitRoute} modelUsed={waitModel} sinceMs={waitSinceMs} />}
+                </div>
+              )}
+              <div ref={bottomRef} />
+            </main>
 
-          {/* Message input */}
-          <MessageInput
-            value={input}
-            onChange={setInput}
-            onSend={handleSend}
-            disabled={isLoading}
-            attachment={attachment}
-            onAttachmentChange={setAttachment}
-            onAttachmentError={(msg) => addToast("error", msg)}
-          />
+            {/* Message input */}
+            <MessageInput
+              value={input}
+              onChange={setInput}
+              onSend={handleSend}
+              disabled={isLoading}
+              attachment={attachment}
+              onAttachmentChange={setAttachment}
+              onAttachmentError={(msg) => addToast("error", msg)}
+            />
+          </div>
+
+          {/* Response detail panel — overlays; on narrow viewports it drops
+              to a fixed bottom sheet instead (rendered outside this column
+              so it isn't clipped by overflow:hidden here). */}
+          {inspectorOpen && !isNarrow && inspectedMessage && (
+            <ResponseDetail
+              message={inspectedMessage}
+              typedQuery={typedQueryFor(inspectedMessage)}
+              deptSlug={settings.deptSlug}
+              baselineMs={baselineMs}
+              baselineSampleCount={baselineLatencies.length}
+              onClose={() => { setInspectorOpen(false); setInspectedMsgId(null); }}
+              asDrawer={false}
+            />
+          )}
         </div>
-
-        {/* Request Inspector panel — right column on wide viewports */}
-        {inspectorOpen && !isNarrow && (
-          <RequestInspector
-            message={inspectedMessage}
-            onClose={() => { setInspectorOpen(false); setInspectedMsgId(null); }}
-            asDrawer={false}
-          />
-        )}
       </div>
 
-      {/* Request Inspector drawer — fixed bottom on narrow viewports */}
-      {inspectorOpen && isNarrow && (
-        <RequestInspector
+      {inspectorOpen && isNarrow && inspectedMessage && (
+        <ResponseDetail
           message={inspectedMessage}
+          typedQuery={typedQueryFor(inspectedMessage)}
+          deptSlug={settings.deptSlug}
+          baselineMs={baselineMs}
+          baselineSampleCount={baselineLatencies.length}
           onClose={() => { setInspectorOpen(false); setInspectedMsgId(null); }}
           asDrawer={true}
         />
@@ -1002,8 +745,8 @@ function WelcomeScreen({
         <div
           style={{
             alignItems: "center",
-            background: "var(--accent-bg)",
-            border: "1px solid var(--accent-border)",
+            background: "var(--bg-3)",
+            border: "1px solid var(--border-2)",
             borderRadius: "12px",
             display: "inline-flex",
             justifyContent: "center",
@@ -1012,10 +755,10 @@ function WelcomeScreen({
           }}
         >
           <svg width="28" height="28" viewBox="0 0 32 32" fill="none">
-            <rect x="2" y="8" width="28" height="18" rx="4" stroke="var(--accent)" strokeWidth="2" />
-            <circle cx="10" cy="17" r="2" fill="var(--accent)" />
-            <circle cx="22" cy="17" r="2" fill="var(--accent)" />
-            <path d="M16 8V4M12 4h8" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" />
+            <rect x="2" y="8" width="28" height="18" rx="4" stroke="var(--fg-dim)" strokeWidth="2" />
+            <circle cx="10" cy="17" r="2" fill="var(--fg-dim)" />
+            <circle cx="22" cy="17" r="2" fill="var(--fg-dim)" />
+            <path d="M16 8V4M12 4h8" stroke="var(--fg-dim)" strokeWidth="2" strokeLinecap="round" />
           </svg>
         </div>
         <h1 style={{ fontSize: "22px", fontWeight: 600, margin: "0 0 8px" }}>
@@ -1058,12 +801,13 @@ function WelcomeScreen({
               style={{
                 background: "none",
                 border: "none",
-                color: "var(--accent)",
+                color: "var(--fg)",
                 cursor: "pointer",
                 fontSize: "12px",
+                fontWeight: 600,
                 padding: 0,
                 textDecoration: "underline",
-                textDecorationColor: "var(--accent-border)",
+                textDecorationColor: "var(--border-2)",
                 textUnderlineOffset: "2px",
               }}
             >

@@ -421,7 +421,7 @@ function btn(kind: "primary" | "secondary", disabled = false) {
     whiteSpace: "nowrap" as const,
   };
   if (kind === "primary")
-    return { ...base, background: "var(--accent-solid)", border: "1px solid var(--accent-solid)", color: "var(--on-accent)" };
+    return { ...base, background: "var(--fg)", border: "1px solid var(--fg)", color: "var(--bg)" };
   return { ...base, background: "var(--bg-3)", border: "1px solid var(--border-2)", color: "var(--fg-dim)" };
 }
 
