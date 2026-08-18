@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { AppMessage } from "./ChatMessage";
 import { copyText } from "./copy-text";
-import { cacheSpeedup, classifyRoute, formatLatency, formatMultiplier, routeStyle } from "./provenance";
+import { cacheComparison, classifyRoute, formatLatency, formatMultiplier, routeStyle } from "./provenance";
 import { RouteIcon } from "./RouteMarker";
 import { diffQueries } from "./word-diff";
 
@@ -258,9 +258,9 @@ function CacheSpeed({
 }) {
   if (latencyMs === undefined) return <span style={{ color: "var(--fg-dimmer)", fontSize: "12px" }}>No latency recorded.</span>;
 
-  const multiplier = cacheSpeedup(latencyMs, baselineMs, sampleCount);
+  const comparison = cacheComparison(latencyMs, baselineMs, sampleCount);
 
-  if (baselineMs === null || multiplier === null) {
+  if (baselineMs === null || comparison.kind === "no-baseline") {
     return (
       <>
         <SpeedBar label="This answer" ms={latencyMs} widthPct={100} tone="var(--accent-solid)" valueColor="var(--accent)" />
@@ -271,17 +271,28 @@ function CacheSpeed({
     );
   }
 
-  const thisPct = Math.max(2, Math.min(100, (latencyMs / baselineMs) * 100));
+  // Both bars scale against the slower of the two, so a cache hit that cost
+  // more than the session's average generation draws visibly longer instead
+  // of being clamped to the same length as the bar it lost to.
+  const longestMs = Math.max(latencyMs, baselineMs);
+  const thisPct = Math.max(2, (latencyMs / longestMs) * 100);
+  const baselinePct = Math.max(2, (baselineMs / longestMs) * 100);
 
   return (
     <>
       <SpeedBar label="This answer" ms={latencyMs} widthPct={thisPct} tone="var(--accent-solid)" valueColor="var(--accent)" />
       <div style={{ marginTop: "9px" }}>
-        <SpeedBar label="If generated" ms={baselineMs} widthPct={100} tone="var(--border-2)" valueColor="var(--fg-dim)" />
+        <SpeedBar label="If generated" ms={baselineMs} widthPct={baselinePct} tone="var(--border-2)" valueColor="var(--fg-dim)" />
       </div>
-      <p style={{ color: "var(--fg-dim)", fontSize: "12px", margin: "11px 0 0" }}>
-        <span style={{ color: "var(--accent)", fontWeight: 600 }}>{formatMultiplier(multiplier)} faster.</span>{" "}
-        One model call avoided.{" "}
+      <p style={{ color: "var(--fg-dim)", fontSize: "12px", lineHeight: 1.5, margin: "11px 0 0" }}>
+        {comparison.kind === "faster" ? (
+          <>
+            <span style={{ color: "var(--accent)", fontWeight: 600 }}>{formatMultiplier(comparison.multiplier)} faster.</span>{" "}
+            One model call avoided.{" "}
+          </>
+        ) : (
+          <>Not faster than this session&rsquo;s generated answers, but no model call was made. </>
+        )}
         {sampleCount < 3 && (
           <span style={{ color: "var(--fg-dimmer)" }}>
             (based on {sampleCount} generated answer{sampleCount === 1 ? "" : "s"} this session)

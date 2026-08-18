@@ -79,19 +79,33 @@ export function formatLatency(ms: number | undefined): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-// How much faster this cache hit was than this session's own generated
-// answers. The baseline is a client-side rolling average of non-cache
-// latencies, so it does not exist until the session has generated at least
-// one answer — null then, and every surface must say so rather than invent
-// a number. One implementation because the answer strip and the response
-// detail panel both quote it and must never disagree.
-export function cacheSpeedup(
+// How this cache hit compares with this session's own generated answers.
+// The baseline is a client-side rolling average of non-cache latencies, so
+// it does not exist until the session has generated at least one answer —
+// "no-baseline" then, and every surface must say so rather than invent a
+// number. "not-faster" is a real outcome, not an error: a hit that runs the
+// context adjuster costs a second or two on top of the lookup, which a fast
+// external generation can beat. Stating that as "0.6× faster" would be the
+// opposite of the truth, so the multiplier is only ever handed out when it
+// is genuinely above 1. One implementation because the answer strip and the
+// response detail panel both quote it and must never disagree.
+export type CacheComparison =
+  | { kind: "no-baseline" }
+  | { kind: "faster"; multiplier: number }
+  | { kind: "not-faster" };
+
+// Below this the multiplier rounds to "1.0×", which claims a speed-up that
+// isn't there.
+const MIN_MEANINGFUL_SPEEDUP = 1.1;
+
+export function cacheComparison(
   latencyMs: number | undefined,
   baselineMs: number | null,
   sampleCount: number,
-): number | null {
-  if (latencyMs === undefined || baselineMs === null || sampleCount === 0) return null;
-  return baselineMs / Math.max(latencyMs, 1);
+): CacheComparison {
+  if (latencyMs === undefined || baselineMs === null || sampleCount === 0) return { kind: "no-baseline" };
+  const multiplier = baselineMs / Math.max(latencyMs, 1);
+  return multiplier >= MIN_MEANINGFUL_SPEEDUP ? { kind: "faster", multiplier } : { kind: "not-faster" };
 }
 
 export function formatMultiplier(multiplier: number): string {

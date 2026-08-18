@@ -618,10 +618,14 @@ export default function ChatApp() {
           onDelete={handleDeleteConversation}
         />
 
-        {/* Main chat area: message list + input. Relative so the response
-            detail panel can overlay it without this column ever resizing —
-            it used to shrink by 340px and re-wrap every line on screen. */}
-        <div style={{ display: "flex", flex: 1, flexDirection: "column", overflow: "hidden", position: "relative" }}>
+        {/* Main chat area: message list + input. */}
+        <div style={{ display: "flex", flex: 1, flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
+          {/* Transcript region. This — not the whole column — is the response
+              detail panel's positioning context: the panel overlays the
+              reading column (no room is reserved for it, since reserving it
+              with padding narrows the same box that centres the 704px measure
+              and rewraps every line) but stops at the top of the composer,
+              which stays reachable. */}
           <div
             style={{
               display: "flex",
@@ -629,10 +633,7 @@ export default function ChatApp() {
               flexDirection: "column",
               minWidth: 0,
               overflow: "hidden",
-              // No room is reserved for the panel: it overlays. Reserving it
-              // with padding on this column narrows the same box that centres
-              // the 704px measure, so every line rewrapped below ~1417px.
-              // Covering part of the column is not reflowing it.
+              position: "relative",
             }}
           >
             {/* Message list */}
@@ -671,32 +672,33 @@ export default function ChatApp() {
               <div ref={bottomRef} />
             </main>
 
-            {/* Message input */}
-            <MessageInput
-              value={input}
-              onChange={setInput}
-              onSend={handleSend}
-              disabled={isLoading}
-              attachment={attachment}
-              onAttachmentChange={setAttachment}
-              onAttachmentError={(msg) => addToast("error", msg)}
-            />
+            {/* Response detail panel — overlays the transcript; on narrow
+                viewports it drops to a fixed bottom sheet instead (rendered
+                outside this column so it isn't clipped by overflow:hidden
+                here). */}
+            {inspectorOpen && !isNarrow && (
+              <ResponseDetail
+                message={inspectedMessage}
+                typedQuery={inspectedMessage ? typedQueryFor(inspectedMessage) : null}
+                deptSlug={settings.deptSlug}
+                baselineMs={baselineMs}
+                baselineSampleCount={baselineLatencies.length}
+                onClose={() => { setInspectorOpen(false); setInspectedMsgId(null); }}
+                asDrawer={false}
+              />
+            )}
           </div>
 
-          {/* Response detail panel — overlays; on narrow viewports it drops
-              to a fixed bottom sheet instead (rendered outside this column
-              so it isn't clipped by overflow:hidden here). */}
-          {inspectorOpen && !isNarrow && (
-            <ResponseDetail
-              message={inspectedMessage}
-              typedQuery={inspectedMessage ? typedQueryFor(inspectedMessage) : null}
-              deptSlug={settings.deptSlug}
-              baselineMs={baselineMs}
-              baselineSampleCount={baselineLatencies.length}
-              onClose={() => { setInspectorOpen(false); setInspectedMsgId(null); }}
-              asDrawer={false}
-            />
-          )}
+          {/* Message input */}
+          <MessageInput
+            value={input}
+            onChange={setInput}
+            onSend={handleSend}
+            disabled={isLoading}
+            attachment={attachment}
+            onAttachmentChange={setAttachment}
+            onAttachmentError={(msg) => addToast("error", msg)}
+          />
         </div>
       </div>
 

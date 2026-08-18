@@ -8,7 +8,15 @@ import "katex/dist/katex.min.css";
 import CodeBlock from "./CodeBlock";
 import TurnShell from "./ReadingColumn";
 import { RouteRing, WaitRing } from "./RouteMarker";
-import { cacheSpeedup, classifyRoute, formatMultiplier, ROUTE_STYLE, type Route } from "./provenance";
+import {
+  cacheComparison,
+  classifyRoute,
+  formatLatency,
+  formatMultiplier,
+  ROUTE_STYLE,
+  type CacheComparison,
+  type Route,
+} from "./provenance";
 import type { FeedbackRating } from "./chat-api";
 
 // The full feedback lifecycle for a single assistant message.
@@ -66,21 +74,31 @@ interface Props {
 function routeAnswerLine(
   route: Route,
   modelUsed: string | null | undefined,
-  speedup: number | null,
+  comparison: CacheComparison,
+  latencyMs: number | undefined,
+  baselineMs: number | null,
 ): { title: string; body: string } {
   if (route === "cache") {
-    return {
-      title: "Answered from cache",
-      body:
-        speedup === null
-          ? "You asked this before — served straight from the store."
-          : `You asked this before — ${formatMultiplier(speedup)} faster than generating it again.`,
-    };
+    return { title: "Answered from cache", body: cacheAnswerBody(comparison, latencyMs, baselineMs) };
   }
   if (route === "local") {
     return { title: "Answered locally", body: `Generated on ${modelUsed ?? "the local model"}.` };
   }
   return { title: "Answered by cloud", body: `Generated on ${modelUsed ?? "the external provider"}.` };
+}
+
+function cacheAnswerBody(
+  comparison: CacheComparison,
+  latencyMs: number | undefined,
+  baselineMs: number | null,
+): string {
+  if (comparison.kind === "faster") {
+    return `You asked this before — ${formatMultiplier(comparison.multiplier)} faster than generating it again.`;
+  }
+  if (comparison.kind === "not-faster" && latencyMs !== undefined && baselineMs !== null) {
+    return `You asked this before — served in ${formatLatency(latencyMs)}, against a ${formatLatency(baselineMs)} average for this session's generated answers.`;
+  }
+  return "You asked this before — served straight from the store.";
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -195,7 +213,13 @@ export default function ChatMessage({
   const line =
     route === null
       ? null
-      : routeAnswerLine(route, message.modelUsed, cacheSpeedup(message.latencyMs, baselineMs, baselineSampleCount));
+      : routeAnswerLine(
+          route,
+          message.modelUsed,
+          cacheComparison(message.latencyMs, baselineMs, baselineSampleCount),
+          message.latencyMs,
+          baselineMs,
+        );
 
   return (
     <TurnShell
