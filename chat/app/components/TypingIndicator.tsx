@@ -21,14 +21,12 @@ export default function TypingIndicator({
   return (
     <TurnShell gap={40} marker={<WaitRing route={route} sinceMs={sinceMs} />}>
       {/*
-        Not dead code, but currently unreachable against the shipped backend:
-        server/app/routers/openai_compat.py's _stream_generator materialises the
-        whole answer before yielding its first chunk, so the X-DejaQ-* headers
-        this branch (and WaitRing's ticking counter) needs only reach the browser
-        together with the first token - by which point the wait is over and the
-        neutral "Checking cache…" state below is all that ever renders. Keep it:
-        it is correct, and it lights up as soon as the gateway streams headers
-        early. Fixing that ordering is tracked separately, not here.
+        Reachable since the gateway started streaming: run_chat_pipeline returns
+        before generation on a cache miss, so the X-DejaQ-* headers this branch
+        (and WaitRing's ticking counter) read now land seconds ahead of the first
+        token - measured 0.2-0.8s to headers against 9-15s to first content. The
+        neutral "Checking cache…" state below is what renders until they arrive,
+        and all a cache hit ever shows, since a hit resolves before its headers.
       */}
       {route === "local" || route === "cloud" ? (
         <div
