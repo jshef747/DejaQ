@@ -40,7 +40,7 @@ def _mapped_errors(api_key: str) -> Iterator[None]:
     except anthropic.AuthenticationError as exc:
         msg = redact_api_key(exc, api_key)
         logger.error("Anthropic authentication failed: %s", msg)
-        raise ExternalLLMAuthError(f"Authentication failed: {msg}") from exc
+        raise ExternalLLMAuthError(f"Authentication failed: {msg}", status_code=401) from exc
     except anthropic.APITimeoutError as exc:
         msg = redact_api_key(exc, api_key)
         logger.error("Anthropic timeout: %s", msg)
@@ -48,7 +48,30 @@ def _mapped_errors(api_key: str) -> Iterator[None]:
     except anthropic.APIError as exc:
         msg = redact_api_key(exc, api_key)
         logger.error("Anthropic API error: %s", msg)
-        raise ExternalLLMError(f"Provider error: {msg}") from exc
+        raise ExternalLLMError(
+            f"Provider error: {msg}", status_code=getattr(exc, "status_code", None)
+        ) from exc
+
+
+async def _create_with_temperature_retry(client, request: ExternalLLMRequest, **kwargs):
+    """Sends `temperature` only if the caller asked for one, and retries once
+    without it if the vendor rejects it by name.
+
+    Anthropic 400s on any non-default temperature for Claude Opus 4.7+ and
+    Sonnet 5 (migration guide) - a model can start rejecting it after a vendor
+    change, so this degrades to a logged warning instead of an outage.
+    """
+    if request.temperature is not None:
+        try:
+            return await client.messages.create(**kwargs, temperature=request.temperature)
+        except anthropic.BadRequestError as exc:
+            if "temperature" not in str(exc).lower():
+                raise
+            logger.warning(
+                "Anthropic rejected temperature=%s for model=%s; retrying without it",
+                request.temperature, request.model,
+            )
+    return await client.messages.create(**kwargs)
 
 
 class AnthropicProviderClient:
@@ -89,12 +112,12 @@ class AnthropicProviderClient:
         logger.debug("Sending hard query to Anthropic model=%s history_turns=%d", request.model, len(request.history))
         start = time.perf_counter()
         with _mapped_errors(api_key):
-            response = await client.messages.create(
+            response = await _create_with_temperature_retry(
+                client, request,
                 model=request.model,
                 system=request.system_prompt,
                 messages=messages,
                 max_tokens=request.max_tokens,
-                temperature=request.temperature,
             )
 
         latency_ms = elapsed_ms(start)
@@ -137,12 +160,12 @@ class AnthropicProviderClient:
         prompt_tokens = completion_tokens = 0
         stop_reason = None
         with _mapped_errors(api_key):
-            stream = await client.messages.create(
+            stream = await _create_with_temperature_retry(
+                client, request,
                 model=request.model,
                 system=request.system_prompt,
                 messages=messages,
                 max_tokens=request.max_tokens,
-                temperature=request.temperature,
                 stream=True,
             )
             # `async with`, not a bare `async for`: a client that disconnects

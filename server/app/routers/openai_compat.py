@@ -1688,7 +1688,7 @@ async def run_chat_pipeline(
                             max_tokens=_max_tokens,
                             system_prompt=system_prompt
                             or "You are a helpful assistant. Answer the user's query concisely and accurately.",
-                            temperature=temperature or 0.7,
+                            temperature=temperature,
                             image_b64=base64.b64encode(image_bytes).decode("ascii") if _request_has_image else None,
                             image_mime=image_mime,
                             # PDFs go as a native document part — every provider parses
@@ -1755,6 +1755,15 @@ async def run_chat_pipeline(
             except ExternalLLMError as exc:
                 if "not wired to a live client" in str(exc):
                     raise PipelineError(422, str(exc)) from exc
+                # A provider 400/401/429 is a permanent misconfiguration, not
+                # the transient blip the apology below exists for - surface it
+                # as its own status with the provider's own message. Only on
+                # the buffered path: a streaming response has already flushed
+                # its 200 headers by the time generation starts, so it has no
+                # status left to change and keeps the apology.
+                if not stream and exc.status_code in (400, 401, 429):
+                    logger.warning("External provider error surfaced to caller: %s", exc)
+                    raise PipelineError(exc.status_code, str(exc)) from exc
                 logger.exception("ExternalLLMService failed")
                 yield _GENERATION_FAILED_MESSAGE
                 gen.update(model_used="error", route="error")

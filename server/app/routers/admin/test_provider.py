@@ -70,7 +70,6 @@ async def test_provider(
         system_prompt="You are a helpful assistant for connectivity testing.",
         model=body.model,
         max_tokens=8,
-        temperature=0.0,
     )
     try:
         response = await _external_llm.generate_response(request, provider=provider, api_key=api_key)

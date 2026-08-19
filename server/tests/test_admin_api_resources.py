@@ -259,7 +259,9 @@ def test_admin_test_provider_uses_stored_org_credential(
     assert request.query == "Reply with exactly: OK"
     assert request.model == "claude-sonnet-4-6"
     assert request.max_tokens == 8
-    assert request.temperature == 0.0
+    # No temperature sent - the diagnostic must not send its own non-default
+    # value, or it 400s on exactly the models it exists to test.
+    assert request.temperature is None
     assert provider == "anthropic"
     assert api_key == "sk-ant-live"
 

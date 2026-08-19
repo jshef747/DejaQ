@@ -45,9 +45,9 @@ def _mapped_errors(api_key: str) -> Iterator[None]:
         msg = redact_api_key(exc, api_key)
         if exc.code == 401:
             logger.error("Google authentication failed: %s", msg)
-            raise ExternalLLMAuthError(f"Authentication failed: {msg}") from exc
+            raise ExternalLLMAuthError(f"Authentication failed: {msg}", status_code=401) from exc
         logger.error("Google client error (code=%d): %s", exc.code, msg)
-        raise ExternalLLMError(f"Provider error: {msg}") from exc
+        raise ExternalLLMError(f"Provider error: {msg}", status_code=exc.code) from exc
     except (TimeoutError, httpx.TimeoutException) as exc:
         msg = redact_api_key(exc, api_key)
         logger.error("Google timeout: %s", msg)
@@ -55,7 +55,9 @@ def _mapped_errors(api_key: str) -> Iterator[None]:
     except genai_errors.APIError as exc:
         msg = redact_api_key(exc, api_key)
         logger.error("Google API error: %s", msg)
-        raise ExternalLLMError(f"Provider error: {msg}") from exc
+        raise ExternalLLMError(
+            f"Provider error: {msg}", status_code=getattr(exc, "code", None)
+        ) from exc
 
 
 class GoogleProviderClient:
