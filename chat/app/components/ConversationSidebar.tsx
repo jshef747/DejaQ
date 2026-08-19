@@ -1,26 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import type { StoredConversation } from "./conversation-store";
 import { classifyRoute, ROUTE_STYLE } from "./provenance";
+import { useNewChatShortcutLabel } from "./shortcuts";
 
 // Below this window width the sidebar gives up its width rather than the
 // reading column's measure — narrow windows lose margins, never measure.
 export const SIDEBAR_COLLAPSE_WIDTH = 1100;
 const SIDEBAR_WIDTH = 272;
 const SIDEBAR_RAIL_WIDTH = 56;
-
-// The shortcut ChatApp actually binds. Cmd/Ctrl+N is reserved by the browser
-// for a new window and can never reach the page, so the hint has to name the
-// binding that does fire. Rendered from the non-Mac form first and swapped
-// after mount so the server and the first client render agree.
-function useNewChatShortcut() {
-  const [label, setLabel] = useState("Ctrl\u21e7O");
-  useEffect(() => {
-    if (/Mac|iPhone|iPad/i.test(navigator.userAgent)) setLabel("\u2318\u21e7O");
-  }, []);
-  return label;
-}
 
 interface Props {
   conversations: StoredConversation[];
@@ -34,6 +22,9 @@ interface Props {
   deptSlug: string;
   connected: boolean;
   collapsed: boolean;
+  // An answer is in flight. New chat is refused while one is (see
+  // startNewConversation in ChatApp), so the control says so.
+  busy: boolean;
 }
 
 export default function ConversationSidebar({
@@ -46,13 +37,15 @@ export default function ConversationSidebar({
   deptSlug,
   connected,
   collapsed,
+  busy,
 }: Props) {
-  const shortcut = useNewChatShortcut();
+  const shortcut = useNewChatShortcutLabel();
+  const canStartNew = connected && !busy;
 
   if (collapsed) {
     return (
       <CollapsedRail
-        onNew={connected ? onNew : undefined}
+        onNew={canStartNew ? onNew : undefined}
         onOpenSettings={onOpenSettings}
         deptSlug={deptSlug}
         shortcut={shortcut}
@@ -77,26 +70,27 @@ export default function ConversationSidebar({
       <div style={{ padding: "12px 12px 8px" }}>
         <button
           onClick={onNew}
-          disabled={!connected}
+          disabled={!canStartNew}
+          title={busy ? "Finish or stop the current answer first" : undefined}
           style={{
             alignItems: "center",
             background: "var(--bg-3)",
             border: `1px solid var(--border-2)`,
             borderRadius: "9px",
             color: "var(--fg)",
-            cursor: connected ? "pointer" : "not-allowed",
+            cursor: canStartNew ? "pointer" : "not-allowed",
             display: "flex",
             fontSize: "13px",
             fontWeight: 500,
             gap: "8px",
             height: "34px",
-            opacity: connected ? 1 : 0.4,
+            opacity: canStartNew ? 1 : 0.4,
             padding: "0 11px",
             transition: "background var(--t-base), border-color var(--t-base)",
             width: "100%",
           }}
           onMouseEnter={(e) => {
-            if (connected) e.currentTarget.style.background = "var(--bg-hover)";
+            if (canStartNew) e.currentTarget.style.background = "var(--bg-hover)";
           }}
           onMouseLeave={(e) => {
             e.currentTarget.style.background = "var(--bg-3)";

@@ -31,6 +31,7 @@ import TypingIndicator from "./TypingIndicator";
 import ToastStack, { type ToastAction, type ToastData, type ToastKind } from "./Toast";
 import { RailTrack } from "./ReadingColumn";
 import { classifyRoute, type Route } from "./provenance";
+import { matchesNewChatShortcut } from "./shortcuts";
 
 const WELCOME_PROMPTS = [
   "What are the main benefits of semantic caching for LLM APIs?",
@@ -108,9 +109,13 @@ export default function ChatApp() {
   // continuation below become no-ops immediately, without waiting on the
   // network teardown to complete.
   const stopRequestedRef = useRef(false);
-  // Set by handleStop so the committed transcript is written to localStorage
-  // from the effect below, never from inside a state updater.
-  const persistAfterCommitRef = useRef(false);
+  // Set by handleStop to the id of the message it marked stopped, so the
+  // committed transcript is written to localStorage from the effect below and
+  // never from inside a state updater. The effect persists only once it can
+  // see that mark in the committed list, so a Stop that changed nothing (no
+  // placeholder yet) cannot leave a write armed for some later, unrelated
+  // change to fire.
+  const persistStoppedIdRef = useRef<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const activeAssistantIdRef = useRef<string | null>(null);
   const windowWidth = useWindowWidth();
@@ -119,9 +124,12 @@ export default function ChatApp() {
 
   useEffect(() => {
     messagesRef.current = messages;
-    if (persistAfterCommitRef.current) {
-      persistAfterCommitRef.current = false;
-      persistCurrentMessages(messages);
+    const stoppedId = persistStoppedIdRef.current;
+    if (stoppedId) {
+      persistStoppedIdRef.current = null;
+      if (messages.some((m) => m.id === stoppedId && m.stopped)) {
+        persistCurrentMessages(messages);
+      }
     }
   }, [messages]);
 
@@ -137,15 +145,13 @@ export default function ChatApp() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isLoading]);
 
-  // New chat shortcut. Cmd/Ctrl+N is reserved by the browser for a new window
-  // and cannot be intercepted from a tab, so the binding is Cmd/Ctrl+Shift+O —
-  // the same one the sidebar advertises (NEW_CHAT_SHORTCUT there). No dep
-  // array: startNewConversation closes over the live transcript, which it
-  // saves before clearing.
+  // New chat shortcut. Binding and the label the sidebar renders both come
+  // from NEW_CHAT_SHORTCUT so they cannot drift. No dep array:
+  // startNewConversation closes over the live transcript, which it saves
+  // before clearing.
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (!(e.metaKey || e.ctrlKey) || !e.shiftKey || e.altKey) return;
-      if (e.key.toLowerCase() !== "o") return;
+      if (!matchesNewChatShortcut(e)) return;
       if (!settings.deptSlug || settingsOpen) return;
       e.preventDefault();
       startNewConversation();
@@ -186,8 +192,12 @@ export default function ChatApp() {
     setConversations(loadConversations());
   }
 
-  // Save the current conversation (if any) and start a blank slate.
+  // Save the current conversation (if any) and start a blank slate. Refused
+  // while an answer is in flight: clearing the transcript under a live send
+  // would land its first delta in an empty chat, an answer with no question.
+  // Stop is the only way to end an in-flight answer, and it is explicit.
   function startNewConversation() {
+    if (isLoading || isGenerating) return;
     if (messages.length > 0 && activeConvId) {
       persistConversation(activeConvId, messages);
     }
@@ -257,7 +267,7 @@ export default function ChatApp() {
     const assistantId = activeAssistantIdRef.current;
     activeAssistantIdRef.current = null;
     if (!assistantId) return;
-    persistAfterCommitRef.current = true;
+    persistStoppedIdRef.current = assistantId;
     setMessages((prev) =>
       prev.some((m) => m.id === assistantId)
         ? prev.map((m) => (m.id === assistantId ? { ...m, stopped: true } : m))
@@ -635,6 +645,7 @@ export default function ChatApp() {
         deptSlug={settings.deptSlug}
         connected={connected}
         collapsed={sidebarCollapsed}
+        busy={isLoading || isGenerating}
       />
 
       <div style={{ display: "flex", flex: 1, flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
