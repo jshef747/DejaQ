@@ -77,7 +77,7 @@ cd chat && npm run dev                                                   # termi
 
 1. Open the dashboard → **Workspaces** → create a workspace → **API Keys** → generate an API key (copy it).
    (Equivalent CLI: `cd server && uv run dejaq-admin workspace create --name Demo && uv run dejaq-admin key generate --workspace demo`.)
-2. Open the chat UI → **Settings** → paste the API key (and an optional department slug).
+2. Open the chat UI → paste the API key on the connect screen → **Connect** (a department is picked for you; change it later in **Settings**).
 3. Start chatting — easy questions route to the local model, hard ones to your configured
    external provider, and repeated questions are answered from the semantic cache.
 
