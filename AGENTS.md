@@ -15,6 +15,8 @@ From `server/`, `uv run --group test pytest`. Two things bite on a fresh worktre
 - Run `uv run alembic upgrade head` first. Without it ~39 tests fail with `no such table: workspaces`.
 - The suite reads the repo's real `server/dejaq.db`, so leftover local workspaces change results - a workspace with id 1 (`demo`) makes routing tests take the configured-LLM path instead of the defaults branch they assert. Start from a freshly migrated DB when tests fail in ways the diff cannot explain.
 
+The repo-root `.no-mistakes.yaml` pins the no-mistakes pipeline's Test step to `-m no_model` (307 of 682 tests - the rest need an Ollama model or in-process torch model not available in the pipeline sandbox) plus `chat/`'s vitest suite; see that file's comments for the full reasoning, including that `commands:` there only takes effect once it reaches `master` (no-mistakes reads `commands` from the default-branch copy of the file, not the pushed branch).
+
 ## Product stance: desktop-only
 
 Neither the dashboard nor the chat app supports narrow viewports, by design (captain decision, 2026-08-10). Neither sidebar has a responsive breakpoint. Do not file this as a defect or add responsive/collapsible-sidebar behavior without a new product decision.
