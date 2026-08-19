@@ -204,14 +204,18 @@ export default function ResponseDetail({
         {/* Routing */}
         <Section title="Routing">
           <Row label="Difficulty">
-            <MonoValue>
-              {route === "cache"
-                ? "not applicable — cache hits skip the difficulty classifier"
-                : message.promptDifficulty ?? "-"}
-            </MonoValue>
+            {route === "cache" ? (
+              <MonoValue note="cache hits skip the difficulty classifier">not applicable</MonoValue>
+            ) : (
+              <MonoValue>{message.promptDifficulty ?? "-"}</MonoValue>
+            )}
           </Row>
           <Row label="Model">
-            <MonoValue>{route === "cache" ? "none — served from store" : message.modelUsed ?? "-"}</MonoValue>
+            {route === "cache" ? (
+              <MonoValue note="served from store">none</MonoValue>
+            ) : (
+              <MonoValue>{message.modelUsed ?? "-"}</MonoValue>
+            )}
           </Row>
           {deptSlug && (
             <Row label="Department">
@@ -497,16 +501,21 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div style={{ alignItems: "center", display: "flex", marginTop: "7px" }}>
-      <span style={{ color: "var(--fg-dim)", fontSize: "12.5px", width: "88px" }}>{label}</span>
+    <div style={{ alignItems: "flex-start", display: "flex", marginTop: "7px" }}>
+      <span style={{ color: "var(--fg-dim)", flexShrink: 0, fontSize: "12.5px", width: "88px" }}>{label}</span>
       {children}
     </div>
   );
 }
 
-function MonoValue({ children }: { children: React.ReactNode }) {
+function MonoValue({ note, children }: { note?: string; children: React.ReactNode }) {
   return (
-    <span style={{ color: "var(--fg)", fontFamily: "var(--font-mono)", fontSize: "11.5px" }}>{children}</span>
+    <div>
+      <span style={{ color: "var(--fg)", fontFamily: "var(--font-mono)", fontSize: "11.5px" }}>{children}</span>
+      {note && (
+        <div style={{ color: "var(--fg-dimmer)", fontSize: "11.5px", marginTop: "2px" }}>{note}</div>
+      )}
+    </div>
   );
 }
 
