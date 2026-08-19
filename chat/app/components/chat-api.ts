@@ -1,14 +1,15 @@
 // Browser-side API utility for the standalone chat app.
 // It only calls this Next.js app's /api/* routes. The workspace API key
-// comes from Settings (localStorage) when set, otherwise the /api/* routes
-// fall back to DEJAQ_API_KEY in chat/.env.local server-side.
+// comes from the connect screen or Settings (localStorage) when set, otherwise
+// the /api/* routes fall back to DEJAQ_API_KEY in chat/.env.local server-side.
 
 import { loadApiKey, loadServerBaseUrl, type Attachment, type ModelProfile, type RoutingMode } from "./chat-store";
 
 // Attach the user-selected DejaQ server + API key as headers the /api/*
-// routes read. `overrides` lets the Settings modal test unsaved values;
-// otherwise the saved settings are used. Empty values omit their header so
-// routes fall back to their server-side default.
+// routes read. `overrides` lets the connect screen and the Settings modal test
+// unsaved values; otherwise the saved settings are used. Empty values omit
+// their header so routes fall back to their server-side default, which is how
+// a blank key on the connect screen reaches the env DEJAQ_API_KEY.
 function dejaqHeaders(overrides?: { server?: string; apiKey?: string }): Record<string, string> {
   const server = (overrides?.server ?? loadServerBaseUrl()).trim();
   const apiKey = (overrides?.apiKey ?? loadApiKey()).trim();
@@ -103,6 +104,10 @@ export async function sendChatMessage(
   attachment: Attachment | null = null,
   onDelta?: (chunk: string) => void,
   onMeta?: (meta: ChatMeta) => void,
+  // Stop's client-side abort path. Aborting mid-fetch rejects the fetch()
+  // below; aborting mid-stream rejects the pending reader.read() instead
+  // (the stream is tied to the same controller) — both are handled below.
+  signal?: AbortSignal,
 ): Promise<ChatResult> {
   // Measured here rather than read from x-dejaq-latency-ms, which the proxy
   // sets when the upstream RESPONSE HEAD arrives. That used to be the same
@@ -118,8 +123,12 @@ export async function sendChatMessage(
       method: "POST",
       headers: { "Content-Type": "application/json", ...dejaqHeaders() },
       body: JSON.stringify({ messages, deptSlug, modelProfile, routingMode, attachment }),
+      signal,
     });
-  } catch {
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      return { kind: "error", status: 0, message: "Stopped." };
+    }
     return { kind: "error", status: 0, message: "Network error. Could not reach the chat server." };
   }
 
@@ -154,10 +163,24 @@ export async function sendChatMessage(
   // the last delta errors the stream instead of arriving as an HTTP status.
   // Either way `reader.read()` rejects, and an unhandled rejection here would
   // throw out of handleSend and leave the typing indicator spinning forever.
+  // (A non-abort rejection here used to escape uncaught and strand the caller
+  // in `generating` with no way out - the outer try/catch below is what fixes
+  // that now, by turning it into a `streamError` result instead of a throw.)
   let streamError: string | null = null;
   try {
     outer: while (true) {
-      const { value, done } = await reader.read();
+      let value: Uint8Array | undefined;
+      let done: boolean;
+      try {
+        ({ value, done } = await reader.read());
+      } catch (err) {
+        // Stop aborted the signal while a read was pending — the stream is
+        // already torn down by the browser; nothing left to cancel by hand.
+        // This is the user's own Stop, not a connection failure, so it must
+        // not fall into the streamError path below.
+        if (err instanceof DOMException && err.name === "AbortError") break outer;
+        throw err;
+      }
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
 

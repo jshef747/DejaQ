@@ -22,6 +22,12 @@ export function RailTrack() {
         left: 0,
         margin: "0 auto",
         maxWidth: SHELL_MAX_WIDTH,
+        // The track is positioned and the turns under it are not, so it paints
+        // above them whatever the DOM order, and every control inside the
+        // reading column — feedback thumbs, response detail, Retry — would be
+        // clicking this hairline's box instead. It is decoration; it takes no
+        // clicks.
+        pointerEvents: "none",
         position: "absolute",
         right: 0,
         top: 0,
