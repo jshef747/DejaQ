@@ -1,16 +1,23 @@
 """Single declaration of which providers exist, which models each offers, and
 what each model can accept.
 
-This module is descriptive, not load-bearing: nothing else imports it yet
-(see `tests/test_provider_registry_consistency.py`). It exists so the six
-places that currently each hand-list providers - `external_llm._PROVIDER_CLIENTS`,
+The model list is load-bearing at write time, not documentation:
+`llm_config_service._provider_for_registered_model` treats `PROVIDERS` as an
+allowlist, so a workspace's `external_model` is rejected with 422 when no
+provider here offers it, and its provider is recorded from this lookup.
+`routers/admin/providers.py` serves the same data publicly as
+`GET /admin/v1/providers`, which is where the dashboard's model picker gets
+its options. Adding a `ModelSpec` is safe; removing or renaming one breaks
+config writes that name it and changes that endpoint's output.
+
+The provider list is mirrored rather than derived: the six places that each
+hand-list providers - `external_llm._PROVIDER_CLIENTS`,
 `llm_providers.LIVE_PROVIDERS`, `credential_service.SUPPORTED_PROVIDERS`,
 `schemas.credentials.ProviderEnum`, the `workspace_provider_credentials` CHECK
-constraint, and the dashboard's own `Provider`/`LIVE_PROVIDERS` - have one
-source of truth to be checked against.
+constraint, and the dashboard's own `Provider`/`LIVE_PROVIDERS` - are checked
+against this one by `tests/test_provider_registry_consistency.py`.
 
-Model lists are taken from `dashboard/lib/external-models.ts` (today's
-de-facto catalogue). Input kinds are taken from what each provider client in
+Input kinds are taken from what each provider client in
 `app/services/llm_providers/` actually builds: all three clients (google.py,
 openai.py, anthropic.py) attach an image or file part unconditionally,
 whatever the model, so every model of a live provider gets the same kinds.
