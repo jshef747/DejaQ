@@ -13,15 +13,17 @@ depends on its name matching a vendor prefix.
 its options. Adding a `ModelSpec` is safe; removing or renaming one breaks
 config writes that name it and changes that endpoint's output.
 
-The provider list is mirrored rather than derived: the five places that each
-hand-list providers - `external_llm._PROVIDER_CLIENTS`,
-`llm_providers.LIVE_PROVIDERS`, `credential_service.SUPPORTED_PROVIDERS`,
-`schemas.credentials.ProviderEnum`, and the dashboard's own
-`Provider`/`LIVE_PROVIDERS` - are checked against this one by
-`tests/test_provider_registry_consistency.py`. The `workspace_provider_credentials`
-CHECK constraint used to be a sixth mirror; it was dropped (migration
-e5f6a7b8c9d0) because every new provider cost a full SQLite table rebuild,
-and this registry already validates provider names in Python.
+The provider list is mirrored rather than derived, so five other places carry
+their own copy - `external_llm._PROVIDER_CLIENTS` (which builds every
+`openai_chat_completions` entry from this registry and hand-lists only
+`google`/`anthropic`), `llm_providers.LIVE_PROVIDERS`,
+`credential_service.SUPPORTED_PROVIDERS`, `schemas.credentials.ProviderEnum`,
+and the dashboard's own `Provider`/`LIVE_PROVIDERS`. All five are checked
+against this one by `tests/test_provider_registry_consistency.py`. The
+`workspace_provider_credentials` CHECK constraint used to be a sixth mirror;
+it was dropped (migration e5f6a7b8c9d0) because every new provider cost a
+full SQLite table rebuild, and this registry already validates provider names
+in Python.
 
 Input kinds are NOT uniform across every live provider. google.py, openai.py,
 and anthropic.py each attach an image or file part unconditionally whatever
