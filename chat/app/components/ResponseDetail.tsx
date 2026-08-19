@@ -153,7 +153,10 @@ export default function ResponseDetail({
               width: "40px",
             }}
           >
-            <span style={{ transform: "scale(1.35)" }}>
+            {/* display:flex keeps the svg out of an inline line box; as an inline
+                child it would sit on the text baseline and the descender gap
+                below it would push the glyph visibly high inside the circle. */}
+            <span style={{ display: "flex", transform: "scale(1.35)" }}>
               {route !== null && <RouteIcon route={route} />}
             </span>
           </div>
