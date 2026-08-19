@@ -56,3 +56,26 @@ def test_resolve_provider_raises_when_stored_is_none_and_the_guess_cannot_place_
 
     with pytest.raises(ValueError, match="Unknown provider"):
         resolve_provider("llama-3.3-70b", None)
+
+
+@pytest.mark.parametrize(
+    ("model", "provider"),
+    [
+        # No vendor prefix any name rule knows.
+        ("grok-4.6", "xai"),
+        ("deepseek-v4-pro", "deepseek"),
+        # Another vendor's namespace entirely - the name says "openai", the
+        # registry says Groq serves it, and the registry is what counts.
+        ("openai/gpt-oss-120b", "groq"),
+        ("groq/compound", "groq"),
+        ("qwen/qwen3.6-27b", "groq"),
+    ],
+)
+def test_provider_for_model_places_registry_models_the_prefix_guess_cannot(model, provider):
+    from app.services.provider_inference import provider_for_model, resolve_provider
+
+    assert provider_for_model(model) == provider
+    # The path that actually matters: no stored external_provider (a config row
+    # written before the column existed, or /admin/v1/.../test-provider, which
+    # always passes None because the model may not be saved yet).
+    assert resolve_provider(model, None) == provider

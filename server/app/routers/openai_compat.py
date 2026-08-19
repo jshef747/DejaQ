@@ -1579,7 +1579,8 @@ async def run_chat_pipeline(
                 raise PipelineError(
                     422,
                     f"Provider '{provider}' is not yet wired to a live client. "
-                    "Configure a model from a supported provider (google, openai, anthropic).",
+                    "Configure a model from a supported provider "
+                    f"({', '.join(sorted(LIVE_PROVIDERS))}).",
                 )
 
             if workspace_id is not None:

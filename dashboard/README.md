@@ -34,7 +34,7 @@ workspace and generate an API key to start using the gateway.
 
 - Workspaces and departments
 - Workspace API keys for `/v1/chat/completions` and `/v1/feedback`
-- Workspace provider credentials for Google, OpenAI, and Anthropic
+- Workspace provider credentials for Google, OpenAI, Anthropic, xAI, DeepSeek, and Groq
 - Per-workspace LLM config and provider test calls
 - Per-workspace pipeline stage models, system prompts, and token budgets (Pipeline page)
 - Per-workspace knowledge base (Rug/RAG documents)

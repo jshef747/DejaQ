@@ -19,7 +19,7 @@ OpenAI-compatible request
         -> INVALID: treat as miss
      -> miss: difficulty classifier
         -> easy: local model (Gemma 4 E4B)
-        -> hard: workspace provider credential (OpenAI / Anthropic / Google)
+        -> hard: the workspace's own external provider credential
         -> either way: relevant chunks from the workspace knowledge base (Rug)
            are injected into the prompt as grounding, when any are close enough
   -> response

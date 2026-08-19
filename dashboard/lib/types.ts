@@ -87,9 +87,9 @@ export type RagDocumentItem = {
   updated_at: string;
 };
 
-export type Provider = "google" | "openai" | "anthropic";
+export type Provider = "google" | "openai" | "anthropic" | "xai" | "deepseek" | "groq";
 
-export const LIVE_PROVIDERS: Provider[] = ["google", "openai", "anthropic"];
+export const LIVE_PROVIDERS: Provider[] = ["google", "openai", "anthropic", "xai", "deepseek", "groq"];
 
 export type LlmConfigResponse = {
   external_model: string | null;

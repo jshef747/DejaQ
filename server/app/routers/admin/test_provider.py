@@ -55,8 +55,9 @@ async def test_provider(
 ):
     try:
         # No stored config row applies here - body.model is a candidate the
-        # admin may not have saved yet, so this always falls through to the
-        # name-prefix guess (see resolve_provider in provider_inference.py).
+        # admin may not have saved yet, so this always falls through to
+        # provider_for_model, which places it from the registry (see
+        # provider_inference.py).
         provider = resolve_provider(body.model, None)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
