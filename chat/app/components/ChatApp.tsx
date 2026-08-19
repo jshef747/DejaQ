@@ -108,6 +108,9 @@ export default function ChatApp() {
   // continuation below become no-ops immediately, without waiting on the
   // network teardown to complete.
   const stopRequestedRef = useRef(false);
+  // Set by handleStop so the committed transcript is written to localStorage
+  // from the effect below, never from inside a state updater.
+  const persistAfterCommitRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const activeAssistantIdRef = useRef<string | null>(null);
   const windowWidth = useWindowWidth();
@@ -116,6 +119,10 @@ export default function ChatApp() {
 
   useEffect(() => {
     messagesRef.current = messages;
+    if (persistAfterCommitRef.current) {
+      persistAfterCommitRef.current = false;
+      persistCurrentMessages(messages);
+    }
   }, [messages]);
 
   // Load settings and conversation history from localStorage on first render.
@@ -129,6 +136,23 @@ export default function ChatApp() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isLoading]);
+
+  // New chat shortcut. Cmd/Ctrl+N is reserved by the browser for a new window
+  // and cannot be intercepted from a tab, so the binding is Cmd/Ctrl+Shift+O —
+  // the same one the sidebar advertises (NEW_CHAT_SHORTCUT there). No dep
+  // array: startNewConversation closes over the live transcript, which it
+  // saves before clearing.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (!(e.metaKey || e.ctrlKey) || !e.shiftKey || e.altKey) return;
+      if (e.key.toLowerCase() !== "o") return;
+      if (!settings.deptSlug || settingsOpen) return;
+      e.preventDefault();
+      startNewConversation();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  });
 
   function addToast(kind: ToastKind, title: string, body: string, action?: ToastAction) {
     const id = `toast_${Date.now()}_${Math.random()}`;
@@ -233,12 +257,12 @@ export default function ChatApp() {
     const assistantId = activeAssistantIdRef.current;
     activeAssistantIdRef.current = null;
     if (!assistantId) return;
-    setMessages((prev) => {
-      if (!prev.some((m) => m.id === assistantId)) return prev;
-      const updated = prev.map((m) => (m.id === assistantId ? { ...m, stopped: true } : m));
-      persistCurrentMessages(updated);
-      return updated;
-    });
+    persistAfterCommitRef.current = true;
+    setMessages((prev) =>
+      prev.some((m) => m.id === assistantId)
+        ? prev.map((m) => (m.id === assistantId ? { ...m, stopped: true } : m))
+        : prev
+    );
   }
 
   async function handleSend() {
@@ -797,8 +821,9 @@ function WelcomeScreen({ onSelectPrompt }: { onSelectPrompt: (p: string) => void
       {/* Same rail+gutter offset as every turn and the composer below, so the
           hero and the prompt grid line up with the reading column rather than
           sitting centred under it. */}
-      <div style={{ margin: "0 auto", maxWidth: "calc(var(--shell) + 32px)", padding: "0 16px", width: "100%" }}>
-        <div style={{ marginLeft: "calc(var(--rail) + var(--gutter))", width: "var(--col)" }}>
+      <div style={{ display: "flex", margin: "0 auto", maxWidth: "calc(var(--shell) + 32px)", padding: "0 16px", width: "100%" }}>
+        <div style={{ flex: "none", width: "calc(var(--rail) + var(--gutter))" }} />
+        <div style={{ flex: 1, maxWidth: "var(--col)", minWidth: 0 }}>
           <div style={{ alignItems: "flex-start", display: "flex", gap: "22px" }}>
             <div
               aria-hidden

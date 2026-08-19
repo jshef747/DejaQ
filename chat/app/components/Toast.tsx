@@ -103,6 +103,8 @@ function ToastCard({ toast, onDismiss }: { toast: ToastData; onDismiss: () => vo
         {toast.action && (
           <a
             href={toast.action.href}
+            target="_blank"
+            rel="noreferrer"
             style={{
               alignItems: "center",
               color: "var(--accent)",

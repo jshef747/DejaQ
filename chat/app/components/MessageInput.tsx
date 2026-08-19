@@ -146,8 +146,9 @@ export default function MessageInput({
     // every turn and the provenance marker use, so the box lines up with the
     // text above it rather than spanning the whole window.
     <div style={{ padding: "0 0 18px" }}>
-      <div style={{ margin: "0 auto", maxWidth: "calc(var(--shell) + 32px)", padding: "0 16px" }}>
-        <div style={{ marginLeft: "calc(var(--rail) + var(--gutter))", width: "var(--col)" }}>
+      <div style={{ display: "flex", margin: "0 auto", maxWidth: "calc(var(--shell) + 32px)", padding: "0 16px" }}>
+        <div style={{ flex: "none", width: "calc(var(--rail) + var(--gutter))" }} />
+        <div style={{ flex: 1, maxWidth: "var(--col)", minWidth: 0 }}>
           {attachment && (
             <div
               style={{

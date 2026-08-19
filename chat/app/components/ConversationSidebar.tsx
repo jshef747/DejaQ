@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import type { StoredConversation } from "./conversation-store";
 import { classifyRoute, ROUTE_STYLE } from "./provenance";
 
@@ -8,6 +9,18 @@ import { classifyRoute, ROUTE_STYLE } from "./provenance";
 export const SIDEBAR_COLLAPSE_WIDTH = 1100;
 const SIDEBAR_WIDTH = 272;
 const SIDEBAR_RAIL_WIDTH = 56;
+
+// The shortcut ChatApp actually binds. Cmd/Ctrl+N is reserved by the browser
+// for a new window and can never reach the page, so the hint has to name the
+// binding that does fire. Rendered from the non-Mac form first and swapped
+// after mount so the server and the first client render agree.
+function useNewChatShortcut() {
+  const [label, setLabel] = useState("Ctrl\u21e7O");
+  useEffect(() => {
+    if (/Mac|iPhone|iPad/i.test(navigator.userAgent)) setLabel("\u2318\u21e7O");
+  }, []);
+  return label;
+}
 
 interface Props {
   conversations: StoredConversation[];
@@ -34,12 +47,15 @@ export default function ConversationSidebar({
   connected,
   collapsed,
 }: Props) {
+  const shortcut = useNewChatShortcut();
+
   if (collapsed) {
     return (
       <CollapsedRail
         onNew={connected ? onNew : undefined}
         onOpenSettings={onOpenSettings}
         deptSlug={deptSlug}
+        shortcut={shortcut}
       />
     );
   }
@@ -90,7 +106,7 @@ export default function ConversationSidebar({
             <PlusIcon />
           </span>
           <span style={{ flex: 1, textAlign: "left" }}>New chat</span>
-          <span style={{ color: "var(--fg-dimmer)", fontFamily: "var(--font-mono)", fontSize: "11px" }}>⌘N</span>
+          <span style={{ color: "var(--fg-dimmer)", fontFamily: "var(--font-mono)", fontSize: "11px" }}>{shortcut}</span>
         </button>
       </div>
 
@@ -372,10 +388,12 @@ function CollapsedRail({
   onNew,
   onOpenSettings,
   deptSlug,
+  shortcut,
 }: {
   onNew?: () => void;
   onOpenSettings: () => void;
   deptSlug: string;
+  shortcut: string;
 }) {
   return (
     <aside
@@ -398,7 +416,7 @@ function CollapsedRail({
       <button
         onClick={onNew}
         disabled={!onNew}
-        title="New chat"
+        title={`New chat (${shortcut})`}
         aria-label="New chat"
         style={{
           alignItems: "center",

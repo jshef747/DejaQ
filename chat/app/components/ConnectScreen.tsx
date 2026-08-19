@@ -24,9 +24,11 @@ export default function ConnectScreen({ initialSettings, onConnected, dashboardU
   const [status, setStatus] = useState<Status>("idle");
   const [errorText, setErrorText] = useState("");
 
-  async function handleConnect() {
+  async function handleConnect(e: React.FormEvent) {
+    e.preventDefault();
     const server = serverBaseUrl.trim();
     const key = apiKey.trim();
+    if (status === "testing" || key.length === 0) return;
     setStatus("testing");
     setErrorText("");
 
@@ -67,7 +69,7 @@ export default function ConnectScreen({ initialSettings, onConnected, dashboardU
 
   return (
     <div style={{ alignItems: "center", display: "flex", flex: 1, justifyContent: "center", minHeight: 0, paddingBottom: "40px" }}>
-      <div style={{ width: "460px" }}>
+      <form onSubmit={handleConnect} style={{ width: "460px" }}>
         <div style={{ fontSize: "24px", fontWeight: 600, letterSpacing: "-0.024em", lineHeight: "30px" }}>
           Connect this chat to DejaQ
         </div>
@@ -175,7 +177,7 @@ export default function ConnectScreen({ initialSettings, onConnected, dashboardU
 
         <div style={{ alignItems: "center", display: "flex", gap: "9px", marginTop: "26px" }}>
           <button
-            onClick={handleConnect}
+            type="submit"
             disabled={connecting || apiKey.trim().length === 0}
             style={{
               alignItems: "center",
@@ -221,7 +223,7 @@ export default function ConnectScreen({ initialSettings, onConnected, dashboardU
             dejaq-admin key generate
           </span>
         </div>
-      </div>
+      </form>
     </div>
   );
 }

@@ -19,7 +19,9 @@ The repo-root `.no-mistakes.yaml` pins the no-mistakes pipeline's Test step to `
 
 ## Product stance: desktop-only
 
-Neither the dashboard nor the chat app supports narrow viewports, by design (captain decision, 2026-08-10). Neither sidebar has a responsive breakpoint. Do not file this as a defect or add responsive/collapsible-sidebar behavior without a new product decision.
+Neither the dashboard nor the chat app supports narrow viewports, by design (captain decision, 2026-08-10). The dashboard still stands exactly as decided then: its sidebar has no responsive breakpoint, and adding one needs a new product decision.
+
+The chat app was scoped out of that stance by the stage-3 redesign (captain decision, 2026-08-19). Its sidebar now collapses to a ~56px icon rail below 1100px (`SIDEBAR_COLLAPSE_WIDTH` in `chat/app/components/ConversationSidebar.tsx`) and the response detail panel becomes an overlay drawer below 1024px. The rule that survives is the reason behind both: a tight window gives up sidebar width, never the reading column's 704px measure. Do not remove the chat's collapse behaviour, and do not add a layout that shrinks or clips the reading column instead.
 
 ## Chat styling
 
