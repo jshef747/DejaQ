@@ -100,7 +100,10 @@ class InvalidLlmConfigUpdate(Exception):
 
 
 class LlmConfigResult(BaseModel):
-    external_model: str
+    # None only when the workspace has no override AND no DEJAQ_EXTERNAL_MODEL
+    # env default is set - openai_compat.py turns that into a 422 before any
+    # external call is attempted.
+    external_model: str | None
     # The provider recorded for external_model (app.services.provider_registry),
     # or None for a row written before this column existed / a workspace that
     # has never changed its external_model - resolve_provider() in

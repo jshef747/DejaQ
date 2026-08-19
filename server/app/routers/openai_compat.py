@@ -128,7 +128,10 @@ class ModelServices:
 
 @dataclass(frozen=True)
 class EffectiveLlmConfig:
-    external_model: str
+    # None means no external model is configured (no workspace override, no
+    # DEJAQ_EXTERNAL_MODEL env default) - only reachable on a "hard" route,
+    # where it is turned into a 422 PipelineError before any provider lookup.
+    external_model: str | None
     routing_threshold: float
     # The recorded provider for external_model (None for a row not yet
     # backfilled - see provider_inference.resolve_provider, the one place
@@ -1557,6 +1560,12 @@ async def run_chat_pipeline(
         provider: str | None = None
         decrypted_key: str | None = None
         if complexity == "hard":
+            if not llm_config.external_model:
+                raise PipelineError(
+                    422,
+                    "No external model configured for this workspace. "
+                    "Configure a provider and model in Settings.",
+                )
             try:
                 provider = resolve_provider(llm_config.external_model, llm_config.external_provider)
             except ValueError:

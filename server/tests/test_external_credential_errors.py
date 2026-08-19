@@ -49,6 +49,7 @@ def _patch_pipeline(monkeypatch):
     async def _noop_log(*a, **k):
         return None
 
+    monkeypatch.setattr(openai_compat, "EXTERNAL_MODEL_NAME", "gemini-2.5-flash")
     monkeypatch.setattr(
         openai_compat, "_services_for_model_profile",
         lambda profile, llm_config=None: openai_compat.ModelServices(
