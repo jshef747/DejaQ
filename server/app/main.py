@@ -86,6 +86,7 @@ app.add_middleware(
         "x-dejaq-prompt-difficulty-score",
         "x-dejaq-cache-distance",
         "x-dejaq-cache-matched-query",
+        "x-dejaq-enriched-query",
         "x-dejaq-nearest-cache-distance",
         "x-dejaq-nearest-cache-prompt",
     ],

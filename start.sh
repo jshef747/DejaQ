@@ -467,6 +467,14 @@ ensure_node_app_ready() {
   if [[ ! -d "$dir/node_modules" ]]; then
     echo -e "${RED}$name dependencies missing. Run: cd $dir && npm install${NC}"; exit 1
   fi
+  # npm writes node_modules/.package-lock.json to reflect what's actually installed.
+  # If it's older than package-lock.json, node_modules is stale. Skip the check (do
+  # not block startup) when either file is missing — nothing to compare.
+  if [[ -f "$dir/package-lock.json" && -f "$dir/node_modules/.package-lock.json" ]]; then
+    if [[ "$dir/package-lock.json" -nt "$dir/node_modules/.package-lock.json" ]]; then
+      echo -e "${RED}$name dependencies out of date. Run: cd $dir && npm install${NC}"; exit 1
+    fi
+  fi
 }
 
 start_dashboard() {
@@ -731,8 +739,8 @@ if [[ "$RUN_BACKEND" == "true" ]]; then
   echo -e "  Remote admin? Run on your machine: ssh -L 3000:localhost:3000 -L 8000:localhost:8000 user@server"
 fi
 if [[ "$RUN_BACKEND" != "true" ]]; then
-  echo -e "  ${CYAN}Client mode: set the DejaQ server in chat Settings (or DEJAQ_API_BASE_URL${NC}"
-  echo -e "  ${CYAN}in chat/.env.local), plus a valid DEJAQ_API_KEY for that server.${NC}"
+  echo -e "  ${CYAN}Client mode: set the DejaQ server on the chat's connect screen (or${NC}"
+  echo -e "  ${CYAN}DEJAQ_API_BASE_URL in chat/.env.local), plus a valid DEJAQ_API_KEY for that server.${NC}"
 fi
 if [[ "$LAN_MODE" == "true" && "$RUN_CHAT" == "true" ]]; then
   echo -e "  ${CYAN}LAN chat:               http://$LAN_IP:4000${NC}"

@@ -30,7 +30,12 @@ from app.schemas.openai_responses import (
     ResponseOutputTextDeltaEvent,
     ResponseOutputTextDoneEvent,
 )
-from app.routers.openai_compat import ChatPipelineResult, PipelineError, run_chat_pipeline
+from app.routers.openai_compat import (
+    ChatPipelineResult,
+    PipelineError,
+    answer_pieces,
+    run_chat_pipeline,
+)
 from app.services.file_text import kind_for as file_kind_for
 
 logger = logging.getLogger("dejaq.router.openai_responses")
@@ -218,12 +223,19 @@ async def _stream_responses_generator(
     yield f"event: response.content_part.added\ndata: {ResponseContentPartAddedEvent(item_id=item_id, part=part_stub).model_dump_json()}\n\n"
 
     full_text = ""
-    for piece in result.stream_chunks:
+    async for piece in answer_pieces(result):
         full_text += piece
         yield (
             f"event: response.output_text.delta\n"
             f"data: {ResponseOutputTextDeltaEvent(item_id=item_id, delta=piece).model_dump_json()}\n\n"
         )
+
+    # One message, one text. `result.answer` is the canonical answer - stripped
+    # on the streaming path exactly as OllamaBackend strips it on the buffered
+    # one - and it is what the terminal `response.completed` body carries, so
+    # the done events below have to carry the same string rather than the raw
+    # concatenation of the deltas. Only settled once the loop above drains.
+    full_text = result.answer or full_text
 
     yield f"event: response.output_text.done\ndata: {ResponseOutputTextDoneEvent(item_id=item_id, text=full_text).model_dump_json()}\n\n"
 
@@ -268,6 +280,7 @@ async def responses(
             background_tasks=background_tasks,
             image=image,
             file=file,
+            stream=bool(oai_request.stream),
         )
     except PipelineError as exc:
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})

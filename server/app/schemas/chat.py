@@ -34,3 +34,19 @@ class ExternalLLMResponse(BaseModel):
     # captures for local generation, so the client-facing finish_reason can
     # be honest regardless of which route answered the request.
     finish_reason: str = Field("stop", description="'stop' if the model finished naturally, 'length' if the token budget cut it off")
+
+
+class ExternalStreamChunk(BaseModel):
+    """One incremental piece of a streamed external-provider answer.
+
+    `text` carries new characters. The LAST chunk carries `final` and no text:
+    usage counts and the finish reason are only known once the provider has
+    closed the stream, and they are exactly the fields the store guards and
+    the usage block need. Same contract shape as
+    `model_backends.CompletionChunk` on the local path.
+    """
+
+    text: str = Field("", description="Newly generated characters")
+    final: ExternalLLMResponse | None = Field(
+        None, description="Set on the terminal chunk only: usage + finish_reason"
+    )

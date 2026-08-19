@@ -5,6 +5,18 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
+import CodeBlock from "./CodeBlock";
+import TurnShell from "./ReadingColumn";
+import { RouteRing, WaitRing } from "./RouteMarker";
+import {
+  cacheComparison,
+  classifyRoute,
+  formatLatency,
+  formatMultiplier,
+  ROUTE_STYLE,
+  type CacheComparison,
+  type Route,
+} from "./provenance";
 import type { FeedbackRating } from "./chat-api";
 
 // The full feedback lifecycle for a single assistant message.
@@ -19,7 +31,7 @@ export interface AppMessage {
   sourceLabel?: string;
   // Data URL of an image the user attached to this message (user messages only).
   imageUrl?: string | null;
-  // A non-image attachment (PDF/Markdown) has nothing to preview, so the bubble
+  // A non-image attachment (PDF/Markdown) has nothing to preview, so the card
   // shows a named chip instead.
   fileName?: string | null;
   // True when the attachment was carried over from an earlier turn rather than
@@ -39,81 +51,103 @@ export interface AppMessage {
   latencyMs?: number;
   cacheHit?: boolean;
   promptDifficulty?: string | null;
+  // Already-forwarded headers the cache lookup produces on a hit; null on a
+  // miss (local/cloud) or before the pipeline resolves either.
+  cacheDistance?: number | null;
+  cacheMatchedQuery?: string | null;
+  cacheEnrichedQuery?: string | null;
+  // Set by Stop: this answer was cut off mid-generation. Whatever text had
+  // already streamed in is kept, marked, and never mistaken for a complete
+  // answer — it carries no responseId/interactionId, so the feedback row
+  // below simply doesn't render for it.
+  stopped?: boolean;
+  // The send this turn belongs to failed. Same shape as `stopped`: kept and
+  // marked, never erased — the question is not thrown away because the request
+  // was — with Retry on the mark. It sits on the question when nothing
+  // streamed, and on the partial answer when something did.
+  //
+  // The value says which failure it was, because the two read as opposite
+  // things to the person looking at them: "unsent" is the request itself
+  // failing (network, 402, a stream that dropped mid-answer), while
+  // "empty-answer" reached the server, came back HTTP 200, and simply had no
+  // text in it — a rephrasing problem, not a connectivity one.
+  failed?: "unsent" | "empty-answer";
+  // Whether this turn carried an attachment, recorded on the turn itself
+  // rather than read back off the composer. The file's bytes are never stored,
+  // and `imageUrl` is stripped from storage on save, so this boolean is the
+  // only thing that still knows the truth after a reload — and it is what
+  // decides that a failed attachment turn gets no Retry, since the attachment
+  // it needs can no longer be reproduced.
+  hadAttachment?: boolean;
+}
+
+// What the mark under a failed turn says. The question and the answer failing
+// are different sentences, and a request that arrived and returned nothing is
+// a different sentence again — it matches the "Empty answer" toast rather than
+// implying the send never left.
+function failedLabel(message: AppMessage): string {
+  if (message.failed === "empty-answer") return "Empty answer";
+  return message.role === "assistant" ? "Answer failed" : "Not sent";
 }
 
 interface Props {
   message: AppMessage;
   // Parent handles the API call and updates feedbackPhase on the message.
   onFeedback: (messageId: string, rating: FeedbackRating, comment: string) => Promise<void>;
+  // Re-runs the turn this message belongs to. Only ever offered on a message
+  // marked `failed`.
+  onRetry?: (messageId: string) => void;
   onInspect?: (messageId: string) => void;
   inspected?: boolean;
+  // This session's rolling average non-cache latency, and how many answers
+  // it averages. Null/0 means the session has generated nothing yet, so the
+  // cache line states the fact without a speed claim rather than defaulting
+  // to an invented one.
+  baselineMs: number | null;
+  baselineSampleCount: number;
 }
 
-// ─── Model source classification ──────────────────────────────────────────────
-
-// The server sends "cache" for cache hits; external models use well-known
-// vendor prefixes (gemini-, gpt-, claude-, o4-, etc.); everything else is local.
-type ModelSource = "cache" | "local" | "external";
-
-function classifyModelSource(modelUsed: string | null | undefined): ModelSource {
-  if (!modelUsed || modelUsed === "cache") return "cache";
-  const m = modelUsed.toLowerCase();
-  if (
-    m.startsWith("gemini-") ||
-    m.startsWith("gpt-") ||
-    m.startsWith("claude-") ||
-    m.startsWith("o1-") ||
-    m.startsWith("o3-") ||
-    m.startsWith("o4-")
-  ) {
-    return "external";
+function routeAnswerLine(
+  route: Route,
+  modelUsed: string | null | undefined,
+  comparison: CacheComparison,
+  latencyMs: number | undefined,
+  baselineMs: number | null,
+): { title: string; body: string } {
+  if (route === "cache") {
+    return { title: "Answered from cache", body: cacheAnswerBody(comparison, latencyMs, baselineMs) };
   }
-  return "local";
+  if (route === "local") {
+    return { title: "Answered locally", body: `Generated on ${modelUsed ?? "the local model"}.` };
+  }
+  return { title: "Answered by cloud", body: `Generated on ${modelUsed ?? "the external provider"}.` };
 }
 
-function tierLabel(tier: AppMessage["tier"], modelUsed: string | null | undefined): string {
-  if (tier === "cache") return "cache";
-  if (tier === "local") return modelUsed ?? "local";
-  if (tier === "external") return modelUsed ?? "external";
-  return modelUsed ?? "cache";
-}
-
-// Color scheme: green = cache hit, amber = local model, red = external provider.
-function modelBadgeStyle(source: ModelSource): React.CSSProperties {
-  const base: React.CSSProperties = {
-    borderRadius: "4px",
-    fontFamily: "var(--font-mono)",
-    fontSize: "10px",
-    padding: "2px 6px",
-  };
-  if (source === "cache") {
-    return {
-      ...base,
-      background: "var(--green-bg)",
-      border: "1px solid rgba(34,197,94,0.3)",
-      color: "var(--green)",
-    };
+function cacheAnswerBody(
+  comparison: CacheComparison,
+  latencyMs: number | undefined,
+  baselineMs: number | null,
+): string {
+  if (comparison.kind === "faster") {
+    return `You asked this before — ${formatMultiplier(comparison.multiplier)} faster than this session's average generated answer.`;
   }
-  if (source === "external") {
-    return {
-      ...base,
-      background: "var(--red-bg)",
-      border: "1px solid var(--red-border)",
-      color: "var(--red)",
-    };
+  if (comparison.kind === "not-faster" && latencyMs !== undefined && baselineMs !== null) {
+    return `You asked this before — served in ${formatLatency(latencyMs)}, against a ${formatLatency(baselineMs)} average for this session's generated answers.`;
   }
-  // local model
-  return {
-    ...base,
-    background: "var(--amber-bg)",
-    border: "1px solid var(--amber-border)",
-    color: "var(--amber)",
-  };
+  return "You asked this before — served straight from the store.";
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function ChatMessage({ message, onFeedback, onInspect, inspected }: Props) {
+export default function ChatMessage({
+  message,
+  onFeedback,
+  onRetry,
+  onInspect,
+  inspected,
+  baselineMs,
+  baselineSampleCount,
+}: Props) {
   const isUser = message.role === "user";
   const phase = message.feedbackPhase ?? "idle";
 
@@ -123,91 +157,61 @@ export default function ChatMessage({ message, onFeedback, onInspect, inspected 
     await onFeedback(message.id, rating, "");
   }
 
-  return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        alignItems: isUser ? "flex-end" : "flex-start",
-        gap: "4px",
-        padding: "0 24px 16px",
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "flex-end",
-          gap: "10px",
-          maxWidth: "82%",
-          flexDirection: isUser ? "row-reverse" : "row",
-        }}
-      >
-        {/* Avatar */}
-        <div
-          style={{
-            alignItems: "center",
-            background: isUser ? "var(--accent-bg)" : "var(--bg-3)",
-            border: `1px solid ${isUser ? "var(--accent-border)" : "var(--border)"}`,
-            borderRadius: "50%",
-            color: isUser ? "var(--accent)" : "var(--fg-dim)",
-            display: "flex",
-            flexShrink: 0,
-            fontSize: "10px",
-            fontWeight: 700,
-            height: "28px",
-            justifyContent: "center",
-            width: "28px",
-          }}
-        >
-          {isUser ? "U" : <BotIcon />}
-        </div>
-
-        {/* Message bubble */}
-        <div
-          style={{
-            background: isUser ? "var(--accent-bg)" : "var(--bg-2)",
-            border: `1px solid ${isUser ? "var(--accent-border)" : inspected ? "var(--accent-border)" : "var(--border)"}`,
-            borderRadius: isUser ? "12px 12px 3px 12px" : "12px 12px 12px 3px",
-            color: "var(--fg)",
-            fontSize: "13px",
-            lineHeight: 1.6,
-            padding: "10px 14px",
-            whiteSpace: isUser ? "pre-wrap" : "normal",
-            wordBreak: "break-word",
-          }}
-        >
-          {isUser ? (
-            <>
-              {message.imageUrl && !message.attachmentSticky && (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={message.imageUrl}
-                  alt="Attached"
-                  style={{
-                    borderRadius: "8px",
-                    display: "block",
-                    marginBottom: message.content ? "8px" : 0,
-                    maxHeight: "240px",
-                    maxWidth: "100%",
-                    objectFit: "contain",
-                  }}
-                />
-              )}
-              {(message.fileName || (message.imageUrl && message.attachmentSticky)) && (
+  // The user's turn is a card in the interface sans; the model's turn is
+  // typeset prose in the serif. The two voices separate by register, not
+  // by alignment alone.
+  if (isUser) {
+    return (
+      <TurnShell gap={26}>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+          <div
+            style={{
+              background: "var(--bg-3)",
+              border: "1px solid var(--border)",
+              borderRadius: "14px 14px 5px 14px",
+              color: "var(--fg)",
+              fontSize: "13.5px",
+              lineHeight: "21px",
+              maxWidth: "78%",
+              padding: "10px 15px",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+            }}
+          >
+            {message.imageUrl && !message.attachmentSticky && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={message.imageUrl}
+                alt="Attached"
+                style={{
+                  borderRadius: "9px",
+                  display: "block",
+                  marginBottom: message.content ? "8px" : 0,
+                  maxHeight: "240px",
+                  maxWidth: "100%",
+                  objectFit: "contain",
+                }}
+              />
+            )}
+            {(message.fileName || (message.imageUrl && message.attachmentSticky)) && (
+              // Its own line: the chip names what the turn carried, it is not
+              // part of the sentence.
+              <div style={{ marginBottom: message.content ? "8px" : 0 }}>
                 <span
                   style={{
                     alignItems: "center",
-                    background: message.attachmentSticky ? "transparent" : "rgba(0,0,0,0.15)",
-                    border: message.attachmentSticky ? "1px dashed var(--accent-border)" : "none",
-                    borderRadius: "6px",
+                    background: message.attachmentSticky ? "transparent" : "var(--bg-2)",
+                    border: message.attachmentSticky
+                      ? "1px dashed var(--border-2)"
+                      : "1px solid var(--border-2)",
+                    borderRadius: "7px",
+                    color: "var(--fg-dim)",
                     display: "inline-flex",
-                    fontSize: message.attachmentSticky ? "11px" : "12px",
+                    fontSize: message.attachmentSticky ? "11px" : "11.5px",
                     gap: "6px",
-                    marginBottom: message.content ? "8px" : 0,
                     maxWidth: "100%",
-                    opacity: message.attachmentSticky ? 0.75 : 1,
                     overflow: "hidden",
-                    padding: "4px 8px",
+                    padding: "4px 9px",
                     textOverflow: "ellipsis",
                     whiteSpace: "nowrap",
                   }}
@@ -226,65 +230,146 @@ export default function ChatMessage({ message, onFeedback, onInspect, inspected 
                   )}
                   {message.fileName ?? "same image"}
                 </span>
-              )}
-              {message.content}
-            </>
-          ) : (
-            <MarkdownContent content={message.content} />
+              </div>
+            )}
+            {message.content}
+          </div>
+          {message.failed && (
+            <FailedRow
+              label={failedLabel(message)}
+              onRetry={onRetry ? () => onRetry(message.id) : undefined}
+            />
           )}
+          <span className="dq-hover-meta" style={{ color: "var(--fg-dimmer)", fontSize: "10.5px", marginTop: "6px" }}>
+            {formatTs(message.ts)}
+          </span>
         </div>
-      </div>
+      </TurnShell>
+    );
+  }
 
-      {/* Metadata row — color-coded model badge + timestamp */}
-      {!isUser && (
+  // Null until the route is known — a streaming answer before its headers
+  // land, or a response that carried none. Neither the strip nor a coloured
+  // ring may guess at it.
+  const route = classifyRoute(message.tier, message.modelUsed);
+  const style = route === null ? null : ROUTE_STYLE[route];
+  const line =
+    route === null
+      ? null
+      : routeAnswerLine(
+          route,
+          message.modelUsed,
+          cacheComparison(message.latencyMs, baselineMs, baselineSampleCount),
+          message.latencyMs,
+          baselineMs,
+        );
+
+  return (
+    <TurnShell
+      gap={40}
+      marker={
+        route === null ? (
+          <WaitRing route={null} sinceMs={null} />
+        ) : (
+          <RouteRing route={route} latencyMs={message.latencyMs} active={inspected} />
+        )
+      }
+    >
+      {style && line && (
         <div
           style={{
             alignItems: "center",
+            background: style.bg,
+            borderRadius: "9px",
             display: "flex",
-            gap: "8px",
-            paddingLeft: "38px", // aligns under the bubble (avatar 28px + gap 10px)
+            gap: "10px",
+            // min-height, not height: the cache line ("You asked this before -
+            // Nx faster than this session's average generated answer.") wraps to
+            // two lines in the 704px reading column, and a fixed 34px box clipped
+            // it. Single-line strips (local, cloud) still measure exactly 34px.
+            marginBottom: "16px",
+            minHeight: "34px",
+            padding: "0 12px",
           }}
         >
-          {message.modelUsed !== undefined && (
-            <span style={modelBadgeStyle(message.tier ?? classifyModelSource(message.modelUsed))}>
-              {tierLabel(message.tier, message.modelUsed)}
-            </span>
-          )}
-          {message.sourceLabel && (
-            <span style={{ color: "var(--fg-dimmer)", fontSize: "10px" }}>
-              {message.sourceLabel}
-            </span>
-          )}
-          <span style={{ color: "var(--fg-dimmer)", fontSize: "10px" }}>
-            {formatTs(message.ts)}
-          </span>
-          {/* Inspect button for assistant messages */}
-          {onInspect && (
+          <span style={{ color: style.ink, fontSize: "12.5px", fontWeight: 600 }}>{line.title}</span>
+          <span style={{ color: "var(--fg-dim)", fontSize: "12.5px" }}>{line.body}</span>
+          <div style={{ flex: 1 }} />
+          {route === "cache" && onInspect && (
             <button
               onClick={() => onInspect(message.id)}
-              title={inspected ? "Currently inspecting" : "Inspect request metadata"}
               style={{
                 alignItems: "center",
-                background: inspected ? "var(--accent-bg)" : "transparent",
-                border: `1px solid ${inspected ? "var(--accent-border)" : "var(--border)"}`,
-                borderRadius: "4px",
-                color: inspected ? "var(--accent)" : "var(--fg-dimmer)",
+                background: "transparent",
+                border: "none",
+                color: style.ink,
                 cursor: "pointer",
                 display: "flex",
-                padding: "2px 5px",
-                transition: "background 0.15s, border-color 0.15s, color 0.15s",
+                fontSize: "12px",
+                fontWeight: 600,
+                gap: "4px",
+                padding: 0,
               }}
-              aria-label="Inspect request metadata"
             >
-              <InspectIcon />
+              Why this matched
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M6 3.5 10.5 8 6 12.5" />
+              </svg>
             </button>
           )}
         </div>
       )}
 
+      <MarkdownContent content={message.content} />
+
+      {message.stopped && (
+        <div style={{ alignItems: "center", color: "var(--fg-dimmer)", display: "flex", fontSize: "12px", gap: "6px", marginTop: "10px" }}>
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
+            <rect x="4" y="4" width="8" height="8" rx="1.5" />
+          </svg>
+          Stopped
+        </div>
+      )}
+
+      {message.failed && (
+        <FailedRow
+          label={failedLabel(message)}
+          onRetry={onRetry ? () => onRetry(message.id) : undefined}
+        />
+      )}
+
+      {/* Timestamp + response-detail affordance — hover-revealed; the strip
+          above already carries the route, so this row is pure metadata. */}
+      <div className="dq-hover-meta" style={{ alignItems: "center", display: "flex", gap: "8px", marginTop: "16px" }}>
+        {message.sourceLabel && (
+          <span style={{ color: "var(--fg-dimmer)", fontSize: "10.5px" }}>{message.sourceLabel}</span>
+        )}
+        <span style={{ color: "var(--fg-dimmer)", fontSize: "10.5px" }}>{formatTs(message.ts)}</span>
+        {onInspect && route !== "cache" && (
+          <button
+            onClick={() => onInspect(message.id)}
+            title={inspected ? "Currently inspecting" : "Response detail"}
+            style={{
+              alignItems: "center",
+              background: inspected ? "var(--bg-3)" : "transparent",
+              border: `1px solid ${inspected ? "var(--border-2)" : "var(--border)"}`,
+              borderRadius: "5px",
+              color: inspected ? "var(--fg)" : "var(--fg-dimmer)",
+              cursor: "pointer",
+              display: "flex",
+              padding: "2px 5px",
+              transition: "background var(--t-base), border-color var(--t-base), color var(--t-base)",
+            }}
+            aria-label="Response detail"
+          >
+            <InspectIcon />
+          </button>
+        )}
+      </div>
+
       {/* Feedback row — icon-only thumbs, no comment box, immediate submit on click */}
-      {!isUser && (message.responseId || message.interactionId) && (
-        <div style={{ alignItems: "center", display: "flex", gap: "4px", paddingLeft: "38px" }}>
+      {(message.responseId || message.interactionId) && (
+        <div style={{ alignItems: "center", display: "flex", gap: "4px", marginTop: "8px" }}>
           {(phase === "idle" || phase === "error" || phase === "submitting") && (
             <>
               <button
@@ -317,17 +402,62 @@ export default function ChatMessage({ message, onFeedback, onInspect, inspected 
           )}
           {typeof message.feedbackScore === "number" && (phase === "positive" || phase === "negative") && (
             <span style={feedbackScoreStyle()}>
-              score {message.feedbackScore.toFixed(1)}
+              Recorded — this answer now scores {message.feedbackScore.toFixed(1)} in the cache.
             </span>
           )}
         </div>
       )}
+    </TurnShell>
+  );
+}
 
-      {/* Timestamp for user messages */}
-      {isUser && (
-        <span style={{ color: "var(--fg-dimmer)", fontSize: "10px", paddingRight: "38px" }}>
-          {formatTs(message.ts)}
-        </span>
+// The failed turn's mark, drawn on the same lines as the Stopped mark above:
+// small, quiet, underneath what it is about. It carries Retry because the
+// question it marks is the only copy of what the user typed — nothing was put
+// back in the composer for them.
+function FailedRow({ label, onRetry }: { label: string; onRetry?: () => void }) {
+  return (
+    <div style={{ alignItems: "center", color: "var(--red)", display: "flex", fontSize: "12px", gap: "10px", marginTop: "10px" }}>
+      <span style={{ alignItems: "center", display: "flex", gap: "6px" }}>
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+          <circle cx="8" cy="8" r="6.3" />
+          <path d="M8 4.9v3.7" />
+          <path d="M8 11.1h.01" />
+        </svg>
+        {label}
+      </span>
+      {onRetry && (
+        <button
+          onClick={onRetry}
+          style={{
+            alignItems: "center",
+            background: "transparent",
+            border: "1px solid var(--border-2)",
+            borderRadius: "999px",
+            color: "var(--fg-dim)",
+            cursor: "pointer",
+            display: "inline-flex",
+            fontSize: "11.5px",
+            fontWeight: 500,
+            gap: "6px",
+            height: "24px",
+            padding: "0 10px",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.color = "var(--fg)";
+            e.currentTarget.style.borderColor = "var(--fg-dimmer)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = "var(--fg-dim)";
+            e.currentTarget.style.borderColor = "var(--border-2)";
+          }}
+        >
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M2.6 8a5.4 5.4 0 0 1 9.2-3.8M13.4 8a5.4 5.4 0 0 1-9.2 3.8" />
+            <path d="M11.9 1.7v3h-3M4.1 14.3v-3h3" />
+          </svg>
+          Retry
+        </button>
       )}
     </div>
   );
@@ -344,6 +474,14 @@ function MarkdownContent({ content }: { content: string }) {
             <a {...props} target="_blank" rel="noreferrer">
               {children}
             </a>
+          ),
+          // A code block gets a language label and a copy control; a table
+          // gets a scroller of its own so a wide one never widens the page.
+          pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
+          table: ({ children }) => (
+            <div className="dq-table-scroll">
+              <table>{children}</table>
+            </div>
           ),
         }}
       >
@@ -364,7 +502,7 @@ function thumbBtn(disabled: boolean): React.CSSProperties {
     alignItems: "center",
     background: "var(--bg-3)",
     border: "1px solid var(--border)",
-    borderRadius: "4px",
+    borderRadius: "5px",
     color: "var(--fg-dimmer)",
     cursor: disabled ? "not-allowed" : "pointer",
     display: "flex",
@@ -378,8 +516,8 @@ function feedbackDoneStyle(rating: FeedbackRating): React.CSSProperties {
   return {
     alignItems: "center",
     background: ok ? "var(--green-bg)" : "var(--red-bg)",
-    border: `1px solid ${ok ? "rgba(34,197,94,0.3)" : "var(--red-border)"}`,
-    borderRadius: "4px",
+    border: `1px solid ${ok ? "var(--green-border)" : "var(--red-border)"}`,
+    borderRadius: "5px",
     color: ok ? "var(--green)" : "var(--red)",
     display: "flex",
     padding: "4px 6px",
@@ -389,24 +527,12 @@ function feedbackDoneStyle(rating: FeedbackRating): React.CSSProperties {
 function feedbackScoreStyle(): React.CSSProperties {
   return {
     color: "var(--fg-dimmer)",
-    fontFamily: "var(--font-mono)",
-    fontSize: "10px",
+    fontSize: "11.5px",
     padding: "0 4px",
   };
 }
 
 // ─── Icons ─────────────────────────────────────────────────────────────────────
-
-function BotIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-      <rect x="2" y="4" width="12" height="10" rx="2" />
-      <circle cx="5.5" cy="9" r="1" fill="currentColor" stroke="none" />
-      <circle cx="10.5" cy="9" r="1" fill="currentColor" stroke="none" />
-      <path d="M6 12h4M8 4V2M6 2h4" strokeLinecap="round" />
-    </svg>
-  );
-}
 
 function ThumbUpIcon() {
   return (

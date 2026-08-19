@@ -43,6 +43,10 @@ interface Props {
   attachment: Attachment | null;
   onAttachmentChange: (attachment: Attachment | null) => void;
   onAttachmentError?: (message: string) => void;
+  // An answer is in flight — the composer stays disabled and a Stop control
+  // appears underneath it.
+  isGenerating: boolean;
+  onStop: () => void;
 }
 
 export default function MessageInput({
@@ -53,6 +57,8 @@ export default function MessageInput({
   attachment,
   onAttachmentChange,
   onAttachmentError,
+  isGenerating,
+  onStop,
 }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -133,221 +139,264 @@ export default function MessageInput({
   }
 
   const canSend = !disabled && (value.trim().length > 0 || attachment != null);
+  const pinned = Boolean(attachment?.sticky);
 
   return (
-    <div
-      style={{
-        background: "var(--bg-2)",
-        borderTop: "1px solid var(--border)",
-        padding: "12px 16px",
-      }}
-    >
-      {attachment && (
-        <div
-          style={{
-            background: "var(--bg)",
-            // A pinned attachment rides along with every message from here on,
-            // which costs money and shapes the cache lookup. Make that state
-            // impossible to miss rather than letting it look like a fresh pick.
-            border: `1px solid ${attachment.sticky ? "var(--accent-border)" : "var(--border-2)"}`,
-            borderRadius: "8px",
-            marginBottom: "8px",
-            padding: "8px 10px",
-          }}
-        >
-        <div style={{ alignItems: "center", display: "flex", gap: "10px" }}>
-          {attachment.kind === "image" ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={attachment.dataUrl}
-              alt="Attached"
-              style={{ borderRadius: "6px", height: "44px", objectFit: "cover", width: "44px" }}
-            />
-          ) : (
-            // A document has nothing to preview, so the icon carries the type.
+    // Sits on the reading column, not full-bleed: same rail+gutter offset
+    // every turn and the provenance marker use, so the box lines up with the
+    // text above it rather than spanning the whole window.
+    <div style={{ padding: "0 0 18px" }}>
+      <div style={{ display: "flex", margin: "0 auto", maxWidth: "calc(var(--shell) + 32px)", padding: "0 16px" }}>
+        <div style={{ flex: "none", width: "calc(var(--rail) + var(--gutter))" }} />
+        <div style={{ flex: 1, maxWidth: "var(--col)", minWidth: 0 }}>
+          {attachment && (
             <div
               style={{
-                alignItems: "center",
-                background: "var(--bg-3)",
-                borderRadius: "6px",
-                color: "var(--accent)",
-                display: "flex",
-                flexShrink: 0,
-                height: "44px",
-                justifyContent: "center",
-                width: "44px",
+                background: "var(--bg-2)",
+                border: `1.5px solid ${pinned ? "var(--accent-solid)" : "var(--border-2)"}`,
+                borderRadius: "14px",
+                marginBottom: "10px",
+                overflow: "hidden",
               }}
             >
-              <DocumentIcon />
+              <div
+                style={{
+                  alignItems: "center",
+                  background: pinned ? "var(--accent-bg)" : "transparent",
+                  borderBottom: pinned ? "1px solid var(--accent-border)" : "none",
+                  display: "flex",
+                  gap: "11px",
+                  padding: "10px 12px",
+                }}
+              >
+                {attachment.kind === "image" ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={attachment.dataUrl}
+                    alt="Attached"
+                    style={{ borderRadius: "8px", flexShrink: 0, height: "38px", objectFit: "cover", width: "38px" }}
+                  />
+                ) : (
+                  <div
+                    style={{
+                      alignItems: "center",
+                      background: pinned ? "var(--bg-2)" : "var(--bg-3)",
+                      border: pinned ? "1px solid var(--accent-border)" : "none",
+                      borderRadius: "8px",
+                      color: pinned ? "var(--accent)" : "var(--fg-dim)",
+                      display: "flex",
+                      flexShrink: 0,
+                      height: "38px",
+                      justifyContent: "center",
+                      width: "38px",
+                    }}
+                  >
+                    <DocumentIcon />
+                  </div>
+                )}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ alignItems: "center", display: "flex", gap: "6px" }}>
+                    {pinned && (
+                      <span style={{ color: "var(--accent)", display: "flex", flexShrink: 0 }}>
+                        <PinIcon />
+                      </span>
+                    )}
+                    <span
+                      style={{
+                        color: pinned ? "var(--accent)" : "var(--fg)",
+                        fontSize: "12.5px",
+                        fontWeight: pinned ? 600 : 500,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {attachment.kind === "image"
+                        ? pinned
+                          ? "Image pinned"
+                          : "Image attached"
+                        : attachment.name || "Document"}
+                    </span>
+                  </div>
+                  <div style={{ color: pinned ? "var(--fg-dim)" : "var(--fg-dimmer)", fontSize: "11px", marginTop: "2px" }}>
+                    {attachment.kind === "image"
+                      ? pinned
+                        ? "sent with every message so follow-ups can see it"
+                        : formatBytes(attachment.size)
+                      : `${formatBytes(attachment.size)} · ${pinned ? "sent with every message so follow-ups can see it" : "sent with this message only"}`}
+                  </div>
+                </div>
+                <button
+                  onClick={() => onAttachmentChange(null)}
+                  title={pinned ? "Stop sending this attachment" : "Remove attachment"}
+                  aria-label={pinned ? "Unpin attachment" : "Remove attachment"}
+                  style={{
+                    background: pinned ? "transparent" : "var(--bg-3)",
+                    border: `1px solid ${pinned ? "var(--accent-border)" : "var(--border)"}`,
+                    borderRadius: "7px",
+                    color: pinned ? "var(--accent)" : "var(--fg-dim)",
+                    cursor: "pointer",
+                    flexShrink: 0,
+                    fontSize: "12px",
+                    padding: "4px 10px",
+                  }}
+                >
+                  {pinned ? "Unpin" : "Remove"}
+                </button>
+              </div>
             </div>
           )}
-          <span
+
+          <div
             style={{
-              alignItems: "center",
-              color: attachment.sticky ? "var(--fg)" : "var(--fg-dim)",
+              alignItems: "flex-end",
+              background: "var(--bg-2)",
+              border: "1px solid var(--border-2)",
+              borderRadius: "14px",
+              boxShadow: "var(--shadow-sm)",
               display: "flex",
-              flex: 1,
-              fontSize: "12px",
-              gap: "6px",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
+              gap: "8px",
+              padding: "8px 8px 8px 10px",
+              transition: "border-color var(--t-base)",
             }}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={handleDrop}
+            onFocusCapture={(e) => (e.currentTarget.style.borderColor = "var(--fg-dimmer)")}
+            onBlurCapture={(e) => (e.currentTarget.style.borderColor = "var(--border-2)")}
           >
-            {attachment.sticky && (
-              <span style={{ color: "var(--accent)", display: "flex", flexShrink: 0 }}>
-                <PinIcon />
-              </span>
-            )}
-            {attachment.kind === "image"
-              ? attachment.sticky
-                ? "Image pinned"
-                : "Image attached"
-              : `${attachment.name || "Document"} · ${formatBytes(attachment.size)}${
-                  attachment.sticky ? " · pinned" : ""
-                }`}
-          </span>
-          <button
-            onClick={() => onAttachmentChange(null)}
-            title={attachment.sticky ? "Stop sending this attachment" : "Remove attachment"}
-            aria-label={attachment.sticky ? "Unpin attachment" : "Remove attachment"}
-            style={{
-              background: "var(--bg-3)",
-              border: "1px solid var(--border)",
-              borderRadius: "5px",
-              color: "var(--fg-dim)",
-              cursor: "pointer",
-              flexShrink: 0,
-              fontSize: "12px",
-              padding: "3px 8px",
-            }}
-          >
-            {attachment.sticky ? "Unpin" : "Remove"}
-          </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              // No accept filter: text/code files are recognised by content on the
+              // server (any UTF-8 file), not by a maintained extension list, so
+              // there is no fixed set to filter the picker to. Images, PDF, and
+              // DOCX are still recognised as such by attachmentKind() above; a
+              // genuinely unsupported pick (a binary file) is rejected server-side
+              // with a clear error surfaced as a toast.
+              onChange={handleFilePick}
+              style={{ display: "none" }}
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={disabled}
+              title="Attach an image, PDF, Word doc, or text/code file"
+              aria-label="Attach a file"
+              style={{
+                alignItems: "center",
+                background: "transparent",
+                border: "none",
+                borderRadius: "9px",
+                color: attachment ? "var(--fg)" : "var(--fg-dim)",
+                cursor: disabled ? "not-allowed" : "pointer",
+                display: "flex",
+                flexShrink: 0,
+                height: "32px",
+                justifyContent: "center",
+                width: "32px",
+              }}
+            >
+              <AttachIcon />
+            </button>
+            <textarea
+              ref={textareaRef}
+              value={value}
+              onChange={(e) => onChange(e.target.value)}
+              onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
+              disabled={disabled}
+              placeholder={disabled ? "Waiting for response…" : "Ask anything"}
+              rows={1}
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "var(--fg)",
+                flex: 1,
+                fontFamily: "var(--font-sans)",
+                fontSize: "13.5px",
+                lineHeight: "20px",
+                maxHeight: "200px",
+                outline: "none",
+                padding: "6px 0",
+                resize: "none",
+              }}
+            />
+            <button
+              onClick={onSend}
+              disabled={!canSend}
+              title="Send (Enter)"
+              style={{
+                alignItems: "center",
+                background: canSend ? "var(--fg)" : "var(--bg-3)",
+                border: "none",
+                borderRadius: "9px",
+                color: canSend ? "var(--bg)" : "var(--fg-dimmer)",
+                cursor: canSend ? "pointer" : "not-allowed",
+                display: "flex",
+                flexShrink: 0,
+                height: "32px",
+                justifyContent: "center",
+                transition: "background var(--t-base)",
+                width: "32px",
+              }}
+              aria-label="Send message"
+            >
+              <SendIcon />
+            </button>
+          </div>
+
+          {isGenerating && (
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "9px" }}>
+              <button
+                onClick={onStop}
+                style={{
+                  alignItems: "center",
+                  background: "transparent",
+                  border: "1px solid var(--border-2)",
+                  borderRadius: "999px",
+                  color: "var(--fg-dim)",
+                  cursor: "pointer",
+                  display: "inline-flex",
+                  fontSize: "11.5px",
+                  fontWeight: 500,
+                  gap: "6px",
+                  height: "26px",
+                  padding: "0 11px",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = "var(--fg)";
+                  e.currentTarget.style.borderColor = "var(--fg-dimmer)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = "var(--fg-dim)";
+                  e.currentTarget.style.borderColor = "var(--border-2)";
+                }}
+              >
+                <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
+                  <rect x="4" y="4" width="8" height="8" rx="1.5" />
+                </svg>
+                Stop
+              </button>
+            </div>
+          )}
+
+          <div style={{ alignItems: "center", display: "flex", margin: "9px 4px 0" }}>
+            <div style={{ color: "var(--fg-dimmer)", fontSize: "11px" }}>
+              Enter to send · Shift + Enter for a new line · drop a file to attach
+            </div>
+            <div style={{ flex: 1 }} />
+            <div style={{ color: "var(--fg-dimmer)", fontSize: "11px" }}>
+              Answers can be wrong — check anything that matters.
+            </div>
+          </div>
         </div>
-        {attachment.sticky && (
-          <p style={{ color: "var(--fg-dim)", fontSize: "11px", margin: "6px 0 0" }}>
-            Sent with every message so follow-ups can see it. Unpin to stop.
-          </p>
-        )}
-        </div>
-      )}
-      <div
-        style={{
-          alignItems: "flex-end",
-          background: "var(--bg)",
-          border: "1px solid var(--border-2)",
-          borderRadius: "8px",
-          display: "flex",
-          gap: "8px",
-          padding: "8px 8px 8px 8px",
-          transition: "border-color 0.15s",
-        }}
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={handleDrop}
-        onFocusCapture={(e) =>
-          (e.currentTarget.style.borderColor = "var(--accent-border)")
-        }
-        onBlurCapture={(e) =>
-          (e.currentTarget.style.borderColor = "var(--border-2)")
-        }
-      >
-        <input
-          ref={fileInputRef}
-          type="file"
-          // No accept filter: text/code files are recognised by content on the
-          // server (any UTF-8 file), not by a maintained extension list, so
-          // there is no fixed set to filter the picker to. Images, PDF, and
-          // DOCX are still recognised as such by attachmentKind() above; a
-          // genuinely unsupported pick (a binary file) is rejected server-side
-          // with a clear error surfaced as a toast.
-          onChange={handleFilePick}
-          style={{ display: "none" }}
-        />
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          disabled={disabled}
-          title="Attach an image, PDF, Word doc, or text/code file"
-          aria-label="Attach a file"
-          style={{
-            alignItems: "center",
-            background: "transparent",
-            border: "none",
-            borderRadius: "6px",
-            color: attachment ? "var(--accent)" : "var(--fg-dim)",
-            cursor: disabled ? "not-allowed" : "pointer",
-            display: "flex",
-            flexShrink: 0,
-            height: "30px",
-            justifyContent: "center",
-            width: "30px",
-          }}
-        >
-          <AttachIcon />
-        </button>
-        <textarea
-          ref={textareaRef}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          onKeyDown={handleKeyDown}
-          onPaste={handlePaste}
-          disabled={disabled}
-          placeholder={disabled ? "Waiting for response…" : "Ask anything… (Enter to send, paste or drop a file to attach)"}
-          rows={1}
-          style={{
-            background: "transparent",
-            border: "none",
-            color: "var(--fg)",
-            flex: 1,
-            fontFamily: "var(--font-sans)",
-            fontSize: "13px",
-            lineHeight: 1.5,
-            maxHeight: "200px",
-            outline: "none",
-            padding: 0,
-            resize: "none",
-          }}
-        />
-        <button
-          onClick={onSend}
-          disabled={!canSend}
-          title="Send (Enter)"
-          style={{
-            alignItems: "center",
-            background: canSend ? "var(--accent)" : "var(--bg-3)",
-            border: "none",
-            borderRadius: "6px",
-            color: canSend ? "#1a0d00" : "var(--fg-dimmer)",
-            cursor: canSend ? "pointer" : "not-allowed",
-            display: "flex",
-            flexShrink: 0,
-            height: "30px",
-            justifyContent: "center",
-            transition: "background 0.15s",
-            width: "30px",
-          }}
-          aria-label="Send message"
-        >
-          <SendIcon />
-        </button>
       </div>
-      <p
-        style={{
-          color: "var(--fg-dim)",
-          fontSize: "11px",
-          margin: "6px 2px 0",
-          textAlign: "center",
-        }}
-      >
-        DejaQ may make mistakes. Verify important information.
-      </p>
     </div>
   );
 }
 
 function AttachIcon() {
   return (
-    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
       <path d="M13 6.5l-5.5 5.5a2.5 2.5 0 0 1-3.5-3.5l5.5-5.5a1.5 1.5 0 0 1 2 2L6 10.5" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
@@ -355,27 +404,27 @@ function AttachIcon() {
 
 function PinIcon() {
   return (
-    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4">
-      <path d="M6 1.5h4l-.5 4 2.5 2.5H4L6.5 5.5 6 1.5z" strokeLinejoin="round" />
-      <path d="M8 8v6.5" strokeLinecap="round" />
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" strokeLinecap="round">
+      <path d="M6 1.9h4l-.5 4.2 2.6 2.6H3.9l2.6-2.6L6 1.9z" />
+      <path d="M8 8.7v5.4" />
     </svg>
   );
 }
 
 function DocumentIcon() {
   return (
-    <svg width="20" height="20" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
-      <path d="M9.5 1.5H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V5l-3.5-3.5z" strokeLinejoin="round" />
-      <path d="M9.5 1.5V5H13" strokeLinejoin="round" />
-      <path d="M5.5 8h5M5.5 10.5h5" strokeLinecap="round" />
+    <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round">
+      <path d="M9.5 1.6H4a1 1 0 0 0-1 1v10.8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V5.1L9.5 1.6z" />
+      <path d="M9.5 1.6v3.5H13" />
     </svg>
   );
 }
 
 function SendIcon() {
   return (
-    <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
-      <path d="M14.5 1.5L7 9M14.5 1.5L10 14.5l-3-5.5L1.5 6l13-4.5z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M8 13.2V3.4" />
+      <path d="M3.7 7.7 8 3.4l4.3 4.3" />
     </svg>
   );
 }

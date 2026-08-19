@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import logging
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass, replace
 from typing import Protocol, TypedDict
 
@@ -75,8 +77,25 @@ class CompletionResult:
     done_reason: str | None = None
 
 
+@dataclass(frozen=True)
+class CompletionChunk:
+    """One incremental piece of a streamed completion.
+
+    `text` carries the new characters; the final chunk carries `done_reason`
+    with an empty `text`, so a caller that only wants the text can concatenate
+    every `text` blindly and a caller that cares about truncation reads the
+    last chunk's `done_reason` — the same field `CompletionResult` exposes.
+    """
+
+    text: str = ""
+    done_reason: str | None = None
+
+
 class ModelBackend(Protocol):
     async def complete(self, request: CompletionRequest) -> CompletionResult:
+        ...
+
+    def stream(self, request: CompletionRequest) -> AsyncGenerator[CompletionChunk, None]:
         ...
 
 
@@ -106,6 +125,37 @@ async def complete_with_default_fallback(
         return await backend.complete(replace(request, model_name=default_model_name))
 
 
+async def stream_with_default_fallback(
+    backend: ModelBackend,
+    request: CompletionRequest,
+    default_model_name: str,
+    role: str,
+) -> AsyncGenerator[CompletionChunk, None]:
+    """Streaming twin of `complete_with_default_fallback`.
+
+    Safe to retry mid-call: Ollama answers 404 for a missing tag when the
+    response is opened, before any chunk has been yielded, so the fallback
+    cannot replay text a caller already saw.
+    """
+    try:
+        stream = backend.stream(request)
+        first = await anext(stream, None)
+    except ModelNotFoundError as exc:
+        if request.model_name == default_model_name:
+            raise
+        logger.warning(
+            "%s model=%s not installed in Ollama; falling back to shipped default=%s",
+            role, exc.model_name, default_model_name,
+        )
+        async for chunk in backend.stream(replace(request, model_name=default_model_name)):
+            yield chunk
+        return
+    if first is not None:
+        yield first
+        async for chunk in stream:
+            yield chunk
+
+
 class OllamaBackend:
     def __init__(
         self,
@@ -129,18 +179,11 @@ class OllamaBackend:
         # raises ModelNotFoundError for the caller to catch.
         return logical_model_name
 
-    async def complete(self, request: CompletionRequest) -> CompletionResult:
-        ollama_model = self._resolve_model(request.model_name)
-        logger.debug(
-            "Model completion backend=ollama model=%s ollama_model=%s url=%s",
-            request.model_name,
-            ollama_model,
-            self._base_url,
-        )
+    def _payload(self, request: CompletionRequest, ollama_model: str, stream: bool) -> dict:
         payload = {
             "model": ollama_model,
             "messages": request.messages,
-            "stream": False,
+            "stream": stream,
             # Gemma 4 is a thinking model: left alone it emits a `thinking` block
             # BEFORE `content`, and both are drawn from the same num_predict
             # budget. Measured on gemma4:e4b with num_predict=1024, a complexity
@@ -160,6 +203,17 @@ class OllamaBackend:
             payload["options"]["stop"] = request.stop
         if request.num_ctx is not None:
             payload["options"]["num_ctx"] = request.num_ctx
+        return payload
+
+    async def complete(self, request: CompletionRequest) -> CompletionResult:
+        ollama_model = self._resolve_model(request.model_name)
+        logger.debug(
+            "Model completion backend=ollama model=%s ollama_model=%s url=%s",
+            request.model_name,
+            ollama_model,
+            self._base_url,
+        )
+        payload = self._payload(request, ollama_model, stream=False)
 
         if self._client is not None:
             response = await self._client.post("/api/chat", json=payload)
@@ -183,3 +237,57 @@ class OllamaBackend:
         if not isinstance(content, str):
             raise ValueError("Ollama response missing assistant message content")
         return CompletionResult(text=content.strip(), done_reason=data.get("done_reason"))
+
+    async def stream(self, request: CompletionRequest) -> AsyncGenerator[CompletionChunk, None]:
+        """Yield the answer as Ollama produces it.
+
+        Same call as `complete`, with `stream: true`: Ollama answers with one
+        JSON object per line, each carrying the newly generated characters,
+        and a final object carrying `done_reason`. The 404 for a missing tag
+        arrives on the response head, before any line — see
+        `stream_with_default_fallback`.
+        """
+        ollama_model = self._resolve_model(request.model_name)
+        logger.debug(
+            "Model stream backend=ollama model=%s ollama_model=%s url=%s",
+            request.model_name,
+            ollama_model,
+            self._base_url,
+        )
+        payload = self._payload(request, ollama_model, stream=True)
+
+        if self._client is not None:
+            async for chunk in self._stream_lines(self._client, payload, ollama_model):
+                yield chunk
+            return
+        async with httpx.AsyncClient(
+            base_url=self._base_url,
+            timeout=self._timeout_seconds,
+        ) as client:
+            async for chunk in self._stream_lines(client, payload, ollama_model):
+                yield chunk
+
+    @staticmethod
+    async def _stream_lines(
+        client: httpx.AsyncClient, payload: dict, ollama_model: str
+    ) -> AsyncGenerator[CompletionChunk, None]:
+        async with client.stream("POST", "/api/chat", json=payload) as response:
+            if response.status_code == 404:
+                raise ModelNotFoundError(ollama_model)
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    logger.warning("Ollama stream produced a non-JSON line; ignoring it")
+                    continue
+                if data.get("error"):
+                    raise ValueError(f"Ollama stream error: {data['error']}")
+                text = data.get("message", {}).get("content") or ""
+                if text:
+                    yield CompletionChunk(text=text)
+                if data.get("done"):
+                    yield CompletionChunk(done_reason=data.get("done_reason"))

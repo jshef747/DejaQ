@@ -70,7 +70,7 @@ and generate an API key, and use it as `Authorization: Bearer <key>` against the
 
 Stacks: `all` (backend + dashboard + chat), `server` (backend + dashboard, no chat),
 `client` (chat app only — connects to a DejaQ server elsewhere on the network; set the
-server address and API key in the chat Settings modal, or via `DEJAQ_API_BASE_URL` /
+server address and API key on the chat app's connect screen, or via `DEJAQ_API_BASE_URL` /
 `DEJAQ_API_KEY` in `chat/.env.local` — see [chat/README.md](chat/README.md)).
 
 Backend + dashboard (no chat), or manual launch:
@@ -108,7 +108,7 @@ cp .env.local.example .env.local
 npm run dev
 ```
 
-Fill `DEJAQ_API_KEY` in `chat/.env.local`, or leave it blank and paste a key into the chat app's Settings modal instead (a Settings key wins). The chat app runs at `http://localhost:4000`, calls its own `/api/*` routes from the browser, and those server routes forward to the backend through `DEJAQ_API_BASE_URL`. See [chat/README.md](chat/README.md) for details.
+The chat app runs at `http://localhost:4000` and opens on a connect screen at first launch: paste a workspace API key, or leave the field blank to use `DEJAQ_API_KEY` from `chat/.env.local` (a pasted key wins). The browser calls the app's own `/api/*` routes, and those server routes forward to the backend through `DEJAQ_API_BASE_URL`. See [chat/README.md](chat/README.md) for details.
 
 ## Main Interfaces
 
@@ -183,7 +183,8 @@ leave the rewrite budget or the context window too small to carry the answer bei
 is rejected with an explanatory error rather than clamped, because a too-low budget produces
 no error anywhere - it just silently stops the cache from filling, since a truncated answer
 is never stored. The **Analytics** page shows the resulting truncation rate (over generated
-answers; a cache hit is never truncated) next to hit rate, latency, and tokens saved.
+answers; a cache hit is never truncated) next to hit rate, latency, and tokens saved. All
+four tiles count completed turns only - a client that disconnects mid-answer is not recorded.
 
 ## Bootstrap a workspace + key
 
@@ -209,4 +210,5 @@ npm run build
 cd ../chat
 npx tsc --noEmit --pretty false
 npm run build
+npm test
 ```

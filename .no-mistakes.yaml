@@ -1,0 +1,39 @@
+# Per-repo no-mistakes overrides.
+#
+# Pinning commands.test so the Test step stops re-discovering, on every run, that
+# tests live in server/tests (pytest), how to invoke them, and which markers are
+# safe to run in the pipeline sandbox. Without this pin the step spends most of
+# its time reading the change to reconstruct that context instead of validating it.
+#
+# DejaQ has no CI (.github/workflows/ does not exist), so unlike the pattern this
+# file is copied from - where a full-suite Test command would just duplicate CI -
+# there is no other gate that ever runs server/tests. That argues for Test running
+# broader than one-file-targeted. It is still not the complete suite: server/tests
+# carries markers (no_model, qwen, qwen_1_5b, gemma_e2b, deberta, llama) for tests
+# that need an Ollama model pulled and running, or the in-process torch models
+# (DeBERTa classifier, BGE embeddings) warmed up. Those aren't available in the
+# pipeline sandbox and a command that tried to pull a model on every run would be
+# slower than the problem this file exists to fix. `-m no_model` is the largest
+# slice that is both real code coverage and runs unconditionally: 307 of 682
+# collected tests, 275 passed / 32 skipped in ~10s wall (measured on this branch,
+# `cd server && uv run pytest -m no_model -q`). The remaining 375 model-gated
+# tests are exactly the gap a real CI workflow would need to own - that's a
+# separate follow-up (DejaQ has none today), not something to fake here.
+#
+# chat/ has a real, fast vitest suite (7 tests, ~200ms) - included. dashboard/
+# has no test script and no test files - nothing to pin there. Neither project
+# has an eslint/biome config or a lint script, so commands.lint is left unset;
+# there's nothing for a lint command to run yet.
+#
+# IMPORTANT: commands is trusted config, loaded from the DEFAULT BRANCH copy of
+# this file only (confirmed from the no-mistakes binary's own strings: "repo
+# commands/agent loaded from default branch, not pushed branch"). DejaQ's default
+# branch is master and PRs target staging, so this file has no effect until
+# staging merges to master - see PR description.
+commands:
+  test: 'cd server && uv run pytest -m no_model -q && cd ../chat && npx vitest run'
+
+# Keep test evidence out of this repo.
+test:
+  evidence:
+    store_in_repo: false
