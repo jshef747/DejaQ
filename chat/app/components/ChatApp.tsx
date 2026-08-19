@@ -613,6 +613,7 @@ export default function ChatApp() {
                 promptDifficulty: result.promptDifficulty,
                 cacheDistance: result.cacheDistance,
                 cacheMatchedQuery: result.cacheMatchedQuery,
+                cacheEnrichedQuery: result.cacheEnrichedQuery,
               }
             : m
         ),
