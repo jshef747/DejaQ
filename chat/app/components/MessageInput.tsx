@@ -326,10 +326,10 @@ export default function MessageInput({
               title="Send (Enter)"
               style={{
                 alignItems: "center",
-                background: canSend ? "var(--accent-solid)" : "var(--bg-3)",
+                background: canSend ? "var(--fg)" : "var(--bg-3)",
                 border: "none",
                 borderRadius: "9px",
-                color: canSend ? "#fff5ee" : "var(--fg-dimmer)",
+                color: canSend ? "var(--bg)" : "var(--fg-dimmer)",
                 cursor: canSend ? "pointer" : "not-allowed",
                 display: "flex",
                 flexShrink: 0,

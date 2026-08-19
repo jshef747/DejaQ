@@ -107,7 +107,7 @@ function ToastCard({ toast, onDismiss }: { toast: ToastData; onDismiss: () => vo
             rel="noreferrer"
             style={{
               alignItems: "center",
-              color: "var(--accent)",
+              color: "var(--fg)",
               display: "flex",
               fontSize: "12.5px",
               fontWeight: 600,

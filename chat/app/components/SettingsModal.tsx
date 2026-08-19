@@ -422,7 +422,7 @@ function btn(kind: "primary" | "ghost", disabled = false): React.CSSProperties {
     whiteSpace: "nowrap",
   };
   if (kind === "primary") {
-    return { ...base, background: "var(--accent-solid)", border: "1px solid var(--accent-solid)", color: "#fff5ee", fontWeight: 600 };
+    return { ...base, background: "var(--fg)", border: "1px solid var(--fg)", color: "var(--bg)", fontWeight: 600 };
   }
   return { ...base, background: "transparent", border: "1px solid transparent", color: "var(--fg-dim)" };
 }

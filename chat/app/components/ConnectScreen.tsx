@@ -68,8 +68,22 @@ export default function ConnectScreen({ initialSettings, onConnected, dashboardU
   const connecting = status === "testing";
 
   return (
-    <div style={{ alignItems: "center", display: "flex", flex: 1, justifyContent: "center", minHeight: 0, paddingBottom: "40px" }}>
-      <form onSubmit={handleConnect} style={{ width: "460px" }}>
+    // Every ancestor clips (the shell is height:100vh;overflow:hidden), so this
+    // screen owns its own scroll. The auto block margins on the form centre it
+    // while it fits and collapse to 0 once it doesn't, so a short window
+    // scrolls to the Connect button instead of cutting it off.
+    <div
+      style={{
+        alignItems: "flex-start",
+        display: "flex",
+        flex: 1,
+        justifyContent: "center",
+        minHeight: 0,
+        overflowY: "auto",
+        padding: "24px 0 40px",
+      }}
+    >
+      <form onSubmit={handleConnect} style={{ flexShrink: 0, margin: "auto 0", width: "460px" }}>
         <div style={{ fontSize: "24px", fontWeight: 600, letterSpacing: "-0.024em", lineHeight: "30px" }}>
           Connect this chat to DejaQ
         </div>
@@ -181,10 +195,10 @@ export default function ConnectScreen({ initialSettings, onConnected, dashboardU
             disabled={connecting || apiKey.trim().length === 0}
             style={{
               alignItems: "center",
-              background: "var(--accent-solid)",
-              border: "1px solid var(--accent-solid)",
+              background: "var(--fg)",
+              border: "1px solid var(--fg)",
               borderRadius: "8px",
-              color: "#fff5ee",
+              color: "var(--bg)",
               cursor: connecting || apiKey.trim().length === 0 ? "not-allowed" : "pointer",
               display: "inline-flex",
               fontSize: "13px",
@@ -198,6 +212,8 @@ export default function ConnectScreen({ initialSettings, onConnected, dashboardU
           </button>
           <a
             href={dashboardUrl}
+            target="_blank"
+            rel="noreferrer"
             style={{
               alignItems: "center",
               background: "transparent",

@@ -9,6 +9,7 @@ dump.rdb
 test_reports/
 validator-test/
 .agent/
+.agents/
 .codex/
 .claude/scheduled_tasks.lock
 server/celerybeat-schedule*

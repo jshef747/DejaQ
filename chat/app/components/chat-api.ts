@@ -162,6 +162,9 @@ export async function sendChatMessage(
   // the last delta errors the stream instead of arriving as an HTTP status.
   // Either way `reader.read()` rejects, and an unhandled rejection here would
   // throw out of handleSend and leave the typing indicator spinning forever.
+  // (A non-abort rejection here used to escape uncaught and strand the caller
+  // in `generating` with no way out - the outer try/catch below is what fixes
+  // that now, by turning it into a `streamError` result instead of a throw.)
   let streamError: string | null = null;
   try {
     outer: while (true) {

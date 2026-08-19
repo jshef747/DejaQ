@@ -477,8 +477,14 @@ export default function ChatApp() {
       send.controller.signal,
     );
 
-    sendsRef.current.delete(convId);
-    endGeneration(convId);
+    // A send only tears down the record it owns. A stop followed by a fresh
+    // send for the same conversation puts a different LiveSend in this slot,
+    // and clearing that one would re-enable the composer and drop Stop while
+    // the replacement answer is still streaming.
+    if (sendsRef.current.get(convId) === send) {
+      sendsRef.current.delete(convId);
+      endGeneration(convId);
+    }
 
     // Stopped or deleted while this was in flight: cancelSend already finalized
     // the message and aborted the request. Nothing below may touch state again
@@ -818,7 +824,7 @@ export default function ChatApp() {
               >
                 <InspectorPanelIcon />
               </button>
-              <a href={dashboardUrl} style={iconBtn(false)} title="Open dashboard">
+              <a href={dashboardUrl} target="_blank" rel="noreferrer" style={iconBtn(false)} title="Open dashboard">
                 <DashboardIcon />
               </a>
             </>
@@ -1057,10 +1063,10 @@ const ROUTE_LEGEND_STYLE: Record<Route, { ink: string; bg: string; border: strin
 function iconBtn(active: boolean): React.CSSProperties {
   return {
     alignItems: "center",
-    background: active ? "var(--accent-bg)" : "transparent",
+    background: active ? "var(--bg-3)" : "transparent",
     border: "none",
     borderRadius: "8px",
-    color: active ? "var(--accent)" : "var(--fg-dimmer)",
+    color: active ? "var(--fg)" : "var(--fg-dimmer)",
     cursor: "pointer",
     display: "flex",
     height: "30px",

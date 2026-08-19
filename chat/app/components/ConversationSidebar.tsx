@@ -219,7 +219,7 @@ function ConversationRow({
         <span
           aria-hidden
           style={{
-            background: "var(--accent-solid)",
+            background: "var(--fg)",
             borderRadius: "2px",
             bottom: "9px",
             left: 0,
@@ -432,7 +432,7 @@ function CollapsedRail({
     >
       <div
         aria-hidden
-        style={{ background: "var(--accent-solid)", borderRadius: "7px", flexShrink: 0, height: "24px", width: "24px" }}
+        style={{ background: "var(--fg-dim)", borderRadius: "7px", flexShrink: 0, height: "24px", width: "24px" }}
       />
       <button
         onClick={onNew}
@@ -444,7 +444,7 @@ function CollapsedRail({
           background: "var(--bg-3)",
           border: "1px solid var(--border-2)",
           borderRadius: "8px",
-          color: onNew ? "var(--accent)" : "var(--fg-dimmer)",
+          color: onNew ? "var(--fg)" : "var(--fg-dimmer)",
           cursor: onNew ? "pointer" : "not-allowed",
           display: "flex",
           height: "30px",
