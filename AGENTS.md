@@ -33,6 +33,12 @@ The chat owns its own token layer (`chat/app/tokens.css`, light + dark) and must
 
 Master has received both real merge commits and squash merges from staging (e.g. `ffb690b` is a squash, `7b9274b` a real merge). When a promotion is squashed, the same content ends up on both branches under different commit identities, so the next `staging` -> `master` PR shows false conflicts on any file touched since that squashed promotion. Fix by back-merging master into staging (never the reverse, never squash/rebase staging): for each conflict, diff `origin/master...origin/staging` on that file first to confirm staging already carries everything master has (it should, since the squash commit is just staging's own prior commits) - staging's side wins. Verify with `git diff origin/staging HEAD` on the resulting merge commit: an empty diff confirms nothing was lost. Only stop and escalate if master's side contains content genuinely absent from staging - that means a change landed on master and never made it back.
 
+## Running the full stack for a visual check
+
+`./start.sh --stack=all --mode=local` needs `--logs=requests` (or `DEJAQ_START_LOGS=requests`) when run non-interactively, or it blocks on a TTY prompt and exits. On a fresh worktree it also needs, once: `chat/` and `dashboard/` each have their own `node_modules` (`npm install` in both - `--stack=all` starts both), a `chat/.env.local` with `DEJAQ_API_KEY` (mint one with `dejaq-admin key generate --workspace <slug>`, and the workspace/department first with `dejaq-admin workspace create` / `dejaq-admin dept create` - a fresh `server/dejaq.db` has neither), and a clean `server/dejaq.db` (delete the gitignored file and let migrations recreate it if a half-finished prior run leaves tables without an `alembic_version` row - migration then fails with "table already exists").
+
+`chrome-devtools-axi` runs against a machine-wide shared browser bridge whose own process cwd is unrelated to any worktree. Its `screenshot`/`take_screenshot` silently no-ops outside the bridge's configured MCP "workspace roots" (the CLI still prints a success line and the resolved path you asked for) - `/tmp` is always allowed. Screenshot to `/tmp/<name>.png` and `cp` into the worktree afterward; do not trust a `screenshot` success message alone without checking the file landed.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.
