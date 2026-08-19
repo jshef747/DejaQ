@@ -103,6 +103,10 @@ export async function sendChatMessage(
   attachment: Attachment | null = null,
   onDelta?: (chunk: string) => void,
   onMeta?: (meta: ChatMeta) => void,
+  // Stop's client-side abort path. Aborting mid-fetch rejects the fetch()
+  // below; aborting mid-stream rejects the pending reader.read() instead
+  // (the stream is tied to the same controller) — both are handled below.
+  signal?: AbortSignal,
 ): Promise<ChatResult> {
   // Measured here rather than read from x-dejaq-latency-ms, which the proxy
   // sets when the upstream RESPONSE HEAD arrives. That used to be the same
@@ -118,8 +122,12 @@ export async function sendChatMessage(
       method: "POST",
       headers: { "Content-Type": "application/json", ...dejaqHeaders() },
       body: JSON.stringify({ messages, deptSlug, modelProfile, routingMode, attachment }),
+      signal,
     });
-  } catch {
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      return { kind: "error", status: 0, message: "Stopped." };
+    }
     return { kind: "error", status: 0, message: "Network error. Could not reach the chat server." };
   }
 
@@ -157,7 +165,18 @@ export async function sendChatMessage(
   let streamError: string | null = null;
   try {
     outer: while (true) {
-      const { value, done } = await reader.read();
+      let value: Uint8Array | undefined;
+      let done: boolean;
+      try {
+        ({ value, done } = await reader.read());
+      } catch (err) {
+        // Stop aborted the signal while a read was pending — the stream is
+        // already torn down by the browser; nothing left to cancel by hand.
+        // This is the user's own Stop, not a connection failure, so it must
+        // not fall into the streamError path below.
+        if (err instanceof DOMException && err.name === "AbortError") break outer;
+        throw err;
+      }
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
 

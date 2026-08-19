@@ -102,12 +102,13 @@ export default function ChatApp() {
   const [baselineLatencies, setBaselineLatencies] = useState<number[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<AppMessage[]>([]);
-  // Stop cannot cancel the underlying fetch (chat-api.ts's sendChatMessage
-  // exposes no AbortSignal — see the stage-3 handoff note), so this is the
-  // client's own abort path: once set, every callback and the post-await
-  // continuation below become no-ops, which is what actually stops the app
-  // from consuming or rendering any more of the stream.
+  // Stop's abort path. abortControllerRef actually tears down the fetch and
+  // its stream (sendChatMessage forwards the signal); stopRequestedRef is
+  // the app-level companion that makes every callback and the post-await
+  // continuation below become no-ops immediately, without waiting on the
+  // network teardown to complete.
   const stopRequestedRef = useRef(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const activeAssistantIdRef = useRef<string | null>(null);
   const windowWidth = useWindowWidth();
   const isNarrow = windowWidth < DRAWER_MAX_WIDTH;
@@ -211,16 +212,19 @@ export default function ChatApp() {
   }
 
   // The one genuine behaviour change in this stage: Stop must leave the
-  // conversation coherent, never looking like a complete answer. A press
-  // before the first token has landed has no placeholder to mark — the turn
-  // just goes back to normal. A press mid-stream keeps whatever text had
-  // already arrived and marks it stopped; every later callback and the
-  // continuation of handleSend below are guarded by stopRequestedRef and
-  // become no-ops, so the request finishing in the background afterwards
-  // (it is still running — see the note on stopRequestedRef above) can never
-  // silently overwrite the stopped state.
+  // conversation coherent, never looking like a complete answer, and must
+  // actually cancel the request rather than just hiding the spinner. abort()
+  // tears down the real fetch/stream (sendChatMessage forwards the signal
+  // into fetch and the read loop); stopRequestedRef flips every callback and
+  // the continuation of handleSend below to a no-op immediately, so nothing
+  // has to wait on the network teardown to be coherent. A press before the
+  // first token has landed has no placeholder to mark — the turn just goes
+  // back to normal. A press mid-stream keeps whatever text had already
+  // arrived and marks it stopped.
   function handleStop() {
     stopRequestedRef.current = true;
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
     setIsGenerating(false);
     setIsLoading(false);
     setWaitRoute(null);
@@ -280,6 +284,8 @@ export default function ChatApp() {
     setIsLoading(true);
     setIsGenerating(true);
     stopRequestedRef.current = false;
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
     // Pre-allocate the assistant message so we can append deltas in-place.
     const assistantId = newId();
@@ -332,19 +338,21 @@ export default function ChatApp() {
         setWaitModel(meta.modelUsed);
         setWaitSinceMs(Date.now());
       },
+      controller.signal,
     );
 
     setIsLoading(false);
     setIsGenerating(false);
     activeAssistantIdRef.current = null;
+    abortControllerRef.current = null;
     setWaitRoute(null);
     setWaitModel(null);
     setWaitSinceMs(null);
 
     // Stopped while this was in flight: handleStop already finalized the
-    // message (or removed the empty placeholder). The request may still be
-    // running in the background, but nothing below may touch state again —
-    // that is exactly the corruption Stop exists to prevent.
+    // message (or removed the empty placeholder) and aborted the request.
+    // Nothing below may touch state again — that is exactly the corruption
+    // Stop exists to prevent.
     if (stopRequestedRef.current) return;
 
     if (isApiError(result)) {
