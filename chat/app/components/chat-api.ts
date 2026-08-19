@@ -41,6 +41,11 @@ export interface ChatSuccess {
   // a hit; neither is fabricated or inferred.
   cacheDistance: number | null;
   cacheMatchedQuery: string | null;
+  // Set when the SSE body broke part-way through the answer: `text` is
+  // whatever arrived before the break, not a finished reply. The caller shows
+  // it AND says so, because a silently truncated answer reads as a complete
+  // one. Null on a clean stream.
+  streamError: string | null;
 }
 
 // Route + model become known as soon as the response headers land, well
@@ -143,36 +148,57 @@ export async function sendChatMessage(
   let buffer = "";
   let text = "";
 
-  outer: while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
+  // The body now stays open for the whole generation, so it is the part of the
+  // request most likely to fail: the proxy's AbortSignal.timeout(120s) fires
+  // DURING the body rather than before the head, and a server-side error after
+  // the last delta errors the stream instead of arriving as an HTTP status.
+  // Either way `reader.read()` rejects, and an unhandled rejection here would
+  // throw out of handleSend and leave the typing indicator spinning forever.
+  let streamError: string | null = null;
+  try {
+    outer: while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
 
-    // SSE events are separated by double newline.
-    const parts = buffer.split("\n\n");
-    buffer = parts.pop()!; // last incomplete chunk stays in buffer
+      // SSE events are separated by double newline.
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop()!; // last incomplete chunk stays in buffer
 
-    for (const part of parts) {
-      for (const line of part.split("\n")) {
-        if (!line.startsWith("data:")) continue;
-        const raw = line.slice(5).trim();
-        if (raw === "[DONE]") break outer;
-        try {
-          const chunk = JSON.parse(raw);
-          // chat/completions chunk, or Responses API text delta (image requests
-          // go through /v1/responses, whose stream uses response.output_text.delta).
-          const delta: string =
-            chunk?.choices?.[0]?.delta?.content ??
-            (chunk?.type === "response.output_text.delta" ? chunk?.delta ?? "" : "");
-          if (delta) {
-            text += delta;
-            onDelta?.(delta);
+      for (const part of parts) {
+        for (const line of part.split("\n")) {
+          if (!line.startsWith("data:")) continue;
+          const raw = line.slice(5).trim();
+          if (raw === "[DONE]") break outer;
+          try {
+            const chunk = JSON.parse(raw);
+            // chat/completions chunk, or Responses API text delta (image requests
+            // go through /v1/responses, whose stream uses response.output_text.delta).
+            const delta: string =
+              chunk?.choices?.[0]?.delta?.content ??
+              (chunk?.type === "response.output_text.delta" ? chunk?.delta ?? "" : "");
+            if (delta) {
+              text += delta;
+              onDelta?.(delta);
+            }
+          } catch {
+            // malformed chunk — skip
           }
-        } catch {
-          // malformed chunk — skip
         }
       }
     }
+  } catch {
+    streamError = "The answer was cut off before it finished streaming. What you see below is incomplete.";
+  }
+
+  // Nothing arrived at all: there is no partial answer worth keeping, so this
+  // is an ordinary failed send and the caller reverts the turn for a retry.
+  if (streamError && !text) {
+    return {
+      kind: "error",
+      status: 0,
+      message: "The connection dropped before the answer started. Try again.",
+    };
   }
 
   const latencyMs = Date.now() - startedAt;
@@ -197,6 +223,7 @@ export async function sendChatMessage(
     cacheHit: modelUsed === "cache",
     cacheDistance,
     cacheMatchedQuery,
+    streamError,
   };
 }
 

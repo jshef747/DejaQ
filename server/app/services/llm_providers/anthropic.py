@@ -145,22 +145,28 @@ class AnthropicProviderClient:
                 temperature=request.temperature,
                 stream=True,
             )
-            async for event in stream:
-                kind = getattr(event, "type", "")
-                if kind == "message_start":
-                    usage = getattr(event.message, "usage", None)
-                    if usage:
-                        prompt_tokens = usage.input_tokens or 0
-                elif kind == "content_block_delta":
-                    piece = getattr(event.delta, "text", "") or ""
-                    if piece:
-                        text += piece
-                        yield ExternalStreamChunk(text=piece)
-                elif kind == "message_delta":
-                    stop_reason = getattr(event.delta, "stop_reason", None) or stop_reason
-                    usage = getattr(event, "usage", None)
-                    if usage:
-                        completion_tokens = usage.output_tokens or completion_tokens
+            # `async with`, not a bare `async for`: a client that disconnects
+            # mid-answer closes this generator where it is suspended, and only
+            # the SDK stream's own __aexit__ releases the upstream HTTPS
+            # response back to the pool. Abandoning it leaks the connection for
+            # as long as the aborted generation would have run.
+            async with stream:
+                async for event in stream:
+                    kind = getattr(event, "type", "")
+                    if kind == "message_start":
+                        usage = getattr(event.message, "usage", None)
+                        if usage:
+                            prompt_tokens = usage.input_tokens or 0
+                    elif kind == "content_block_delta":
+                        piece = getattr(event.delta, "text", "") or ""
+                        if piece:
+                            text += piece
+                            yield ExternalStreamChunk(text=piece)
+                    elif kind == "message_delta":
+                        stop_reason = getattr(event.delta, "stop_reason", None) or stop_reason
+                        usage = getattr(event, "usage", None)
+                        if usage:
+                            completion_tokens = usage.output_tokens or completion_tokens
 
         yield ExternalStreamChunk(final=ExternalLLMResponse(
             text=text,

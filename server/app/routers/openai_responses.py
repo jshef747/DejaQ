@@ -230,6 +230,13 @@ async def _stream_responses_generator(
             f"data: {ResponseOutputTextDeltaEvent(item_id=item_id, delta=piece).model_dump_json()}\n\n"
         )
 
+    # One message, one text. `result.answer` is the canonical answer - stripped
+    # on the streaming path exactly as OllamaBackend strips it on the buffered
+    # one - and it is what the terminal `response.completed` body carries, so
+    # the done events below have to carry the same string rather than the raw
+    # concatenation of the deltas. Only settled once the loop above drains.
+    full_text = result.answer or full_text
+
     yield f"event: response.output_text.done\ndata: {ResponseOutputTextDoneEvent(item_id=item_id, text=full_text).model_dump_json()}\n\n"
 
     part_done = {"type": "output_text", "text": full_text}

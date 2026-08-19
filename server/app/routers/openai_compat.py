@@ -1986,6 +1986,13 @@ async def run_chat_pipeline(
                 # .strip() to match the buffered path, where OllamaBackend
                 # strips the assembled answer before anything stores it.
                 result.answer = "".join(pieces).strip()
+                # Everything below runs inside the response body, so a client
+                # that disconnects mid-answer gets none of it: no cache store,
+                # no `requests` row (so no finish_reason for the truncation-rate
+                # tile) and no `done cache=miss` log line. That is the trade for
+                # streaming - the generation is aborted with the connection, so
+                # there is no complete answer left to store anyway - but it does
+                # mean aborted turns are absent from stats rather than counted.
                 (
                     result.response_id,
                     _,

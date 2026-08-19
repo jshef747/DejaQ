@@ -152,21 +152,27 @@ class OpenAIProviderClient:
                 stream_options={"include_usage": True},
                 **extra_kwargs,
             )
-            async for chunk in stream:
-                usage = getattr(chunk, "usage", None)
-                if usage:
-                    prompt_tokens = usage.prompt_tokens or prompt_tokens
-                    completion_tokens = usage.completion_tokens or completion_tokens
-                # The usage-only chunk carries no choices at all.
-                if not chunk.choices:
-                    continue
-                choice = chunk.choices[0]
-                if choice.finish_reason:
-                    finish_reason = choice.finish_reason
-                piece = (choice.delta.content if choice.delta else None) or ""
-                if piece:
-                    text += piece
-                    yield ExternalStreamChunk(text=piece)
+            # `async with`, not a bare `async for`: a client that disconnects
+            # mid-answer closes this generator where it is suspended, and only
+            # the SDK stream's own __aexit__ releases the upstream HTTPS
+            # response back to the pool. Abandoning it leaks the connection for
+            # as long as the aborted generation would have run.
+            async with stream:
+                async for chunk in stream:
+                    usage = getattr(chunk, "usage", None)
+                    if usage:
+                        prompt_tokens = usage.prompt_tokens or prompt_tokens
+                        completion_tokens = usage.completion_tokens or completion_tokens
+                    # The usage-only chunk carries no choices at all.
+                    if not chunk.choices:
+                        continue
+                    choice = chunk.choices[0]
+                    if choice.finish_reason:
+                        finish_reason = choice.finish_reason
+                    piece = (choice.delta.content if choice.delta else None) or ""
+                    if piece:
+                        text += piece
+                        yield ExternalStreamChunk(text=piece)
 
         yield ExternalStreamChunk(final=ExternalLLMResponse(
             text=text,

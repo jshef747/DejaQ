@@ -152,18 +152,25 @@ class GoogleProviderClient:
                 contents=contents,
                 config=config,
             )
-            async for chunk in stream:
-                usage = getattr(chunk, "usage_metadata", None)
-                if usage:
-                    prompt_tokens = usage.prompt_token_count or prompt_tokens
-                    completion_tokens = usage.candidates_token_count or completion_tokens
-                candidates = getattr(chunk, "candidates", None)
-                if candidates and candidates[0].finish_reason:
-                    finish_reason = candidates[0].finish_reason
-                piece = chunk.text or ""
-                if piece:
-                    text += piece
-                    yield ExternalStreamChunk(text=piece)
+            # Closed explicitly rather than left to the async-generator
+            # finalizer: a client that disconnects mid-answer closes THIS
+            # generator where it is suspended, and the upstream HTTPS response
+            # stays checked out until the SDK's own generator is closed too.
+            # `aclosing` rather than `async with` because google-genai hands
+            # back a plain async generator, not a context manager.
+            async with contextlib.aclosing(stream) as events:
+                async for chunk in events:
+                    usage = getattr(chunk, "usage_metadata", None)
+                    if usage:
+                        prompt_tokens = usage.prompt_token_count or prompt_tokens
+                        completion_tokens = usage.candidates_token_count or completion_tokens
+                    candidates = getattr(chunk, "candidates", None)
+                    if candidates and candidates[0].finish_reason:
+                        finish_reason = candidates[0].finish_reason
+                    piece = chunk.text or ""
+                    if piece:
+                        text += piece
+                        yield ExternalStreamChunk(text=piece)
 
         yield ExternalStreamChunk(final=ExternalLLMResponse(
             text=text,

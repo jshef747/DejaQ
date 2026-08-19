@@ -14,11 +14,13 @@ from app.services.llm_router import LLMRouterService
 from app.services.normalizer import NormalizerService
 from app.services.validator import ValidatorService
 from app.services.model_backends import (
+    CompletionChunk,
     CompletionRequest,
     CompletionResult,
     ModelBackend,
     ModelNotFoundError,
     OllamaBackend,
+    stream_with_default_fallback,
 )
 
 
@@ -205,3 +207,79 @@ def test_generalize_reraises_when_the_shipped_default_is_also_missing():
 
     with pytest.raises(ModelNotFoundError):
         asyncio.run(service.generalize("some raw answer"))
+
+
+# ── The same rule on the streaming path ──
+
+
+class _FailThenSucceedStreamBackend:
+    """Streaming twin of `_FailThenSucceedBackend`: the missing tag raises
+    where Ollama raises it, on the first pull, before any chunk."""
+
+    def __init__(self, missing_model: str, pieces: tuple[str, ...] = ("Par", "is.")):
+        self.missing_model = missing_model
+        self.pieces = pieces
+        self.model_names_seen: list[str] = []
+
+    async def complete(self, request: CompletionRequest) -> CompletionResult:
+        raise AssertionError("the streaming path must not fall back to the buffered call")
+
+    async def stream(self, request: CompletionRequest):
+        self.model_names_seen.append(request.model_name)
+        if request.model_name == self.missing_model:
+            raise ModelNotFoundError(request.model_name)
+        for piece in self.pieces:
+            yield CompletionChunk(text=piece)
+        yield CompletionChunk(done_reason="stop")
+
+
+def _stream_text(backend, model_name: str, default_model_name: str) -> list[CompletionChunk]:
+    async def run():
+        return [
+            chunk
+            async for chunk in stream_with_default_fallback(
+                backend,
+                CompletionRequest(
+                    model_name=model_name,
+                    messages=[{"role": "user", "content": "hi"}],
+                    max_tokens=32,
+                    temperature=0.0,
+                ),
+                default_model_name,
+                "local answering",
+            )
+        ]
+
+    return asyncio.run(run())
+
+
+def test_stream_falls_back_to_shipped_default_when_override_is_uninstalled():
+    backend = _FailThenSucceedStreamBackend(missing_model="a-since-uninstalled-tag")
+
+    chunks = _stream_text(backend, "a-since-uninstalled-tag", "gemma_local")
+
+    assert [c.text for c in chunks if c.text] == ["Par", "is."]
+    assert chunks[-1].done_reason == "stop"
+    assert backend.model_names_seen == ["a-since-uninstalled-tag", "gemma_local"]
+
+
+def test_stream_reraises_when_the_shipped_default_is_also_missing():
+    backend = _FailThenSucceedStreamBackend(missing_model="gemma_local")
+
+    with pytest.raises(ModelNotFoundError):
+        _stream_text(backend, "gemma_local", "gemma_local")
+    assert backend.model_names_seen == ["gemma_local"]
+
+
+def test_stream_does_not_replay_a_chunk_the_caller_already_saw():
+    """The fallback re-runs the whole call, so it is only safe because the
+    404 lands before the first chunk. A backend that fails mid-stream must
+    surface that failure, never restart and duplicate text."""
+
+    class _FailsMidStream:
+        async def stream(self, request: CompletionRequest):
+            yield CompletionChunk(text="Par")
+            raise ModelNotFoundError(request.model_name)
+
+    with pytest.raises(ModelNotFoundError):
+        _stream_text(_FailsMidStream(), "a-since-uninstalled-tag", "gemma_local")

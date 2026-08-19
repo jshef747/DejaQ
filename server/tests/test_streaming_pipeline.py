@@ -11,9 +11,15 @@ streaming from the outside.
 import asyncio
 import json
 
+import httpx
 import pytest
 
-from app.services.model_backends import CompletionChunk
+from app.services.model_backends import (
+    CompletionChunk,
+    CompletionRequest,
+    ModelNotFoundError,
+    OllamaBackend,
+)
 from tests.test_openai_compat_smoke import _AUTH, _patch_for_truncation
 
 
@@ -299,3 +305,103 @@ def test_missing_credential_is_still_402_on_a_streaming_request(monkeypatch):
 
     assert response.status_code == 402
     assert "API key" in response.json()["detail"]
+
+
+# ── The NDJSON parser underneath: OllamaBackend.stream / _stream_lines ──
+#
+# Everything above drives the pipeline through a stub router, so none of it
+# reaches the backend that actually talks to Ollama. These feed it real
+# response bytes instead.
+
+
+def _ndjson_backend(chunks: list[bytes]) -> tuple[OllamaBackend, httpx.AsyncClient]:
+    async def body():
+        for chunk in chunks:
+            yield chunk
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=body())
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://ollama.test")
+    return OllamaBackend(base_url="http://ollama.test", timeout_seconds=5.0, client=client), client
+
+
+def _request(model_name: str = "gemma_local") -> CompletionRequest:
+    return CompletionRequest(
+        model_name=model_name,
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=32,
+        temperature=0.0,
+    )
+
+
+def _drain(backend: OllamaBackend, client: httpx.AsyncClient, model_name: str = "gemma_local"):
+    async def run():
+        try:
+            return [chunk async for chunk in backend.stream(_request(model_name))]
+        finally:
+            await client.aclose()
+
+    return asyncio.run(run())
+
+
+def test_stream_reassembles_a_json_object_split_across_network_reads():
+    """Ollama's lines do not arrive aligned to socket reads."""
+    backend, client = _ndjson_backend([
+        b'{"message":{"content":"Hel"},"done":false}\n{"message":{"content":"lo"},"do',
+        b'ne":false}\n{"message":{"content":""},"done":true,"done_reason":"stop"}\n',
+    ])
+
+    chunks = _drain(backend, client)
+
+    assert [c.text for c in chunks if c.text] == ["Hel", "lo"]
+    assert chunks[-1].done_reason == "stop"
+
+
+def test_stream_terminal_chunk_carries_done_reason_length():
+    """The truncation signal only exists on the last line - the text itself
+    reads as a clean prefix, which is what the store guard relies on."""
+    backend, client = _ndjson_backend([
+        b'{"message":{"content":"cut off mid-"},"done":false}\n',
+        b'{"message":{"content":""},"done":true,"done_reason":"length"}\n',
+    ])
+
+    chunks = _drain(backend, client)
+
+    assert chunks[-1].text == ""
+    assert chunks[-1].done_reason == "length"
+
+
+def test_stream_raises_on_an_error_line():
+    backend, client = _ndjson_backend([
+        b'{"message":{"content":"partial"},"done":false}\n',
+        b'{"error":"llama runner process has terminated"}\n',
+    ])
+
+    with pytest.raises(ValueError, match="llama runner"):
+        _drain(backend, client)
+
+
+def test_stream_skips_a_non_json_line_rather_than_dying():
+    backend, client = _ndjson_backend([
+        b'not json at all\n{"message":{"content":"ok"},"done":true,"done_reason":"stop"}\n',
+    ])
+
+    chunks = _drain(backend, client)
+
+    assert [c.text for c in chunks if c.text] == ["ok"]
+
+
+def test_stream_raises_model_not_found_on_ollama_404():
+    """The 404 lands on the response head, before any chunk - which is what
+    makes the fallback in stream_with_default_fallback safe to retry."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error": "model 'ghost:1b' not found"})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://ollama.test")
+    backend = OllamaBackend(base_url="http://ollama.test", timeout_seconds=5.0, client=client)
+
+    with pytest.raises(ModelNotFoundError) as exc_info:
+        _drain(backend, client, model_name="ghost:1b")
+
+    assert exc_info.value.model_name == "ghost:1b"
