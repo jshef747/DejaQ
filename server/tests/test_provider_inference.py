@@ -77,3 +77,28 @@ def test_provider_for_model_raises_for_unmapped_model():
 
     with pytest.raises(ValueError, match="Unknown provider"):
         provider_for_model("mystery-model")
+
+
+def test_resolve_provider_prefers_the_stored_value_over_the_guess():
+    from app.services.provider_inference import resolve_provider
+
+    # "llama-3.3-70b" matches no name-prefix rule at all - if resolve_provider
+    # fell through to the guess here it would raise instead of returning this.
+    assert resolve_provider("llama-3.3-70b", "groq") == "groq"
+    # Even for a model the guess WOULD map correctly, the stored value wins -
+    # this is what lets a workspace record a provider a naive prefix guess
+    # would misattribute (OpenRouter's "anthropic/claude-sonnet-5", say).
+    assert resolve_provider("claude-sonnet-5", "openrouter") == "openrouter"
+
+
+def test_resolve_provider_falls_back_to_the_guess_when_stored_is_none():
+    from app.services.provider_inference import resolve_provider
+
+    assert resolve_provider("claude-sonnet-5", None) == "anthropic"
+
+
+def test_resolve_provider_raises_when_stored_is_none_and_the_guess_cannot_place_it():
+    from app.services.provider_inference import resolve_provider
+
+    with pytest.raises(ValueError, match="Unknown provider"):
+        resolve_provider("llama-3.3-70b", None)

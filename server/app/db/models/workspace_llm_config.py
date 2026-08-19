@@ -15,6 +15,7 @@ class WorkspaceLlmConfig(Base):
         primary_key=True,
     )
     external_model: Mapped[str | None] = mapped_column(String, nullable=True)
+    external_provider: Mapped[str | None] = mapped_column(String, nullable=True)
     local_model: Mapped[str | None] = mapped_column(String, nullable=True)
     generalizer_model: Mapped[str | None] = mapped_column(String, nullable=True)
     adjuster_model: Mapped[str | None] = mapped_column(String, nullable=True)

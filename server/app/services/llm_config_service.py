@@ -28,6 +28,7 @@ from app.services.context_enricher import DEFAULT_SYSTEM_PROMPT as ENRICHER_DEFA
 from app.services.llm_router import DEFAULT_SYSTEM_PROMPT as LOCAL_DEFAULT_SYSTEM_PROMPT
 from app.services.model_backends import MODEL_RUNTIME_SPECS
 from app.services.normalizer import DEFAULT_SYSTEM_PROMPT as NORMALIZER_DEFAULT_SYSTEM_PROMPT
+from app.services.provider_registry import PROVIDERS
 from app.services.validator import (
     DEFAULT_IMAGE_SYSTEM_PROMPT as VALIDATOR_DEFAULT_IMAGE_SYSTEM_PROMPT,
     DEFAULT_SYSTEM_PROMPT as VALIDATOR_DEFAULT_SYSTEM_PROMPT,
@@ -100,6 +101,12 @@ class InvalidLlmConfigUpdate(Exception):
 
 class LlmConfigResult(BaseModel):
     external_model: str
+    # The provider recorded for external_model (app.services.provider_registry),
+    # or None for a row written before this column existed / a workspace that
+    # has never changed its external_model - resolve_provider() in
+    # provider_inference.py is what falls back to the name-prefix guess for
+    # that case; nothing here guesses on its behalf.
+    external_provider: str | None
     local_model: str
     generalizer_model: str
     adjuster_model: str
@@ -151,6 +158,7 @@ def _shipped_default_ollama_tag(logical_model_name: str) -> str:
 def _effective(row, credentials_configured: list[str] | None = None) -> LlmConfigResult:
     values = {
         "external_model": row.external_model if row and row.external_model is not None else EXTERNAL_MODEL_NAME,
+        "external_provider": row.external_provider if row else None,
         "local_model": (
             row.local_model if row and row.local_model is not None
             else _shipped_default_ollama_tag(LOCAL_LLM_MODEL_NAME)
@@ -409,6 +417,44 @@ def _validate_token_budget_overrides(
         )
 
 
+def _provider_for_registered_model(model_id: str) -> str | None:
+    """Which provider in the registry lists `model_id`, or None if none does.
+
+    Read-only registry lookup, never modifies provider_registry.py. Used
+    only for write-time validation/backfill of external_provider below -
+    the request-time provider decision is resolve_provider() in
+    provider_inference.py, which does not consult the registry.
+    """
+    for provider_key, spec in PROVIDERS.items():
+        if any(model.id == model_id for model in spec.models):
+            return provider_key
+    return None
+
+
+def _validate_and_resolve_external_model(payload: dict[str, Any], fields_set: set[str]) -> dict[str, Any]:
+    """Reject an external_model the registry doesn't know, and return the
+    external_provider to persist alongside it.
+
+    Only reachable when this update actually touches external_model, same
+    guard style as _validate_ollama_overrides/_validate_prompt_overrides. A
+    null value (reset-to-default) clears external_provider too rather than
+    validating it - EXTERNAL_MODEL_NAME is a shipped constant, not admin
+    input, so there is nothing here to reject.
+    """
+    if "external_model" not in fields_set:
+        return {}
+    model = payload.get("external_model")
+    if model is None:
+        return {"external_provider": None}
+    provider = _provider_for_registered_model(model)
+    if provider is None:
+        raise InvalidLlmConfigUpdate(
+            f"external_model: '{model}' is not a known model - no provider in "
+            "the registry offers it (app/services/provider_registry.py)."
+        )
+    return {"external_provider": provider}
+
+
 def _get_workspace(session, workspace_slug: str) -> Workspace:
     workspace = session.query(Workspace).filter_by(slug=workspace_slug).first()
     if workspace is None:
@@ -434,6 +480,10 @@ def update_for_workspace(
 
     _validate_ollama_overrides(payload, fields_set)
     _validate_prompt_overrides(payload, fields_set)
+    derived = _validate_and_resolve_external_model(payload, fields_set)
+    if derived:
+        payload = {**payload, **derived}
+        fields_set = fields_set | set(derived)
 
     with get_session() as session:
         workspace = _get_workspace(session, workspace_slug)
