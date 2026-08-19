@@ -694,6 +694,26 @@ class MemoryService:
         return self._collection.count()
 
 
+def is_human_authored(memory: "MemoryService", entry_id: str) -> bool:
+    """Whether a person wrote the answer at this id through Edit & Save.
+
+    The one copy every store path shares (the Celery task, its in-process
+    fallback, and the feedback-escalation store), so a fourth one cannot ship
+    without the guard.
+
+    Fails OPEN (False) when the metadata cannot be read: a Chroma blip must not
+    turn every background store into a silent no-op. The cost of being wrong in
+    this direction is one regenerated answer; the other direction stops the
+    cache filling at all.
+    """
+    try:
+        meta = memory.get_entry_metadata(entry_id)
+    except Exception:
+        logger.warning("Could not read provenance for %s; proceeding with store", entry_id, exc_info=True)
+        return False
+    return bool(meta and meta.get("authored") == "human")
+
+
 # ---------------------------------------------------------------------------
 # Namespace-aware pool — lazy, one MemoryService per ChromaDB collection name
 # ---------------------------------------------------------------------------

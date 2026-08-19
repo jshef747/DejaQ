@@ -31,7 +31,12 @@ from app.services.credential_service import (
     get_workspace_provider_key,
 )
 from app.services.llm_providers import LIVE_PROVIDERS
-from app.services.memory_chromaDB import CacheLookupResult, derive_doc_id, get_memory_service
+from app.services.memory_chromaDB import (
+    CacheLookupResult,
+    derive_doc_id,
+    get_memory_service,
+    is_human_authored,
+)
 from app.services.image_fingerprint import (
     ImageFingerprint,
     fingerprint as compute_image_fingerprint,
@@ -793,19 +798,8 @@ def _llm_config_for_workspace_slug(workspace_slug: str) -> EffectiveLlmConfig:
     return _effective_from_config(config)
 
 
-def _human_authored_entry(memory, doc_id: str) -> bool:
-    """Whether a person wrote the answer at this id (Edit & Save).
-
-    Fails OPEN on a read error, for the reason given on the Celery twin in
-    tasks/cache_tasks.py: one regenerated answer beats a cache that silently
-    stops filling.
-    """
-    try:
-        meta = memory.get_entry_metadata(doc_id)
-    except Exception:
-        logger.warning("Could not read provenance for %s; proceeding with store", doc_id, exc_info=True)
-        return False
-    return bool(meta and meta.get("authored") == "human")
+# Bound, not reimplemented — every store path shares one provenance guard.
+_human_authored_entry = is_human_authored
 
 
 def _bg_generalize_and_store(

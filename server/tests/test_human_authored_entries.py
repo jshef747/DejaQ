@@ -6,6 +6,8 @@ one is guarded independently — this file covers all three plus the request-sha
 rules that get an edit to them in the first place.
 """
 
+import asyncio
+
 import pytest
 from pydantic import ValidationError
 
@@ -103,6 +105,59 @@ def test_in_process_fallback_store_skips_a_human_authored_entry(monkeypatch):
     )
 
     assert memory.stored == []
+
+
+class _EscalationAdjuster:
+    async def generalize(self, answer):
+        return f"generalized:{answer}"
+
+
+def test_escalation_store_skips_a_human_authored_entry(monkeypatch):
+    """The feedback-escalation store writes to the same id as everything else,
+    and reaches a human entry the other guards never see: a turn the cache
+    filter refused was never stored, so its thumbs-down deletes nothing, while
+    an Edit & Save on the same question created the entry the re-answer would
+    now upsert over."""
+    from app.services import escalation
+
+    memory = _FakeMemory({"authored": "human"})
+    monkeypatch.setattr(escalation, "get_memory_service", lambda ns: memory)
+    monkeypatch.setattr(escalation, "_workspace_config_override", lambda tenant, field: None)
+    monkeypatch.setattr(escalation, "get_context_adjuster_service", lambda **kw: _EscalationAdjuster())
+
+    asyncio.run(
+        escalation._store_escalation_cache_entry(
+            clean_query="what is the refund window",
+            answer="the escalated model answer",
+            original_query="What is the refund window?",
+            tenant_id="acme",
+            cache_namespace="acme__eng",
+        )
+    )
+
+    assert memory.stored == []
+
+
+def test_escalation_store_proceeds_for_an_ordinary_entry(monkeypatch):
+    """Control: the escalation store is otherwise unchanged."""
+    from app.services import escalation
+
+    memory = _FakeMemory({"generalized_answer": "an older model answer"})
+    monkeypatch.setattr(escalation, "get_memory_service", lambda ns: memory)
+    monkeypatch.setattr(escalation, "_workspace_config_override", lambda tenant, field: None)
+    monkeypatch.setattr(escalation, "get_context_adjuster_service", lambda **kw: _EscalationAdjuster())
+
+    asyncio.run(
+        escalation._store_escalation_cache_entry(
+            clean_query="what is the refund window",
+            answer="the escalated model answer",
+            original_query="What is the refund window?",
+            tenant_id="acme",
+            cache_namespace="acme__eng",
+        )
+    )
+
+    assert memory.stored[0][0][1] == "generalized:the escalated model answer"
 
 
 # ── Score eviction must not age out a human answer ────────────────────────────

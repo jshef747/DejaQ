@@ -7,7 +7,13 @@ import redis as redis_lib
 
 from app.celery_app import celery_app
 from app.config import REDIS_URL, EVICTION_FLOOR
-from app.services.memory_chromaDB import derive_doc_id, get_memory_service, list_namespaces, _pool
+from app.services.memory_chromaDB import (
+    derive_doc_id,
+    get_memory_service,
+    is_human_authored,
+    list_namespaces,
+    _pool,
+)
 from app.services import llm_config_service, pipeline_config_cache, rag_service
 from app.services.service_factory import get_context_adjuster_service
 
@@ -26,20 +32,8 @@ def _is_suppressed(clean_query: str) -> bool:
     except redis_lib.exceptions.RedisError:
         return False  # Redis unavailable: proceed with storage
 
-def _is_human_authored(memory, doc_id: str) -> bool:
-    """Whether a person wrote the answer at this id through Edit & Save.
-
-    Fails OPEN (False) when the metadata cannot be read: a Chroma blip must not
-    turn every background store into a silent no-op. The cost of being wrong in
-    this direction is one regenerated answer; the other direction stops the
-    cache filling at all.
-    """
-    try:
-        meta = memory.get_entry_metadata(doc_id)
-    except Exception:
-        logger.warning("Could not read provenance for %s; proceeding with store", doc_id, exc_info=True)
-        return False
-    return bool(meta and meta.get("authored") == "human")
+# Bound, not reimplemented — every store path shares one provenance guard.
+_is_human_authored = is_human_authored
 
 
 _worker_loop: asyncio.AbstractEventLoop | None = None

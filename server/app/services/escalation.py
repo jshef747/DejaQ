@@ -15,7 +15,7 @@ from app.services import cache_filter, llm_config_service, workspace_overrides
 from app.services.chat_messages import extract_pipeline_inputs
 from app.services.credential_service import CredentialService
 from app.services.external_llm import ExternalLLMService
-from app.services.memory_chromaDB import get_memory_service
+from app.services.memory_chromaDB import get_memory_service, is_human_authored
 from app.services.provider_inference import provider_for_model
 from app.services.request_logger import request_logger
 from app.services.response_registry import response_registry
@@ -96,6 +96,19 @@ async def _store_escalation_cache_entry(
 ) -> None:
     doc_id = _doc_id(clean_query)
     try:
+        # Same guard the two background store paths carry (tasks/cache_tasks.py,
+        # openai_compat.py): a person wrote the answer at this id through Edit &
+        # Save, and the model's re-answer must not replace their text. Reachable
+        # here even when the escalating turn was never cached itself - the edit
+        # creates the entry at the same id, derived from the query alone.
+        memory = get_memory_service(cache_namespace)
+        if is_human_authored(memory, doc_id):
+            logger.info(
+                "feedback_escalation cache_store status=skipped reason=human_authored namespace=%s doc_id=%s",
+                cache_namespace,
+                doc_id,
+            )
+            return
         generalizer_model = _workspace_config_override(tenant_id, "generalizer_model")
         generalizer_prompt = _workspace_config_override(tenant_id, "generalizer_system_prompt")
         rewrite_max_tokens = _workspace_config_override(tenant_id, "rewrite_max_tokens")
@@ -111,7 +124,18 @@ async def _store_escalation_cache_entry(
             else get_context_adjuster_service()
         )
         generalized = await adjuster_service.generalize(answer)
-        get_memory_service(cache_namespace).store_interaction(
+        # Re-read right before the upsert: generalize() takes seconds, which is
+        # the window an edit most likely lands in. Same pair as the two
+        # background store paths.
+        if is_human_authored(memory, doc_id):
+            logger.info(
+                "feedback_escalation cache_store status=skipped reason=human_authored_race "
+                "namespace=%s doc_id=%s",
+                cache_namespace,
+                doc_id,
+            )
+            return
+        memory.store_interaction(
             clean_query,
             generalized,
             original_query,

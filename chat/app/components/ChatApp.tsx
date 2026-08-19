@@ -58,6 +58,19 @@ function turnQuestionIndex(messages: AppMessage[], index: number): number {
   return -1;
 }
 
+// Whether the turn a message belongs to carried an image or a file. Read off
+// the question's own `hadAttachment` flag, which is the only record that
+// survives a reload: the image data URL is stripped when a conversation is
+// persisted (conversation-store.ts), so `imageUrl` says "no attachment" for
+// every image turn in a reloaded conversation. Everything that withholds a
+// blind replay from the server reads the turn through this.
+function turnHadAttachment(messages: AppMessage[], index: number): boolean {
+  const questionIndex = turnQuestionIndex(messages, index);
+  if (questionIndex < 0) return false;
+  const question = messages[questionIndex];
+  return Boolean(question.hadAttachment || question.imageUrl || question.fileName);
+}
+
 // A conversation with nothing in it yet. Shared instance so the empty
 // transcript keeps a stable identity across renders and the effects that
 // depend on it do not re-run for a conversation that has not changed.
@@ -672,8 +685,7 @@ export default function ChatApp() {
     // question would get cached as an ungated text entry. Withhold the replay
     // for a turn whose preceding user message carried an attachment; feedback
     // (score adjustment / delete) is still recorded either way.
-    const precedingUserMsg = [...messages.slice(0, msgIndex)].reverse().find((m) => m.role === "user");
-    const isAttachmentAnchored = Boolean(precedingUserMsg?.imageUrl || precedingUserMsg?.fileName);
+    const isAttachmentAnchored = turnHadAttachment(messages, msgIndex);
 
     updateFeedbackPhase(convId, msgId, "submitting");
 
@@ -755,10 +767,7 @@ export default function ChatApp() {
     const msg = msgIndex >= 0 ? currentMessages[msgIndex] : undefined;
     if (!msg?.responseId && !msg?.interactionId) return false;
 
-    const precedingUserMsg = [...currentMessages.slice(0, msgIndex)]
-      .reverse()
-      .find((m) => m.role === "user");
-    const isAttachmentAnchored = Boolean(precedingUserMsg?.imageUrl || precedingUserMsg?.fileName);
+    const isAttachmentAnchored = turnHadAttachment(currentMessages, msgIndex);
 
     const result = await saveEditedAnswer(
       msg.responseId ?? null,
