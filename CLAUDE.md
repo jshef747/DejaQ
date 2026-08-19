@@ -243,6 +243,7 @@ Layering: `routers/` (endpoints) → `services/` (business logic) → `schemas/`
 - Per-request stats logged to SQLite (fire-and-forget via asyncio.create_task)
 - Feedback adjusts ChromaDB entry scores (+1.0 positive, −2.0 negative); first negative deletes immediately
 - External LLM routing supports Google, OpenAI, and Anthropic provider clients through encrypted workspace credentials; `ExternalLLMService` is a singleton
+- `ExternalLLMRequest.temperature` defaults to `None` and is sent to a provider only when the client explicitly set one — never inject a hardcoded default here. Claude Opus 4.7+/Sonnet 5 and every `gpt-5.x` model 400 on any non-default `temperature`, and that 400 used to be swallowed into a generic HTTP 200 apology (`openai_compat.py`), so a workspace on an affected model looked like it simply had a cache that never filled. `anthropic.py`/`openai.py` each retry once without `temperature` on a 400 that names it; a provider 400/401/429 now reaches the caller as its own status on the non-streaming path (streaming has already flushed its 200 headers by the time generation starts, so it still gets the apology there)
 - Workspace/dept/API-key data lives in SQLite (SQLAlchemy + Alembic); `dejaq.db` by default
 
 ### Management API
