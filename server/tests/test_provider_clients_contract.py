@@ -94,6 +94,45 @@ def test_openai_provider_client_returns_contract_shape(monkeypatch):
     assert response.finish_reason == "stop"
 
 
+def test_openai_provider_client_cache_keyed_on_base_url_not_api_key_alone(monkeypatch):
+    """xAI/DeepSeek/Groq share the OpenAI client class and can share an API
+    key string with OpenAI itself (or with each other). The client cache must
+    key on (api_key, base_url): keyed on api_key alone, the second call below
+    would reuse the first provider's cached client - pointed at the wrong
+    host - instead of building a second one for the new base_url."""
+    from app.services.llm_providers import openai as openai_provider
+
+    created = []
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            return SimpleNamespace(
+                choices=[SimpleNamespace(
+                    message=SimpleNamespace(content="answer"),
+                    finish_reason="stop",
+                )],
+                usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+            )
+
+    class FakeClient:
+        def __init__(self, api_key, base_url=None):
+            created.append((api_key, base_url))
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr(openai_provider.openai, "AsyncOpenAI", FakeClient)
+
+    default_client = openai_provider.OpenAIProviderClient()
+    groq_client = openai_provider.OpenAIProviderClient(base_url="https://api.groq.com/openai/v1")
+
+    asyncio.run(default_client.generate_response(_request("gpt-4o"), "SharedKey"))
+    asyncio.run(groq_client.generate_response(_request("openai/gpt-oss-120b"), "SharedKey"))
+
+    assert created == [
+        ("SharedKey", None),
+        ("SharedKey", "https://api.groq.com/openai/v1"),
+    ]
+
+
 def test_anthropic_provider_client_returns_contract_shape_and_splits_system(monkeypatch):
     from app.services.llm_providers import anthropic as anthropic_provider
 

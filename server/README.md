@@ -79,7 +79,7 @@ Hard-query external provider calls use encrypted per-workspace credentials store
 | `DEJAQ_LOG_LEVEL` | `INFO` | App log level |
 | `DEJAQ_LOG_SHOW_CONTENT` | `false` | Include prompt/response content in request logs |
 | `DEJAQ_EVICTION_FLOOR` | `-5.0` | Cache score floor for eviction |
-| `DEJAQ_EXTERNAL_MODEL` | `gemini-2.5-flash` | Default hard-query model when workspace config has no override |
+| `DEJAQ_EXTERNAL_MODEL` | unset (no default) | Server-wide fallback hard-query model when a workspace has no `external_model` override. There is no baked-in default: with neither this nor a workspace override set, a hard query returns 422 naming the fix rather than being silently routed to some provider |
 | `DEJAQ_ROUTING_THRESHOLD` | `0.3` | Default easy/hard threshold |
 | `DEJAQ_CHROMA_HOST` | `127.0.0.1` | ChromaDB host |
 | `DEJAQ_CHROMA_PORT` | `8001` | ChromaDB port |

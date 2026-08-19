@@ -3,8 +3,9 @@ import Topbar from "@/components/Topbar";
 import { listWorkspaces } from "@/app/actions/workspaces";
 import { getLlmConfig } from "@/app/actions/llm-config";
 import { listCredentials } from "@/app/actions/credentials";
+import { getProviders } from "@/app/actions/providers";
 import SettingsClient from "./SettingsClient";
-import type { CredentialItem, LlmConfigResponse, WorkspaceItem } from "@/lib/types";
+import type { CredentialItem, LlmConfigResponse, ProviderCatalogItem, WorkspaceItem } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -63,13 +64,22 @@ export default async function SettingsPage({
   const activeWorkspace = workspaces.find((item) => item.slug === activeSlug);
   let config: LlmConfigResponse | null = null;
   let credentials: CredentialItem[] = [];
+  let providers: ProviderCatalogItem[] = [];
   let error: string | null = null;
 
   try {
-    [config, credentials] = await Promise.all([
+    const [configRes, credentialsList, providersRes] = await Promise.all([
       getLlmConfig(activeSlug),
       listCredentials(activeSlug),
+      getProviders(),
     ]);
+    config = configRes;
+    credentials = credentialsList;
+    if (providersRes.ok) {
+      providers = providersRes.data.providers.filter((item) => item.live && item.models.length > 0);
+    } else {
+      error = providersRes.error;
+    }
   } catch (e) {
     error = (e as Error).message;
   }
@@ -83,6 +93,7 @@ export default async function SettingsPage({
           workspaceName={activeWorkspace?.name ?? activeSlug}
           initialConfig={config}
           initialCredentials={credentials}
+          providers={providers}
           loadError={error}
         />
       ) : (

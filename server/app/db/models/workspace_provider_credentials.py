@@ -1,19 +1,21 @@
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 
 
 class WorkspaceProviderCredentials(Base):
+    """No CHECK constraint on `provider`: the set of valid providers is
+    `app.services.provider_registry`, validated in Python at write time.
+    Dropped by migration e5f6a7b8c9d0 - see that file for the constraint's
+    actual (misnamed) name on already-migrated databases.
+    """
+
     __tablename__ = "workspace_provider_credentials"
     __table_args__ = (
         UniqueConstraint("workspace_id", "provider", name="uq_workspace_provider_credentials_workspace_provider"),
-        CheckConstraint(
-            "provider IN ('google', 'openai', 'anthropic', 'mistral', 'cohere', 'together', 'groq', 'fireworks')",
-            name="ck_workspace_provider_credentials_provider",
-        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

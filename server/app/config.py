@@ -52,7 +52,10 @@ CHROMA_HOST = os.getenv("DEJAQ_CHROMA_HOST", "127.0.0.1")
 CHROMA_PORT = int(os.getenv("DEJAQ_CHROMA_PORT", "8001"))
 
 # External LLM
-EXTERNAL_MODEL_NAME = os.getenv("DEJAQ_EXTERNAL_MODEL", "gemini-2.5-flash")
+# No baked-in default: an unset DEJAQ_EXTERNAL_MODEL means no external model
+# is configured server-wide, and every consumer must treat that as "ask the
+# workspace to configure a provider" rather than silently picking one.
+EXTERNAL_MODEL_NAME = os.getenv("DEJAQ_EXTERNAL_MODEL")
 ROUTING_THRESHOLD = _get_float("DEJAQ_ROUTING_THRESHOLD", 0.3)
 CREDENTIAL_ENCRYPTION_KEY = os.getenv("DEJAQ_CREDENTIAL_ENCRYPTION_KEY", "")
 

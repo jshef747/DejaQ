@@ -202,7 +202,15 @@ request
   the enricher has already folded a "give me the short version" ask back into the original
   question by the time the distance is measured.
 - Easy miss: served by the configured local model backend.
-- Hard miss: served by the provider inferred from the workspace's configured model, using encrypted workspace credentials.
+- Hard miss: served by the provider recorded for the workspace's configured external model (or,
+  for a config saved before that provider was recorded, inferred from the model name), using
+  encrypted workspace credentials.
+- A workspace with no external model configured - no per-workspace override and no
+  `DEJAQ_EXTERNAL_MODEL` server default - returns `422 Unprocessable Entity`, naming the fix:
+  configure a provider and model in Settings. DejaQ never silently substitutes a model nobody
+  chose.
+- A configured model that maps to no supported provider also returns `422 Unprocessable Entity`,
+  naming the offending model.
 - Missing hard-query credentials return `402 Payment Required`.
 - A hard-query provider failure on the **non-streaming** path returns `400` (request rejected),
   `502` (the workspace's stored provider credential was rejected — not `401`, which on this
@@ -212,7 +220,7 @@ request
   A status-less failure (timeout, connection reset) still returns `200` with the generic apology,
   as does every failure on the streaming path, whose `200` headers are already flushed.
 
-There is no runtime `GEMINI_API_KEY` fallback. Store provider credentials through the dashboard or `PUT /admin/v1/workspaces/{workspace_slug}/credentials/{provider}`.
+There is no runtime `GEMINI_API_KEY` fallback, and no baked-in default external model. Store provider credentials through the dashboard or `PUT /admin/v1/workspaces/{workspace_slug}/credentials/{provider}`; choose a provider and model through the dashboard Settings page or `PUT /admin/v1/workspaces/{workspace_slug}/llm-config`.
 
 ## SDK Example
 

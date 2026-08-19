@@ -9,6 +9,8 @@ SUPPORTED_PROVIDERS = {
     "google",
     "openai",
     "anthropic",
+    "xai",
+    "deepseek",
     "mistral",
     "cohere",
     "together",

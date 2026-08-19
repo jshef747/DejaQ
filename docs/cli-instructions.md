@@ -72,5 +72,8 @@ Stats read `DEJAQ_STATS_DB` and mirror the dashboard/admin API aggregate shapes.
 Provider credentials (encrypted per workspace with `DEJAQ_CREDENTIAL_ENCRYPTION_KEY`) and
 feedback are managed through the dashboard or the management API
 (`/admin/v1/workspaces/{slug}/credentials`, `/admin/v1/feedback`) — not the CLI.
-Supported live providers: `google`, `openai`, `anthropic`.
+Supported live providers: `google`, `openai`, `anthropic`, `xai`, `deepseek`, `groq` -
+the last three reuse the OpenAI-compatible client through a per-provider `base_url`
+rather than shipping a client module of their own. Provider names are validated in
+Python against `app/services/provider_registry.py`; there is no database constraint.
 There is no platform `GEMINI_API_KEY` fallback.
