@@ -74,6 +74,14 @@ Non-streaming responses use the OpenAI chat-completion shape:
 
 Streaming responses emit OpenAI-style `data:` SSE chunks followed by `data: [DONE]`.
 
+On a **cache miss** the deltas are the generator's own output as it produces it, not a finished
+answer re-split after the fact: the response head (status + all the `x-dejaq-*` headers below)
+is flushed before generation starts, so a client can name the route and model it is waiting on
+seconds before the first content byte arrives. `finish_reason` / `status` and, on
+`/v1/responses`, `usage` only settle once the stream is drained, so they ride the terminal
+event rather than the head. A **cache hit** is unchanged - the answer already exists, so head
+and body arrive together.
+
 ### `usage`: real counts vs. estimate
 
 `usage` is not derived the same way on every route, because only one route has a real token
@@ -116,7 +124,7 @@ Gateway headers:
 | `x-dejaq-conversation-id` | OpenAI-compatible response id |
 | `x-dejaq-interaction-id` | Interaction id for feedback / escalation |
 | `x-dejaq-tier` | Serving tier: `cache`, `local`, or `external` |
-| `x-dejaq-response-id` | Cache entry response id when feedback can be submitted |
+| `x-dejaq-response-id` | Cache entry response id when feedback can be submitted. On a **streaming** miss the header goes out before the answer exists, so it names the entry the request *intends* to store - see [Feedback](#feedback) |
 | `x-dejaq-rag-chunks` | Present on a cache miss when the answer was **grounded** in the workspace knowledge base (Rug); value is the number of injected chunks. Absent when nothing was retrieved |
 
 > `POST /v1/responses` (OpenAI Responses API, newer format) shares the same auth, headers, and
@@ -233,3 +241,10 @@ Content-Type: application/json
   "comment": "optional"
 }
 ```
+
+An id that names no entry returns `404 {"detail": "response_id not found"}`. Two cases produce
+one: an entry evicted since it was served, and a **streaming** miss whose header was flushed
+before generation and whose answer a store guard then refused (a failed, empty, or truncated
+answer - see [`finish_reason` / `status`](#finish_reason--status-truncation-is-reported-not-hidden)).
+Withholding the id until the store decision would mean withholding the whole response head
+until the answer was complete, which is the delay streaming exists to remove.
