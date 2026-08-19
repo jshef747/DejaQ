@@ -149,13 +149,13 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
         style={{
           background: "var(--bg-2)",
           border: "1px solid var(--border-2)",
-          borderRadius: "10px",
+          borderRadius: "16px",
           boxShadow: "var(--shadow)",
           display: "flex",
           flexDirection: "column",
-          gap: 0,
-          maxWidth: "460px",
-          width: "calc(100vw - 40px)",
+          maxHeight: "700px",
+          width: "552px",
+          maxWidth: "calc(100vw - 40px)",
         }}
       >
         <div
@@ -163,39 +163,43 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
             alignItems: "center",
             borderBottom: "1px solid var(--border)",
             display: "flex",
-            padding: "16px 20px",
+            flexShrink: 0,
+            height: "58px",
+            padding: "0 14px 0 24px",
           }}
         >
-          <div>
-            <h2 style={{ fontSize: "14px", fontWeight: 600, margin: 0 }}>Chat Settings</h2>
-            <p style={{ color: "var(--fg-dim)", fontSize: "12px", margin: "2px 0 0" }}>
-              Paste a workspace API key below, or leave it blank to use DEJAQ_API_KEY from
-              chat/.env.local.
-            </p>
-          </div>
+          <h2 style={{ flex: 1, fontSize: "17px", fontWeight: 600, letterSpacing: "-0.018em", margin: 0 }}>
+            Settings
+          </h2>
           <button
             onClick={onClose}
+            aria-label="Close settings"
             style={{
+              alignItems: "center",
               background: "transparent",
               border: "none",
-              borderRadius: "4px",
+              borderRadius: "8px",
               color: "var(--fg-dimmer)",
               cursor: "pointer",
-              fontSize: "16px",
-              marginLeft: "auto",
-              padding: "2px 6px",
+              display: "flex",
+              height: "30px",
+              justifyContent: "center",
+              width: "30px",
             }}
-            aria-label="Close settings"
           >
-            x
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+              <path d="M4.2 4.2 11.8 11.8M11.8 4.2 4.2 11.8" />
+            </svg>
           </button>
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: "16px", padding: "20px" }}>
-          <Field
-            label="DejaQ server"
-            hint="Leave blank to use this machine (http://127.0.0.1:8000). Set to http://<other-host>:8000 to use a server running on another computer on the network."
-          >
+        {/* Height-capped body with its own scroll, so a short window never
+            clips the Developer group off the bottom. */}
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "22px 24px 24px" }}>
+          {/* ── Connection ── */}
+          <SectionLabel>Connection</SectionLabel>
+          <div style={{ display: "grid", gap: "12px 16px", gridTemplateColumns: "128px 1fr", marginTop: "12px" }}>
+            <RowLabel>Server</RowLabel>
             <input
               type="text"
               value={serverBaseUrl}
@@ -205,12 +209,8 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
               autoComplete="off"
               style={inputStyle}
             />
-          </Field>
 
-          <Field
-            label="API key"
-            hint="Paste a workspace API key to use it instead of DEJAQ_API_KEY from chat/.env.local. Stored in this browser only."
-          >
+            <RowLabel>API key</RowLabel>
             <div style={{ position: "relative" }}>
               <input
                 type={showApiKey ? "text" : "password"}
@@ -242,33 +242,45 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
                 {showApiKey ? <EyeOff size={15} /> : <Eye size={15} />}
               </button>
             </div>
-          </Field>
+          </div>
+          <div style={{ alignItems: "center", display: "flex", gap: "10px", marginLeft: "144px", marginTop: "12px" }}>
+            <span
+              aria-hidden
+              style={{
+                background: health === "ok" ? "var(--green)" : health === "error" ? "var(--red)" : "var(--fg-dimmer)",
+                borderRadius: "999px",
+                flexShrink: 0,
+                height: "6px",
+                width: "6px",
+              }}
+            />
+            <span style={{ color: health === "error" ? "var(--red)" : health === "ok" ? "var(--green)" : "var(--fg-dim)", fontSize: "12.5px" }}>
+              {health === "idle" && "Not tested yet"}
+              {health === "checking" && "Checking…"}
+              {(health === "ok" || health === "error") && healthText}
+            </span>
+            <div style={{ flex: 1 }} />
+            <button onClick={handleTest} disabled={health === "checking"} style={btn("ghost", health === "checking")}>
+              {health === "checking" ? "Testing…" : "Test again"}
+            </button>
+          </div>
 
-          <Field
-            label={
-              <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                Department
-                <span style={{ color: "var(--red)", fontSize: "11px" }}>required</span>
-                {deptStatus === "loading" && (
-                  <span style={{ color: "var(--fg-dimmer)", fontSize: "11px" }}>Loading...</span>
-                )}
-                {deptStatus === "error" && (
-                  <span style={{ color: "var(--red)", fontSize: "11px" }}>Could not load</span>
-                )}
-              </span>
-            }
-            hint="Select the department whose cache namespace you want to use"
-          >
+          <Divider />
+
+          {/* ── Workspace ── */}
+          <SectionLabel>Workspace</SectionLabel>
+          <div style={{ alignItems: "center", display: "grid", gap: "12px 16px", gridTemplateColumns: "128px 1fr", marginTop: "12px" }}>
+            <span style={{ alignItems: "center", color: "var(--fg-dim)", display: "flex", fontSize: "13px", gap: "6px" }}>
+              Department
+              {deptStatus === "loading" && <span style={{ color: "var(--fg-dimmer)", fontSize: "11px" }}>Loading…</span>}
+              {deptStatus === "error" && <span style={{ color: "var(--red)", fontSize: "11px" }}>Could not load</span>}
+            </span>
             <select
               ref={firstInputRef}
               value={deptSlug}
               onChange={(e) => setDeptSlug(e.target.value)}
               disabled={deptDisabled}
-              style={{
-                ...inputStyle,
-                cursor: deptDisabled ? "not-allowed" : "pointer",
-                opacity: deptDisabled ? 0.55 : 1,
-              }}
+              style={{ ...inputStyle, cursor: deptDisabled ? "not-allowed" : "pointer", opacity: deptDisabled ? 0.55 : 1 }}
             >
               {departments.length === 0 ? (
                 <option value={deptSlug}>{deptSlug || "--"}</option>
@@ -280,111 +292,44 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
                 ))
               )}
             </select>
-          </Field>
-
-          <div
-            style={{
-              background: "var(--bg)",
-              border: "1px solid var(--border)",
-              borderRadius: "6px",
-              padding: "12px",
-            }}
-          >
-            <div style={{ marginBottom: "12px" }}>
-              <div style={{ color: "var(--fg)", fontSize: "12px", fontWeight: 600 }}>
-                Developer overrides
-              </div>
-              <div style={{ color: "var(--fg-dimmer)", fontSize: "11px", lineHeight: 1.45, marginTop: "3px" }}>
-                Browser controls for CPU-only testing and routing diagnostics.
-              </div>
-            </div>
-            <div style={{ display: "grid", gap: "12px", gridTemplateColumns: "1fr" }}>
-              <Field
-                label="Local model profile"
-                hint="Weak CPU uses Qwen 0.5B for local roles"
-              >
-                <select
-                  value={modelProfile}
-                  onChange={(e) => setModelProfile(e.target.value as ModelProfile)}
-                  style={{ ...inputStyle, cursor: "pointer" }}
-                >
-                  <option value="default">Default</option>
-                  <option value="weak_cpu">Weak CPU Test</option>
-                </select>
-              </Field>
-              <Field
-                label="Routing mode"
-                hint="Forced modes skip the classifier"
-              >
-                <select
-                  value={routingMode}
-                  onChange={(e) => setRoutingMode(e.target.value as RoutingMode)}
-                  style={{ ...inputStyle, cursor: "pointer" }}
-                >
-                  <option value="auto">Auto</option>
-                  <option value="easy_local">Force Easy/Local</option>
-                  <option value="hard_external">Force Hard/External</option>
-                </select>
-              </Field>
-            </div>
           </div>
+          <p style={{ color: "var(--fg-dimmer)", fontSize: "11.5px", lineHeight: "17px", marginLeft: "144px", marginTop: "8px" }}>
+            Each department has its own cache. Answers are never shared across them.
+          </p>
 
-          <div
-            style={{
-              alignItems: "center",
-              background: "var(--bg)",
-              border: "1px solid var(--border)",
-              borderRadius: "6px",
-              display: "flex",
-              gap: "10px",
-              padding: "10px 14px",
-            }}
-          >
-            <div style={{ flex: 1 }}>
-              {health === "idle" && (
-                <span style={{ color: "var(--fg-dimmer)", fontSize: "12px" }}>
-                  Test the DejaQ server above and load its departments.
-                </span>
-              )}
-              {health === "checking" && (
-                <span style={{ color: "var(--fg-dim)", fontSize: "12px" }}>Checking...</span>
-              )}
-              {health === "ok" && (
-                <span style={{ color: "var(--green)", fontSize: "12px" }}>{healthText}</span>
-              )}
-              {health === "error" && (
-                <span style={{ color: "var(--red)", fontSize: "12px" }}>{healthText}</span>
-              )}
-            </div>
-            <button
-              onClick={handleTest}
-              disabled={health === "checking"}
-              style={btn("secondary", health === "checking")}
+          <Divider />
+
+          {/* ── Developer ── */}
+          <div style={{ alignItems: "baseline", display: "flex", gap: "9px" }}>
+            <SectionLabel>Developer</SectionLabel>
+            <span style={{ color: "var(--fg-dimmer)", fontSize: "11.5px" }}>affects this browser only</span>
+          </div>
+          <div style={{ display: "grid", gap: "14px 16px", gridTemplateColumns: "128px 1fr", marginTop: "12px" }}>
+            <RowLabel>Routing</RowLabel>
+            <SegmentedControl value={routingMode} onChange={setRoutingMode} />
+
+            <RowLabel>Local profile</RowLabel>
+            <select
+              value={modelProfile}
+              onChange={(e) => setModelProfile(e.target.value as ModelProfile)}
+              style={{ ...inputStyle, cursor: "pointer" }}
             >
-              {health === "checking" ? "Testing..." : "Test connection"}
-            </button>
+              <option value="default">Default</option>
+              <option value="weak_cpu">Weak CPU Test</option>
+            </select>
           </div>
+          <p style={{ color: "var(--fg-dimmer)", fontSize: "11.5px", lineHeight: "17px", marginLeft: "144px", marginTop: "8px" }}>
+            Forced routing skips the difficulty classifier. Weak CPU drops local roles to Qwen 0.5B.
+          </p>
         </div>
 
-        <div
-          style={{
-            borderTop: "1px solid var(--border)",
-            display: "flex",
-            gap: "8px",
-            justifyContent: "flex-end",
-            padding: "14px 20px",
-          }}
-        >
-          <button onClick={onClose} style={btn("secondary")}>
+        <div style={{ alignItems: "center", borderTop: "1px solid var(--border)", display: "flex", flexShrink: 0, gap: "9px", padding: "14px 24px" }}>
+          <span style={{ color: "var(--fg-dimmer)", flex: 1, fontSize: "11.5px" }}>Stored in this browser</span>
+          <button onClick={onClose} style={btn("ghost")}>
             Cancel
           </button>
-          <button
-            onClick={handleSave}
-            disabled={!canSave}
-            title={!canSave ? "Department is required" : undefined}
-            style={btn("primary", !canSave)}
-          >
-            Save settings
+          <button onClick={handleSave} disabled={!canSave} title={!canSave ? "Department is required" : undefined} style={btn("primary", !canSave)}>
+            Save
           </button>
         </div>
       </div>
@@ -392,47 +337,102 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
   );
 }
 
-function Field({
-  label,
-  hint,
-  children,
-}: {
-  label: React.ReactNode;
-  hint: string;
-  children: React.ReactNode;
-}) {
+// ─── Routing mode: a segmented control, not a <select> — it's a diagnostic
+// three-way toggle, not an open-ended choice. ─────────────────────────────
+
+const ROUTING_OPTIONS: { value: RoutingMode; label: string }[] = [
+  { value: "auto", label: "Auto" },
+  { value: "easy_local", label: "Force local" },
+  { value: "hard_external", label: "Force cloud" },
+];
+
+function SegmentedControl({ value, onChange }: { value: RoutingMode; onChange: (v: RoutingMode) => void }) {
   return (
-    <label style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
-      <span style={{ color: "var(--fg)", fontSize: "12px", fontWeight: 500 }}>{label}</span>
-      {children}
-      <span style={{ color: "var(--fg-dimmer)", fontSize: "11px" }}>{hint}</span>
-    </label>
+    <div
+      role="radiogroup"
+      aria-label="Routing mode"
+      style={{
+        background: "var(--bg)",
+        border: "1px solid var(--border-2)",
+        borderRadius: "9px",
+        display: "flex",
+        gap: "3px",
+        height: "32px",
+        padding: "3px",
+      }}
+    >
+      {ROUTING_OPTIONS.map((opt) => {
+        const active = value === opt.value;
+        return (
+          <button
+            key={opt.value}
+            role="radio"
+            aria-checked={active}
+            onClick={() => onChange(opt.value)}
+            style={{
+              alignItems: "center",
+              background: active ? "var(--bg-3)" : "transparent",
+              border: active ? "1px solid var(--border-2)" : "1px solid transparent",
+              borderRadius: "6px",
+              color: active ? "var(--fg)" : "var(--fg-dimmer)",
+              cursor: "pointer",
+              display: "flex",
+              flex: 1,
+              fontSize: "12.5px",
+              fontWeight: active ? 600 : 400,
+              justifyContent: "center",
+            }}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
-function btn(kind: "primary" | "secondary", disabled = false) {
-  const base = {
-    borderRadius: "5px",
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ color: "var(--fg-dimmer)", fontSize: "10.5px", fontWeight: 600, letterSpacing: "0.10em", textTransform: "uppercase" }}>
+      {children}
+    </div>
+  );
+}
+
+function RowLabel({ children }: { children: React.ReactNode }) {
+  return <span style={{ color: "var(--fg-dim)", fontSize: "13px" }}>{children}</span>;
+}
+
+function Divider() {
+  return <div style={{ background: "var(--border)", height: "1px", margin: "22px 0" }} />;
+}
+
+function btn(kind: "primary" | "ghost", disabled = false): React.CSSProperties {
+  const base: React.CSSProperties = {
+    borderRadius: "8px",
     cursor: disabled ? "not-allowed" : "pointer",
-    fontSize: "12px",
+    fontSize: "12.5px",
     fontWeight: 500,
+    height: "32px",
     opacity: disabled ? 0.55 : 1,
-    padding: "7px 14px",
-    whiteSpace: "nowrap" as const,
+    padding: "0 14px",
+    whiteSpace: "nowrap",
   };
-  if (kind === "primary")
-    return { ...base, background: "var(--fg)", border: "1px solid var(--fg)", color: "var(--bg)" };
-  return { ...base, background: "var(--bg-3)", border: "1px solid var(--border-2)", color: "var(--fg-dim)" };
+  if (kind === "primary") {
+    return { ...base, background: "var(--accent-solid)", border: "1px solid var(--accent-solid)", color: "#fff5ee", fontWeight: 600 };
+  }
+  return { ...base, background: "transparent", border: "1px solid transparent", color: "var(--fg-dim)" };
 }
 
 const inputStyle: React.CSSProperties = {
   background: "var(--bg)",
   border: "1px solid var(--border-2)",
-  borderRadius: "5px",
+  borderRadius: "8px",
   color: "var(--fg)",
   fontFamily: "var(--font-sans)",
   fontSize: "13px",
+  height: "34px",
   outline: "none",
-  padding: "8px 10px",
+  padding: "0 11px",
   width: "100%",
 };

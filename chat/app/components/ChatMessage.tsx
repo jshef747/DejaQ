@@ -55,6 +55,11 @@ export interface AppMessage {
   // miss (local/cloud) or before the pipeline resolves either.
   cacheDistance?: number | null;
   cacheMatchedQuery?: string | null;
+  // Set by Stop: this answer was cut off mid-generation. Whatever text had
+  // already streamed in is kept, marked, and never mistaken for a complete
+  // answer — it carries no responseId/interactionId, so the feedback row
+  // below simply doesn't render for it.
+  stopped?: boolean;
 }
 
 interface Props {
@@ -278,6 +283,15 @@ export default function ChatMessage({
       )}
 
       <MarkdownContent content={message.content} />
+
+      {message.stopped && (
+        <div style={{ alignItems: "center", color: "var(--fg-dimmer)", display: "flex", fontSize: "12px", gap: "6px", marginTop: "10px" }}>
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
+            <rect x="4" y="4" width="8" height="8" rx="1.5" />
+          </svg>
+          Stopped
+        </div>
+      )}
 
       {/* Timestamp + response-detail affordance — hover-revealed; the strip
           above already carries the route, so this row is pure metadata. */}
