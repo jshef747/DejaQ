@@ -187,10 +187,15 @@ def test_local_tier_without_credential_returns_no_credential(monkeypatch):
         escalation.llm_config_service,
         "read_for_workspace",
         lambda workspace_slug: type(
-            "Cfg", (), {"external_model": "gpt-5.4-mini", "default_max_tokens": DEFAULT_MAX_TOKENS}
+            "Cfg",
+            (),
+            {
+                "external_model": "gpt-5.4-mini",
+                "external_provider": "openai",
+                "default_max_tokens": DEFAULT_MAX_TOKENS,
+            },
         )(),
     )
-    monkeypatch.setattr(escalation, "provider_for_model", lambda model: "openai")
     monkeypatch.setattr(
         escalation.CredentialService,
         "get_decrypted_key",
@@ -257,10 +262,15 @@ def test_local_tier_escalates_to_external_llm(monkeypatch):
         escalation.llm_config_service,
         "read_for_workspace",
         lambda workspace_slug: type(
-            "Cfg", (), {"external_model": "gpt-5.4-mini", "default_max_tokens": DEFAULT_MAX_TOKENS}
+            "Cfg",
+            (),
+            {
+                "external_model": "gpt-5.4-mini",
+                "external_provider": "openai",
+                "default_max_tokens": DEFAULT_MAX_TOKENS,
+            },
         )(),
     )
-    monkeypatch.setattr(escalation, "provider_for_model", lambda model: "openai")
     monkeypatch.setattr(escalation, "get_session", fake_session)
     monkeypatch.setattr(
         escalation.CredentialService,
@@ -380,10 +390,15 @@ def test_truncated_external_escalation_is_answered_but_not_cached(monkeypatch):
         escalation.llm_config_service,
         "read_for_workspace",
         lambda workspace_slug: type(
-            "Cfg", (), {"external_model": "gpt-5.4-mini", "default_max_tokens": DEFAULT_MAX_TOKENS}
+            "Cfg",
+            (),
+            {
+                "external_model": "gpt-5.4-mini",
+                "external_provider": "openai",
+                "default_max_tokens": DEFAULT_MAX_TOKENS,
+            },
         )(),
     )
-    monkeypatch.setattr(escalation, "provider_for_model", lambda model: "openai")
     monkeypatch.setattr(escalation, "get_session", fake_session)
     monkeypatch.setattr(
         escalation.CredentialService,
@@ -433,10 +448,15 @@ def test_untruncated_external_escalation_is_still_cached(monkeypatch):
         escalation.llm_config_service,
         "read_for_workspace",
         lambda workspace_slug: type(
-            "Cfg", (), {"external_model": "gpt-5.4-mini", "default_max_tokens": DEFAULT_MAX_TOKENS}
+            "Cfg",
+            (),
+            {
+                "external_model": "gpt-5.4-mini",
+                "external_provider": "openai",
+                "default_max_tokens": DEFAULT_MAX_TOKENS,
+            },
         )(),
     )
-    monkeypatch.setattr(escalation, "provider_for_model", lambda model: "openai")
     monkeypatch.setattr(escalation, "get_session", fake_session)
     monkeypatch.setattr(
         escalation.CredentialService,
@@ -481,10 +501,15 @@ def test_local_tier_external_failures_return_status(monkeypatch, raised, expecte
         escalation.llm_config_service,
         "read_for_workspace",
         lambda workspace_slug: type(
-            "Cfg", (), {"external_model": "gpt-5.4-mini", "default_max_tokens": DEFAULT_MAX_TOKENS}
+            "Cfg",
+            (),
+            {
+                "external_model": "gpt-5.4-mini",
+                "external_provider": "openai",
+                "default_max_tokens": DEFAULT_MAX_TOKENS,
+            },
         )(),
     )
-    monkeypatch.setattr(escalation, "provider_for_model", lambda model: "openai")
     monkeypatch.setattr(escalation, "get_session", fake_session)
     monkeypatch.setattr(
         escalation.CredentialService,
@@ -799,10 +824,15 @@ def test_external_escalation_uses_default_max_tokens(monkeypatch):
         escalation.llm_config_service,
         "read_for_workspace",
         lambda workspace_slug: type(
-            "Cfg", (), {"external_model": "gpt-5.4-mini", "default_max_tokens": DEFAULT_MAX_TOKENS}
+            "Cfg",
+            (),
+            {
+                "external_model": "gpt-5.4-mini",
+                "external_provider": "openai",
+                "default_max_tokens": DEFAULT_MAX_TOKENS,
+            },
         )(),
     )
-    monkeypatch.setattr(escalation, "provider_for_model", lambda model: "openai")
     monkeypatch.setattr(escalation, "get_session", fake_session)
     monkeypatch.setattr(
         escalation.CredentialService,

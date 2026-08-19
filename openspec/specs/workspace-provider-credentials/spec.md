@@ -31,9 +31,9 @@ The system SHALL read a `DEJAQ_CREDENTIAL_ENCRYPTION_KEY` environment variable. 
 
 ---
 
-### Requirement: Provider credentials are stored encrypted with provider whitelist enforced at the DB level
+### Requirement: Provider credentials are stored encrypted with the provider whitelist enforced in Python
 
-The system SHALL persist per-workspace provider credentials in a new `workspace_provider_credentials` table with columns: `id` (INTEGER PK autoincrement), `workspace_id` (FK to `workspaces.id` ON DELETE CASCADE), `provider` (VARCHAR NOT NULL), `encrypted_key` (TEXT NOT NULL), `created_at` (TIMESTAMP NOT NULL), `updated_at` (TIMESTAMP NOT NULL). The `(workspace_id, provider)` pair SHALL be unique under a constraint named `uq_workspace_provider_credentials_workspace_provider`. Provider values SHALL be restricted to: `google`, `openai`, `anthropic`, `mistral`, `cohere`, `together`, `groq`, `fireworks`. The whitelist SHALL be enforced both in the Pydantic request schema AND by a `CHECK` constraint on the `provider` column (defence-in-depth against direct DB writes). The raw API key SHALL never be written to the database; only the Fernet-encrypted ciphertext SHALL be stored.
+The system SHALL persist per-workspace provider credentials in a new `workspace_provider_credentials` table with columns: `id` (INTEGER PK autoincrement), `workspace_id` (FK to `workspaces.id` ON DELETE CASCADE), `provider` (VARCHAR NOT NULL), `encrypted_key` (TEXT NOT NULL), `created_at` (TIMESTAMP NOT NULL), `updated_at` (TIMESTAMP NOT NULL). The `(workspace_id, provider)` pair SHALL be unique under a constraint named `uq_workspace_provider_credentials_workspace_provider`. Provider values SHALL be restricted to the keys of `app/services/provider_registry.PROVIDERS`: `google`, `openai`, `anthropic`, `xai`, `deepseek`, `groq`, `mistral`, `cohere`, `together`, `fireworks`. The whitelist SHALL be enforced in Python only - the Pydantic request schema and `credential_service.SUPPORTED_PROVIDERS`, both checked against the registry by `tests/test_provider_registry_consistency.py`. There SHALL be no `CHECK` constraint on the `provider` column: it duplicated the registry and made every new provider cost a full SQLite table rebuild, so migration `e5f6a7b8c9d0` dropped it. The raw API key SHALL never be written to the database; only the Fernet-encrypted ciphertext SHALL be stored.
 
 #### Scenario: Storing a credential encrypts the key
 
@@ -50,10 +50,11 @@ The system SHALL persist per-workspace provider credentials in a new `workspace_
 - **WHEN** a second INSERT is attempted for the same `(workspace_id, provider)` pair
 - **THEN** the unique constraint is violated; the service layer MUST use upsert instead of raw INSERT
 
-#### Scenario: Direct DB write with invalid provider is rejected
+#### Scenario: Unknown provider is rejected by the request schema, not by the DB
 
-- **WHEN** a direct SQL INSERT attempts to write `provider = 'invalid_provider'`
-- **THEN** the DB CHECK constraint rejects the write
+- **WHEN** a client PUTs to a credential endpoint for a provider the registry does not list
+- **THEN** the response is HTTP 422 and no row is written
+- **THEN** a direct SQL INSERT of the same value is NOT rejected by the database - there is no CHECK constraint, and the registry is the only whitelist
 
 ---
 
@@ -149,9 +150,11 @@ The system SHALL expose `DELETE /admin/v1/workspaces/{workspace_slug}/credential
 
 ---
 
-### Requirement: LLM router resolves workspace credential from the recorded provider; supports google, openai, anthropic
+### Requirement: LLM router resolves workspace credential from the recorded provider; supports google, openai, anthropic, xai, deepseek, groq
 
-The system SHALL resolve the target provider through a single `resolve_provider(model_name, stored_provider)` helper, and no call site SHALL reimplement that decision. The helper SHALL use the `external_provider` value recorded on the workspace's LLM config row - written from the provider registry when the model is saved, see the `workspace-llm-config` spec - and SHALL fall back to a `provider_for_model(model_name)` name-prefix guess only when that value is absent (a row written before the column existed and not yet resaved). The name-prefix mapping SHALL cover at minimum:
+The system SHALL resolve the target provider through a single `resolve_provider(model_name, stored_provider)` helper, and no call site SHALL reimplement that decision. The helper SHALL use the `external_provider` value recorded on the workspace's LLM config row - written from the provider registry when the model is saved, see the `workspace-llm-config` spec - and SHALL fall back to `provider_for_model(model_name)` only when that value is absent (a row written before the column existed and not yet resaved, or a model an operator is testing before saving it anywhere).
+
+`provider_for_model` SHALL consult the provider registry first and return the provider that lists the model, so every model any live provider offers resolves regardless of its name - including names carrying no vendor prefix (`grok-4.6`, `deepseek-v4-pro`) and names carrying another vendor's (`openai/gpt-oss-120b`, served by Groq). Only for a model the registry does NOT list SHALL it fall back to a name-prefix guess, which SHALL cover at minimum:
 
 - `gemini-*` -> `google`
 - `gpt-*`, `o1-*`, `o3-*`, `o4-*`, `chatgpt-*` -> `openai`
@@ -159,12 +162,12 @@ The system SHALL resolve the target provider through a single `resolve_provider(
 
 For each request, the system SHALL look up the calling workspace's encrypted credential for the resolved provider and dispatch to the matching provider client. The lookup SHALL decrypt the key using `DEJAQ_CREDENTIAL_ENCRYPTION_KEY`. The system SHALL NOT fall back to any environment variable (`GEMINI_API_KEY` or equivalent) during request processing.
 
-The system SHALL define `LIVE_PROVIDERS = {"google", "openai", "anthropic"}` - the set of providers wired to a live client. Other entries in `SUPPORTED_PROVIDERS` are storage-only.
+The system SHALL define `LIVE_PROVIDERS = {"google", "openai", "anthropic", "xai", "deepseek", "groq"}` - the set of providers wired to a live client, mirroring the registry's `live_providers()`. Other entries in `SUPPORTED_PROVIDERS` are storage-only.
 
 Failure modes:
 
 - If the workspace has no external model configured at all - no `external_model` override and no `DEJAQ_EXTERNAL_MODEL` server default - the system SHALL return HTTP 422 naming the fix (configure a provider and model in Settings), and SHALL NOT substitute a model of its own.
-- If `provider_for_model` raises `ValueError` for an unmapped model name, the system SHALL return HTTP 422.
+- If `provider_for_model` raises `ValueError` - the registry does not list the model and no name prefix matches it either - the system SHALL return HTTP 422.
 - If the resolved provider is in `SUPPORTED_PROVIDERS` but NOT in `LIVE_PROVIDERS`, the system SHALL return HTTP 422 - no credential lookup is attempted.
 - If no credential row exists for the workspace and a live provider, the system SHALL return HTTP 402 Payment Required with body `{"detail": "No <provider> API key configured for this organization. Add one via the credentials settings."}`. The wording still says "organization" because that is the shipped string clients match on (`routers/openai_compat.py`).
 - The system SHALL NOT use HTTP 503 for missing-credential or unwired-provider cases (permanent per-tenant config errors must not present as transient server faults).
@@ -212,7 +215,7 @@ Failure modes:
 
 #### Scenario: Unmapped model name returns 422
 
-- **WHEN** `EXTERNAL_MODEL_NAME` does not match any pattern in `provider_for_model`
+- **WHEN** `EXTERNAL_MODEL_NAME` is listed by no provider in the registry and matches no name prefix in `provider_for_model`
 - **THEN** the response is HTTP 422 with a message naming the unmapped model
 
 #### Scenario: 503 is never used for missing-credential or unwired-provider failures
@@ -229,7 +232,7 @@ Failure modes:
 
 ### Requirement: Each live provider client implements a uniform contract
 
-The system SHALL provide three live provider client modules under `app/services/llm_providers/` (`google.py`, `openai.py`, `anthropic.py`), each exposing the same `LLMProviderClient` Protocol: `async generate_response(request: ExternalLLMRequest, api_key: str) -> ExternalLLMResponse`. Each client SHALL instantiate its underlying SDK client per call (no singletons), populate `ExternalLLMResponse` with `text`, `model_used`, `prompt_tokens`, `completion_tokens`, `latency_ms`, and map provider-specific exceptions uniformly:
+The system SHALL provide three live provider client modules under `app/services/llm_providers/` (`google.py`, `openai.py`, `anthropic.py`) serving all six live providers: `xai`, `deepseek`, and `groq` speak the same wire shape as OpenAI and SHALL reuse `openai.py` with the `base_url` taken from their registry row, rather than each shipping a client module of their own. Each module SHALL expose the same `LLMProviderClient` Protocol: `async generate_response(request: ExternalLLMRequest, api_key: str) -> ExternalLLMResponse`. Each client SHALL instantiate its underlying SDK client per call (no singletons), populate `ExternalLLMResponse` with `text`, `model_used`, `prompt_tokens`, `completion_tokens`, `latency_ms`, and map provider-specific exceptions uniformly:
 
 - Authentication failures -> `ExternalLLMAuthError`
 - Timeouts -> `ExternalLLMTimeoutError`
@@ -266,7 +269,7 @@ The api_key SHALL never appear in any log statement emitted by these clients, an
 
 ### Requirement: API keys are never logged across the dispatcher and all live providers
 
-The system SHALL never write a decrypted API key to logs from the `ExternalLLMService` dispatcher or any live provider client (`google`, `openai`, `anthropic`). The `api_key` parameter passed through the dispatcher and into each provider client SHALL not appear in any log statement on any code path (success, auth failure, timeout, generic error). Any provider error body returned by the underlying SDK (`genai_errors.ClientError` / `APIError`, `openai.OpenAIError` and subclasses, `anthropic.APIError` and subclasses) SHALL be redacted by substring-replacing the api_key value with `<redacted>` before being logged.
+The system SHALL never write a decrypted API key to logs from the `ExternalLLMService` dispatcher or any live provider client module (`google.py`, `anthropic.py`, and `openai.py` - the last also serving `xai`, `deepseek`, and `groq`). The `api_key` parameter passed through the dispatcher and into each provider client SHALL not appear in any log statement on any code path (success, auth failure, timeout, generic error). Any provider error body returned by the underlying SDK (`genai_errors.ClientError` / `APIError`, `openai.OpenAIError` and subclasses, `anthropic.APIError` and subclasses) SHALL be redacted by substring-replacing the api_key value with `<redacted>` before being logged.
 
 #### Scenario: Successful hard query does not log api_key (any provider)
 

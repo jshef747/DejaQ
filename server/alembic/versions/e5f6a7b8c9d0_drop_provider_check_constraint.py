@@ -23,6 +23,17 @@ A from-scratch database has no unique constraint on this table at all today
 (confirmed by inserting two rows with the same (workspace_id, provider) and
 finding the DB accepts the duplicate). This migration restores it while it is
 already rebuilding the table for the CHECK removal.
+
+Because the table has been running without that unique constraint, a database
+may already hold duplicate (workspace_id, provider) rows, which the rebuild's
+row copy would reject with an opaque IntegrityError. Every such row is an
+encrypted provider API key, so `upgrade()` refuses to pick one to drop: it
+checks first and aborts naming the offending rows, leaving the operator to
+delete the unwanted credential through the admin API and re-run.
+
+The downgrade restores the CHECK constraint with its pre-stage-2 provider
+list, so it fails the same way on a database that has since stored an `xai`
+or `deepseek` credential - delete those rows first, or stay on this revision.
 """
 
 from alembic import op
@@ -38,7 +49,36 @@ _UNIQUE_NAME = "uq_workspace_provider_credentials_workspace_provider"
 _CHECK_NAME = "ck_org_provider_credentials_provider"
 
 
+def _reject_duplicate_credentials() -> None:
+    duplicates = (
+        op.get_bind()
+        .execute(
+            sa.text(
+                "SELECT workspace_id, provider, COUNT(*) AS row_count "
+                "FROM workspace_provider_credentials "
+                "GROUP BY workspace_id, provider HAVING COUNT(*) > 1"
+            )
+        )
+        .fetchall()
+    )
+    if not duplicates:
+        return
+    offenders = "; ".join(
+        f"workspace_id={row.workspace_id} provider='{row.provider}' ({row.row_count} rows)"
+        for row in duplicates
+    )
+    raise RuntimeError(
+        "workspace_provider_credentials holds duplicate (workspace_id, provider) rows, "
+        "so the unique constraint this migration restores cannot be created: "
+        f"{offenders}. Each of those rows is an encrypted provider API key, so this "
+        "migration will not choose one to delete. Remove the unwanted credential via "
+        "DELETE /admin/v1/workspaces/{slug}/credentials/{provider} (re-adding the key "
+        "you want to keep afterwards), then re-run `alembic upgrade head`."
+    )
+
+
 def upgrade() -> None:
+    _reject_duplicate_credentials()
     with op.batch_alter_table("workspace_provider_credentials", recreate="always") as batch_op:
         batch_op.drop_constraint(_CHECK_NAME, type_="check")
         batch_op.create_unique_constraint(_UNIQUE_NAME, ["workspace_id", "provider"])

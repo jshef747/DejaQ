@@ -25,6 +25,9 @@ const PROVIDER_LABEL: Record<string, string> = {
   google: "Google",
   openai: "OpenAI",
   anthropic: "Anthropic",
+  xai: "xAI",
+  deepseek: "DeepSeek",
+  groq: "Groq",
 };
 
 function providerLabel(key: string | null) {

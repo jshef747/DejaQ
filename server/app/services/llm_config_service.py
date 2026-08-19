@@ -28,7 +28,7 @@ from app.services.context_enricher import DEFAULT_SYSTEM_PROMPT as ENRICHER_DEFA
 from app.services.llm_router import DEFAULT_SYSTEM_PROMPT as LOCAL_DEFAULT_SYSTEM_PROMPT
 from app.services.model_backends import MODEL_RUNTIME_SPECS
 from app.services.normalizer import DEFAULT_SYSTEM_PROMPT as NORMALIZER_DEFAULT_SYSTEM_PROMPT
-from app.services.provider_registry import PROVIDERS
+from app.services.provider_registry import provider_for_registered_model
 from app.services.validator import (
     DEFAULT_IMAGE_SYSTEM_PROMPT as VALIDATOR_DEFAULT_IMAGE_SYSTEM_PROMPT,
     DEFAULT_SYSTEM_PROMPT as VALIDATOR_DEFAULT_SYSTEM_PROMPT,
@@ -420,20 +420,6 @@ def _validate_token_budget_overrides(
         )
 
 
-def _provider_for_registered_model(model_id: str) -> str | None:
-    """Which provider in the registry lists `model_id`, or None if none does.
-
-    Read-only registry lookup, never modifies provider_registry.py. Used
-    only for write-time validation/backfill of external_provider below -
-    the request-time provider decision is resolve_provider() in
-    provider_inference.py, which does not consult the registry.
-    """
-    for provider_key, spec in PROVIDERS.items():
-        if any(model.id == model_id for model in spec.models):
-            return provider_key
-    return None
-
-
 def _validate_and_resolve_external_model(payload: dict[str, Any], fields_set: set[str]) -> dict[str, Any]:
     """Reject an external_model the registry doesn't know, and return the
     external_provider to persist alongside it.
@@ -449,7 +435,7 @@ def _validate_and_resolve_external_model(payload: dict[str, Any], fields_set: se
     model = payload.get("external_model")
     if model is None:
         return {"external_provider": None}
-    provider = _provider_for_registered_model(model)
+    provider = provider_for_registered_model(model)
     if provider is None:
         raise InvalidLlmConfigUpdate(
             f"external_model: '{model}' is not a known model - no provider in "
