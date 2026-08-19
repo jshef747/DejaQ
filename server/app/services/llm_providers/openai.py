@@ -14,8 +14,16 @@ logger = logging.getLogger("dejaq.services.llm_providers.openai")
 
 
 @lru_cache(maxsize=32)
-def _get_client(api_key: str) -> openai.AsyncOpenAI:
-    return openai.AsyncOpenAI(api_key=api_key)
+def _get_client(api_key: str, base_url: str | None) -> openai.AsyncOpenAI:
+    # Keyed on (api_key, base_url), not api_key alone: several providers now
+    # share this client class, and the same key string can legitimately be
+    # used against two different hosts (e.g. copy-pasted between providers).
+    # Keying on api_key alone would hand one provider's request a client
+    # pointed at another provider's host.
+    kwargs = {"api_key": api_key}
+    if base_url:
+        kwargs["base_url"] = base_url
+    return openai.AsyncOpenAI(**kwargs)
 
 
 _client_factory = openai.AsyncOpenAI
@@ -84,6 +92,12 @@ async def _create_with_temperature_retry(
 
 
 class OpenAIProviderClient:
+    def __init__(self, base_url: str | None = None) -> None:
+        # None reproduces today's OpenAI behavior exactly - the SDK's own
+        # default. Set for a provider whose registry row names one (xAI,
+        # DeepSeek, Groq: same wire shape, different host).
+        self._base_url = base_url
+
     @staticmethod
     def _build_call(request: ExternalLLMRequest) -> tuple[list[dict], dict, bool]:
         messages = [{"role": "system", "content": request.system_prompt}]
@@ -125,7 +139,7 @@ class OpenAIProviderClient:
         ensure_query(request)
 
         _clear_client_cache_if_factory_changed()
-        client = _get_client(api_key)
+        client = _get_client(api_key, self._base_url)
         messages, extra_kwargs, send_temperature = self._build_call(request)
 
         logger.debug("Sending hard query to OpenAI model=%s history_turns=%d", request.model, len(request.history))
@@ -167,7 +181,7 @@ class OpenAIProviderClient:
         ensure_query(request)
 
         _clear_client_cache_if_factory_changed()
-        client = _get_client(api_key)
+        client = _get_client(api_key, self._base_url)
         messages, extra_kwargs, send_temperature = self._build_call(request)
 
         logger.debug("Streaming hard query to OpenAI model=%s history_turns=%d", request.model, len(request.history))

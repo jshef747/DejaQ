@@ -8,6 +8,8 @@ class ProviderEnum(StrEnum):
     google = "google"
     openai = "openai"
     anthropic = "anthropic"
+    xai = "xai"
+    deepseek = "deepseek"
     mistral = "mistral"
     cohere = "cohere"
     together = "together"

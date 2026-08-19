@@ -10,17 +10,24 @@ provider here offers it, and its provider is recorded from this lookup.
 its options. Adding a `ModelSpec` is safe; removing or renaming one breaks
 config writes that name it and changes that endpoint's output.
 
-The provider list is mirrored rather than derived: the six places that each
+The provider list is mirrored rather than derived: the five places that each
 hand-list providers - `external_llm._PROVIDER_CLIENTS`,
 `llm_providers.LIVE_PROVIDERS`, `credential_service.SUPPORTED_PROVIDERS`,
-`schemas.credentials.ProviderEnum`, the `workspace_provider_credentials` CHECK
-constraint, and the dashboard's own `Provider`/`LIVE_PROVIDERS` - are checked
-against this one by `tests/test_provider_registry_consistency.py`.
+`schemas.credentials.ProviderEnum`, and the dashboard's own
+`Provider`/`LIVE_PROVIDERS` - are checked against this one by
+`tests/test_provider_registry_consistency.py`. The `workspace_provider_credentials`
+CHECK constraint used to be a sixth mirror; it was dropped (migration
+e5f6a7b8c9d0) because every new provider cost a full SQLite table rebuild,
+and this registry already validates provider names in Python.
 
-Input kinds are taken from what each provider client in
-`app/services/llm_providers/` actually builds: all three clients (google.py,
-openai.py, anthropic.py) attach an image or file part unconditionally,
-whatever the model, so every model of a live provider gets the same kinds.
+Input kinds are NOT uniform across every live provider. google.py, openai.py,
+and anthropic.py each attach an image or file part unconditionally whatever
+the model, so google/openai/anthropic models all get every kind. xAI,
+DeepSeek, and Groq speak the same `openai_chat_completions` wire shape (no new
+client needed) but do not share that uniformity: DeepSeek's models take text
+only, and Groq's vision support is per-model, not per-provider - most Groq
+models are text-only. `input_kinds` is set per `ModelSpec` for exactly this
+reason; do not assume every model of a live provider matches its neighbours.
 """
 
 from dataclasses import dataclass, field
@@ -54,11 +61,17 @@ class ProviderSpec:
     live: bool
     client_shape: ClientShape | None
     models: tuple[ModelSpec, ...] = ()
+    # None for a provider whose row carries no override (OpenAI itself: the
+    # `openai` SDK's own default). Sourced into the client by
+    # `external_llm._PROVIDER_CLIENTS`, never hardcoded at the client call site.
+    base_url: str | None = None
 
 
-# Every model of every live provider accepts text/image/file uniformly -
-# see the module docstring for why.
+# google/openai/anthropic accept text/image/file uniformly across every
+# model - see the module docstring for why that stops being true below.
 _ALL_KINDS = frozenset(InputKind)
+_TEXT_ONLY = frozenset({InputKind.TEXT})
+_TEXT_IMAGE = frozenset({InputKind.TEXT, InputKind.IMAGE})
 
 PROVIDERS: dict[str, ProviderSpec] = {
     "google": ProviderSpec(
@@ -106,12 +119,57 @@ PROVIDERS: dict[str, ProviderSpec] = {
             ModelSpec("claude-opus-4-5-20251101", "Claude Opus 4.5", _ALL_KINDS),
         ),
     ),
+    "xai": ProviderSpec(
+        key="xai",
+        live=True,
+        client_shape=ClientShape.OPENAI_CHAT_COMPLETIONS,
+        base_url="https://api.x.ai/v1",
+        # Text models only (excludes grok-imagine-* image/video generation and
+        # grok-voice-* audio models - not chat-completions models). All accept
+        # image input (jpg/png); none accept file input. docs.x.ai/docs/models
+        models=(
+            ModelSpec("grok-4.6", "Grok 4.6", _TEXT_IMAGE),
+            ModelSpec("grok-4.5", "Grok 4.5", _TEXT_IMAGE),
+            ModelSpec("grok-4.3", "Grok 4.3", _TEXT_IMAGE),
+            ModelSpec("grok-4.20-0309-reasoning", "Grok 4.20 (Reasoning)", _TEXT_IMAGE),
+            ModelSpec("grok-4.20-0309-non-reasoning", "Grok 4.20 (Non-Reasoning)", _TEXT_IMAGE),
+            ModelSpec("grok-4.20-multi-agent-0309", "Grok 4.20 (Multi-Agent)", _TEXT_IMAGE),
+            ModelSpec("grok-build-0.1", "Grok Build 0.1", _TEXT_IMAGE),
+        ),
+    ),
+    "deepseek": ProviderSpec(
+        key="deepseek",
+        live=True,
+        client_shape=ClientShape.OPENAI_CHAT_COMPLETIONS,
+        base_url="https://api.deepseek.com",
+        # Text only - neither model takes image or file input.
+        # api-docs.deepseek.com/quick_start/pricing
+        models=(
+            ModelSpec("deepseek-v4-flash", "DeepSeek V4 Flash", _TEXT_ONLY),
+            ModelSpec("deepseek-v4-pro", "DeepSeek V4 Pro", _TEXT_ONLY),
+        ),
+    ),
+    "groq": ProviderSpec(
+        key="groq",
+        live=True,
+        client_shape=ClientShape.OPENAI_CHAT_COMPLETIONS,
+        base_url="https://api.groq.com/openai/v1",
+        # Vision is per-model, not per-provider: only qwen/qwen3.6-27b takes
+        # image input on GroqCloud today. console.groq.com/docs/models,
+        # console.groq.com/docs/vision. No model takes file input.
+        models=(
+            ModelSpec("openai/gpt-oss-120b", "GPT-OSS 120B (Groq)", _TEXT_ONLY),
+            ModelSpec("openai/gpt-oss-20b", "GPT-OSS 20B (Groq)", _TEXT_ONLY),
+            ModelSpec("groq/compound", "Groq Compound", _TEXT_ONLY),
+            ModelSpec("groq/compound-mini", "Groq Compound Mini", _TEXT_ONLY),
+            ModelSpec("qwen/qwen3.6-27b", "Qwen3.6 27B (Groq, vision)", _TEXT_IMAGE),
+        ),
+    ),
     # Credential-supported only: a workspace can store a key for these, but no
     # client is wired to call them yet.
     "mistral": ProviderSpec(key="mistral", live=False, client_shape=None),
     "cohere": ProviderSpec(key="cohere", live=False, client_shape=None),
     "together": ProviderSpec(key="together", live=False, client_shape=None),
-    "groq": ProviderSpec(key="groq", live=False, client_shape=None),
     "fireworks": ProviderSpec(key="fireworks", live=False, client_shape=None),
 }
 
