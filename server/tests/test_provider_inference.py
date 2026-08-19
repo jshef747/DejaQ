@@ -1,57 +1,11 @@
-import re
-from pathlib import Path
+"""Name-prefix provider guessing and the stored-provider resolution above it.
 
+The old test that parsed `dashboard/lib/external-models.ts` is gone with the
+file itself (piece 1e): the dashboard now fetches its model catalogue from
+`GET /admin/v1/providers`, so there is no hand-written list left to drift.
+Provider-list drift is covered by `test_provider_registry_consistency.py`.
+"""
 import pytest
-
-
-def _dashboard_external_models() -> list[tuple[str, str]]:
-    """Parse dashboard/lib/external-models.ts and return (model_value, provider) pairs.
-
-    Reads the actual source file so this test fails the moment the dashboard
-    offers a model the backend doesn't know how to route, instead of relying
-    on a hand-picked list that can drift out of sync (see o4-mini).
-    """
-    ts_path = Path(__file__).resolve().parents[2] / "dashboard" / "lib" / "external-models.ts"
-    source = ts_path.read_text()
-
-    block_match = re.search(
-        r"EXTERNAL_MODELS:.*?=\s*\{(.*?)\n\};", source, re.DOTALL
-    )
-    assert block_match, "Could not find EXTERNAL_MODELS block in external-models.ts"
-    block = block_match.group(1)
-
-    pairs: list[tuple[str, str]] = []
-    for provider_match in re.finditer(r"(\w+):\s*\[(.*?)\]\s*,", block, re.DOTALL):
-        provider, entries = provider_match.group(1), provider_match.group(2)
-        for value_match in re.finditer(r'value:\s*"([^"]+)"', entries):
-            pairs.append((value_match.group(1), provider))
-
-    total_values = len(re.findall(r'value:\s*"([^"]+)"', block))
-    assert pairs, "Could not parse any models out of EXTERNAL_MODELS"
-    assert len(pairs) == total_values, (
-        f"parsed {len(pairs)} (model, provider) pairs but the EXTERNAL_MODELS "
-        f"block contains {total_values} 'value: \"...\"' entries - the "
-        "provider-block regex silently dropped some entries (e.g. the last "
-        "provider block, which has no trailing blank line after it)"
-    )
-    parsed_providers = {provider for _, provider in pairs}
-    for expected_provider in ("google", "openai", "anthropic"):
-        assert expected_provider in parsed_providers, (
-            f"no models parsed for provider '{expected_provider}' - the "
-            "provider-block regex failed to match its block"
-        )
-    return pairs
-
-
-def test_every_dashboard_model_maps_to_its_declared_provider():
-    from app.services.provider_inference import provider_for_model
-
-    for model, expected_provider in _dashboard_external_models():
-        assert provider_for_model(model) == expected_provider, (
-            f"dashboard model '{model}' (provider '{expected_provider}') "
-            "does not map to that provider in provider_for_model - the "
-            "dashboard would offer a model the backend rejects"
-        )
 
 
 @pytest.mark.parametrize(

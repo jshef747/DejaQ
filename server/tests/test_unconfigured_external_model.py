@@ -48,6 +48,10 @@ def test_env_var_absent_means_no_baked_in_default(monkeypatch):
     try:
         assert config.EXTERNAL_MODEL_NAME is None
     finally:
+        # undo() BEFORE the reload: monkeypatch's own teardown runs after this
+        # block, so reloading first would re-read the patched environment and
+        # leave the module constant wrong for every later test in the session.
+        monkeypatch.undo()
         importlib.reload(config)
 
 
@@ -60,6 +64,10 @@ def test_env_var_set_is_still_an_honored_deployment_default(monkeypatch):
     try:
         assert config.EXTERNAL_MODEL_NAME == "gemini-2.5-flash"
     finally:
+        # See the note above: without undo() first, this reload pins
+        # EXTERNAL_MODEL_NAME to "gemini-2.5-flash" for the rest of the run and
+        # test_llm_config_service's default-model assertions fail by ordering.
+        monkeypatch.undo()
         importlib.reload(config)
 
 
