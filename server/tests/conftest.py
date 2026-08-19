@@ -20,6 +20,26 @@ from app.services.service_factory import (
 )
 
 
+class StreamingLocalRouterMixin:
+    """Gives a stub local router the streaming call the pipeline uses.
+
+    Derived from the stub's OWN generate_local_response rather than written
+    out a second time, so a double cannot answer one thing buffered and
+    another thing streamed - which is exactly how a streaming regression
+    would hide from a suite full of non-streaming stubs.
+    """
+
+    async def stream_local_response(self, query, history=None, max_tokens=1024, system_prompt=None):
+        from app.services.model_backends import CompletionChunk
+
+        text, _latency, done_reason = await self.generate_local_response(
+            query, history=history, max_tokens=max_tokens, system_prompt=system_prompt
+        )
+        if text:
+            yield CompletionChunk(text=text)
+        yield CompletionChunk(done_reason=done_reason)
+
+
 def _reset_backend() -> None:
     _sf._backend = None
     _service_pool.clear()

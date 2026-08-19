@@ -1,10 +1,12 @@
+import contextlib
 import logging
 import time
+from collections.abc import AsyncGenerator, Iterator
 from functools import lru_cache
 
 import openai
 
-from app.schemas.chat import ExternalLLMRequest, ExternalLLMResponse
+from app.schemas.chat import ExternalLLMRequest, ExternalLLMResponse, ExternalStreamChunk
 from app.services.llm_providers.common import elapsed_ms, ensure_query, normalize_finish_reason, redact_api_key
 from app.utils.exceptions import ExternalLLMAuthError, ExternalLLMError, ExternalLLMTimeoutError
 
@@ -26,12 +28,32 @@ def _clear_client_cache_if_factory_changed() -> None:
         _client_factory = openai.AsyncOpenAI
 
 
-class OpenAIProviderClient:
-    async def generate_response(self, request: ExternalLLMRequest, api_key: str) -> ExternalLLMResponse:
-        ensure_query(request)
+@contextlib.contextmanager
+def _mapped_errors(api_key: str) -> Iterator[None]:
+    """Translate the provider SDK's exceptions into DejaQ's own.
 
-        _clear_client_cache_if_factory_changed()
-        client = _get_client(api_key)
+    Shared by the buffered and the streaming call so a new failure mode never
+    reaches one path and not the other.
+    """
+    try:
+        yield
+    except openai.AuthenticationError as exc:
+        msg = redact_api_key(exc, api_key)
+        logger.error("OpenAI authentication failed: %s", msg)
+        raise ExternalLLMAuthError(f"Authentication failed: {msg}") from exc
+    except openai.APITimeoutError as exc:
+        msg = redact_api_key(exc, api_key)
+        logger.error("OpenAI timeout: %s", msg)
+        raise ExternalLLMTimeoutError(f"Provider timeout: {msg}") from exc
+    except openai.OpenAIError as exc:
+        msg = redact_api_key(exc, api_key)
+        logger.error("OpenAI API error: %s", msg)
+        raise ExternalLLMError(f"Provider error: {msg}") from exc
+
+
+class OpenAIProviderClient:
+    @staticmethod
+    def _build_call(request: ExternalLLMRequest) -> tuple[list[dict], dict]:
         messages = [{"role": "system", "content": request.system_prompt}]
         messages.extend(request.history)
         if request.image_b64:
@@ -57,8 +79,6 @@ class OpenAIProviderClient:
             user_content = request.query
         messages.append({"role": "user", "content": user_content})
 
-        logger.debug("Sending hard query to OpenAI model=%s history_turns=%d", request.model, len(request.history))
-        start = time.perf_counter()
         # o-series reasoning models (o1-, o3-, o4-) reject `max_tokens` (need
         # `max_completion_tokens`) and any non-default temperature.
         is_reasoning_model = request.model.strip().lower().startswith(("o1-", "o3-", "o4-"))
@@ -66,24 +86,23 @@ class OpenAIProviderClient:
             "max_tokens": request.max_tokens,
             "temperature": request.temperature,
         }
-        try:
+        return messages, extra_kwargs
+
+    async def generate_response(self, request: ExternalLLMRequest, api_key: str) -> ExternalLLMResponse:
+        ensure_query(request)
+
+        _clear_client_cache_if_factory_changed()
+        client = _get_client(api_key)
+        messages, extra_kwargs = self._build_call(request)
+
+        logger.debug("Sending hard query to OpenAI model=%s history_turns=%d", request.model, len(request.history))
+        start = time.perf_counter()
+        with _mapped_errors(api_key):
             response = await client.chat.completions.create(
                 model=request.model,
                 messages=messages,
                 **extra_kwargs,
             )
-        except openai.AuthenticationError as exc:
-            msg = redact_api_key(exc, api_key)
-            logger.error("OpenAI authentication failed: %s", msg)
-            raise ExternalLLMAuthError(f"Authentication failed: {msg}") from exc
-        except openai.APITimeoutError as exc:
-            msg = redact_api_key(exc, api_key)
-            logger.error("OpenAI timeout: %s", msg)
-            raise ExternalLLMTimeoutError(f"Provider timeout: {msg}") from exc
-        except openai.OpenAIError as exc:
-            msg = redact_api_key(exc, api_key)
-            logger.error("OpenAI API error: %s", msg)
-            raise ExternalLLMError(f"Provider error: {msg}") from exc
 
         latency_ms = elapsed_ms(start)
         usage = response.usage
@@ -104,3 +123,62 @@ class OpenAIProviderClient:
             latency_ms=latency_ms,
             finish_reason=normalize_finish_reason(choice.finish_reason),
         )
+
+    async def stream_response(
+        self, request: ExternalLLMRequest, api_key: str
+    ) -> AsyncGenerator[ExternalStreamChunk, None]:
+        """Streaming twin of `generate_response`.
+
+        `stream_options={"include_usage": True}` is what keeps the usage block
+        honest: without it a streamed response reports no token counts at all
+        and DejaQ would fall back to the word-count estimate.
+        """
+        ensure_query(request)
+
+        _clear_client_cache_if_factory_changed()
+        client = _get_client(api_key)
+        messages, extra_kwargs = self._build_call(request)
+
+        logger.debug("Streaming hard query to OpenAI model=%s history_turns=%d", request.model, len(request.history))
+        start = time.perf_counter()
+        text = ""
+        prompt_tokens = completion_tokens = 0
+        finish_reason = None
+        with _mapped_errors(api_key):
+            stream = await client.chat.completions.create(
+                model=request.model,
+                messages=messages,
+                stream=True,
+                stream_options={"include_usage": True},
+                **extra_kwargs,
+            )
+            # `async with`, not a bare `async for`: a client that disconnects
+            # mid-answer closes this generator where it is suspended, and only
+            # the SDK stream's own __aexit__ releases the upstream HTTPS
+            # response back to the pool. Abandoning it leaks the connection for
+            # as long as the aborted generation would have run.
+            async with stream:
+                async for chunk in stream:
+                    usage = getattr(chunk, "usage", None)
+                    if usage:
+                        prompt_tokens = usage.prompt_tokens or prompt_tokens
+                        completion_tokens = usage.completion_tokens or completion_tokens
+                    # The usage-only chunk carries no choices at all.
+                    if not chunk.choices:
+                        continue
+                    choice = chunk.choices[0]
+                    if choice.finish_reason:
+                        finish_reason = choice.finish_reason
+                    piece = (choice.delta.content if choice.delta else None) or ""
+                    if piece:
+                        text += piece
+                        yield ExternalStreamChunk(text=piece)
+
+        yield ExternalStreamChunk(final=ExternalLLMResponse(
+            text=text,
+            model_used=request.model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            latency_ms=elapsed_ms(start),
+            finish_reason=normalize_finish_reason(finish_reason),
+        ))

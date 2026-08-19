@@ -295,6 +295,13 @@ export default function ChatApp() {
       return;
     }
 
+    // A stream that broke part-way still carries real text, so the turn is kept
+    // rather than reverted - but never silently: a cut-off answer is
+    // indistinguishable from a finished one in the bubble alone.
+    if (result.streamError) {
+      addToast("error", result.streamError);
+    }
+
     // The assistant bubble is only ever created by the first delta, so a stream
     // that yields none leaves the finalization below mapping over a list with no
     // assistantId: it quietly no-ops and the user sees their own message, no

@@ -117,7 +117,12 @@ export async function POST(request: NextRequest) {
     return proxyError(response.status, await parseErrorDetail(response));
   }
 
-  // Forward SSE headers from the upstream response plus our own latency measurement.
+  // Forward SSE headers from the upstream response plus our own measurement of
+  // how long the upstream took to send its RESPONSE HEAD. That is no longer the
+  // same thing as how long the answer took: the gateway streams, so the head
+  // arrives before generation starts. Kept as the diagnostic it now is - the
+  // header lead over the first token - and deliberately not read as answer
+  // latency; chat-api.ts times the stream itself for that.
   const outHeaders: Record<string, string> = {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache, no-transform",

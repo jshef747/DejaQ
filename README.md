@@ -183,7 +183,8 @@ leave the rewrite budget or the context window too small to carry the answer bei
 is rejected with an explanatory error rather than clamped, because a too-low budget produces
 no error anywhere - it just silently stops the cache from filling, since a truncated answer
 is never stored. The **Analytics** page shows the resulting truncation rate (over generated
-answers; a cache hit is never truncated) next to hit rate, latency, and tokens saved.
+answers; a cache hit is never truncated) next to hit rate, latency, and tokens saved. All
+four tiles count completed turns only - a client that disconnects mid-answer is not recorded.
 
 ## Bootstrap a workspace + key
 

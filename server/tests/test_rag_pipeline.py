@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.routers import openai_compat
 from app.services.memory_chromaDB import CacheLookupResult
+from tests.conftest import StreamingLocalRouterMixin
 
 pytestmark = pytest.mark.no_model
 
@@ -57,7 +58,7 @@ class StubMemory:
         return None
 
 
-class CapturingRouter:
+class CapturingRouter(StreamingLocalRouterMixin):
     def __init__(self):
         self.query = None
 

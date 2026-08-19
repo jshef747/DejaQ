@@ -216,6 +216,15 @@ class ChatPipelineResult:
     # returns here is never a cut-off text - the default covers every hit
     # construction without needing to touch each one.
     finish_reason: str = "stop"
+    # Set only when run_chat_pipeline was called with stream=True AND the
+    # request missed the cache: the answer does not exist yet. Draining it
+    # yields the model's output as it is produced and, once exhausted, fills in
+    # `answer`, `response_id`, `finish_reason` and the token counts on THIS
+    # object - so a caller that needs them (the terminal SSE frame) must read
+    # them after the stream, never before. A cache hit leaves this None and
+    # serves `stream_chunks`; the answer already exists, so there is nothing to
+    # wait for and nothing to restructure (a hit answers in ~144ms).
+    answer_stream: AsyncGenerator[str, None] | None = None
 
 
 def _request_model_profile(raw_request: Request) -> str:
@@ -877,38 +886,58 @@ async def _register_answer_interaction(
         )
 
 
+_GENERATION_FAILED_MESSAGE = (
+    "I'm sorry, I couldn't process your request right now. Please try again later."
+)
+
+
+def answer_pieces(result: ChatPipelineResult) -> AsyncGenerator[str, None]:
+    """The answer as an async stream, however this result carries it.
+
+    A cache miss served with stream=True carries a live generator; everything
+    else (cache hits, and anything already materialized) carries a finished
+    list. Both SSE encoders below iterate this, so neither has to know which.
+    """
+    if result.answer_stream is not None:
+        return result.answer_stream
+
+    async def _replay() -> AsyncGenerator[str, None]:
+        for piece in result.stream_chunks:
+            yield piece
+
+    return _replay()
+
+
 async def _stream_generator(
-    chunks: list[str],
-    completion_id: str,
+    result: ChatPipelineResult,
     model: str,
-    model_used: str,
-    finish_reason: str = "stop",
 ) -> AsyncGenerator[str, None]:
-    """Yield SSE chunks for a list of text pieces, then [DONE]."""
+    """Yield SSE chunks for the answer as it arrives, then [DONE]."""
     # First chunk carries role
     first = OAIChatChunk(
-        id=completion_id,
+        id=result.completion_id,
         created=_now_ts(),
         model=model,
         choices=[OAIStreamChoice(delta=OAIStreamDelta(role="assistant", content=""))],
     )
     yield f"data: {first.model_dump_json()}\n\n"
 
-    for piece in chunks:
+    async for piece in answer_pieces(result):
         chunk = OAIChatChunk(
-            id=completion_id,
+            id=result.completion_id,
             created=_now_ts(),
             model=model,
             choices=[OAIStreamChoice(delta=OAIStreamDelta(content=piece))],
         )
         yield f"data: {chunk.model_dump_json()}\n\n"
 
-    # Final chunk with finish_reason
+    # Final chunk with finish_reason — only settled once the stream above is
+    # drained, which is why it is read here and not captured up top.
     final = OAIChatChunk(
-        id=completion_id,
+        id=result.completion_id,
         created=_now_ts(),
         model=model,
-        choices=[OAIStreamChoice(delta=OAIStreamDelta(), finish_reason=finish_reason)],
+        choices=[OAIStreamChoice(delta=OAIStreamDelta(), finish_reason=result.finish_reason)],
     )
     yield f"data: {final.model_dump_json()}\n\n"
     yield "data: [DONE]\n\n"
@@ -924,6 +953,7 @@ async def run_chat_pipeline(
     background_tasks: BackgroundTasks,
     image: tuple[bytes, str] | None = None,
     file: tuple[bytes, str, str] | None = None,
+    stream: bool = False,
 ) -> ChatPipelineResult:
     """Core DejaQ pipeline: enrich → normalize → cache → validate → adjust/generate → store.
 
@@ -1468,14 +1498,7 @@ async def run_chat_pipeline(
                 }
 
         complexity = classification["complexity"]
-        answer: str = ""
-        model_used: str = _local_model_used(services.llm_router)
         route = "external" if complexity == "hard" else "local"
-        # "length" only when the generator's own signal says the token budget
-        # cut the answer off (Ollama's done_reason / the provider's own stop
-        # reason, both captured below) - never inferred from length or shape.
-        finish_reason: str = "stop"
-        ext_response = None  # set below only on a successful external call; real provider usage lives on it
 
         # RAG (Rug): on a genuine cache miss, ground the answer in the workspace's
         # curated knowledge base. Retrieval sees the normalized query; retrieved
@@ -1506,108 +1529,57 @@ async def run_chat_pipeline(
         # The prompt actually sent to whichever model runs, grounded if RAG hit.
         gen_query = _query_with_rag_context(user_query, rag_context)
 
-        try:
-            with trace.step("generate"):
-                if complexity == "hard":
-                    try:
-                        provider = provider_for_model(llm_config.external_model)
-                    except ValueError:
-                        raise PipelineError(
-                            422,
-                            f"Configured external model '{llm_config.external_model}' "
-                            "is not mapped to a supported provider.",
+        # Provider + credential resolution happens HERE, not inside the generation
+        # step, and that placement is load-bearing: every failure below is an HTTP
+        # status (402/422/500), and on a streaming request the response headers are
+        # flushed the moment generation starts. Resolved after that point, a missing
+        # credential could only be reported as a 200 carrying an apology.
+        provider: str | None = None
+        decrypted_key: str | None = None
+        if complexity == "hard":
+            try:
+                provider = provider_for_model(llm_config.external_model)
+            except ValueError:
+                raise PipelineError(
+                    422,
+                    f"Configured external model '{llm_config.external_model}' "
+                    "is not mapped to a supported provider.",
+                )
+
+            if provider in SUPPORTED_PROVIDERS and provider not in LIVE_PROVIDERS:
+                raise PipelineError(
+                    422,
+                    f"Provider '{provider}' is not yet wired to a live client. "
+                    "Configure a model from a supported provider (google, openai, anthropic).",
+                )
+
+            if workspace_id is not None:
+                try:
+                    with get_session() as session:
+                        decrypted_key = get_workspace_provider_key(
+                            session, workspace_id, provider
                         )
+                # A missing server key and an undecryptable credential are
+                # both operator problems, so both are 500s - but they say
+                # which one, instead of surfacing an exception string. A
+                # workspace with no credential falls through to the 402
+                # below, which is what it always should have been.
+                except CredentialEncryptionKeyMissing as exc:
+                    raise PipelineError(500, str(exc)) from exc
+                except ValueError as exc:
+                    raise PipelineError(500, ENCRYPTION_KEY_MISMATCH_DETAIL) from exc
+            if decrypted_key is None:
+                raise PipelineError(
+                    402,
+                    f"No {provider} API key configured for this organization. "
+                    "Add one via the credentials settings.",
+                )
 
-                    if provider in SUPPORTED_PROVIDERS and provider not in LIVE_PROVIDERS:
-                        raise PipelineError(
-                            422,
-                            f"Provider '{provider}' is not yet wired to a live client. "
-                            "Configure a model from a supported provider (google, openai, anthropic).",
-                        )
-
-                    decrypted_key: str | None = None
-                    if workspace_id is not None:
-                        try:
-                            with get_session() as session:
-                                decrypted_key = get_workspace_provider_key(
-                                    session, workspace_id, provider
-                                )
-                        # A missing server key and an undecryptable credential are
-                        # both operator problems, so both are 500s - but they say
-                        # which one, instead of surfacing an exception string. A
-                        # workspace with no credential falls through to the 402
-                        # below, which is what it always should have been.
-                        except CredentialEncryptionKeyMissing as exc:
-                            raise PipelineError(500, str(exc)) from exc
-                        except ValueError as exc:
-                            raise PipelineError(500, ENCRYPTION_KEY_MISMATCH_DETAIL) from exc
-                    if decrypted_key is None:
-                        raise PipelineError(
-                            402,
-                            f"No {provider} API key configured for this organization. "
-                            "Add one via the credentials settings.",
-                        )
-
-                    ext_request = ExternalLLMRequest(
-                        query=_query_with_inlined_file(gen_query, file_doc),
-                        history=history,
-                        model=llm_config.external_model,
-                        max_tokens=_max_tokens,
-                        system_prompt=system_prompt
-                        or "You are a helpful assistant. Answer the user's query concisely and accurately.",
-                        temperature=temperature or 0.7,
-                        image_b64=base64.b64encode(image_bytes).decode("ascii") if _request_has_image else None,
-                        image_mime=image_mime,
-                        # PDFs go as a native document part — every provider parses
-                        # them better than we could. Markdown is already text and
-                        # rides in the query above, so it sends no file part.
-                        file_b64=(
-                            base64.b64encode(file_bytes).decode("ascii")
-                            if _request_has_file and file_doc and file_doc.kind == "pdf"
-                            else None
-                        ),
-                        file_mime="application/pdf",
-                        file_name=file_name or "document.pdf",
-                    )
-                    ext_response = await _external_llm.generate_response(
-                        ext_request,
-                        provider=provider,
-                        api_key=decrypted_key,
-                    )
-                    answer = ext_response.text
-                    model_used = ext_response.model_used
-                    finish_reason = ext_response.finish_reason
-                else:
-                    answer, _, done_reason = await services.llm_router.generate_local_response(
-                        gen_query,
-                        history=history,
-                        max_tokens=_max_tokens,
-                        # None (client sent no system prompt of its own) falls
-                        # through to the router's own default_system_prompt -
-                        # the workspace's local_model_system_prompt override
-                        # when set, otherwise the hardcoded literal. Hardcoding
-                        # the literal here too would silently shadow that
-                        # override (same reasoning as escalation.py).
-                        system_prompt=system_prompt,
-                    )
-                    model_used = _local_model_used(services.llm_router)
-                    finish_reason = "length" if done_reason == "length" else "stop"
-        except PipelineError:
-            raise
-        except ExternalLLMError as exc:
-            if "not wired to a live client" in str(exc):
-                raise PipelineError(422, str(exc)) from exc
-            logger.exception("ExternalLLMService failed")
-            answer = "I'm sorry, I couldn't process your request right now. Please try again later."
-            model_used = "error"
-            route = "error"
-        except Exception:
-            logger.exception("LLM generation failed")
-            answer = "I'm sorry, I couldn't process your request right now. Please try again later."
-            model_used = "error"
-            route = "error"
-
-        # 5. Cache filter + background store
+        # 5. Cache filter + attachment cacheability — every store decision that
+        # does NOT depend on the answer, resolved before generation so a streaming
+        # request can advertise its response id in the headers it flushes first.
+        # The three answer-dependent guards (failed / empty / truncated) stay
+        # where they belong, in _finalize below.
         will_cache = False
         try:
             with trace.step("filter"):
@@ -1617,41 +1589,6 @@ async def run_chat_pipeline(
                 )
         except Exception:
             logger.exception("Cache filter failed")
-
-        # Never cache a failed generation. Without this the user-facing apology
-        # ("I'm sorry, I couldn't process your request…") is stored as a real
-        # answer and served to every later match — observed live.
-        if route == "error":
-            will_cache = False
-            logger.warning("generation failed; not caching the error response")
-
-        # An empty answer is not an answer. A thinking model that spends its whole
-        # num_predict budget on the scratchpad returns content="" with no error at
-        # all, so nothing above catches it — and caching that means every later
-        # match is served silence forever. Observed live: gemma-4-e4b, 20s of
-        # generation, store=queued, blank bubble in the chat.
-        if not answer.strip():
-            will_cache = False
-            logger.warning(
-                "generation returned an empty answer (route=%s model=%s); not caching it",
-                route, model_used,
-            )
-
-        # A truncated answer is not an answer either. The client's own
-        # max_tokens (nothing clamps it) can cut a long answer off mid-sentence,
-        # and the generator's own signal is the only thing that knows: the text
-        # reads as a clean prefix. generalize()'s guard does not cover this one
-        # - it only sees whether the REWRITE was truncated, and its fallback
-        # returns this same cut-off raw answer. Stored, it never self-heals:
-        # every later match is served the same cut-off text, reported as
-        # finish_reason="stop" because a hit carries no truncation signal.
-        if finish_reason == "length":
-            will_cache = False
-            logger.warning(
-                "generation was truncated (finish_reason=length, route=%s model=%s); "
-                "not caching the cut-off answer",
-                route, model_used,
-            )
 
         # An image with no usable fingerprint of either kind can't be gated on
         # future hits, so don't cache it — the query text alone would wrongly
@@ -1680,50 +1617,245 @@ async def run_chat_pipeline(
                 file_doc.reason if file_doc else "could not be read",
             )
 
-        store_status = "skipped"
-        miss_response_id: str | None = None
+        # The id this answer WOULD be stored under. Known before a single token
+        # exists, because it is derived from the normalized query and the
+        # attachment hash - never from the answer.
+        #
+        # A streaming request therefore advertises it in headers that go out
+        # before generation, and one of the three answer-dependent guards below
+        # can still refuse the store afterwards (a failed, empty or truncated
+        # answer). The header then names an entry nobody wrote, and /v1/feedback
+        # answers 404 "response_id not found" - the same answer it already gives
+        # for an entry that was evicted, which every client has to handle. The
+        # alternative is worse: withholding the id until the answer is complete
+        # means withholding the whole response head, which is the bug this
+        # change exists to fix.
+        _planned_response_id: str | None = None
         if will_cache:
-            miss_doc_id = _doc_id(
+            _planned_response_id = f"{cache_namespace}:" + _doc_id(
                 clean_query, _file_sha, image_text=_img_text, image_dhash=_img_dhash
             )
-            miss_response_id = f"{cache_namespace}:{miss_doc_id}"
-            with trace.step("store"):
-                if USE_CELERY:
-                    try:
-                        # Text requests keep the legacy positional-args call; image
-                        # fingerprints ride as kwargs only when present. workspace_slug
-                        # always rides as a kwarg (plain string) so the worker can
-                        # resolve its own fresh generalizer config - see
-                        # tasks/cache_tasks.py.
-                        _apply_kwargs: dict = {
-                            "headers": {"dejaq_model_profile": model_profile},
-                            "ignore_result": True,
-                            "kwargs": {"workspace_slug": workspace_slug},
-                        }
-                        if _request_has_image:
-                            _apply_kwargs["kwargs"].update({
-                                "image_dhash": _img_dhash, "image_clip": _img_clip,
-                                "image_kind": _img_kind, "image_text": _img_text,
-                            })
-                        elif _request_has_file:
-                            _apply_kwargs["kwargs"].update({
-                                "file_sha": _file_sha, "file_kind": _file_kind,
-                            })
-                        generalize_and_store_task.apply_async(
-                            args=(clean_query, answer, user_query, workspace_slug, cache_namespace),
-                            **_apply_kwargs,
+
+        # Mutated by the generation step below, which runs inside an async
+        # generator on a streaming request and therefore cannot rebind the
+        # enclosing function's locals.
+        gen: dict = {
+            "model_used": _local_model_used(services.llm_router),
+            "route": route,
+            # "length" only when the generator's own signal says the token budget
+            # cut the answer off (Ollama's done_reason / the provider's own stop
+            # reason, both captured below) - never inferred from length or shape.
+            "finish_reason": "stop",
+            # set below only on a successful external call; real provider usage lives on it
+            "ext_response": None,
+        }
+        if route == "external":
+            # The external model name is known up front and is exactly what every
+            # provider client echoes back as `model_used`, so a streaming header
+            # can name the model that is about to answer.
+            gen["model_used"] = llm_config.external_model
+
+        async def _answer_chunks() -> AsyncGenerator[str, None]:
+            """Yield the answer as it is produced, updating `gen` as it goes.
+
+            One generator for both the streaming and the buffered path: the
+            buffered path just drains it. `stream` only chooses which call the
+            two routes make, so a change to prompt assembly or error handling
+            cannot land on one path and miss the other.
+            """
+            try:
+                with trace.step("generate"):
+                    if complexity == "hard":
+                        ext_request = ExternalLLMRequest(
+                            query=_query_with_inlined_file(gen_query, file_doc),
+                            history=history,
+                            model=llm_config.external_model,
+                            max_tokens=_max_tokens,
+                            system_prompt=system_prompt
+                            or "You are a helpful assistant. Answer the user's query concisely and accurately.",
+                            temperature=temperature or 0.7,
+                            image_b64=base64.b64encode(image_bytes).decode("ascii") if _request_has_image else None,
+                            image_mime=image_mime,
+                            # PDFs go as a native document part — every provider parses
+                            # them better than we could. Markdown is already text and
+                            # rides in the query above, so it sends no file part.
+                            file_b64=(
+                                base64.b64encode(file_bytes).decode("ascii")
+                                if _request_has_file and file_doc and file_doc.kind == "pdf"
+                                else None
+                            ),
+                            file_mime="application/pdf",
+                            file_name=file_name or "document.pdf",
                         )
-                        store_status = "queued"
-                    except Exception as exc:
-                        # Broker/result-backend down (e.g. Redis outage): degrade to in-process
-                        # storage instead of failing the user-facing chat request.
-                        logger.warning("Celery dispatch failed (%s); storing in-process", type(exc).__name__)
-                        # Every attachment argument, or the entry loses its
-                        # identity: without file_sha/file_kind the row is an
-                        # ungated TEXT entry, the answer goes through the
-                        # generalizer that cannot see the document, and the id
-                        # returned above (derived WITH the file hash) addresses
-                        # a row that was never written.
+                        if stream:
+                            async for piece in _external_llm.stream_response(
+                                ext_request, provider=provider, api_key=decrypted_key,
+                            ):
+                                if piece.final is not None:
+                                    gen["ext_response"] = piece.final
+                                    gen["model_used"] = piece.final.model_used
+                                    gen["finish_reason"] = piece.final.finish_reason
+                                elif piece.text:
+                                    yield piece.text
+                        else:
+                            ext_response = await _external_llm.generate_response(
+                                ext_request,
+                                provider=provider,
+                                api_key=decrypted_key,
+                            )
+                            gen["ext_response"] = ext_response
+                            gen["model_used"] = ext_response.model_used
+                            gen["finish_reason"] = ext_response.finish_reason
+                            yield ext_response.text
+                    else:
+                        # None (client sent no system prompt of its own) falls
+                        # through to the router's own default_system_prompt -
+                        # the workspace's local_model_system_prompt override
+                        # when set, otherwise the hardcoded literal. Hardcoding
+                        # the literal here too would silently shadow that
+                        # override (same reasoning as escalation.py).
+                        if stream:
+                            async for chunk in services.llm_router.stream_local_response(
+                                gen_query,
+                                history=history,
+                                max_tokens=_max_tokens,
+                                system_prompt=system_prompt,
+                            ):
+                                if chunk.done_reason is not None:
+                                    gen["finish_reason"] = (
+                                        "length" if chunk.done_reason == "length" else "stop"
+                                    )
+                                if chunk.text:
+                                    yield chunk.text
+                        else:
+                            text, _, done_reason = await services.llm_router.generate_local_response(
+                                gen_query,
+                                history=history,
+                                max_tokens=_max_tokens,
+                                system_prompt=system_prompt,
+                            )
+                            gen["finish_reason"] = "length" if done_reason == "length" else "stop"
+                            yield text
+                        gen["model_used"] = _local_model_used(services.llm_router)
+            except ExternalLLMError as exc:
+                if "not wired to a live client" in str(exc):
+                    raise PipelineError(422, str(exc)) from exc
+                logger.exception("ExternalLLMService failed")
+                yield _GENERATION_FAILED_MESSAGE
+                gen.update(model_used="error", route="error")
+            except Exception:
+                logger.exception("LLM generation failed")
+                yield _GENERATION_FAILED_MESSAGE
+                gen.update(model_used="error", route="error")
+
+        async def _finalize(
+            answer: str, interaction: ResponseInteraction | None
+        ) -> tuple[str | None, ResponseInteraction, int, int]:
+            """Apply the answer-dependent store guards, store, and log.
+
+            Returns (response_id, interaction, prompt_tokens, completion_tokens).
+            `interaction` is passed in already-registered on the streaming path,
+            where the headers carrying its id went out before the first token.
+            """
+            _will_cache = will_cache
+            route_ = gen["route"]
+            model_used_ = gen["model_used"]
+            finish_reason_ = gen["finish_reason"]
+            ext_response_ = gen["ext_response"]
+
+            # Never cache a failed generation. Without this the user-facing apology
+            # ("I'm sorry, I couldn't process your request…") is stored as a real
+            # answer and served to every later match — observed live.
+            if route_ == "error":
+                _will_cache = False
+                logger.warning("generation failed; not caching the error response")
+
+            # An empty answer is not an answer. A thinking model that spends its whole
+            # num_predict budget on the scratchpad returns content="" with no error at
+            # all, so nothing above catches it — and caching that means every later
+            # match is served silence forever. Observed live: gemma-4-e4b, 20s of
+            # generation, store=queued, blank bubble in the chat.
+            if not answer.strip():
+                _will_cache = False
+                logger.warning(
+                    "generation returned an empty answer (route=%s model=%s); not caching it",
+                    route_, model_used_,
+                )
+
+            # A truncated answer is not an answer either. The client's own
+            # max_tokens (nothing clamps it) can cut a long answer off mid-sentence,
+            # and the generator's own signal is the only thing that knows: the text
+            # reads as a clean prefix. generalize()'s guard does not cover this one
+            # - it only sees whether the REWRITE was truncated, and its fallback
+            # returns this same cut-off raw answer. Stored, it never self-heals:
+            # every later match is served the same cut-off text, reported as
+            # finish_reason="stop" because a hit carries no truncation signal.
+            if finish_reason_ == "length":
+                _will_cache = False
+                logger.warning(
+                    "generation was truncated (finish_reason=length, route=%s model=%s); "
+                    "not caching the cut-off answer",
+                    route_, model_used_,
+                )
+
+            store_status = "skipped"
+            miss_response_id: str | None = None
+            if _will_cache:
+                miss_response_id = _planned_response_id
+                with trace.step("store"):
+                    if USE_CELERY:
+                        try:
+                            # Text requests keep the legacy positional-args call; image
+                            # fingerprints ride as kwargs only when present. workspace_slug
+                            # always rides as a kwarg (plain string) so the worker can
+                            # resolve its own fresh generalizer config - see
+                            # tasks/cache_tasks.py.
+                            _apply_kwargs: dict = {
+                                "headers": {"dejaq_model_profile": model_profile},
+                                "ignore_result": True,
+                                "kwargs": {"workspace_slug": workspace_slug},
+                            }
+                            if _request_has_image:
+                                _apply_kwargs["kwargs"].update({
+                                    "image_dhash": _img_dhash, "image_clip": _img_clip,
+                                    "image_kind": _img_kind, "image_text": _img_text,
+                                })
+                            elif _request_has_file:
+                                _apply_kwargs["kwargs"].update({
+                                    "file_sha": _file_sha, "file_kind": _file_kind,
+                                })
+                            generalize_and_store_task.apply_async(
+                                args=(clean_query, answer, user_query, workspace_slug, cache_namespace),
+                                **_apply_kwargs,
+                            )
+                            store_status = "queued"
+                        except Exception as exc:
+                            # Broker/result-backend down (e.g. Redis outage): degrade to in-process
+                            # storage instead of failing the user-facing chat request.
+                            logger.warning("Celery dispatch failed (%s); storing in-process", type(exc).__name__)
+                            # Every attachment argument, or the entry loses its
+                            # identity: without file_sha/file_kind the row is an
+                            # ungated TEXT entry, the answer goes through the
+                            # generalizer that cannot see the document, and the id
+                            # returned above (derived WITH the file hash) addresses
+                            # a row that was never written.
+                            background_tasks.add_task(
+                                _bg_generalize_and_store,
+                                clean_query,
+                                answer,
+                                user_query,
+                                workspace_slug,
+                                cache_namespace,
+                                model_profile,
+                                image_dhash=_img_dhash,
+                                image_clip=_img_clip,
+                                image_kind=_img_kind,
+                                image_text=_img_text,
+                                file_sha=_file_sha,
+                                file_kind=_file_kind,
+                            )
+                            store_status = "background-fallback"
+                    else:
                         background_tasks.add_task(
                             _bg_generalize_and_store,
                             clean_query,
@@ -1739,84 +1871,146 @@ async def run_chat_pipeline(
                             file_sha=_file_sha,
                             file_kind=_file_kind,
                         )
-                        store_status = "background-fallback"
-                else:
-                    background_tasks.add_task(
-                        _bg_generalize_and_store,
-                        clean_query,
-                        answer,
-                        user_query,
-                        workspace_slug,
-                        cache_namespace,
-                        model_profile,
-                        image_dhash=_img_dhash,
-                        image_clip=_img_clip,
-                        image_kind=_img_kind,
-                        image_text=_img_text,
-                        file_sha=_file_sha,
-                        file_kind=_file_kind,
-                    )
-                    store_status = "background"
+                        store_status = "background"
 
-        # 6. Build result
-        _latency = int((time.monotonic() - _t0) * 1000)
-        served_tier: ServedTier = "external" if route == "external" else "local"
-        interaction = await _register_answer_interaction(
-            workspace_id=workspace_id,
-            workspace_slug=workspace_slug,
-            department=dept,
-            cache_namespace=cache_namespace,
-            served_tier=served_tier,
-            response_id=miss_response_id,
-            request_messages=list(messages),
-        )
-        asyncio.create_task(
-            request_logger.log(
-                workspace_slug, dept, _latency, False, complexity, model_used, miss_response_id,
-                finish_reason=finish_reason,
+            # 6. Build result
+            _latency = int((time.monotonic() - _t0) * 1000)
+            if interaction is None:
+                interaction = await _register_answer_interaction(
+                    workspace_id=workspace_id,
+                    workspace_slug=workspace_slug,
+                    department=dept,
+                    cache_namespace=cache_namespace,
+                    served_tier="external" if route_ == "external" else "local",
+                    response_id=miss_response_id,
+                    request_messages=list(messages),
+                )
+            asyncio.create_task(
+                request_logger.log(
+                    workspace_slug, dept, _latency, False, complexity, model_used_, miss_response_id,
+                    finish_reason=finish_reason_,
+                )
             )
-        )
-        diff_score = float(classification.get("score", 0.0))
-        logger.info(
-            "done cache=miss route=%s model=%s store=%s response_id=%s latency=%dms difficulty_score=%.4f steps=%s%s%s%s%s",
-            route, model_used, store_status, miss_response_id or "none", _latency, diff_score,
-            trace.summary(),
-            _enriched_log_suffix(enriched, enrich_succeeded),
-            _nearest_log_suffix(cache_lookup),
-            _image_log_suffix(_request_has_image, _image_kind(image_ocr) if _request_has_image else None,
-                              _image_clip_distance, _image_hamming, _image_token_jaccard),
-            _rag_log_suffix(rag_context),
-        )
+            diff_score = float(classification.get("score", 0.0))
+            logger.info(
+                "done cache=miss route=%s model=%s store=%s response_id=%s latency=%dms difficulty_score=%.4f steps=%s%s%s%s%s",
+                route_, model_used_, store_status, miss_response_id or "none", _latency, diff_score,
+                trace.summary(),
+                _enriched_log_suffix(enriched, enrich_succeeded),
+                _nearest_log_suffix(cache_lookup),
+                _image_log_suffix(_request_has_image, _image_kind(image_ocr) if _request_has_image else None,
+                                  _image_clip_distance, _image_hamming, _image_token_jaccard),
+                _rag_log_suffix(rag_context),
+            )
 
-        if route == "external" and ext_response is not None:
-            # Real provider usage, not the word-count estimate below - Anthropic (and
-            # any other provider client) already returns actual input/output token
-            # counts from the API response itself; this was being computed and then
-            # discarded on every external call, so DejaQ's own /v1/responses and
-            # /v1/chat/completions usage fields never reflected real spend.
-            prompt_tokens = ext_response.prompt_tokens
-            completion_tokens = ext_response.completion_tokens
-        else:
-            prompt_tokens = int(len(clean_query.split()) * 1.3)
-            completion_tokens = int(len(answer.split()) * 1.3)
+            if route_ == "external" and ext_response_ is not None:
+                # Real provider usage, not the word-count estimate below - Anthropic (and
+                # any other provider client) already returns actual input/output token
+                # counts from the API response itself; this was being computed and then
+                # discarded on every external call, so DejaQ's own /v1/responses and
+                # /v1/chat/completions usage fields never reflected real spend.
+                prompt_tokens = ext_response_.prompt_tokens
+                completion_tokens = ext_response_.completion_tokens
+            else:
+                prompt_tokens = int(len(clean_query.split()) * 1.3)
+                completion_tokens = int(len(answer.split()) * 1.3)
+            return miss_response_id, interaction, prompt_tokens, completion_tokens
+
+        def _miss_headers(
+            model_used: str, served_tier: str, interaction_id: str, response_id: str | None
+        ) -> dict[str, str]:
+            headers = _sanitize_headers({
+                "x-dejaq-model-used": model_used,
+                "x-dejaq-conversation-id": completion_id,
+                "x-dejaq-interaction-id": interaction_id,
+                "x-dejaq-tier": served_tier,
+                "x-dejaq-prompt-difficulty": complexity,
+                "x-dejaq-prompt-difficulty-score": f"{float(classification.get('score', 0.0)):.4f}",
+            })
+            headers.update(_nearest_headers(cache_lookup))
+            if rag_context:
+                headers["x-dejaq-rag-chunks"] = str(len(rag_context))
+            if response_id:
+                headers["x-dejaq-response-id"] = response_id
+            if _validator_verdict is not None:
+                headers["x-dejaq-validator-verdict"] = "invalid"
+            return headers
+
+        if stream:
+            # Headers first, tokens after: the caller turns this result into a
+            # StreamingResponse, and Starlette sends the response head before it
+            # pulls the first item out of the body iterator. Everything the
+            # headers name is therefore resolved above, before generation starts;
+            # the two values that genuinely cannot be (was the answer empty, was
+            # it truncated) only ever REMOVE a store, never change a header.
+            interaction = await _register_answer_interaction(
+                workspace_id=workspace_id,
+                workspace_slug=workspace_slug,
+                department=dept,
+                cache_namespace=cache_namespace,
+                served_tier="external" if route == "external" else "local",
+                response_id=_planned_response_id,
+                request_messages=list(messages),
+            )
+            result = ChatPipelineResult(
+                answer="",
+                response_id=_planned_response_id,
+                completion_id=completion_id,
+                model_used=gen["model_used"],
+                stream_chunks=[],
+                headers=_miss_headers(
+                    gen["model_used"],
+                    "external" if route == "external" else "local",
+                    interaction.interaction_id,
+                    _planned_response_id,
+                ),
+                prompt_tokens=0,
+                completion_tokens=0,
+            )
+
+            async def _streamed_answer() -> AsyncGenerator[str, None]:
+                # The enclosing request's log context ends when this function
+                # returns; the generation it launched runs afterwards, while the
+                # response body streams, so it re-establishes its own. Set
+                # without a matching reset on purpose: this generator can be
+                # closed from a different task than the one that drove it (a
+                # client disconnect mid-answer), and resetting a contextvar
+                # Token across contexts raises. The context is the streaming
+                # task's own and dies with the response, so there is nothing to
+                # leak into the next request.
+                set_request_id(_short_request_id(completion_id))
+                pieces: list[str] = []
+                async for piece in _answer_chunks():
+                    pieces.append(piece)
+                    yield piece
+                # .strip() to match the buffered path, where OllamaBackend
+                # strips the assembled answer before anything stores it.
+                result.answer = "".join(pieces).strip()
+                # Everything below runs inside the response body, so a client
+                # that disconnects mid-answer gets none of it: no cache store,
+                # no `requests` row (so no finish_reason for the truncation-rate
+                # tile) and no `done cache=miss` log line. That is the trade for
+                # streaming - the generation is aborted with the connection, so
+                # there is no complete answer left to store anyway - but it does
+                # mean aborted turns are absent from stats rather than counted.
+                (
+                    result.response_id,
+                    _,
+                    result.prompt_tokens,
+                    result.completion_tokens,
+                ) = await _finalize(result.answer, interaction)
+                result.model_used = gen["model_used"]
+                result.finish_reason = gen["finish_reason"]
+
+            result.answer_stream = _streamed_answer()
+            return result
+
+        answer = "".join([piece async for piece in _answer_chunks()])
+        miss_response_id, interaction, prompt_tokens, completion_tokens = await _finalize(answer, None)
+        model_used = gen["model_used"]
+        finish_reason = gen["finish_reason"]
         words = answer.split(" ")
         stream_chunks = [w + " " for w in words[:-1]] + [words[-1]] if words else [answer]
-
-        miss_headers: dict[str, str] = _sanitize_headers({
-            "x-dejaq-model-used": model_used,
-            "x-dejaq-conversation-id": completion_id,
-            "x-dejaq-interaction-id": interaction.interaction_id,
-            "x-dejaq-tier": served_tier,
-            "x-dejaq-prompt-difficulty": complexity,
-            "x-dejaq-prompt-difficulty-score": f"{diff_score:.4f}",
-        })
-        miss_headers.update(_nearest_headers(cache_lookup))
-        if rag_context:
-            miss_headers["x-dejaq-rag-chunks"] = str(len(rag_context))
-        if miss_response_id:
-            miss_headers["x-dejaq-response-id"] = miss_response_id
-        if _validator_verdict is not None:
-            miss_headers["x-dejaq-validator-verdict"] = "invalid"
 
         return ChatPipelineResult(
             answer=answer,
@@ -1824,7 +2018,12 @@ async def run_chat_pipeline(
             completion_id=completion_id,
             model_used=model_used,
             stream_chunks=stream_chunks,
-            headers=miss_headers,
+            headers=_miss_headers(
+                model_used,
+                "external" if gen["route"] == "external" else "local",
+                interaction.interaction_id,
+                miss_response_id,
+            ),
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             finish_reason=finish_reason,
@@ -1848,16 +2047,14 @@ async def chat_completions(
             max_tokens=oai_request.max_tokens,
             raw_request=raw_request,
             background_tasks=background_tasks,
+            stream=bool(oai_request.stream),
         )
     except PipelineError as exc:
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
     if oai_request.stream:
         return StreamingResponse(
-            _stream_generator(
-                result.stream_chunks, result.completion_id, oai_request.model,
-                result.model_used, result.finish_reason,
-            ),
+            _stream_generator(result, oai_request.model),
             media_type="text/event-stream",
             headers=result.headers,
         )

@@ -386,3 +386,131 @@ def test_google_provider_client_coalesces_none_token_counts(monkeypatch):
     assert response.prompt_tokens == 0
     assert response.completion_tokens == 0
     assert response.text == ""
+
+
+# ── Streaming: the SDK stream is released when the consumer walks away ──
+#
+# A cloud answer keeps the upstream HTTPS response open for the whole
+# generation, and a mid-answer abort (the user hits stop, or navigates away)
+# closes these generators where they are suspended. Iterating the SDK stream
+# without closing it leaves that connection checked out.
+
+
+class _FakeSDKStream:
+    """Stands in for anthropic/openai `AsyncStream`: an async iterator that is
+    also an async context manager, recording whether it was closed."""
+
+    def __init__(self, events):
+        self._events = list(events)
+        self.closed = False
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        self.closed = True
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self._events:
+            raise StopAsyncIteration
+        return self._events.pop(0)
+
+
+def test_anthropic_stream_is_closed_when_the_consumer_abandons_it(monkeypatch):
+    from app.services.llm_providers import anthropic as anthropic_provider
+
+    stream = _FakeSDKStream([
+        SimpleNamespace(type="content_block_delta", delta=SimpleNamespace(text="Hel")),
+        SimpleNamespace(type="content_block_delta", delta=SimpleNamespace(text="lo")),
+    ])
+
+    class FakeMessages:
+        async def create(self, **kwargs):
+            return stream
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.messages = FakeMessages()
+
+    monkeypatch.setattr(anthropic_provider.anthropic, "AsyncAnthropic", FakeClient)
+
+    async def run():
+        chunks = anthropic_provider.AnthropicProviderClient().stream_response(
+            _request("claude-sonnet-4-6"), "SecretKey123"
+        )
+        assert (await anext(chunks)).text == "Hel"
+        await chunks.aclose()
+        assert stream.closed is True
+
+    asyncio.run(run())
+
+
+def test_openai_stream_is_closed_when_the_consumer_abandons_it(monkeypatch):
+    from app.services.llm_providers import openai as openai_provider
+
+    def _chunk(content: str):
+        return SimpleNamespace(
+            usage=None,
+            choices=[SimpleNamespace(finish_reason=None, delta=SimpleNamespace(content=content))],
+        )
+
+    stream = _FakeSDKStream([_chunk("Hel"), _chunk("lo")])
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            return stream
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr(openai_provider.openai, "AsyncOpenAI", FakeClient)
+
+    async def run():
+        chunks = openai_provider.OpenAIProviderClient().stream_response(
+            _request("gpt-4o"), "SecretKey123"
+        )
+        assert (await anext(chunks)).text == "Hel"
+        await chunks.aclose()
+        assert stream.closed is True
+
+    asyncio.run(run())
+
+
+def test_google_stream_is_closed_when_the_consumer_abandons_it(monkeypatch):
+    """google-genai hands back a plain async generator rather than a context
+    manager, so it is closed explicitly instead - left to the event loop's
+    asyncgen finalizer the connection outlives the request."""
+    from app.services.llm_providers import google as google_provider
+
+    closed = {"value": False}
+
+    async def fake_stream():
+        try:
+            for piece in ("Hel", "lo"):
+                yield SimpleNamespace(text=piece, usage_metadata=None, candidates=None)
+        finally:
+            closed["value"] = True
+
+    class FakeModels:
+        async def generate_content_stream(self, **kwargs):
+            return fake_stream()
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.aio = SimpleNamespace(models=FakeModels())
+
+    monkeypatch.setattr(google_provider.genai, "Client", FakeClient)
+
+    async def run():
+        chunks = google_provider.GoogleProviderClient().stream_response(
+            _request("gemini-2.5-flash"), "SecretKey123"
+        )
+        assert (await anext(chunks)).text == "Hel"
+        await chunks.aclose()
+        assert closed["value"] is True
+
+    asyncio.run(run())
