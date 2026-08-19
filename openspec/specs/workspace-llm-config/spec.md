@@ -7,7 +7,7 @@ Define per-workspace LLM routing configuration persistence and the management en
 
 ### Requirement: Per-workspace LLM config is persisted
 
-The system SHALL persist a single LLM configuration record per workspace in a new `workspace_llm_configs` table with columns: `workspace_id` (PK, FK to `workspaces.id`, ON DELETE CASCADE), `external_model` (TEXT, nullable), the six pipeline-role model columns `local_model`, `generalizer_model`, `adjuster_model`, `enricher_model`, `normalizer_model`, `validator_model` (each TEXT, nullable), the seven pipeline-role system prompt columns `enricher_system_prompt`, `normalizer_system_prompt`, `validator_system_prompt`, `validator_image_system_prompt`, `adjuster_system_prompt`, `generalizer_system_prompt`, `local_model_system_prompt` (each TEXT, nullable), `routing_threshold` (REAL, nullable), the three token-budget columns `default_max_tokens`, `rewrite_max_tokens`, `ollama_num_ctx` (each INTEGER, nullable), `updated_at` (TIMESTAMP, NOT NULL). Nullable config columns with `NULL` values SHALL fall back to the global defaults defined in `app.config` (models, routing threshold, and token budgets - each token-budget column mirrors the `app.config` constant of the same name uppercased) or to the owning service module's shipped `DEFAULT_*_SYSTEM_PROMPT` constant (prompts).
+The system SHALL persist a single LLM configuration record per workspace in a new `workspace_llm_configs` table with columns: `workspace_id` (PK, FK to `workspaces.id`, ON DELETE CASCADE), `external_model` (TEXT, nullable), `external_provider` (TEXT, nullable - the provider recorded for `external_model` when it is saved), the six pipeline-role model columns `local_model`, `generalizer_model`, `adjuster_model`, `enricher_model`, `normalizer_model`, `validator_model` (each TEXT, nullable), the seven pipeline-role system prompt columns `enricher_system_prompt`, `normalizer_system_prompt`, `validator_system_prompt`, `validator_image_system_prompt`, `adjuster_system_prompt`, `generalizer_system_prompt`, `local_model_system_prompt` (each TEXT, nullable), `routing_threshold` (REAL, nullable), the three token-budget columns `default_max_tokens`, `rewrite_max_tokens`, `ollama_num_ctx` (each INTEGER, nullable), `updated_at` (TIMESTAMP, NOT NULL). Nullable config columns with `NULL` values SHALL fall back to the global defaults defined in `app.config` (models, routing threshold, and token budgets - each token-budget column mirrors the `app.config` constant of the same name uppercased) or to the owning service module's shipped `DEFAULT_*_SYSTEM_PROMPT` constant (prompts). `external_model` is the one field whose global default may itself be unset: `app.config.EXTERNAL_MODEL_NAME` is `DEJAQ_EXTERNAL_MODEL` with no baked-in literal behind it, so a workspace that overrides neither reads back `null` - "no model configured", never a substituted one.
 
 #### Scenario: Workspace with no config row uses defaults
 
@@ -50,7 +50,7 @@ The system SHALL expose `PUT /admin/v1/workspaces/{workspace_slug}/llm-config` a
 #### Scenario: Explicit null clears an override
 
 - **WHEN** an authorized client PUTs `{"external_model": null}` and the row previously had `external_model = "gemini-2.5-pro"`
-- **THEN** the stored `external_model` is `NULL`, the response `external_model` is the global default, and `external_model` is absent from `overrides`
+- **THEN** the stored `external_model` and `external_provider` are both `NULL`, the response `external_model` is the global default (which is itself `null` when `DEJAQ_EXTERNAL_MODEL` is unset), and `external_model` is absent from `overrides`
 
 #### Scenario: Empty update is rejected
 
@@ -69,7 +69,7 @@ The system SHALL expose `PUT /admin/v1/workspaces/{workspace_slug}/llm-config` a
 
 ### Requirement: Pipeline-role model overrides are validated against the live Ollama catalog
 
-A non-null value for any of the six pipeline-role model fields (`local_model`, `generalizer_model`, `adjuster_model`, `enricher_model`, `normalizer_model`, `validator_model`) SHALL be validated on write against a forced (cache-bypassing) `GET /api/tags` call to the configured Ollama host, accepting any installed tag rather than only tags registered in `MODEL_RUNTIME_SPECS`. A value Ollama does not currently report SHALL return HTTP 422 naming the offending field and value, and SHALL NOT be stored. An unreachable Ollama SHALL also return HTTP 422. Explicit `null` (reset to default) SHALL skip this validation, so an override can be cleared while Ollama is down. `external_model` names a provider model string, not an Ollama tag, and SHALL NOT be validated this way.
+A non-null value for any of the six pipeline-role model fields (`local_model`, `generalizer_model`, `adjuster_model`, `enricher_model`, `normalizer_model`, `validator_model`) SHALL be validated on write against a forced (cache-bypassing) `GET /api/tags` call to the configured Ollama host, accepting any installed tag rather than only tags registered in `MODEL_RUNTIME_SPECS`. A value Ollama does not currently report SHALL return HTTP 422 naming the offending field and value, and SHALL NOT be stored. An unreachable Ollama SHALL also return HTTP 422. Explicit `null` (reset to default) SHALL skip this validation, so an override can be cleared while Ollama is down. `external_model` names a provider model string, not an Ollama tag, and SHALL NOT be validated this way - it is validated against the provider registry instead (see the requirement below).
 
 A role whose stored override names a tag that was later uninstalled SHALL NOT fail the request that uses it: the affected role SHALL fall back to its shipped default and log a warning.
 
@@ -87,6 +87,22 @@ A role whose stored override names a tag that was later uninstalled SHALL NOT fa
 
 - **WHEN** a workspace has `enricher_model` set to a tag that is no longer installed and a request exercises the context enricher
 - **THEN** the role runs on its shipped default model and a warning is logged, rather than the request failing
+
+### Requirement: external_model is validated against the provider registry and records its provider
+
+A non-null `external_model` SHALL be validated on write against the provider registry (`app/services/provider_registry.py`), the single declaration of which providers exist and which models each offers. A value no provider in the registry offers SHALL return HTTP 422 naming the offending model, and SHALL NOT be stored. A valid value SHALL be stored together with the offering provider in `external_provider`, so the request path reads a recorded provider rather than guessing one from the model name. Explicit `null` SHALL clear both columns and SHALL skip validation.
+
+The registry SHALL also be served read-only as `GET /admin/v1/providers`, returning each provider's key, whether it is wired to a live client, its client wire shape, and its models with each model's accepted input kinds - the one source the dashboard's provider/model pickers read, so no client ships its own copy of the list.
+
+#### Scenario: Unknown external model is rejected
+
+- **WHEN** an authorized client PUTs `{"external_model": "not-a-real-model"}`
+- **THEN** the response is HTTP 422 naming the model and no override is stored
+
+#### Scenario: Saving a model records its provider
+
+- **WHEN** an authorized client PUTs `{"external_model": "claude-sonnet-5"}`
+- **THEN** the row stores `external_provider = "anthropic"` alongside it
 
 ### Requirement: Blank system prompt overrides are rejected
 
