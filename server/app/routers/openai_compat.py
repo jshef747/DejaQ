@@ -97,7 +97,7 @@ from app.config import (
     VALIDATOR_SKIP_DISTANCE,
 )
 from app.db.session import get_session
-from app.utils.exceptions import ExternalLLMError
+from app.utils.exceptions import ExternalLLMAuthError, ExternalLLMError
 from app.utils.logger import clear_request_id, content_snippet, hide_content, set_request_id
 from app.utils.pipeline_trace import PipelineTrace
 from app.schemas.chat import ExternalLLMRequest
@@ -1755,15 +1755,47 @@ async def run_chat_pipeline(
             except ExternalLLMError as exc:
                 if "not wired to a live client" in str(exc):
                     raise PipelineError(422, str(exc)) from exc
-                # A provider 400/401/429 is a permanent misconfiguration, not
-                # the transient blip the apology below exists for - surface it
-                # as its own status with the provider's own message. Only on
-                # the buffered path: a streaming response has already flushed
-                # its 200 headers by the time generation starts, so it has no
-                # status left to change and keeps the apology.
-                if not stream and exc.status_code in (400, 401, 429):
+                # A rejected provider credential or a provider 400/429 is a
+                # permanent misconfiguration, not the transient blip the apology
+                # below exists for - surface it as its own status. Only on the
+                # buffered path: a streaming response has already flushed its
+                # 200 headers by the time generation starts, so it has no status
+                # left to change and keeps the apology.
+                #
+                # The detail is fixed per status and never the provider's own
+                # text: that text can echo a masked form of the workspace's
+                # provider key (OpenAI's 401 body does) or account identifiers,
+                # and this body goes to any holder of a workspace API key. The
+                # real message stays in the log line below.
+                #
+                # A rejected credential is 502, not the provider's own 401:
+                # on this endpoint 401 already means the CALLER's DejaQ API key
+                # was rejected, and 402 already means no credential is stored
+                # at all. Keyed off the exception type, not the status, because
+                # the auth failure is the signal.
+                surfaced: tuple[int, str] | None = None
+                provider_name = provider or "external provider"
+                if isinstance(exc, ExternalLLMAuthError):
+                    surfaced = (
+                        502,
+                        f"The {provider_name} credential configured for this workspace was "
+                        "rejected. Check the API key in the workspace's provider settings.",
+                    )
+                elif exc.status_code == 429:
+                    surfaced = (
+                        429,
+                        f"The {provider_name} account for this workspace is rate limited. "
+                        "Try again shortly.",
+                    )
+                elif exc.status_code == 400:
+                    surfaced = (
+                        400,
+                        f"The {provider_name} request was rejected ({provider_name} error). "
+                        "The model or its parameters may not be supported.",
+                    )
+                if not stream and surfaced is not None:
                     logger.warning("External provider error surfaced to caller: %s", exc)
-                    raise PipelineError(exc.status_code, str(exc)) from exc
+                    raise PipelineError(*surfaced) from exc
                 logger.exception("ExternalLLMService failed")
                 yield _GENERATION_FAILED_MESSAGE
                 gen.update(model_used="error", route="error")

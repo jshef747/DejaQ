@@ -8,7 +8,10 @@ fills.
 This file locks down the fix at the router level:
   * no client temperature -> nothing is sent to the provider client;
   * an explicit client temperature -> still forwarded;
-  * a provider 400/401/429 -> a distinguishable status, not the apology.
+  * a provider 400/429 -> that same status, and a rejected provider credential
+    -> 502 (not 401, which on this endpoint means the CALLER's DejaQ key was
+    rejected), each carrying a fixed message rather than the provider's own
+    text, which can echo a masked form of the workspace's provider key.
 """
 import pytest
 from cryptography.fernet import Fernet
@@ -17,7 +20,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.routers import openai_compat
 from app.schemas.chat import ExternalLLMResponse
-from app.utils.exceptions import ExternalLLMError
+from app.utils.exceptions import ExternalLLMAuthError, ExternalLLMError
 from tests.test_openai_compat_smoke import (
     _AUTH,
     StubEnricher,
@@ -136,17 +139,23 @@ def test_provider_400_surfaces_as_a_distinguishable_status_not_the_apology(monke
     resp = _ask_hard_question()
 
     assert resp.status_code == 400
-    assert "temperature is deprecated" in resp.json()["detail"]
+    detail = resp.json()["detail"]
+    assert "anthropic request was rejected" in detail
+    assert "temperature is deprecated" not in detail
 
 
-def test_provider_401_surfaces_as_a_distinguishable_status(monkeypatch):
-    external = FailingExternalLLM(ExternalLLMError("invalid api key", status_code=401))
+def test_provider_auth_error_surfaces_as_502_not_401(monkeypatch):
+    """401 on this endpoint already means the caller's own DejaQ API key was
+    rejected; a rejected PROVIDER credential is an upstream failure (502)."""
+    external = FailingExternalLLM(ExternalLLMAuthError("invalid api key: sk-ant-li****ive", status_code=401))
     _setup_hard_route(monkeypatch, external)
 
     resp = _ask_hard_question()
 
-    assert resp.status_code == 401
-    assert "invalid api key" in resp.json()["detail"]
+    assert resp.status_code == 502
+    detail = resp.json()["detail"]
+    assert "anthropic credential configured for this workspace was rejected" in detail
+    assert "sk-ant-li" not in detail
 
 
 def test_provider_429_surfaces_as_a_distinguishable_status(monkeypatch):
@@ -156,7 +165,8 @@ def test_provider_429_surfaces_as_a_distinguishable_status(monkeypatch):
     resp = _ask_hard_question()
 
     assert resp.status_code == 429
-    assert "rate limited" in resp.json()["detail"]
+    detail = resp.json()["detail"]
+    assert "anthropic account for this workspace is rate limited" in detail
 
 
 def test_transient_provider_failure_still_gets_the_generic_apology(monkeypatch):

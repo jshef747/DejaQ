@@ -203,6 +203,13 @@ request
 - Easy miss: served by the configured local model backend.
 - Hard miss: served by the provider inferred from the workspace's configured model, using encrypted workspace credentials.
 - Missing hard-query credentials return `402 Payment Required`.
+- A hard-query provider failure on the **non-streaming** path returns `400` (request rejected),
+  `502` (the workspace's stored provider credential was rejected — not `401`, which on this
+  endpoint means the caller's own DejaQ API key was rejected), or `429` (provider rate limit).
+  Each carries a fixed per-status message naming the provider, never the provider's own error
+  text — that stays in the server log, since it can echo a masked form of the stored credential.
+  A status-less failure (timeout, connection reset) still returns `200` with the generic apology,
+  as does every failure on the streaming path, whose `200` headers are already flushed.
 
 There is no runtime `GEMINI_API_KEY` fallback. Store provider credentials through the dashboard or `PUT /admin/v1/workspaces/{workspace_slug}/credentials/{provider}`.
 
