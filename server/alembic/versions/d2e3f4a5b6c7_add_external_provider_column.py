@@ -8,13 +8,26 @@ Create Date: 2026-08-19 00:00:00.000000
 from alembic import op
 import sqlalchemy as sa
 
-from app.services.provider_inference import provider_for_model
-
 
 revision = "d2e3f4a5b6c7"
 down_revision = "c6d7e8f9a0b1"
 branch_labels = None
 depends_on = None
+
+
+def _provider_for_model(model_name: str) -> str | None:
+    """Frozen copy of app.services.provider_inference.provider_for_model as it
+    read at migration authorship time. Do not import the live app function here:
+    it may be changed or removed by later code, and this migration must keep
+    reproducing the same backfill on a fresh database regardless."""
+    model = model_name.strip().lower()
+    if model.startswith("gemini-"):
+        return "google"
+    if model.startswith(("gpt-", "o1-", "o3-", "o4-", "chatgpt-")):
+        return "openai"
+    if model.startswith("claude-"):
+        return "anthropic"
+    return None
 
 
 def upgrade() -> None:
@@ -33,9 +46,8 @@ def upgrade() -> None:
         )
     ).fetchall()
     for workspace_id, external_model in rows:
-        try:
-            provider = provider_for_model(external_model)
-        except ValueError:
+        provider = _provider_for_model(external_model)
+        if provider is None:
             continue
         bind.execute(
             configs_table.update()
