@@ -467,6 +467,14 @@ ensure_node_app_ready() {
   if [[ ! -d "$dir/node_modules" ]]; then
     echo -e "${RED}$name dependencies missing. Run: cd $dir && npm install${NC}"; exit 1
   fi
+  # npm writes node_modules/.package-lock.json to reflect what's actually installed.
+  # If it's older than package-lock.json, node_modules is stale. Skip the check (do
+  # not block startup) when either file is missing — nothing to compare.
+  if [[ -f "$dir/package-lock.json" && -f "$dir/node_modules/.package-lock.json" ]]; then
+    if [[ "$dir/package-lock.json" -nt "$dir/node_modules/.package-lock.json" ]]; then
+      echo -e "${RED}$name dependencies out of date. Run: cd $dir && npm install${NC}"; exit 1
+    fi
+  fi
 }
 
 start_dashboard() {
