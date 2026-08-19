@@ -17,8 +17,8 @@ function defaultBaseUrl(): string {
 }
 
 // Resolve the DejaQ backend URL. A client-supplied override (X-DejaQ-Server,
-// set from the chat Settings modal so users can target a server on another
-// machine) wins when it is a valid http(s) URL; otherwise fall back to the
+// set from the chat connect screen or Settings so users can target a server on
+// another machine) wins when it is a valid http(s) URL; otherwise fall back to the
 // server-side default. Invalid overrides are ignored rather than erroring.
 function resolveBaseUrl(override?: string | null): string {
   const candidate = (override ?? "").trim();
@@ -52,8 +52,8 @@ function isDefaultServer(baseUrl: string): boolean {
 }
 
 // Resolve the workspace API key. A client-supplied override (X-DejaQ-Key, set
-// from the chat Settings modal so a workspace created during dev testing can
-// be used without a restart) wins when non-empty. Otherwise the env
+// from the chat connect screen or Settings so a workspace created during dev
+// testing can be used without a restart) wins when non-empty. Otherwise the env
 // DEJAQ_API_KEY only applies when the request targets the configured default
 // server - never forward the operator's key to a client-supplied server, or a
 // LAN caller could point X-DejaQ-Server at a listener they control and
@@ -75,8 +75,11 @@ export function getDejaQConfig(
     return NextResponse.json(
       {
         code: "missing_dejaq_api_key",
+        // Reachable from the connect screen (blank key, no env key) as well as
+        // from a live chat request, so it must not send the reader to Settings,
+        // which is unreachable while the connect screen is up.
         message:
-          "No DejaQ API key configured. Paste one into Settings, or set DEJAQ_API_KEY in chat/.env.local.",
+          "No DejaQ API key configured. Enter one in the chat app, or set DEJAQ_API_KEY in chat/.env.local.",
       },
       { status: 424 },
     );

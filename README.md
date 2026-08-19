@@ -108,7 +108,7 @@ cp .env.local.example .env.local
 npm run dev
 ```
 
-The chat app runs at `http://localhost:4000` and asks for a workspace API key on its connect screen at first launch; `DEJAQ_API_KEY` in `chat/.env.local` is only the server-side fallback for requests that carry no key of their own. The browser calls the app's own `/api/*` routes, and those server routes forward to the backend through `DEJAQ_API_BASE_URL`. See [chat/README.md](chat/README.md) for details.
+The chat app runs at `http://localhost:4000` and opens on a connect screen at first launch: paste a workspace API key, or leave the field blank to use `DEJAQ_API_KEY` from `chat/.env.local` (a pasted key wins). The browser calls the app's own `/api/*` routes, and those server routes forward to the backend through `DEJAQ_API_BASE_URL`. See [chat/README.md](chat/README.md) for details.
 
 ## Main Interfaces
 

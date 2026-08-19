@@ -18,11 +18,11 @@ DEJAQ_API_BASE_URL=http://127.0.0.1:8000
 NEXT_PUBLIC_DASHBOARD_URL=http://localhost:3000/dashboard
 ```
 
-`DEJAQ_API_KEY` is the server-side fallback, used only for requests that arrive without
-a key of their own. The app itself asks for a key on its connect screen at first launch
-and that key always wins, so filling the env var does not skip that screen. If you point
-the app at a different server, paste that server's key too - the env var is never sent to
-any server other than `DEJAQ_API_BASE_URL`.
+`DEJAQ_API_KEY` is optional if you'd rather enter the key in the app instead (a key entered
+there always wins over this env var). If you do fill it in, leave the connect screen's key
+field blank and press Connect - the request then carries no key of its own and this env var
+answers for it. If you point the app at a different server, enter that server's key in the
+app - the env var is never sent to any server other than `DEJAQ_API_BASE_URL`.
 
 ## Run
 
@@ -31,8 +31,9 @@ npm run dev
 ```
 
 Open `http://localhost:4000`. First launch shows a connect screen: paste a workspace API
-key (mint one with `dejaq-admin key generate`), optionally point it at another server, and
-Connect. A department is picked for you; change it, the key, or the server later in
+key (mint one with `dejaq-admin key generate`) - or leave the key field blank to use the
+`DEJAQ_API_KEY` this server already has configured - optionally point it at another server,
+and Connect. A department is picked for you; change it, the key, or the server later in
 Settings.
 
 The app follows your OS light/dark setting and has no in-app toggle; set

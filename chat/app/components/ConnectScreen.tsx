@@ -17,6 +17,11 @@ type Status = "idle" | "testing" | "rejected" | "error";
 // that opened on every reload before the saved settings had even loaded.
 // A department is picked automatically from whatever the key can see; a
 // specific department is a Settings concern, not a first-run one.
+// The key field is deliberately submittable while empty: an empty key omits
+// the X-DejaQ-Key header, so the /api/* routes fall back to DEJAQ_API_KEY in
+// chat/.env.local. Someone who configured the key there and never typed one
+// into the browser must still be able to get past this screen. When neither
+// side has a key the routes answer 424 and its message is what shows below.
 export default function ConnectScreen({ initialSettings, onConnected, dashboardUrl }: Props) {
   const [serverBaseUrl, setServerBaseUrl] = useState(initialSettings.serverBaseUrl);
   const [apiKey, setApiKey] = useState(initialSettings.apiKey);
@@ -28,7 +33,7 @@ export default function ConnectScreen({ initialSettings, onConnected, dashboardU
     e.preventDefault();
     const server = serverBaseUrl.trim();
     const key = apiKey.trim();
-    if (status === "testing" || key.length === 0) return;
+    if (status === "testing") return;
     setStatus("testing");
     setErrorText("");
 
@@ -156,6 +161,9 @@ export default function ConnectScreen({ initialSettings, onConnected, dashboardU
               <span style={{ color: "var(--red)", fontSize: "12px", lineHeight: "18px" }}>{errorText}</span>
             </div>
           )}
+          <div style={{ color: "var(--fg-dimmer)", fontSize: "11.5px", lineHeight: "18px", marginTop: "7px" }}>
+            Leave blank to use the key this server already has configured.
+          </div>
         </div>
 
         <div style={{ marginTop: "20px" }}>
@@ -195,19 +203,19 @@ export default function ConnectScreen({ initialSettings, onConnected, dashboardU
         <div style={{ alignItems: "center", display: "flex", gap: "9px", marginTop: "26px" }}>
           <button
             type="submit"
-            disabled={connecting || apiKey.trim().length === 0}
+            disabled={connecting}
             style={{
               alignItems: "center",
               background: "var(--fg)",
               border: "1px solid var(--fg)",
               borderRadius: "8px",
               color: "var(--bg)",
-              cursor: connecting || apiKey.trim().length === 0 ? "not-allowed" : "pointer",
+              cursor: connecting ? "not-allowed" : "pointer",
               display: "inline-flex",
               fontSize: "13px",
               fontWeight: 600,
               height: "36px",
-              opacity: connecting || apiKey.trim().length === 0 ? 0.6 : 1,
+              opacity: connecting ? 0.6 : 1,
               padding: "0 18px",
             }}
           >

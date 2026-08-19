@@ -1,14 +1,15 @@
 // Browser-side API utility for the standalone chat app.
 // It only calls this Next.js app's /api/* routes. The workspace API key
-// comes from Settings (localStorage) when set, otherwise the /api/* routes
-// fall back to DEJAQ_API_KEY in chat/.env.local server-side.
+// comes from the connect screen or Settings (localStorage) when set, otherwise
+// the /api/* routes fall back to DEJAQ_API_KEY in chat/.env.local server-side.
 
 import { loadApiKey, loadServerBaseUrl, type Attachment, type ModelProfile, type RoutingMode } from "./chat-store";
 
 // Attach the user-selected DejaQ server + API key as headers the /api/*
-// routes read. `overrides` lets the Settings modal test unsaved values;
-// otherwise the saved settings are used. Empty values omit their header so
-// routes fall back to their server-side default.
+// routes read. `overrides` lets the connect screen and the Settings modal test
+// unsaved values; otherwise the saved settings are used. Empty values omit
+// their header so routes fall back to their server-side default, which is how
+// a blank key on the connect screen reaches the env DEJAQ_API_KEY.
 function dejaqHeaders(overrides?: { server?: string; apiKey?: string }): Record<string, string> {
   const server = (overrides?.server ?? loadServerBaseUrl()).trim();
   const apiKey = (overrides?.apiKey ?? loadApiKey()).trim();
