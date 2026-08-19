@@ -153,7 +153,10 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
           boxShadow: "var(--shadow)",
           display: "flex",
           flexDirection: "column",
-          maxHeight: "700px",
+          // Capped at 700px on a tall window, but never taller than the
+          // viewport itself (minus a margin) — otherwise a short window just
+          // pushes the header and footer off-screen instead of scrolling.
+          maxHeight: "min(700px, calc(100vh - 40px))",
           width: "552px",
           maxWidth: "calc(100vw - 40px)",
         }}

@@ -207,6 +207,7 @@ export default function ConnectScreen({ initialSettings, onConnected, dashboardU
               fontWeight: 500,
               height: "36px",
               padding: "0 14px",
+              textDecoration: "none",
             }}
           >
             Open dashboard

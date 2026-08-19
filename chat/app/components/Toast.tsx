@@ -111,6 +111,7 @@ function ToastCard({ toast, onDismiss }: { toast: ToastData; onDismiss: () => vo
               fontWeight: 600,
               gap: "5px",
               marginTop: "9px",
+              textDecoration: "none",
             }}
           >
             {toast.action.label}
