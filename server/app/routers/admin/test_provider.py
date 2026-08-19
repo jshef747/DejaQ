@@ -11,7 +11,7 @@ from app.schemas.test_provider import TestProviderRequest, TestProviderResponse
 from app.services.credential_service import SUPPORTED_PROVIDERS, CredentialService
 from app.services.external_llm import ExternalLLMService
 from app.services.llm_providers import LIVE_PROVIDERS, redact_api_key
-from app.services.provider_inference import provider_for_model
+from app.services.provider_inference import resolve_provider
 from app.utils.exceptions import ExternalLLMAuthError, ExternalLLMError, ExternalLLMTimeoutError
 
 logger = logging.getLogger("dejaq.routers.admin.test_provider")
@@ -54,7 +54,10 @@ async def test_provider(
     body: TestProviderRequest,
 ):
     try:
-        provider = provider_for_model(body.model)
+        # No stored config row applies here - body.model is a candidate the
+        # admin may not have saved yet, so this always falls through to the
+        # name-prefix guess (see resolve_provider in provider_inference.py).
+        provider = resolve_provider(body.model, None)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
