@@ -779,6 +779,21 @@ def _llm_config_for_workspace_slug(workspace_slug: str) -> EffectiveLlmConfig:
     return _effective_from_config(config)
 
 
+def _human_authored_entry(memory, doc_id: str) -> bool:
+    """Whether a person wrote the answer at this id (Edit & Save).
+
+    Fails OPEN on a read error, for the reason given on the Celery twin in
+    tasks/cache_tasks.py: one regenerated answer beats a cache that silently
+    stops filling.
+    """
+    try:
+        meta = memory.get_entry_metadata(doc_id)
+    except Exception:
+        logger.warning("Could not read provenance for %s; proceeding with store", doc_id, exc_info=True)
+        return False
+    return bool(meta and meta.get("authored") == "human")
+
+
 def _bg_generalize_and_store(
     clean_query: str,
     answer: str,
@@ -796,6 +811,17 @@ def _bg_generalize_and_store(
     start = time.perf_counter()
     doc_id = _doc_id(clean_query, file_sha, image_text=image_text, image_dhash=image_dhash)
     try:
+        # Same guard the Celery task carries: a person wrote this answer through
+        # Edit & Save while this store was still pending, and their text must
+        # not be replaced by the model's. See tasks/cache_tasks.py.
+        _memory = get_memory_service(cache_namespace)
+        if _human_authored_entry(_memory, doc_id):
+            logger.info(
+                "background_store status=skipped reason=human_authored namespace=%s doc_id=%s",
+                cache_namespace,
+                doc_id,
+            )
+            return
         # Attachment-anchored answers are stored verbatim — see the note in
         # tasks/cache_tasks.py: generalization cannot see the image or the file
         # and invents specifics, and the gate already pins the answer to one
@@ -806,7 +832,17 @@ def _bg_generalize_and_store(
             llm_config = _llm_config_for_workspace_slug(tenant_id)
             services = _services_for_model_profile(model_profile, llm_config)
             generalized = asyncio.run(services.adjuster.generalize(answer))
+        # Re-read right before the upsert: generalize() takes seconds, which is
+        # the window an edit most likely lands in. See the same pair in
+        # tasks/cache_tasks.py.
         memory = get_memory_service(cache_namespace)
+        if _human_authored_entry(memory, doc_id):
+            logger.info(
+                "background_store status=skipped reason=human_authored_race namespace=%s doc_id=%s",
+                cache_namespace,
+                doc_id,
+            )
+            return
         doc_id = memory.store_interaction(
             clean_query, generalized, original_query, tenant_id,
             image_dhash=image_dhash, image_clip=image_clip,
@@ -1293,6 +1329,10 @@ async def run_chat_pipeline(
         # Every model downstream is blind to the attachment, so an answer about one
         # is only reusable once the attachment itself has been proven identical.
         _attachment_anchored = _image_anchored or _file_anchored
+        # Set on an entry a person wrote through Edit & Save. Read here for the
+        # adjuster skip below and reported on the response so a client can mark
+        # the answer as human-verified.
+        _human_authored = getattr(cache_lookup, "authored", None) == "human"
 
         _validator_verdict: str | None = None
         if cache_lookup.hit:
@@ -1380,12 +1420,18 @@ async def run_chat_pipeline(
                 # a near-duplicate of the original question (measured distance
                 # as low as 0.0000) — see ADJUSTER_SKIP_DISTANCE in config.py.
                 _skip_adjust = (not history) and _cache_distance <= ADJUSTER_SKIP_DISTANCE
-                if _attachment_anchored:
+                if _attachment_anchored or _human_authored:
                     # Attachment answers are stored verbatim (the generalizer
                     # invents specifics it cannot see — docs/image-gate.md), so no
                     # tone was ever stripped and there is nothing to put back.
                     # Running the adjuster here would be the same blind rewrite,
                     # plus ~2.1s.
+                    #
+                    # A human-authored answer (Edit & Save) is the same case with
+                    # the opposite cause: nothing stripped its tone because no
+                    # model ever touched it. Adjusting it would serve a 1.5B
+                    # paraphrase of text a person vouched for, which is the one
+                    # thing the feature exists to prevent.
                     answer = cached_answer
                 elif _skip_adjust:
                     answer = cached_answer
@@ -1455,6 +1501,10 @@ async def run_chat_pipeline(
                     "x-dejaq-cache-matched-query": _cache_matched_query,
                     "x-dejaq-validator-verdict": "valid",
                 })
+                if _human_authored:
+                    # Only ever set on a hit: a miss is by definition an answer
+                    # no person has written yet.
+                    hit_headers["x-dejaq-answer-authored"] = "human"
                 hit_headers.update(_nearest_headers(cache_lookup))
                 return ChatPipelineResult(
                     answer=answer,

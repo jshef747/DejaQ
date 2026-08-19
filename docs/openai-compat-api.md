@@ -126,6 +126,7 @@ Gateway headers:
 | `x-dejaq-tier` | Serving tier: `cache`, `local`, or `external` |
 | `x-dejaq-response-id` | Cache entry response id when feedback can be submitted. On a **streaming** miss the header goes out before the answer exists, so it names the entry the request *intends* to store - see [Feedback](#feedback) |
 | `x-dejaq-rag-chunks` | Present on a cache miss when the answer was **grounded** in the workspace knowledge base (Rug); value is the number of injected chunks. Absent when nothing was retrieved |
+| `x-dejaq-answer-authored` | `human` when the served cache entry holds an answer a person wrote through [Edit & Save](#edit--save). Only ever set on a hit - a miss is by definition an answer nobody has corrected yet |
 
 > `POST /v1/responses` (OpenAI Responses API, newer format) shares the same auth, headers, and
 > pipeline. It is stateless: `previous_response_id` / `conversation` are rejected with HTTP 400.
@@ -248,3 +249,51 @@ before generation and whose answer a store guard then refused (a failed, empty, 
 answer - see [`finish_reason` / `status`](#finish_reason--status-truncation-is-reported-not-hidden)).
 Withholding the id until the store decision would mean withholding the whole response head
 until the answer was complete, which is the delay streaming exists to remove.
+
+## Edit & Save
+
+A client can correct a served answer and have the correction become the cached answer. It is the
+same request as a thumbs-up, with the text attached:
+
+```json
+{
+  "interaction_id": "<x-dejaq-interaction-id>",
+  "rating": "positive",
+  "edited_answer": "the corrected answer",
+  "messages": [{"role": "user", "content": "..."}]
+}
+```
+
+`edited_answer` requires `rating: "positive"` and an `interaction_id` (both `422` otherwise). A save
+**is** the like: the `+1.0` is applied in the same call, to the entry the edit wrote rather than to
+the answer it replaced.
+
+The response adds two fields:
+
+| Field | Meaning |
+| --- | --- |
+| `edit_status` | `saved` (an existing entry was overwritten), `created` (no entry existed, so one was written under a freshly derived key), `not_cached` (nothing to overwrite and no usable replay), `message_mismatch` (the replay did not match the interaction) |
+| `response_id` | The entry the edit actually landed on. Adopt it - it differs from the id you sent when the answer was served through an alias, or when the entry had to be created |
+
+The edited text **replaces** the model's rather than sitting beside it. Three things would
+otherwise put the old answer back, and each is closed separately: the entry's own answer field is
+overwritten in place (keeping its score, hit counts and any attachment fingerprints), every alias
+of it - which holds a byte-copy - is rewritten too, and the background generalizer refuses to store
+over an entry marked `authored="human"`. On the way out, the context adjuster is skipped for such
+an entry, so the next asker gets the human text byte-identical rather than a 1.5B paraphrase of it.
+A human entry is also exempt from score eviction; a thumbs-down still deletes it, so a bad edit
+stays undoable.
+
+`edit_status` also tells a client whether to show the answer as rated: on `not_cached` and
+`message_mismatch` no score was applied, so presenting it as a recorded thumbs-up would be wrong.
+A `response_id` naming another workspace's entry is rejected `422` before anything is written.
+
+`messages` is the same hash-verified request replay the escalation path uses, and it is only needed
+when no entry exists yet. **Withhold it for a turn that carried an image or a file** - the replay is
+blind to the attachment, so building an entry from it would produce an ungated text entry holding
+an answer about a document nobody attached. Those turns can only overwrite an entry that already
+exists, and answer `not_cached` when there is none.
+
+Unlike the normal store path, `edited_answer` is **not** subject to the cache filter: a person
+vouching for an answer outranks the "at least three words" heuristic that decides whether a model's
+answer is worth keeping.

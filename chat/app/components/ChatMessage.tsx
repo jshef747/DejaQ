@@ -1,5 +1,6 @@
 "use client";
 
+import { useLayoutEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -17,6 +18,7 @@ import {
   type CacheComparison,
   type Route,
 } from "./provenance";
+import { canSave, isSaveShortcut, normalizeDraft } from "./edit-draft";
 import type { FeedbackRating } from "./chat-api";
 
 // The full feedback lifecycle for a single assistant message.
@@ -78,6 +80,15 @@ export interface AppMessage {
   // decides that a failed attachment turn gets no Retry, since the attachment
   // it needs can no longer be reproduced.
   hadAttachment?: boolean;
+  // A person rewrote this answer through Edit & Save and it was accepted as the
+  // cached answer. Persisted, so a reloaded conversation still shows the mark —
+  // the transcript would otherwise claim a model wrote text a person did.
+  editedByUser?: boolean;
+  // This answer came back from a cache entry somebody ELSE corrected
+  // (x-dejaq-answer-authored). Same claim as editedByUser — a person wrote
+  // this — from the other side of the exchange, so it earns the same mark
+  // with different wording.
+  authoredByHuman?: boolean;
 }
 
 // What the mark under a failed turn says. The question and the answer failing
@@ -96,6 +107,10 @@ interface Props {
   // Re-runs the turn this message belongs to. Only ever offered on a message
   // marked `failed`.
   onRetry?: (messageId: string) => void;
+  // Commits an edited answer. Resolves false when the save failed, which keeps
+  // the editor open with the draft intact rather than discarding the user's
+  // work on a network blip.
+  onSaveEdit?: (messageId: string, text: string) => Promise<boolean>;
   onInspect?: (messageId: string) => void;
   inspected?: boolean;
   // This session's rolling average non-cache latency, and how many answers
@@ -142,6 +157,7 @@ export default function ChatMessage({
   message,
   onFeedback,
   onRetry,
+  onSaveEdit,
   onInspect,
   inspected,
   baselineMs,
@@ -149,6 +165,37 @@ export default function ChatMessage({
 }: Props) {
   const isUser = message.role === "user";
   const phase = message.feedbackPhase ?? "idle";
+
+  // The draft lives here, not in ChatApp. Lifting it would push every keystroke
+  // through updateTranscript, re-rendering the whole transcript and arming a
+  // localStorage write per character. Only the committed save goes up — the
+  // same split CodeBlock uses for its copy state.
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  function startEditing() {
+    setDraft(message.content);
+    setEditing(true);
+  }
+
+  function cancelEditing() {
+    setEditing(false);
+    setDraft("");
+  }
+
+  async function commitEdit() {
+    if (!onSaveEdit || saving || !canSave(message.content, draft)) return;
+    setSaving(true);
+    const ok = await onSaveEdit(message.id, normalizeDraft(draft));
+    setSaving(false);
+    // Only close on success. A failed save keeps the editor open with the
+    // draft intact — the alternative throws away work the user just did.
+    if (ok) {
+      setEditing(false);
+      setDraft("");
+    }
+  }
 
   // Immediately submit feedback without a comment or confirmation step.
   async function handleFeedbackClick(rating: FeedbackRating) {
@@ -250,6 +297,15 @@ export default function ChatMessage({
   // Null until the route is known — a streaming answer before its headers
   // land, or a response that carried none. Neither the strip nor a coloured
   // ring may guess at it.
+  // Editing is offered on an answer the cache can actually be told about: it
+  // needs a target (response_id or interaction_id), and a stopped or failed
+  // turn is not a finished answer to correct.
+  const canEdit =
+    Boolean(onSaveEdit) &&
+    Boolean(message.responseId || message.interactionId) &&
+    !message.stopped &&
+    !message.failed;
+
   const route = classifyRoute(message.tier, message.modelUsed);
   const style = route === null ? null : ROUTE_STYLE[route];
   const line =
@@ -319,7 +375,18 @@ export default function ChatMessage({
         </div>
       )}
 
-      <MarkdownContent content={message.content} />
+      {editing ? (
+        <AnswerEditor
+          value={draft}
+          onChange={setDraft}
+          onSave={commitEdit}
+          onCancel={cancelEditing}
+          saving={saving}
+          canCommit={canSave(message.content, draft)}
+        />
+      ) : (
+        <MarkdownContent content={message.content} />
+      )}
 
       {message.stopped && (
         <div style={{ alignItems: "center", color: "var(--fg-dimmer)", display: "flex", fontSize: "12px", gap: "6px", marginTop: "10px" }}>
@@ -338,12 +405,24 @@ export default function ChatMessage({
       )}
 
       {/* Timestamp + response-detail affordance — hover-revealed; the strip
-          above already carries the route, so this row is pure metadata. */}
+          above already carries the route, so this row is pure metadata. The
+          whole row and the feedback row below are replaced by the editor's own
+          controls while editing, so the turn never shows two action bars. */}
+      {!editing && (
       <div className="dq-hover-meta" style={{ alignItems: "center", display: "flex", gap: "8px", marginTop: "16px" }}>
         {message.sourceLabel && (
           <span style={{ color: "var(--fg-dimmer)", fontSize: "10.5px" }}>{message.sourceLabel}</span>
         )}
         <span style={{ color: "var(--fg-dimmer)", fontSize: "10.5px" }}>{formatTs(message.ts)}</span>
+        {(message.editedByUser || message.authoredByHuman) && (
+          // Same quiet register as the Stopped mark: the transcript must not
+          // let a person's words read as the model's — whether that person was
+          // this user or a teammate who corrected it earlier.
+          <span style={{ alignItems: "center", color: "var(--fg-dimmer)", display: "flex", fontSize: "10.5px", gap: "4px" }}>
+            <PencilIcon />
+            {message.editedByUser ? "Edited by you" : "Human-verified answer"}
+          </span>
+        )}
         {onInspect && route !== "cache" && (
           <button
             onClick={() => onInspect(message.id)}
@@ -364,10 +443,41 @@ export default function ChatMessage({
             <InspectIcon />
           </button>
         )}
+        {canEdit && (
+          <button
+            onClick={startEditing}
+            title="Edit this answer"
+            aria-label="Edit this answer"
+            style={{
+              alignItems: "center",
+              background: "transparent",
+              border: "1px solid var(--border)",
+              borderRadius: "5px",
+              color: "var(--fg-dimmer)",
+              cursor: "pointer",
+              display: "flex",
+              padding: "2px 5px",
+              transition: "background var(--t-base), border-color var(--t-base), color var(--t-base)",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "var(--bg-3)";
+              e.currentTarget.style.borderColor = "var(--border-2)";
+              e.currentTarget.style.color = "var(--fg)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+              e.currentTarget.style.borderColor = "var(--border)";
+              e.currentTarget.style.color = "var(--fg-dimmer)";
+            }}
+          >
+            <PencilIcon />
+          </button>
+        )}
       </div>
+      )}
 
       {/* Feedback row — icon-only thumbs, no comment box, immediate submit on click */}
-      {(message.responseId || message.interactionId) && (
+      {!editing && (message.responseId || message.interactionId) && (
         <div style={{ alignItems: "center", display: "flex", gap: "4px", marginTop: "8px" }}>
           {(phase === "idle" || phase === "error" || phase === "submitting") && (
             <>
@@ -462,6 +572,139 @@ function FailedRow({ label, onRetry }: { label: string; onRetry?: () => void }) 
   );
 }
 
+// The editing state. It deliberately carries the reading column's exact type
+// metrics — serif, 16.5/27, the same measure — so the words do not move when
+// the answer becomes editable. That stillness is the whole trick: the turn
+// reads as the same text, now typeable, rather than as a form that replaced it.
+function AnswerEditor({
+  value,
+  onChange,
+  onSave,
+  onCancel,
+  saving,
+  canCommit,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  onSave: () => void;
+  onCancel: () => void;
+  saving: boolean;
+  canCommit: boolean;
+}) {
+  const ref = useRef<HTMLTextAreaElement | null>(null);
+
+  // Grow to fit rather than scroll internally: an answer is read as one block,
+  // and a nested scroller inside the reading column would break that.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [value]);
+
+  // Caret at the end on open, so the user starts where they stopped reading.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  }, []);
+
+  return (
+    <div>
+      <textarea
+        ref={ref}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={saving}
+        aria-label="Edit the answer"
+        onKeyDown={(e) => {
+          if (isSaveShortcut(e)) {
+            e.preventDefault();
+            onSave();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            onCancel();
+          }
+        }}
+        style={{
+          background: "var(--bg-2)",
+          border: "1px solid var(--border-2)",
+          borderRadius: "10px",
+          boxSizing: "border-box",
+          color: "var(--fg)",
+          display: "block",
+          fontFamily: "var(--font-serif)",
+          fontSize: "16.5px",
+          lineHeight: "27px",
+          minHeight: "108px",
+          opacity: saving ? 0.6 : 1,
+          outline: "none",
+          overflow: "hidden",
+          padding: "14px 16px",
+          resize: "none",
+          width: "100%",
+        }}
+      />
+      <div style={{ alignItems: "center", display: "flex", gap: "8px", marginTop: "12px" }}>
+        <button
+          onClick={onSave}
+          disabled={saving || !canCommit}
+          style={{
+            alignItems: "center",
+            background: "var(--fg)",
+            border: "1px solid var(--fg)",
+            borderRadius: "999px",
+            color: "var(--bg)",
+            cursor: saving || !canCommit ? "not-allowed" : "pointer",
+            display: "inline-flex",
+            fontSize: "12px",
+            fontWeight: 600,
+            gap: "7px",
+            height: "28px",
+            opacity: saving || !canCommit ? 0.45 : 1,
+            padding: "0 14px",
+          }}
+        >
+          {saving && (
+            // The class carries only the pulse; size and colour are inline, as
+            // in ConversationSidebar's WorkingDot. On the filled Save button the
+            // dot takes the button's own foreground.
+            <span
+              aria-hidden
+              className="dq-working-dot"
+              style={{ background: "var(--bg)", borderRadius: "999px", flexShrink: 0, height: "6px", width: "6px" }}
+            />
+          )}
+          {saving ? "Saving" : "Save"}
+        </button>
+        <button
+          onClick={onCancel}
+          disabled={saving}
+          style={{
+            background: "transparent",
+            border: "1px solid var(--border-2)",
+            borderRadius: "999px",
+            color: "var(--fg-dim)",
+            cursor: saving ? "not-allowed" : "pointer",
+            fontSize: "12px",
+            fontWeight: 500,
+            height: "28px",
+            padding: "0 14px",
+          }}
+        >
+          Cancel
+        </button>
+        {/* The blast radius, said plainly. This is not a private note: the next
+            person in the department who asks this gets what you typed. */}
+        <span style={{ color: "var(--fg-dimmer)", fontSize: "11.5px", marginLeft: "2px" }}>
+          Saves as the cached answer for your department.
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function MarkdownContent({ content }: { content: string }) {
   return (
     <div className="dq-markdown">
@@ -545,6 +788,15 @@ function ThumbDownIcon() {
   return (
     <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
       <path d="M11 7V1h3a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1h-3zm0 0L8 15l-.5.5A1.5 1.5 0 0 1 5 14v-2H1.5a1 1 0 0 1-.97-1.24L2 5a1 1 0 0 1 .97-.76H11" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function PencilIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M11.2 2.3a1.6 1.6 0 0 1 2.3 2.3l-7.6 7.6-3 .7.7-3 7.6-7.6z" />
+      <path d="M10.1 3.4l2.3 2.3" />
     </svg>
   );
 }

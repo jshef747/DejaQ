@@ -7,11 +7,11 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from app.config import DEFAULT_MAX_TOKENS, OLLAMA_TIMEOUT_SECONDS
+from app.config import OLLAMA_TIMEOUT_SECONDS
 from app.db.session import get_session
 from app.schemas.chat import ExternalLLMRequest
 from app.schemas.feedback import EscalatedResponse
-from app.services import cache_filter, llm_config_service, pipeline_config_cache
+from app.services import cache_filter, llm_config_service, workspace_overrides
 from app.services.chat_messages import extract_pipeline_inputs
 from app.services.credential_service import CredentialService
 from app.services.external_llm import ExternalLLMService
@@ -45,33 +45,11 @@ def _doc_id(clean_query: str) -> str:
     return hashlib.sha256(clean_query.encode()).hexdigest()[:16]
 
 
-def _effective_default_max_tokens(workspace_slug: str) -> int:
-    """The workspace's effective answer-generation budget (override or the
-    shipped DEFAULT_MAX_TOKENS) - unlike _workspace_config_override below,
-    this always returns a usable value since there's no "no override, pass
-    None and let the callee's own default apply" path for a call-time
-    max_tokens argument the way there is for a pooled service's model_name."""
-    try:
-        return pipeline_config_cache.get_effective_config(workspace_slug).default_max_tokens
-    except llm_config_service.WorkspaceNotFound:
-        return DEFAULT_MAX_TOKENS
-
-
-def _workspace_config_override(workspace_slug: str, field: str) -> str | None:
-    """The workspace's override for `field` (e.g. "local_model",
-    "generalizer_model", "enricher_model", "normalizer_model", or any of the
-    matching "*_system_prompt" fields), or None when there isn't one -
-    including when the workspace can't be resolved at all. None lets callers
-    make the exact same no-override get_*_service() call this module always
-    made before per-workspace pipeline config existed.
-    """
-    try:
-        config = pipeline_config_cache.get_effective_config(workspace_slug)
-    except llm_config_service.WorkspaceNotFound:
-        return None
-    if field not in config.overrides:
-        return None
-    return getattr(config, field)
+# Both lifted into services/workspace_overrides.py so answer_edit.py can share
+# them rather than keep a second copy that drifts. Aliased rather than renamed
+# at every call site below - the names are private to this module either way.
+_effective_default_max_tokens = workspace_overrides.effective_default_max_tokens
+_workspace_config_override = workspace_overrides.workspace_config_override
 
 
 def _entry_is_attachment_anchored(meta: dict | None) -> bool:

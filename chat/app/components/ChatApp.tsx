@@ -4,9 +4,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   sendChatMessage,
   sendFeedback,
+  saveEditedAnswer,
   isApiError,
   type FeedbackRating,
 } from "./chat-api";
+import { editLanded, editStatusNotice } from "./edit-draft";
 import {
   DEFAULT_CHAT_SETTINGS,
   loadSettings,
@@ -613,6 +615,7 @@ export default function ChatApp() {
                 promptDifficulty: result.promptDifficulty,
                 cacheDistance: result.cacheDistance,
                 cacheMatchedQuery: result.cacheMatchedQuery,
+                authoredByHuman: result.answerAuthored === "human",
               }
             : m
         ),
@@ -732,6 +735,78 @@ export default function ChatApp() {
 
     const toast = escalationToast(result.escalationStatus);
     if (toast) addToast("info", "Notice", toast);
+  }
+
+  // Edit & Save. Returns false when nothing was committed, which keeps the
+  // editor open with the user's draft rather than discarding it.
+  //
+  // Modeled on handleFeedback above, and shares its attachment rule for the
+  // same reason: the request replay carries role/content history only, never
+  // the attachment, so a turn anchored to an image or a file must not hand the
+  // server material to build an ungated text entry from. Withholding
+  // requestMessages is what limits those turns to overwriting an entry that
+  // already exists, with its fingerprints intact.
+  async function handleSaveEdit(msgId: string, text: string): Promise<boolean> {
+    const convId = activeConvIdRef.current;
+    if (!convId) return false;
+    const currentMessages = transcriptsRef.current[convId] ?? NO_MESSAGES;
+    const msgIndex = currentMessages.findIndex((m) => m.id === msgId);
+    const msg = msgIndex >= 0 ? currentMessages[msgIndex] : undefined;
+    if (!msg?.responseId && !msg?.interactionId) return false;
+
+    const precedingUserMsg = [...currentMessages.slice(0, msgIndex)]
+      .reverse()
+      .find((m) => m.role === "user");
+    const isAttachmentAnchored = Boolean(precedingUserMsg?.imageUrl || precedingUserMsg?.fileName);
+
+    const result = await saveEditedAnswer(
+      msg.responseId ?? null,
+      msg.interactionId ?? null,
+      isAttachmentAnchored ? null : msg.requestMessages ?? null,
+      text,
+      settings.deptSlug,
+    );
+
+    if (isApiError(result)) {
+      addToast("error", "Could not save", result.message);
+      return false;
+    }
+
+    // The edit is committed to the transcript whatever the cache did with it:
+    // the user corrected the answer they are looking at, and that much is true
+    // even when the entry could not be written. The toast says which happened.
+    //
+    // The thumbs row is a different question. A save that never reached the
+    // cache got no +1.0 either, so claiming the terminal thumbs-up state would
+    // be a lie AND would take away the only control left for rating the answer.
+    const landed = editLanded(result.editStatus);
+    updateTranscript(
+      convId,
+      (prev) =>
+        prev.map((m) =>
+          m.id === msgId
+            ? {
+                ...m,
+                content: text,
+                editedByUser: true,
+                // A save IS a like — when it lands, the server applies the
+                // +1.0 in the same call, so the row shows its terminal
+                // thumbs-up state. When it didn't, the row stays open.
+                feedbackPhase: landed ? ("positive" as const) : m.feedbackPhase,
+                feedbackScore: typeof result.newScore === "number" ? result.newScore : m.feedbackScore,
+                // The server may have redirected an alias to its root or keyed
+                // a new entry; later feedback must address the entry that
+                // actually holds this text.
+                responseId: result.responseId ?? m.responseId,
+              }
+            : m
+        ),
+      {},
+    );
+
+    const notice = editStatusNotice(result.editStatus);
+    if (notice) addToast(notice.kind, notice.title, notice.body);
+    return true;
   }
 
   function handleWelcomePrompt(prompt: string) {
@@ -926,6 +1001,7 @@ export default function ChatApp() {
                         message={msg}
                         onFeedback={handleFeedback}
                         onRetry={msg.id === retryableMsgId ? handleRetry : undefined}
+                        onSaveEdit={msg.role === "assistant" ? handleSaveEdit : undefined}
                         onInspect={msg.role === "assistant" ? handleInspect : undefined}
                         inspected={msg.id === inspectedMsgId && inspectorOpen}
                         baselineMs={baselineMs}
