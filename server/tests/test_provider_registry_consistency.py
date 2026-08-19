@@ -1,10 +1,11 @@
 """Fails when any of the six hand-written provider/model lists drifts from
 `app.services.provider_registry`.
 
-The two TypeScript sources (dashboard/lib/types.ts, dashboard/lib/external-models.ts)
-are read with a small regex extractor rather than a real TS parser - proportionate
-for two small literal lists. TEMPORARY: piece 1e deletes the dashboard's own
-lists in favor of consuming the registry, and this extractor goes with them.
+`dashboard/lib/types.ts` still declares its own `LIVE_PROVIDERS` list, read
+with a small regex extractor rather than a real TS parser - proportionate for
+one small literal list. `dashboard/lib/external-models.ts` is gone as of
+piece 1e (the dashboard now fetches its model catalogue from `GET
+/admin/v1/providers`), so there is nothing left to check it against.
 """
 
 import re
@@ -30,22 +31,6 @@ def _extract_ts_live_providers() -> set[str]:
     match = re.search(r"LIVE_PROVIDERS:\s*Provider\[\]\s*=\s*\[([^\]]*)\]", text)
     assert match, "could not find LIVE_PROVIDERS array in dashboard/lib/types.ts"
     return set(re.findall(r'"(\w+)"', match.group(1)))
-
-
-def _extract_ts_external_models() -> dict[str, set[str]]:
-    """Per-provider model `value`s out of `EXTERNAL_MODELS: Record<Provider, ...>`."""
-    text = (DASHBOARD_LIB / "external-models.ts").read_text()
-    match = re.search(
-        r"EXTERNAL_MODELS:\s*Record<Provider,[^=]*=\s*\{(.*?)\n\};", text, re.DOTALL
-    )
-    assert match, "could not find EXTERNAL_MODELS object in dashboard/lib/external-models.ts"
-    body = match.group(1)
-
-    result: dict[str, set[str]] = {}
-    for provider_match in re.finditer(r"(\w+):\s*\[(.*?)\n  \],", body, re.DOTALL):
-        provider, entries = provider_match.group(1), provider_match.group(2)
-        result[provider] = set(re.findall(r'value:\s*"([^"]+)"', entries))
-    return result
 
 
 def _extract_check_constraint_providers() -> set[str]:
@@ -74,10 +59,3 @@ def test_known_providers_match_credential_surfaces():
 
 def test_dashboard_live_providers_match_registry():
     assert provider_registry.live_providers() == _extract_ts_live_providers()
-
-
-def test_dashboard_model_catalogue_matches_registry():
-    ts_models = _extract_ts_external_models()
-    for provider in provider_registry.live_providers():
-        assert provider in ts_models, f"{provider} missing from dashboard EXTERNAL_MODELS"
-        assert provider_registry.model_ids(provider) == ts_models[provider]

@@ -12,25 +12,35 @@ import { deleteCredential, upsertCredential } from "@/app/actions/credentials";
 import { deleteWorkspace } from "@/app/actions/workspaces";
 import { updateLlmConfig } from "@/app/actions/llm-config";
 import { testProvider } from "@/app/actions/test-provider";
-import {
-  DEFAULT_EXTERNAL_MODEL,
-  EXTERNAL_MODELS,
-  modelBelongsToProvider,
-  providerForExternalModel,
-} from "@/lib/external-models";
 import type {
   CredentialItem,
   LlmConfigResponse,
   LlmConfigUpdate,
   Provider,
+  ProviderCatalogItem,
   TestProviderResponse,
 } from "@/lib/types";
 
-const PROVIDER_LABEL: Record<Provider, string> = {
+const PROVIDER_LABEL: Record<string, string> = {
   google: "Google",
   openai: "OpenAI",
   anthropic: "Anthropic",
 };
+
+function providerLabel(key: string | null) {
+  if (!key) return "provider";
+  return PROVIDER_LABEL[key] ?? key;
+}
+
+function providerForModel(providers: ProviderCatalogItem[], modelId: string | null | undefined): Provider | null {
+  if (!modelId) return null;
+  const key = providers.find((p) => p.models.some((m) => m.id === modelId))?.key;
+  return (key as Provider | undefined) ?? null;
+}
+
+function modelBelongsToProvider(providers: ProviderCatalogItem[], modelId: string, providerKey: Provider) {
+  return providers.find((p) => p.key === providerKey)?.models.some((m) => m.id === modelId) ?? false;
+}
 
 type Status = { kind: "idle" | "success" | "error" | "info"; text: string };
 type TestResult =
@@ -43,6 +53,7 @@ interface Props {
   workspaceName: string;
   initialConfig: LlmConfigResponse;
   initialCredentials: CredentialItem[];
+  providers: ProviderCatalogItem[];
   loadError: string | null;
 }
 
@@ -51,15 +62,14 @@ export default function SettingsClient({
   workspaceName,
   initialConfig,
   initialCredentials,
+  providers,
   loadError,
 }: Props) {
   const router = useRouter();
-  const initialProvider = providerForExternalModel(initialConfig.external_model);
+  const initialProvider = providerForModel(providers, initialConfig.external_model);
 
-  const [provider, setProvider] = useState<Provider>(initialProvider);
-  const [externalModel, setExternalModel] = useState(
-    initialConfig.external_model ?? DEFAULT_EXTERNAL_MODEL[initialProvider],
-  );
+  const [provider, setProvider] = useState<Provider | null>(initialProvider);
+  const [externalModel, setExternalModel] = useState(initialConfig.external_model ?? "");
   const [threshold, setThreshold] = useState(initialConfig.routing_threshold ?? 0.75);
   const [apiKey, setApiKey] = useState("");
   const [credentials, setCredentials] = useState(initialCredentials);
@@ -90,9 +100,9 @@ export default function SettingsClient({
   const credsKey = JSON.stringify(initialCredentials);
 
   useEffect(() => {
-    const nextProvider = providerForExternalModel(initialConfig.external_model);
+    const nextProvider = providerForModel(providers, initialConfig.external_model);
     setProvider(nextProvider);
-    setExternalModel(initialConfig.external_model ?? DEFAULT_EXTERNAL_MODEL[nextProvider]);
+    setExternalModel(initialConfig.external_model ?? "");
     setThreshold(initialConfig.routing_threshold ?? 0.75);
     setCredentials(initialCredentials);
     setApiKey("");
@@ -101,29 +111,35 @@ export default function SettingsClient({
 
   const currentCredential = credentials.find((item) => item.provider === provider);
   const models = useMemo(() => {
-    const catalog = EXTERNAL_MODELS[provider];
-    if (catalog.some((model) => model.value === externalModel)) return catalog;
-    return [{ value: externalModel, label: `${externalModel} (custom)` }, ...catalog];
-  }, [externalModel, provider]);
+    if (!provider) return [];
+    const catalog = providers.find((p) => p.key === provider)?.models ?? [];
+    if (!externalModel || catalog.some((model) => model.id === externalModel)) return catalog;
+    return [{ id: externalModel, label: `${externalModel} (custom)`, input_kinds: [] }, ...catalog];
+  }, [externalModel, provider, providers]);
 
   const hasUnsavedKey = apiKey.trim().length > 0;
   const canTest = !!currentCredential && !hasUnsavedKey && !testBusy;
   const testHint = hasUnsavedKey
     ? "Save the API key first to enable Test."
     : currentCredential
-      ? `Testing with the stored ${PROVIDER_LABEL[provider]} key.`
-      : `No ${PROVIDER_LABEL[provider]} API key configured for this organization.`;
+      ? `Testing with the stored ${providerLabel(provider)} key.`
+      : provider
+        ? `No ${providerLabel(provider)} API key configured for this organization.`
+        : "Choose a provider first.";
+  const canSave = !!provider && !!externalModel;
 
   function onProviderChange(next: Provider) {
     setProvider(next);
-    setExternalModel(
-      modelBelongsToProvider(externalModel, next) ? externalModel : DEFAULT_EXTERNAL_MODEL[next],
-    );
+    setExternalModel((prev) => (modelBelongsToProvider(providers, prev, next) ? prev : ""));
     setApiKey("");
     setTestResult(null);
   }
 
   async function handleSave() {
+    if (!provider || !externalModel) {
+      setSaveStatus({ kind: "error", text: "Choose a provider and a model before saving." });
+      return;
+    }
     const trimmedKey = apiKey.trim();
     const patch: LlmConfigUpdate = {};
     if (externalModel !== initialConfig.external_model) patch.external_model = externalModel;
@@ -179,9 +195,9 @@ export default function SettingsClient({
       setSaveStatus({ kind: "error", text: res.error });
       return;
     }
-    const nextProvider = providerForExternalModel(res.data.external_model);
+    const nextProvider = providerForModel(providers, res.data.external_model);
     setProvider(nextProvider);
-    setExternalModel(res.data.external_model ?? DEFAULT_EXTERNAL_MODEL[nextProvider]);
+    setExternalModel(res.data.external_model ?? "");
     setThreshold(res.data.routing_threshold ?? 0.75);
     setApiKey("");
     setSaveStatus({ kind: "success", text: `Defaults restored ${formatTime(new Date())}` });
@@ -189,6 +205,7 @@ export default function SettingsClient({
   }
 
   async function handleRemoveCredential() {
+    if (!provider) return;
     setRemoveBusy(true);
     setSaveStatus({ kind: "idle", text: "" });
     const res = await deleteCredential(workspaceSlug, provider);
@@ -199,7 +216,7 @@ export default function SettingsClient({
     }
     setCredentials((items) => items.filter((item) => item.provider !== provider));
     setConfirmRemove(false);
-    setSaveStatus({ kind: "success", text: `${PROVIDER_LABEL[provider]} key removed ${formatTime(new Date())}` });
+    setSaveStatus({ kind: "success", text: `${providerLabel(provider)} key removed ${formatTime(new Date())}` });
     router.refresh();
   }
 
@@ -245,15 +262,16 @@ export default function SettingsClient({
           </div>
           <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 0 }}>
             <div style={{ display: "grid", gap: 12, gridTemplateColumns: "220px 1fr" }}>
-              <Field label="External provider" hint="Provider is inferred from the selected model">
+              <Field label="External provider" hint="Choose a provider, then a model from its list">
                 <select
-                  value={provider}
+                  value={provider ?? ""}
                   onChange={(e) => onProviderChange(e.target.value as Provider)}
                   className="ds-input"
                   style={{ cursor: "pointer" }}
                 >
-                  {(["google", "openai", "anthropic"] as Provider[]).map((item) => (
-                    <option key={item} value={item}>{PROVIDER_LABEL[item]}</option>
+                  <option value="" disabled>Choose a provider</option>
+                  {providers.map((item) => (
+                    <option key={item.key} value={item.key}>{providerLabel(item.key)}</option>
                   ))}
                 </select>
               </Field>
@@ -263,15 +281,17 @@ export default function SettingsClient({
                   onChange={(e) => setExternalModel(e.target.value)}
                   className="ds-input"
                   style={{ cursor: "pointer" }}
+                  disabled={!provider}
                 >
+                  <option value="" disabled>{provider ? "Choose a model" : "Choose a provider first"}</option>
                   {models.map((model) => (
-                    <option key={model.value} value={model.value}>{model.label}</option>
+                    <option key={model.id} value={model.id}>{model.label}</option>
                   ))}
                 </select>
               </Field>
             </div>
 
-            <Field label={`${PROVIDER_LABEL[provider]} API key`} hint="Leave blank to keep the stored key unchanged">
+            <Field label={`${providerLabel(provider)} API key`} hint="Leave blank to keep the stored key unchanged">
               <div style={{ display: "flex", gap: 8 }}>
                 <Input
                   type="password"
@@ -316,7 +336,7 @@ export default function SettingsClient({
           <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "flex-end", padding: "12px 20px", borderTop: "1px solid var(--border)" }}>
             <StatusText status={saveStatus} />
             <Button onClick={handleReset} disabled={saveBusy}>Reset to defaults</Button>
-            <Button variant="primary" onClick={handleSave} loading={saveBusy}>Save changes</Button>
+            <Button variant="primary" onClick={handleSave} loading={saveBusy} disabled={!canSave}>Save changes</Button>
           </div>
         </div>
       </section>
@@ -373,8 +393,8 @@ export default function SettingsClient({
 
       <ConfirmDialog
         open={confirmRemove}
-        title={`Remove ${PROVIDER_LABEL[provider]} key?`}
-        message={`This will remove the stored ${PROVIDER_LABEL[provider]} API key for ${workspaceSlug}. Hard queries using ${PROVIDER_LABEL[provider]} will fail until a new key is saved.`}
+        title={`Remove ${providerLabel(provider)} key?`}
+        message={`This will remove the stored ${providerLabel(provider)} API key for ${workspaceSlug}. Hard queries using ${providerLabel(provider)} will fail until a new key is saved.`}
         confirmLabel="Remove key"
         destructive
         busy={removeBusy}
@@ -429,9 +449,8 @@ function ProviderTestResult({ result }: { result: TestResult }) {
   );
 }
 
-function testErrorText(status: number | undefined, error: string, provider: Provider) {
-  if (status === 401) return `API key was rejected by ${PROVIDER_LABEL[provider]}.`;
-  if (status === 402) return `No ${PROVIDER_LABEL[provider]} API key configured for this organization.`;
+function testErrorText(status: number | undefined, error: string, provider: Provider | null) {
+  if (status === 402) return `No ${providerLabel(provider)} API key configured for this organization.`;
   if (status === 429) return "Provider test recently succeeded. Please wait before running it again.";
   if (status === 422) return error;
   return error || "Provider test failed.";

@@ -180,6 +180,23 @@ export type CredentialItem = {
   updated_at: string;
 };
 
+export type ProviderModel = {
+  id: string;
+  label: string;
+  input_kinds: string[];
+};
+
+export type ProviderCatalogItem = {
+  key: string;
+  live: boolean;
+  client_shape: string | null;
+  models: ProviderModel[];
+};
+
+export type ProvidersListResponse = {
+  providers: ProviderCatalogItem[];
+};
+
 export type TestProviderResponse = {
   ok: boolean;
   model_used: string;
