@@ -60,12 +60,33 @@ export interface AppMessage {
   // answer — it carries no responseId/interactionId, so the feedback row
   // below simply doesn't render for it.
   stopped?: boolean;
-  // The send this turn belongs to failed (network, 402, a stream that dropped
-  // mid-answer, an empty answer). Same shape as `stopped`: kept and marked,
-  // never erased — the question is not thrown away because the request was —
-  // with Retry on the mark. It sits on the question when nothing streamed, and
-  // on the partial answer when something did.
-  failed?: boolean;
+  // The send this turn belongs to failed. Same shape as `stopped`: kept and
+  // marked, never erased — the question is not thrown away because the request
+  // was — with Retry on the mark. It sits on the question when nothing
+  // streamed, and on the partial answer when something did.
+  //
+  // The value says which failure it was, because the two read as opposite
+  // things to the person looking at them: "unsent" is the request itself
+  // failing (network, 402, a stream that dropped mid-answer), while
+  // "empty-answer" reached the server, came back HTTP 200, and simply had no
+  // text in it — a rephrasing problem, not a connectivity one.
+  failed?: "unsent" | "empty-answer";
+  // Whether this turn carried an attachment, recorded on the turn itself
+  // rather than read back off the composer. The file's bytes are never stored,
+  // and `imageUrl` is stripped from storage on save, so this boolean is the
+  // only thing that still knows the truth after a reload — and it is what
+  // decides that a failed attachment turn gets no Retry, since the attachment
+  // it needs can no longer be reproduced.
+  hadAttachment?: boolean;
+}
+
+// What the mark under a failed turn says. The question and the answer failing
+// are different sentences, and a request that arrived and returned nothing is
+// a different sentence again — it matches the "Empty answer" toast rather than
+// implying the send never left.
+function failedLabel(message: AppMessage): string {
+  if (message.failed === "empty-answer") return "Empty answer";
+  return message.role === "assistant" ? "Answer failed" : "Not sent";
 }
 
 interface Props {
@@ -214,7 +235,7 @@ export default function ChatMessage({
           </div>
           {message.failed && (
             <FailedRow
-              label="Not sent"
+              label={failedLabel(message)}
               onRetry={onRetry ? () => onRetry(message.id) : undefined}
             />
           )}
@@ -311,7 +332,7 @@ export default function ChatMessage({
 
       {message.failed && (
         <FailedRow
-          label="Answer failed"
+          label={failedLabel(message)}
           onRetry={onRetry ? () => onRetry(message.id) : undefined}
         />
       )}

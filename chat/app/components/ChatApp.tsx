@@ -45,6 +45,17 @@ function newId() {
   return `msg_${++msgCounter}_${Date.now()}`;
 }
 
+// The question a turn started from: the given message if it is the question
+// itself, otherwise the nearest one above it. Both the retry itself and the
+// decision to offer it read the turn through this, so neither can end up
+// judging one message and re-running another.
+function turnQuestionIndex(messages: AppMessage[], index: number): number {
+  for (let i = index; i >= 0; i--) {
+    if (messages[i].role === "user") return i;
+  }
+  return -1;
+}
+
 // A conversation with nothing in it yet. Shared instance so the empty
 // transcript keeps a stable identity across renders and the effects that
 // depend on it do not re-run for a conversation that has not changed.
@@ -357,12 +368,17 @@ export default function ChatApp() {
   // same way Stop marks a cut-off answer, and the mark carries Retry. The mark
   // goes on whatever ended the turn: a partial answer when the stream dropped
   // mid-flight, otherwise the question itself.
-  function markSendFailed(convId: string, userMsgId: string, assistantId: string) {
+  function markSendFailed(
+    convId: string,
+    userMsgId: string,
+    assistantId: string,
+    reason: "unsent" | "empty-answer",
+  ) {
     updateTranscript(
       convId,
       (prev) => {
         const targetId = prev.some((m) => m.id === assistantId) ? assistantId : userMsgId;
-        return prev.map((m) => (m.id === targetId ? { ...m, failed: true } : m));
+        return prev.map((m) => (m.id === targetId ? { ...m, failed: reason } : m));
       },
       {
         requires: (msgs) =>
@@ -389,21 +405,21 @@ export default function ChatApp() {
   // the retry re-sends its text against the history in front of it and
   // replaces everything from that turn on — the failed mark, and any partial
   // answer under it.
+  //
+  // It replays that turn and nothing else: no attachment is passed, because
+  // the only attachment a retry could reach for is whatever the composer is
+  // holding right now, which is not what the turn sent — a conversation
+  // switch clears the pin, and the file's bytes are never stored. A turn that
+  // did carry one is not retryable at all (see retryableMsgId).
   function handleRetry(msgId: string) {
     const convId = activeConvIdRef.current;
     if (!convId || generating[convId]) return;
     const msgs = transcriptsRef.current[convId] ?? NO_MESSAGES;
     const index = msgs.findIndex((m) => m.id === msgId);
     if (index < 0) return;
-    let userIndex = -1;
-    for (let i = index; i >= 0; i--) {
-      if (msgs[i].role === "user") {
-        userIndex = i;
-        break;
-      }
-    }
-    if (userIndex < 0) return;
-    void runSend(convId, msgs.slice(0, userIndex), msgs[userIndex].content, attachment);
+    const userIndex = turnQuestionIndex(msgs, index);
+    if (userIndex < 0 || msgs[userIndex].hadAttachment) return;
+    void runSend(convId, msgs.slice(0, userIndex), msgs[userIndex].content, null);
   }
 
   async function runSend(
@@ -430,6 +446,7 @@ export default function ChatApp() {
       // Distinguishes the turn that uploaded the file from the turns that
       // re-sent it, so the transcript shows which is which.
       attachmentSticky: sentAttachment?.sticky ?? false,
+      hadAttachment: sentAttachment !== null,
     };
 
     // The transcript this send writes into: the history in front of the
@@ -538,7 +555,7 @@ export default function ChatApp() {
       // The question stays where it was asked, marked, with Retry on it. The
       // attachment needs no restoring — it was never cleared — and a failed
       // send leaves it un-pinned, so a retry still reads as the first attempt.
-      markSendFailed(convId, userMsg.id, assistantId);
+      markSendFailed(convId, userMsg.id, assistantId, "unsent");
       return;
     }
 
@@ -560,7 +577,7 @@ export default function ChatApp() {
         updateTranscript(convId, (prev) => [...prev, { ...assistantPlaceholder, content: result.text }]);
       } else {
         addToast("error", "Empty answer", "The model returned an empty answer. Try rephrasing, or switch routing to external.");
-        markSendFailed(convId, userMsg.id, assistantId);
+        markSendFailed(convId, userMsg.id, assistantId, "empty-answer");
         return;
       }
       firstDelta = false;
@@ -748,6 +765,28 @@ export default function ChatApp() {
     return [...messages.slice(0, index)].reverse().find((m) => m.role === "user")?.content ?? null;
   }
 
+  // The one message, if any, that may carry Retry. Two conditions, both about
+  // being able to honour the offer:
+  //
+  // It must be the last message, because a retry replaces the failed turn and
+  // everything under it, so a failure the user has already moved past stays
+  // marked but can no longer take later turns with it.
+  //
+  // And its turn must not have carried an attachment. The file is gone — the
+  // pin is cleared by a conversation switch and its bytes are never persisted
+  // — so re-running the turn would send "What is in this document?" with no
+  // document, and the answer to that gets stored as an ungated text entry
+  // another document could later match. The turn's own recorded
+  // `hadAttachment` decides this, never the live composer, so the answer does
+  // not change under the user as they pin and unpin things.
+  const lastMessage = messages[messages.length - 1];
+  const retryableMsgId = (() => {
+    if (!lastMessage?.failed) return null;
+    const questionIndex = turnQuestionIndex(messages, messages.length - 1);
+    if (questionIndex < 0 || messages[questionIndex].hadAttachment) return null;
+    return lastMessage.id;
+  })();
+
   // Cache hits among this conversation's answered turns — the header's
   // "N of M from cache" pulse. Only counted once a route is known.
   const cacheStats = messages.reduce(
@@ -881,17 +920,12 @@ export default function ChatApp() {
                 ) : (
                   <div style={{ position: "relative" }}>
                     <RailTrack />
-                    {messages.map((msg, i) => (
+                    {messages.map((msg) => (
                       <ChatMessage
                         key={msg.id}
                         message={msg}
                         onFeedback={handleFeedback}
-                        // Retry replaces the failed turn and everything under
-                        // it, so it is only offered while there is nothing
-                        // under it: a failure the user has already moved past
-                        // stays marked, but re-running it can no longer take
-                        // later turns with it.
-                        onRetry={i === messages.length - 1 ? handleRetry : undefined}
+                        onRetry={msg.id === retryableMsgId ? handleRetry : undefined}
                         onInspect={msg.role === "assistant" ? handleInspect : undefined}
                         inspected={msg.id === inspectedMsgId && inspectorOpen}
                         baselineMs={baselineMs}
