@@ -20,7 +20,11 @@
 # tests are exactly the gap a real CI workflow would need to own - that's a
 # separate follow-up (DejaQ has none today), not something to fake here.
 #
-# chat/ has a real, fast vitest suite (7 tests, ~200ms) - included. dashboard/
+# chat/ has a real, fast vitest suite (43 tests, ~200ms) - included, preceded by
+# `npm ci` because each pipeline run gets a fresh worktree with an empty
+# chat/node_modules, and without it every suite importing react or next/server
+# fails to collect ("Cannot find package 'react'") while the rest still pass, which
+# reads as a code regression rather than a missing install. dashboard/
 # has no test script and no test files - nothing to pin there. Neither project
 # has an eslint/biome config or a lint script, so commands.lint is left unset;
 # there's nothing for a lint command to run yet.
@@ -31,7 +35,7 @@
 # branch is master and PRs target staging, so this file has no effect until
 # staging merges to master - see PR description.
 commands:
-  test: 'cd server && uv run pytest -m no_model -q && cd ../chat && npx vitest run'
+  test: 'cd server && uv run pytest -m no_model -q && cd ../chat && npm ci --no-audit --no-fund && npx vitest run'
 
 # Keep test evidence out of this repo.
 test:
