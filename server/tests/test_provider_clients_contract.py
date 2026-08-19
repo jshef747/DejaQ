@@ -4,7 +4,9 @@ from types import SimpleNamespace
 import pytest
 
 from app.schemas.chat import ExternalLLMRequest, ExternalLLMResponse
-from app.utils.exceptions import ExternalLLMAuthError, ExternalLLMTimeoutError
+from app.utils.exceptions import ExternalLLMAuthError, ExternalLLMError, ExternalLLMTimeoutError
+
+pytestmark = pytest.mark.no_model
 
 
 def _request(model: str = "provider-model") -> ExternalLLMRequest:
@@ -15,6 +17,17 @@ def _request(model: str = "provider-model") -> ExternalLLMRequest:
         model=model,
         max_tokens=64,
         temperature=0.2,
+    )
+
+
+def _request_no_temperature(model: str = "provider-model") -> ExternalLLMRequest:
+    """A client that never asked for a temperature - the caller sent none."""
+    return ExternalLLMRequest(
+        query="Hello",
+        history=[{"role": "assistant", "content": "Hi"}],
+        system_prompt="Be useful.",
+        model=model,
+        max_tokens=64,
     )
 
 
@@ -242,6 +255,91 @@ def test_provider_clients_map_auth_errors_uniformly(monkeypatch, provider_name):
         asyncio.run(client.generate_response(_request(), "SecretKey123"))
 
 
+def _google_client_raising(monkeypatch, exc):
+    from app.services.llm_providers import google as module
+
+    class FakeModels:
+        async def generate_content(self, **kwargs):
+            raise exc
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.aio = SimpleNamespace(models=FakeModels())
+
+    monkeypatch.setattr(module.genai, "Client", FakeClient)
+    monkeypatch.setattr(module.genai_errors, "ClientError", type(exc))
+    return module.GoogleProviderClient()
+
+
+class _FakeGoogleClientError(Exception):
+    def __init__(self, code, details=None):
+        super().__init__(f"{code} error")
+        self.code = code
+        self.details = details
+
+
+def test_google_rejects_an_invalid_api_key_as_an_auth_error_not_a_bad_request(monkeypatch):
+    """Gemini reports a bad key as 400 INVALID_ARGUMENT, not 401. Without the
+    structured reason it lands in the generic 400 bucket, whose caller-facing
+    message blames the model or its parameters instead of the credential."""
+    exc = _FakeGoogleClientError(
+        400,
+        details={
+            "error": {
+                "code": 400,
+                "status": "INVALID_ARGUMENT",
+                "message": "API key not valid. Please pass a valid API key.",
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                        "reason": "API_KEY_INVALID",
+                        "domain": "googleapis.com",
+                    }
+                ],
+            }
+        },
+    )
+    client = _google_client_raising(monkeypatch, exc)
+
+    with pytest.raises(ExternalLLMAuthError):
+        asyncio.run(client.generate_response(_request(), "SecretKey123"))
+
+
+def test_google_permission_denied_is_an_auth_error_not_a_silent_apology(monkeypatch):
+    """403 PERMISSION_DENIED (suspended, disabled, or referer-restricted key)
+    matched no surfaced status, so it fell through to the generic HTTP 200
+    apology - the invisible failure this contract exists to prevent."""
+    exc = _FakeGoogleClientError(
+        403,
+        details={"error": {"code": 403, "status": "PERMISSION_DENIED", "message": "denied"}},
+    )
+    client = _google_client_raising(monkeypatch, exc)
+
+    with pytest.raises(ExternalLLMAuthError):
+        asyncio.run(client.generate_response(_request(), "SecretKey123"))
+
+
+def test_google_ordinary_bad_request_is_not_mistaken_for_an_auth_error(monkeypatch):
+    """The control: a 400 INVALID_ARGUMENT about the request itself carries no
+    API_KEY_INVALID reason and must stay a plain provider error."""
+    exc = _FakeGoogleClientError(
+        400,
+        details={
+            "error": {
+                "code": 400,
+                "status": "INVALID_ARGUMENT",
+                "message": "Unknown field 'temperature'.",
+            }
+        },
+    )
+    client = _google_client_raising(monkeypatch, exc)
+
+    with pytest.raises(ExternalLLMError) as raised:
+        asyncio.run(client.generate_response(_request(), "SecretKey123"))
+    assert not isinstance(raised.value, ExternalLLMAuthError)
+    assert raised.value.status_code == 400
+
+
 @pytest.mark.parametrize("provider_name", ["google", "openai", "anthropic"])
 def test_provider_clients_map_timeout_errors_uniformly(monkeypatch, provider_name):
     if provider_name == "google":
@@ -386,6 +484,186 @@ def test_google_provider_client_coalesces_none_token_counts(monkeypatch):
     assert response.prompt_tokens == 0
     assert response.completion_tokens == 0
     assert response.text == ""
+
+
+def test_openai_provider_client_omits_temperature_when_not_requested(monkeypatch):
+    """A client that sent no temperature must not have one injected - the
+    fix for DejaQ silently sending 0.7 to models that 400 on any non-default
+    value (every gpt-5.x row per OpenRouter's supported_parameters)."""
+    from app.services.llm_providers import openai as openai_provider
+
+    calls = {}
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            calls.update(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(
+                    message=SimpleNamespace(content="answer"),
+                    finish_reason="stop",
+                )],
+                usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+            )
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr(openai_provider.openai, "AsyncOpenAI", FakeClient)
+
+    asyncio.run(
+        openai_provider.OpenAIProviderClient().generate_response(
+            _request_no_temperature("gpt-5.6-terra"), "SecretKey123"
+        )
+    )
+
+    assert "temperature" not in calls
+
+
+def test_anthropic_provider_client_omits_temperature_when_not_requested(monkeypatch):
+    from app.services.llm_providers import anthropic as anthropic_provider
+
+    calls = {}
+
+    class FakeMessages:
+        async def create(self, **kwargs):
+            calls.update(kwargs)
+            return SimpleNamespace(
+                content=[SimpleNamespace(text="answer")],
+                usage=SimpleNamespace(input_tokens=1, output_tokens=1),
+                stop_reason="end_turn",
+            )
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.messages = FakeMessages()
+
+    monkeypatch.setattr(anthropic_provider.anthropic, "AsyncAnthropic", FakeClient)
+
+    asyncio.run(
+        anthropic_provider.AnthropicProviderClient().generate_response(
+            _request_no_temperature("claude-sonnet-5"), "SecretKey123"
+        )
+    )
+
+    assert "temperature" not in calls
+
+
+def test_anthropic_provider_client_retries_once_without_temperature_on_400(monkeypatch):
+    """Claude Sonnet 5 / Opus 4.7+ 400 on any explicit temperature (migration
+    guide). A client that did ask for one must still get an answer - one
+    retry without it, not an outage."""
+    from app.services.llm_providers import anthropic as anthropic_provider
+
+    class FakeBadRequestError(Exception):
+        pass
+
+    calls = []
+
+    class FakeMessages:
+        async def create(self, **kwargs):
+            calls.append(kwargs)
+            if "temperature" in kwargs:
+                raise FakeBadRequestError("temperature: Unsupported parameter for this model.")
+            return SimpleNamespace(
+                content=[SimpleNamespace(text="ok without temperature")],
+                usage=SimpleNamespace(input_tokens=1, output_tokens=1),
+                stop_reason="end_turn",
+            )
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.messages = FakeMessages()
+
+    monkeypatch.setattr(anthropic_provider.anthropic, "AsyncAnthropic", FakeClient)
+    monkeypatch.setattr(anthropic_provider.anthropic, "BadRequestError", FakeBadRequestError)
+
+    response = asyncio.run(
+        anthropic_provider.AnthropicProviderClient().generate_response(
+            _request("claude-sonnet-5"), "SecretKey123"
+        )
+    )
+
+    assert response.text == "ok without temperature"
+    assert len(calls) == 2
+    assert "temperature" in calls[0]
+    assert "temperature" not in calls[1]
+
+
+def test_anthropic_provider_client_does_not_retry_a_400_unrelated_to_temperature(monkeypatch):
+    """Retry is scoped to the parameter it names - any other 400 (bad model
+    name, malformed request) surfaces normally, not after a wasted retry."""
+    from app.services.llm_providers import anthropic as anthropic_provider
+    from app.utils.exceptions import ExternalLLMError
+
+    class FakeBadRequestError(Exception):
+        pass
+
+    calls = []
+
+    class FakeMessages:
+        async def create(self, **kwargs):
+            calls.append(kwargs)
+            raise FakeBadRequestError("model: not found")
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.messages = FakeMessages()
+
+    monkeypatch.setattr(anthropic_provider.anthropic, "AsyncAnthropic", FakeClient)
+    monkeypatch.setattr(anthropic_provider.anthropic, "BadRequestError", FakeBadRequestError)
+    monkeypatch.setattr(anthropic_provider.anthropic, "APIError", FakeBadRequestError)
+
+    with pytest.raises(ExternalLLMError):
+        asyncio.run(
+            anthropic_provider.AnthropicProviderClient().generate_response(
+                _request("claude-sonnet-5"), "SecretKey123"
+            )
+        )
+
+    assert len(calls) == 1
+
+
+def test_openai_provider_client_retries_once_without_temperature_on_400(monkeypatch):
+    """Every gpt-5.x row reports temperature unsupported per OpenRouter's
+    supported_parameters - same one-shot retry contract as Anthropic."""
+    from app.services.llm_providers import openai as openai_provider
+
+    class FakeBadRequestError(Exception):
+        pass
+
+    calls = []
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            calls.append(kwargs)
+            if "temperature" in kwargs:
+                raise FakeBadRequestError("Unsupported parameter: 'temperature'")
+            return SimpleNamespace(
+                choices=[SimpleNamespace(
+                    message=SimpleNamespace(content="ok without temperature"),
+                    finish_reason="stop",
+                )],
+                usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+            )
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr(openai_provider.openai, "AsyncOpenAI", FakeClient)
+    monkeypatch.setattr(openai_provider.openai, "BadRequestError", FakeBadRequestError)
+
+    response = asyncio.run(
+        openai_provider.OpenAIProviderClient().generate_response(
+            _request("gpt-5.6-terra"), "SecretKey123"
+        )
+    )
+
+    assert response.text == "ok without temperature"
+    assert len(calls) == 2
+    assert "temperature" in calls[0]
+    assert "temperature" not in calls[1]
 
 
 # ── Streaming: the SDK stream is released when the consumer walks away ──

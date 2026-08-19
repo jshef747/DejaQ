@@ -259,7 +259,9 @@ def test_admin_test_provider_uses_stored_org_credential(
     assert request.query == "Reply with exactly: OK"
     assert request.model == "claude-sonnet-4-6"
     assert request.max_tokens == 8
-    assert request.temperature == 0.0
+    # No temperature sent - the diagnostic must not send its own non-default
+    # value, or it 400s on exactly the models it exists to test.
+    assert request.temperature is None
     assert provider == "anthropic"
     assert api_key == "sk-ant-live"
 
@@ -408,10 +410,15 @@ def test_admin_test_provider_maps_provider_errors(
         headers=headers,
     )
 
-    assert auth.status_code == 401
+    # A rejected provider credential is 502, never 401: the dashboard treats any
+    # 401 from /admin/v1/* as its own session expiring and discards the body, so
+    # 401 here would hide the reason on the Test connection button.
+    assert auth.status_code == 502
+    assert "google credential configured for this workspace was rejected" in auth.json()["detail"]
     assert timeout.status_code == 504
     assert generic.status_code == 502
     assert "AIza-secret" not in auth.text
+    assert "bad key" not in auth.text
     assert "AIza-secret" not in generic.text
 
 

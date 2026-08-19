@@ -45,6 +45,26 @@ def _reset_backend() -> None:
     _service_pool.clear()
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _ensure_default_org_schema() -> None:
+    """Create any missing org tables on the DEFAULT SessionLocal bind.
+
+    Most tests hit the real app through TestClient without asking for
+    `isolated_org_db`, so they read whatever `app.db.base.engine` points at -
+    `server/dejaq.db`, which is gitignored and therefore absent (or an empty
+    0-byte file) in a fresh clone or worktree. Without this the first DB read
+    in the request pipeline raises `no such table: workspaces` and ~39 tests
+    fail for setup reasons alone.
+
+    `create_all` is checkfirst-by-default, so this adds only what is missing
+    and never drops or rewrites a developer's already-migrated local DB.
+    Test-suite setup only - real deployments still run `alembic upgrade head`.
+    """
+    from app.db.base import engine
+
+    Base.metadata.create_all(bind=engine)
+
+
 # ── No-model fixtures (function-scoped for isolation) ──
 
 @pytest.fixture
