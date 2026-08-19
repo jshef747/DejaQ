@@ -29,6 +29,10 @@ The chat owns its own token layer (`chat/app/tokens.css`, light + dark) and must
 
 `--accent` has exactly two sanctioned uses: the cache route (stage 2 of the chat redesign) and the pinned-attachment state in `chat/app/components/MessageInput.tsx`. Nothing else - not a button, not a link, not an active row, not any other surface. Use a neutral (`--fg`/`--border-2`/`--bg-3`) or the appropriate route colour instead (`--local` for local, `--blue` for cloud - see `chat/app/components/provenance.ts`). The same two-use wording sits on the token itself in `chat/app/tokens.css`; change both together or they drift. `chat/app/components/RouteMarker.tsx`, `ResponseDetail.tsx`, and `TypingIndicator.tsx` are the provenance rail, the response detail panel, and the wait strip; read those before touching per-message routing UI.
 
+## Promotion conflicts (staging -> master)
+
+Master only ever receives **squash** merges from staging (see `CLAUDE.md`'s Branching section), so the same content lands on both branches under different commit identities and the next `staging` -> `master` PR shows false conflicts on any file touched since the last promotion. Fix by back-merging master into staging (never the reverse, never squash/rebase staging): for each conflict, diff `origin/master...origin/staging` on that file first to confirm staging already carries everything master has (it should, since master's squash commit is just staging's own prior commits) - staging's side wins. Verify with `git diff origin/staging HEAD` on the resulting merge commit: an empty diff confirms nothing was lost. Only stop and escalate if master's side contains content genuinely absent from staging - that means a change landed on master and never made it back.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.
