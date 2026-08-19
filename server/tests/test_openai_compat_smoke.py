@@ -1786,6 +1786,95 @@ def test_cache_hit_with_non_latin1_matched_query_does_not_crash(monkeypatch):
     assert response.headers["x-dejaq-nearest-cache-prompt"].encode("latin-1")
 
 
+def test_cache_hit_includes_enriched_query_header_when_rewritten(monkeypatch):
+    """RewritingEnricher stands in for a follow-up that genuinely got rewritten
+    into a standalone question - the header must carry that rewritten text so
+    the client can show it as the middle step between "You asked" and "Stored
+    answer for"."""
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(openai_compat, "_enricher", RewritingEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubHitMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+
+    client = TestClient(app, headers=_AUTH)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "How many people died in that war?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-dejaq-enriched-query"] == "What is the capital of France?"
+
+
+def test_cache_hit_omits_enriched_query_header_when_not_rewritten(monkeypatch):
+    """enrich() returns the message unchanged for an already-standalone
+    question (context_enricher.py:47) - the header must be absent entirely,
+    not present and identical to the user's own words."""
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubHitMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+
+    client = TestClient(app, headers=_AUTH)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert "x-dejaq-enriched-query" not in response.headers
+
+
+def test_cache_hit_with_non_latin1_enriched_query_does_not_crash(monkeypatch):
+    """Sibling of the em-dash/curly-quote regressions above: the enriched
+    question is free text in whatever language the user wrote in, and must go
+    through the same _sanitize_headers path or a non-Latin-1 rewrite crashes
+    the request the same way the matched-query header once did."""
+    class NonLatin1Enricher:
+        async def enrich(self, message: str, history: list[dict]) -> str:
+            return "how many people died in the war — the one that ended in 1848?"
+
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(openai_compat, "_enricher", NonLatin1Enricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubHitMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+
+    client = TestClient(app, headers=_AUTH)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "How many people died in that war?"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    header = response.headers["x-dejaq-enriched-query"]
+    assert "—" not in header
+    header.encode("latin-1")  # must not raise
+
+
 def test_sanitize_headers_covers_every_free_text_diagnostic_header():
     """Proves the shared choke point, not per-site patching: every free-text
     header declared in app/main.py's CORS expose_headers list must survive
@@ -1804,7 +1893,11 @@ def test_sanitize_headers_covers_every_free_text_diagnostic_header():
             break
     assert expose_headers is not None
 
-    free_text_headers = {"x-dejaq-nearest-cache-prompt", "x-dejaq-cache-matched-query"}
+    free_text_headers = {
+        "x-dejaq-nearest-cache-prompt",
+        "x-dejaq-cache-matched-query",
+        "x-dejaq-enriched-query",
+    }
     assert free_text_headers.issubset(set(expose_headers))
 
     poisoned = {name: "em—dash and curly ’ quote" for name in expose_headers}

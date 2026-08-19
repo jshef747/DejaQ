@@ -57,6 +57,7 @@ export interface AppMessage {
   // miss (local/cloud) or before the pipeline resolves either.
   cacheDistance?: number | null;
   cacheMatchedQuery?: string | null;
+  cacheEnrichedQuery?: string | null;
   // Set by Stop: this answer was cut off mid-generation. Whatever text had
   // already streamed in is kept, marked, and never mistaken for a complete
   // answer — it carries no responseId/interactionId, so the feedback row

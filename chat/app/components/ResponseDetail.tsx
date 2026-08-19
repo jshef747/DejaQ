@@ -153,7 +153,10 @@ export default function ResponseDetail({
               width: "40px",
             }}
           >
-            <span style={{ transform: "scale(1.35)" }}>
+            {/* display:flex keeps the svg out of an inline line box; as an inline
+                child it would sit on the text baseline and the descender gap
+                below it would push the glyph visibly high inside the circle. */}
+            <span style={{ display: "flex", transform: "scale(1.35)" }}>
               {route !== null && <RouteIcon route={route} />}
             </span>
           </div>
@@ -343,6 +346,9 @@ function SpeedBar({
 function WhyItMatched({ typedQuery, message }: { typedQuery: string | null; message: AppMessage }) {
   const stored = message.cacheMatchedQuery ?? null;
   const distance = message.cacheDistance ?? null;
+  // Absent (not empty, not a repeat of "You asked") whenever the follow-up
+  // was already standalone - see the server's own rule in context_enricher.py.
+  const enriched = message.cacheEnrichedQuery ?? null;
 
   if (!stored || distance === null) {
     return (
@@ -382,6 +388,7 @@ function WhyItMatched({ typedQuery, message }: { typedQuery: string | null; mess
             ))}
             &rdquo;
           </div>
+          {enriched && <SearchedAsRow enriched={enriched} />}
           <div style={{ color: "var(--fg-dimmer)", fontSize: "11.5px", marginTop: "11px" }}>Stored answer for</div>
           <div style={{ color: "var(--fg)", fontFamily: "var(--font-serif)", fontSize: "14px", lineHeight: "21px", marginTop: "3px" }}>
             &ldquo;
@@ -397,7 +404,10 @@ function WhyItMatched({ typedQuery, message }: { typedQuery: string | null; mess
       )}
       {!diff && (
         <>
-          <div style={{ color: "var(--fg-dimmer)", fontSize: "11.5px" }}>Stored answer for</div>
+          {enriched && <SearchedAsRow enriched={enriched} topMargin={0} />}
+          <div style={{ color: "var(--fg-dimmer)", fontSize: "11.5px", marginTop: enriched ? "11px" : 0 }}>
+            Stored answer for
+          </div>
           <div style={{ color: "var(--fg)", fontFamily: "var(--font-serif)", fontSize: "14px", lineHeight: "21px", marginTop: "3px" }}>
             &ldquo;{stored}&rdquo;
           </div>
@@ -471,6 +481,24 @@ function WhyItMatched({ typedQuery, message }: { typedQuery: string | null; mess
         </span>
       </div>
     </Section>
+  );
+}
+
+// The standalone question the context enricher rewrote a follow-up into
+// before searching the cache - the step between the user's raw words and the
+// stored question they matched. No word-diff here: it is not being compared
+// against anything, just shown as the extra step, in the same quoted-question
+// typography as "You asked"/"Stored answer for" so it reads as a peer of both.
+function SearchedAsRow({ enriched, topMargin = 11 }: { enriched: string; topMargin?: number }) {
+  return (
+    <>
+      <div style={{ color: "var(--fg-dimmer)", fontSize: "11.5px", marginTop: `${topMargin}px` }}>
+        Searched as
+      </div>
+      <div style={{ color: "var(--fg-dim)", fontFamily: "var(--font-serif)", fontSize: "14px", lineHeight: "21px", marginTop: "3px" }}>
+        &ldquo;{enriched}&rdquo;
+      </div>
+    </>
   );
 }
 

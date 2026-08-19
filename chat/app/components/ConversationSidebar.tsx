@@ -99,7 +99,6 @@ export default function ConversationSidebar({
             <PlusIcon />
           </span>
           <span style={{ flex: 1, textAlign: "left" }}>New chat</span>
-          <span style={{ color: "var(--fg-dimmer)", fontFamily: "var(--font-mono)", fontSize: "11px" }}>{shortcut}</span>
         </button>
       </div>
 

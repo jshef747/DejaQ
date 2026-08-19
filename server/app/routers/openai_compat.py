@@ -97,7 +97,7 @@ from app.config import (
     VALIDATOR_SKIP_DISTANCE,
 )
 from app.db.session import get_session
-from app.utils.exceptions import ExternalLLMError
+from app.utils.exceptions import ExternalLLMAuthError, ExternalLLMError
 from app.utils.logger import clear_request_id, content_snippet, hide_content, set_request_id
 from app.utils.pipeline_trace import PipelineTrace
 from app.schemas.chat import ExternalLLMRequest
@@ -474,6 +474,20 @@ def _nearest_headers(cache_lookup: CacheLookupResult) -> dict[str, str]:
         "x-dejaq-nearest-cache-distance": f"{cache_lookup.nearest_distance:.4f}",
         "x-dejaq-nearest-cache-prompt": prompt,
     })
+
+
+def _enriched_headers(user_query: str, enriched: str, enrich_succeeded: bool) -> dict[str, str]:
+    """The standalone question the enricher rewrote a follow-up into, so a
+    client can show it as the middle step between the user's raw words and
+    the stored question they matched. Absent (not empty) when enrich()
+    returned the message unchanged - a follow-up genuinely rewritten is the
+    only case worth surfacing."""
+    if not enrich_succeeded or enriched == user_query:
+        return {}
+    prompt = _diagnostic_prompt(enriched)
+    if prompt is None:
+        return {}
+    return _sanitize_headers({"x-dejaq-enriched-query": prompt})
 
 
 def _nearest_log_suffix(cache_lookup: CacheLookupResult) -> str:
@@ -1008,7 +1022,7 @@ async def run_chat_pipeline(
     channel that gates the hit. Running a 40-page document through the normalizer
     would produce a useless key and an enormous embedding.
 
-    Raises PipelineError for HTTP-level failures (400, 402, 422, 500).
+    Raises PipelineError for HTTP-level failures (400, 402, 422, 429, 500, 502).
     """
     image_bytes, image_mime = image if image else (None, None)
     _request_has_image = image_bytes is not None
@@ -1506,6 +1520,7 @@ async def run_chat_pipeline(
                     # no person has written yet.
                     hit_headers["x-dejaq-answer-authored"] = "human"
                 hit_headers.update(_nearest_headers(cache_lookup))
+                hit_headers.update(_enriched_headers(user_query, enriched, enrich_succeeded))
                 return ChatPipelineResult(
                     answer=answer,
                     response_id=response_id,
@@ -1723,7 +1738,7 @@ async def run_chat_pipeline(
                             max_tokens=_max_tokens,
                             system_prompt=system_prompt
                             or "You are a helpful assistant. Answer the user's query concisely and accurately.",
-                            temperature=temperature or 0.7,
+                            temperature=temperature,
                             image_b64=base64.b64encode(image_bytes).decode("ascii") if _request_has_image else None,
                             image_mime=image_mime,
                             # PDFs go as a native document part — every provider parses
@@ -1790,6 +1805,47 @@ async def run_chat_pipeline(
             except ExternalLLMError as exc:
                 if "not wired to a live client" in str(exc):
                     raise PipelineError(422, str(exc)) from exc
+                # A rejected provider credential or a provider 400/429 is a
+                # permanent misconfiguration, not the transient blip the apology
+                # below exists for - surface it as its own status. Only on the
+                # buffered path: a streaming response has already flushed its
+                # 200 headers by the time generation starts, so it has no status
+                # left to change and keeps the apology.
+                #
+                # The detail is fixed per status and never the provider's own
+                # text: that text can echo a masked form of the workspace's
+                # provider key (OpenAI's 401 body does) or account identifiers,
+                # and this body goes to any holder of a workspace API key. The
+                # real message stays in the log line below.
+                #
+                # A rejected credential is 502, not the provider's own 401:
+                # on this endpoint 401 already means the CALLER's DejaQ API key
+                # was rejected, and 402 already means no credential is stored
+                # at all. Keyed off the exception type, not the status, because
+                # the auth failure is the signal.
+                surfaced: tuple[int, str] | None = None
+                provider_name = provider or "external provider"
+                if isinstance(exc, ExternalLLMAuthError):
+                    surfaced = (
+                        502,
+                        f"The {provider_name} credential configured for this workspace was "
+                        "rejected. Check the API key in the workspace's provider settings.",
+                    )
+                elif exc.status_code == 429:
+                    surfaced = (
+                        429,
+                        f"The {provider_name} account for this workspace is rate limited. "
+                        "Try again shortly.",
+                    )
+                elif exc.status_code == 400:
+                    surfaced = (
+                        400,
+                        f"The {provider_name} request was rejected ({provider_name} error). "
+                        "The model or its parameters may not be supported.",
+                    )
+                if not stream and surfaced is not None:
+                    logger.warning("External provider error surfaced to caller: %s", exc)
+                    raise PipelineError(*surfaced) from exc
                 logger.exception("ExternalLLMService failed")
                 yield _GENERATION_FAILED_MESSAGE
                 gen.update(model_used="error", route="error")
@@ -1978,6 +2034,7 @@ async def run_chat_pipeline(
                 "x-dejaq-prompt-difficulty-score": f"{float(classification.get('score', 0.0)):.4f}",
             })
             headers.update(_nearest_headers(cache_lookup))
+            headers.update(_enriched_headers(user_query, enriched, enrich_succeeded))
             if rag_context:
                 headers["x-dejaq-rag-chunks"] = str(len(rag_context))
             if response_id:

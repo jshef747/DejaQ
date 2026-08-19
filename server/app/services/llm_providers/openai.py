@@ -40,7 +40,7 @@ def _mapped_errors(api_key: str) -> Iterator[None]:
     except openai.AuthenticationError as exc:
         msg = redact_api_key(exc, api_key)
         logger.error("OpenAI authentication failed: %s", msg)
-        raise ExternalLLMAuthError(f"Authentication failed: {msg}") from exc
+        raise ExternalLLMAuthError(f"Authentication failed: {msg}", status_code=401) from exc
     except openai.APITimeoutError as exc:
         msg = redact_api_key(exc, api_key)
         logger.error("OpenAI timeout: %s", msg)
@@ -48,12 +48,44 @@ def _mapped_errors(api_key: str) -> Iterator[None]:
     except openai.OpenAIError as exc:
         msg = redact_api_key(exc, api_key)
         logger.error("OpenAI API error: %s", msg)
-        raise ExternalLLMError(f"Provider error: {msg}") from exc
+        raise ExternalLLMError(
+            f"Provider error: {msg}", status_code=getattr(exc, "status_code", None)
+        ) from exc
+
+
+async def _create_with_temperature_retry(
+    client, request: ExternalLLMRequest, messages: list[dict], extra_kwargs: dict,
+    send_temperature: bool, **call_kwargs,
+):
+    """Sends `temperature` only if the caller asked for one and the model
+    accepts it (`send_temperature`), and retries once without it if the
+    vendor rejects it by name.
+
+    Every `gpt-5.x` row in OpenRouter's `supported_parameters` reports
+    `temperature` unsupported - a model can start rejecting it after a vendor
+    change, so this degrades to a logged warning instead of an outage.
+    """
+    if send_temperature and request.temperature is not None:
+        try:
+            return await client.chat.completions.create(
+                model=request.model, messages=messages,
+                temperature=request.temperature, **extra_kwargs, **call_kwargs,
+            )
+        except openai.BadRequestError as exc:
+            if "temperature" not in str(exc).lower():
+                raise
+            logger.warning(
+                "OpenAI rejected temperature=%s for model=%s; retrying without it",
+                request.temperature, request.model,
+            )
+    return await client.chat.completions.create(
+        model=request.model, messages=messages, **extra_kwargs, **call_kwargs
+    )
 
 
 class OpenAIProviderClient:
     @staticmethod
-    def _build_call(request: ExternalLLMRequest) -> tuple[list[dict], dict]:
+    def _build_call(request: ExternalLLMRequest) -> tuple[list[dict], dict, bool]:
         messages = [{"role": "system", "content": request.system_prompt}]
         messages.extend(request.history)
         if request.image_b64:
@@ -82,26 +114,25 @@ class OpenAIProviderClient:
         # o-series reasoning models (o1-, o3-, o4-) reject `max_tokens` (need
         # `max_completion_tokens`) and any non-default temperature.
         is_reasoning_model = request.model.strip().lower().startswith(("o1-", "o3-", "o4-"))
-        extra_kwargs = {"max_completion_tokens": request.max_tokens} if is_reasoning_model else {
-            "max_tokens": request.max_tokens,
-            "temperature": request.temperature,
-        }
-        return messages, extra_kwargs
+        extra_kwargs = (
+            {"max_completion_tokens": request.max_tokens}
+            if is_reasoning_model
+            else {"max_tokens": request.max_tokens}
+        )
+        return messages, extra_kwargs, not is_reasoning_model
 
     async def generate_response(self, request: ExternalLLMRequest, api_key: str) -> ExternalLLMResponse:
         ensure_query(request)
 
         _clear_client_cache_if_factory_changed()
         client = _get_client(api_key)
-        messages, extra_kwargs = self._build_call(request)
+        messages, extra_kwargs, send_temperature = self._build_call(request)
 
         logger.debug("Sending hard query to OpenAI model=%s history_turns=%d", request.model, len(request.history))
         start = time.perf_counter()
         with _mapped_errors(api_key):
-            response = await client.chat.completions.create(
-                model=request.model,
-                messages=messages,
-                **extra_kwargs,
+            response = await _create_with_temperature_retry(
+                client, request, messages, extra_kwargs, send_temperature,
             )
 
         latency_ms = elapsed_ms(start)
@@ -137,7 +168,7 @@ class OpenAIProviderClient:
 
         _clear_client_cache_if_factory_changed()
         client = _get_client(api_key)
-        messages, extra_kwargs = self._build_call(request)
+        messages, extra_kwargs, send_temperature = self._build_call(request)
 
         logger.debug("Streaming hard query to OpenAI model=%s history_turns=%d", request.model, len(request.history))
         start = time.perf_counter()
@@ -145,12 +176,9 @@ class OpenAIProviderClient:
         prompt_tokens = completion_tokens = 0
         finish_reason = None
         with _mapped_errors(api_key):
-            stream = await client.chat.completions.create(
-                model=request.model,
-                messages=messages,
-                stream=True,
-                stream_options={"include_usage": True},
-                **extra_kwargs,
+            stream = await _create_with_temperature_retry(
+                client, request, messages, extra_kwargs, send_temperature,
+                stream=True, stream_options={"include_usage": True},
             )
             # `async with`, not a bare `async for`: a client that disconnects
             # mid-answer closes this generator where it is suspended, and only

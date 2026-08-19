@@ -45,6 +45,10 @@ export interface ChatSuccess {
   // "human" when the served cache entry holds an answer a person wrote through
   // Edit & Save. Null on a miss, and on an ordinary cache entry.
   answerAuthored: string | null;
+  // The standalone question the context enricher rewrote a follow-up into
+  // before searching the cache. Null both when there was nothing to rewrite
+  // (enrich() returned the message unchanged) and on any non-cache answer.
+  cacheEnrichedQuery: string | null;
   // Set when the SSE body broke part-way through the answer: `text` is
   // whatever arrived before the break, not a finished reply. The caller shows
   // it AND says so, because a silently truncated answer reads as a complete
@@ -152,6 +156,7 @@ export async function sendChatMessage(
   const cacheDistance = rawDistance !== null ? Number(rawDistance) : null;
   const cacheMatchedQuery = response.headers.get("x-dejaq-cache-matched-query") ?? null;
   const answerAuthored = response.headers.get("x-dejaq-answer-authored") ?? null;
+  const cacheEnrichedQuery = response.headers.get("x-dejaq-enriched-query") ?? null;
 
   onMeta?.({ modelUsed, tier });
 
@@ -251,6 +256,7 @@ export async function sendChatMessage(
     cacheDistance,
     cacheMatchedQuery,
     answerAuthored,
+    cacheEnrichedQuery,
     streamError,
   };
 }
