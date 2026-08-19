@@ -1,3 +1,4 @@
+import logging
 import time
 
 from fastapi import APIRouter, HTTPException
@@ -12,6 +13,8 @@ from app.services.external_llm import ExternalLLMService
 from app.services.llm_providers import LIVE_PROVIDERS, redact_api_key
 from app.services.provider_inference import provider_for_model
 from app.utils.exceptions import ExternalLLMAuthError, ExternalLLMError, ExternalLLMTimeoutError
+
+logger = logging.getLogger("dejaq.routers.admin.test_provider")
 
 router = APIRouter()
 _external_llm = ExternalLLMService()
@@ -74,8 +77,20 @@ async def test_provider(
     try:
         response = await _external_llm.generate_response(request, provider=provider, api_key=api_key)
     except ExternalLLMAuthError as exc:
-        detail = redact_api_key(exc, api_key)
-        raise HTTPException(status_code=401, detail=f"API key was rejected by {provider}: {detail}") from exc
+        # 502, not 401: on /admin/v1/* a 401 means the dashboard's own session
+        # failed, and dashboard/lib/api.ts throws "session may have expired"
+        # before it ever reads the body - so a rejected provider key reported
+        # as 401 loses its message on the one button that exists to show it.
+        logger.warning(
+            "Provider test rejected by %s: %s", provider, redact_api_key(exc, api_key)
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"The {provider} credential configured for this workspace was rejected. "
+                "Check the API key in the workspace's provider settings."
+            ),
+        ) from exc
     except ExternalLLMTimeoutError as exc:
         detail = redact_api_key(exc, api_key)
         raise HTTPException(status_code=504, detail=f"Provider timed out: {detail}") from exc
