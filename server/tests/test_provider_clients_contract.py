@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.schemas.chat import ExternalLLMRequest, ExternalLLMResponse
-from app.utils.exceptions import ExternalLLMAuthError, ExternalLLMTimeoutError
+from app.utils.exceptions import ExternalLLMAuthError, ExternalLLMError, ExternalLLMTimeoutError
 
 pytestmark = pytest.mark.no_model
 
@@ -253,6 +253,91 @@ def test_provider_clients_map_auth_errors_uniformly(monkeypatch, provider_name):
 
     with pytest.raises(ExternalLLMAuthError):
         asyncio.run(client.generate_response(_request(), "SecretKey123"))
+
+
+def _google_client_raising(monkeypatch, exc):
+    from app.services.llm_providers import google as module
+
+    class FakeModels:
+        async def generate_content(self, **kwargs):
+            raise exc
+
+    class FakeClient:
+        def __init__(self, api_key):
+            self.aio = SimpleNamespace(models=FakeModels())
+
+    monkeypatch.setattr(module.genai, "Client", FakeClient)
+    monkeypatch.setattr(module.genai_errors, "ClientError", type(exc))
+    return module.GoogleProviderClient()
+
+
+class _FakeGoogleClientError(Exception):
+    def __init__(self, code, details=None):
+        super().__init__(f"{code} error")
+        self.code = code
+        self.details = details
+
+
+def test_google_rejects_an_invalid_api_key_as_an_auth_error_not_a_bad_request(monkeypatch):
+    """Gemini reports a bad key as 400 INVALID_ARGUMENT, not 401. Without the
+    structured reason it lands in the generic 400 bucket, whose caller-facing
+    message blames the model or its parameters instead of the credential."""
+    exc = _FakeGoogleClientError(
+        400,
+        details={
+            "error": {
+                "code": 400,
+                "status": "INVALID_ARGUMENT",
+                "message": "API key not valid. Please pass a valid API key.",
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                        "reason": "API_KEY_INVALID",
+                        "domain": "googleapis.com",
+                    }
+                ],
+            }
+        },
+    )
+    client = _google_client_raising(monkeypatch, exc)
+
+    with pytest.raises(ExternalLLMAuthError):
+        asyncio.run(client.generate_response(_request(), "SecretKey123"))
+
+
+def test_google_permission_denied_is_an_auth_error_not_a_silent_apology(monkeypatch):
+    """403 PERMISSION_DENIED (suspended, disabled, or referer-restricted key)
+    matched no surfaced status, so it fell through to the generic HTTP 200
+    apology - the invisible failure this contract exists to prevent."""
+    exc = _FakeGoogleClientError(
+        403,
+        details={"error": {"code": 403, "status": "PERMISSION_DENIED", "message": "denied"}},
+    )
+    client = _google_client_raising(monkeypatch, exc)
+
+    with pytest.raises(ExternalLLMAuthError):
+        asyncio.run(client.generate_response(_request(), "SecretKey123"))
+
+
+def test_google_ordinary_bad_request_is_not_mistaken_for_an_auth_error(monkeypatch):
+    """The control: a 400 INVALID_ARGUMENT about the request itself carries no
+    API_KEY_INVALID reason and must stay a plain provider error."""
+    exc = _FakeGoogleClientError(
+        400,
+        details={
+            "error": {
+                "code": 400,
+                "status": "INVALID_ARGUMENT",
+                "message": "Unknown field 'temperature'.",
+            }
+        },
+    )
+    client = _google_client_raising(monkeypatch, exc)
+
+    with pytest.raises(ExternalLLMError) as raised:
+        asyncio.run(client.generate_response(_request(), "SecretKey123"))
+    assert not isinstance(raised.value, ExternalLLMAuthError)
+    assert raised.value.status_code == 400
 
 
 @pytest.mark.parametrize("provider_name", ["google", "openai", "anthropic"])

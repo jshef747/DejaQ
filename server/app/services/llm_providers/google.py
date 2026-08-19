@@ -32,6 +32,32 @@ def _clear_client_cache_if_factory_changed() -> None:
         _client_factory = genai.Client
 
 
+def _rejected_credential(exc: genai_errors.ClientError) -> bool:
+    """Whether this client error means the API key itself was refused.
+
+    Gemini does not use 401 for a bad key: an invalid one comes back as 400
+    INVALID_ARGUMENT, which is also what a bad model or parameter returns, so
+    only the structured `ErrorInfo.reason` separates them. 403 is PERMISSION_
+    DENIED - suspended, disabled, or referer-restricted - which is always about
+    the credential, so the code alone is enough there.
+    """
+    if getattr(exc, "code", None) in (401, 403):
+        return True
+    payload = getattr(exc, "details", None)
+    if isinstance(payload, list) and len(payload) == 1:
+        payload = payload[0]
+    if not isinstance(payload, dict):
+        return False
+    error = payload.get("error")
+    entries = (error if isinstance(error, dict) else payload).get("details")
+    if not isinstance(entries, list):
+        return False
+    return any(
+        isinstance(entry, dict) and entry.get("reason") == "API_KEY_INVALID"
+        for entry in entries
+    )
+
+
 @contextlib.contextmanager
 def _mapped_errors(api_key: str) -> Iterator[None]:
     """Translate the provider SDK's exceptions into DejaQ's own.
@@ -43,9 +69,11 @@ def _mapped_errors(api_key: str) -> Iterator[None]:
         yield
     except genai_errors.ClientError as exc:
         msg = redact_api_key(exc, api_key)
-        if exc.code == 401:
-            logger.error("Google authentication failed: %s", msg)
-            raise ExternalLLMAuthError(f"Authentication failed: {msg}", status_code=401) from exc
+        if _rejected_credential(exc):
+            logger.error("Google authentication failed (code=%s): %s", exc.code, msg)
+            raise ExternalLLMAuthError(
+                f"Authentication failed: {msg}", status_code=exc.code
+            ) from exc
         logger.error("Google client error (code=%d): %s", exc.code, msg)
         raise ExternalLLMError(f"Provider error: {msg}", status_code=exc.code) from exc
     except (TimeoutError, httpx.TimeoutException) as exc:
