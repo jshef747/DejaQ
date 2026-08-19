@@ -42,6 +42,9 @@ export interface ChatSuccess {
   // a hit; neither is fabricated or inferred.
   cacheDistance: number | null;
   cacheMatchedQuery: string | null;
+  // "human" when the served cache entry holds an answer a person wrote through
+  // Edit & Save. Null on a miss, and on an ordinary cache entry.
+  answerAuthored: string | null;
   // The standalone question the context enricher rewrote a follow-up into
   // before searching the cache. Null both when there was nothing to rewrite
   // (enrich() returned the message unchanged) and on any non-cache answer.
@@ -152,6 +155,7 @@ export async function sendChatMessage(
   const rawDistance = response.headers.get("x-dejaq-cache-distance");
   const cacheDistance = rawDistance !== null ? Number(rawDistance) : null;
   const cacheMatchedQuery = response.headers.get("x-dejaq-cache-matched-query") ?? null;
+  const answerAuthored = response.headers.get("x-dejaq-answer-authored") ?? null;
   const cacheEnrichedQuery = response.headers.get("x-dejaq-enriched-query") ?? null;
 
   onMeta?.({ modelUsed, tier });
@@ -251,6 +255,7 @@ export async function sendChatMessage(
     cacheHit: modelUsed === "cache",
     cacheDistance,
     cacheMatchedQuery,
+    answerAuthored,
     cacheEnrichedQuery,
     streamError,
   };
@@ -281,6 +286,21 @@ export interface FeedbackSuccess {
 }
 
 export type FeedbackResult = FeedbackSuccess | ApiError;
+
+export type EditStatus = "saved" | "created" | "not_cached" | "message_mismatch";
+
+export interface EditSuccess {
+  kind: "success";
+  editStatus: EditStatus | null;
+  // The entry the edit landed on. Differs from the one we sent when the answer
+  // was served through an alias (the write redirects to its root) or when the
+  // entry had to be created under a freshly derived key — so the caller adopts
+  // it, or later feedback would address an entry that no longer holds this text.
+  responseId: string | null;
+  newScore?: number;
+}
+
+export type EditResult = EditSuccess | ApiError;
 
 export async function sendFeedback(
   responseId: string | null,
@@ -313,6 +333,55 @@ export async function sendFeedback(
     newScore: data.newScore,
     escalatedResponse: data.escalatedResponse ?? null,
     escalationStatus: data.escalationStatus ?? null,
+  };
+}
+
+/** Save a human-edited answer. This IS the thumbs-up: one request carries the
+ * corrected text and the positive rating, so the score lands on what the person
+ * wrote rather than on the answer it replaced.
+ *
+ * `messages` is the request replay the server hash-verifies before using it to
+ * build a cache entry that does not exist yet. Pass null for a turn that
+ * carried an attachment — the replay is blind to the file, and the server will
+ * only overwrite an existing gated entry rather than create an ungated one.
+ */
+export async function saveEditedAnswer(
+  responseId: string | null,
+  interactionId: string | null,
+  messages: ChatApiMessage[] | null,
+  editedAnswer: string,
+  deptSlug: string,
+): Promise<EditResult> {
+  let response: Response;
+  try {
+    response = await fetch("/api/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...dejaqHeaders() },
+      body: JSON.stringify({
+        responseId,
+        interactionId,
+        messages,
+        editedAnswer,
+        rating: "positive",
+        comment: "",
+        deptSlug,
+      }),
+    });
+  } catch {
+    return { kind: "error", status: 0, message: "Network error. Could not save the edit." };
+  }
+
+  if (!response.ok) {
+    const detail = await parseErrorDetail(response);
+    return { kind: "error", status: response.status, message: userFacingError(response.status, detail) };
+  }
+
+  const data = await response.json();
+  return {
+    kind: "success",
+    editStatus: data.editStatus ?? null,
+    responseId: data.responseId ?? null,
+    newScore: data.newScore,
   };
 }
 

@@ -7,15 +7,15 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from app.config import DEFAULT_MAX_TOKENS, OLLAMA_TIMEOUT_SECONDS
+from app.config import OLLAMA_TIMEOUT_SECONDS
 from app.db.session import get_session
 from app.schemas.chat import ExternalLLMRequest
 from app.schemas.feedback import EscalatedResponse
-from app.services import cache_filter, llm_config_service, pipeline_config_cache
+from app.services import cache_filter, llm_config_service, workspace_overrides
 from app.services.chat_messages import extract_pipeline_inputs
 from app.services.credential_service import CredentialService
 from app.services.external_llm import ExternalLLMService
-from app.services.memory_chromaDB import get_memory_service
+from app.services.memory_chromaDB import get_memory_service, is_human_authored
 from app.services.provider_inference import resolve_provider
 from app.services.request_logger import request_logger
 from app.services.response_registry import response_registry
@@ -45,33 +45,11 @@ def _doc_id(clean_query: str) -> str:
     return hashlib.sha256(clean_query.encode()).hexdigest()[:16]
 
 
-def _effective_default_max_tokens(workspace_slug: str) -> int:
-    """The workspace's effective answer-generation budget (override or the
-    shipped DEFAULT_MAX_TOKENS) - unlike _workspace_config_override below,
-    this always returns a usable value since there's no "no override, pass
-    None and let the callee's own default apply" path for a call-time
-    max_tokens argument the way there is for a pooled service's model_name."""
-    try:
-        return pipeline_config_cache.get_effective_config(workspace_slug).default_max_tokens
-    except llm_config_service.WorkspaceNotFound:
-        return DEFAULT_MAX_TOKENS
-
-
-def _workspace_config_override(workspace_slug: str, field: str) -> str | None:
-    """The workspace's override for `field` (e.g. "local_model",
-    "generalizer_model", "enricher_model", "normalizer_model", or any of the
-    matching "*_system_prompt" fields), or None when there isn't one -
-    including when the workspace can't be resolved at all. None lets callers
-    make the exact same no-override get_*_service() call this module always
-    made before per-workspace pipeline config existed.
-    """
-    try:
-        config = pipeline_config_cache.get_effective_config(workspace_slug)
-    except llm_config_service.WorkspaceNotFound:
-        return None
-    if field not in config.overrides:
-        return None
-    return getattr(config, field)
+# Both lifted into services/workspace_overrides.py so answer_edit.py can share
+# them rather than keep a second copy that drifts. Aliased rather than renamed
+# at every call site below - the names are private to this module either way.
+_effective_default_max_tokens = workspace_overrides.effective_default_max_tokens
+_workspace_config_override = workspace_overrides.workspace_config_override
 
 
 def _entry_is_attachment_anchored(meta: dict | None) -> bool:
@@ -118,6 +96,19 @@ async def _store_escalation_cache_entry(
 ) -> None:
     doc_id = _doc_id(clean_query)
     try:
+        # Same guard the two background store paths carry (tasks/cache_tasks.py,
+        # openai_compat.py): a person wrote the answer at this id through Edit &
+        # Save, and the model's re-answer must not replace their text. Reachable
+        # here even when the escalating turn was never cached itself - the edit
+        # creates the entry at the same id, derived from the query alone.
+        memory = get_memory_service(cache_namespace)
+        if is_human_authored(memory, doc_id):
+            logger.info(
+                "feedback_escalation cache_store status=skipped reason=human_authored namespace=%s doc_id=%s",
+                cache_namespace,
+                doc_id,
+            )
+            return
         generalizer_model = _workspace_config_override(tenant_id, "generalizer_model")
         generalizer_prompt = _workspace_config_override(tenant_id, "generalizer_system_prompt")
         rewrite_max_tokens = _workspace_config_override(tenant_id, "rewrite_max_tokens")
@@ -133,7 +124,18 @@ async def _store_escalation_cache_entry(
             else get_context_adjuster_service()
         )
         generalized = await adjuster_service.generalize(answer)
-        get_memory_service(cache_namespace).store_interaction(
+        # Re-read right before the upsert: generalize() takes seconds, which is
+        # the window an edit most likely lands in. Same pair as the two
+        # background store paths.
+        if is_human_authored(memory, doc_id):
+            logger.info(
+                "feedback_escalation cache_store status=skipped reason=human_authored_race "
+                "namespace=%s doc_id=%s",
+                cache_namespace,
+                doc_id,
+            )
+            return
+        memory.store_interaction(
             clean_query,
             generalized,
             original_query,

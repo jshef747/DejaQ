@@ -58,6 +58,9 @@ _REQUEST_COLUMNS = {
 
 _FEEDBACK_COLUMNS = {
     "interaction_id": "TEXT",
+    # 1 when the positive rating came from Edit & Save rather than a plain
+    # thumbs-up, so the two can be told apart in the feedback log.
+    "edited": "INTEGER NOT NULL DEFAULT 0",
 }
 
 _CREATE_INDEXES = (
@@ -196,15 +199,16 @@ class RequestLogger:
         comment: str | None,
         *,
         interaction_id: str | None = None,
+        edited: bool = False,
     ) -> None:
         if self._db is None:
             return
         ts = datetime.now(timezone.utc).isoformat()
         try:
             await self._db.execute(
-                "INSERT INTO feedback_log (ts, response_id, workspace, department, rating, comment, interaction_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (ts, response_id, workspace, department, rating, comment, interaction_id),
+                "INSERT INTO feedback_log (ts, response_id, workspace, department, rating, comment, interaction_id, edited) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (ts, response_id, workspace, department, rating, comment, interaction_id, int(edited)),
             )
             await self._db.commit()
         except Exception:

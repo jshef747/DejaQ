@@ -89,6 +89,7 @@ app.add_middleware(
         "x-dejaq-enriched-query",
         "x-dejaq-nearest-cache-distance",
         "x-dejaq-nearest-cache-prompt",
+        "x-dejaq-answer-authored",
     ],
 )
 

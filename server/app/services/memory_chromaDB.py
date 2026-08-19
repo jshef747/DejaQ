@@ -122,6 +122,12 @@ class CacheLookupResult:
     # deterministic, so the gate is equality. See services/file_text.py.
     file_sha: str | None = None
     file_kind: str | None = None
+    # "human" when a person wrote this answer through Edit & Save, absent
+    # otherwise. The serve path reads it to skip the context adjuster: a human
+    # answer had no tone stripped from it, so there is nothing to put back, and
+    # paraphrasing it would serve a model's rewording of text a person vouched
+    # for. Same reasoning as the attachment-anchored skip.
+    authored: str | None = None
 
 
 class MemoryService:
@@ -247,6 +253,7 @@ class MemoryService:
                     image_text=meta.get("image_text"),
                     file_sha=meta.get("file_sha"),
                     file_kind=meta.get("file_kind"),
+                    authored=meta.get("authored"),
                 ))
 
         if not candidates:
@@ -322,6 +329,7 @@ class MemoryService:
         image_text: str | None = None,
         file_sha: str | None = None,
         file_kind: str | None = None,
+        authored: str | None = None,
     ) -> str:
         doc_id = derive_doc_id(
             normalized_query,
@@ -353,6 +361,12 @@ class MemoryService:
         if file_sha and file_kind:
             metadata["file_sha"] = file_sha
             metadata["file_kind"] = file_kind
+        # Provenance, written only when a person authored the answer. Absent on
+        # every model-generated entry, so this is additive — nothing reads it
+        # except the protections in overwrite_answer, the store guards and the
+        # serve-path adjuster skip.
+        if authored:
+            metadata["authored"] = authored
         self._collection.upsert(
             ids=[doc_id],
             embeddings=[embedding],
@@ -380,20 +394,27 @@ class MemoryService:
         if doc_id == source_entry_id or doc_id == root_id:
             return None  # alias text identical to the stored query
 
+        alias_meta = {
+            "generalized_answer": parent_meta.get("generalized_answer", ""),
+            "original_query": parent_meta.get("original_query", ""),
+            "user_id": parent_meta.get("user_id", ""),
+            "stored_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "score": 0.0,
+            "hit_count": 0,
+            "negative_count": 0,
+            "alias_of": root_id,
+        }
+        # An alias holds a byte-copy of the parent's answer, so it must inherit
+        # the parent's provenance too. Without this, the same human-written text
+        # served through an alias would go back through the context adjuster.
+        if parent_meta.get("authored"):
+            alias_meta["authored"] = parent_meta["authored"]
+
         self._collection.upsert(
             ids=[doc_id],
             embeddings=[_embed(alias_query)],
             documents=[alias_query],
-            metadatas=[{
-                "generalized_answer": parent_meta.get("generalized_answer", ""),
-                "original_query": parent_meta.get("original_query", ""),
-                "user_id": parent_meta.get("user_id", ""),
-                "stored_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "score": 0.0,
-                "hit_count": 0,
-                "negative_count": 0,
-                "alias_of": root_id,
-            }],
+            metadatas=[alias_meta],
         )
         # Re-verify the root survived the upsert: a negative-feedback delete
         # racing between the get_entry_metadata read above and this upsert
@@ -406,6 +427,79 @@ class MemoryService:
             return None
         logger.info("Stored alias %s -> %s (query=%r)", doc_id, root_id, alias_query[:60])
         return doc_id
+
+    def overwrite_answer(self, entry_id: str, answer: str, *, authored: str = "human") -> str:
+        """Replace the ANSWER of an existing entry, keeping everything else.
+
+        The write path for Edit & Save. Deliberately not `store_interaction`:
+        an upsert would reset score/hit_count/negative_count to 0 and drop any
+        image_*/file_* keys that were not re-supplied, un-gating an
+        attachment-anchored entry. This keeps the entry's identity, its
+        counters and its gates, and changes only the text it serves.
+
+        Two things make the replacement total rather than partial:
+
+        - An `alias_of` entry is a POINTER for lookup but holds its own copy of
+          the answer, so editing through an alias-served response_id would
+          leave the root serving the old text. The write is redirected to the
+          root instead.
+        - Every alias of the root holds that same byte-copy (see store_alias),
+          so each one is rewritten too. `delete_entry` cascades for exactly this
+          reason; so must this.
+
+        Raises KeyError when the entry does not exist, matching update_score and
+        get_negative_count so feedback_service maps it to a 404 unchanged.
+        Returns the id actually written (the root, which may differ from
+        `entry_id`).
+        """
+        meta = self.get_entry_metadata(entry_id)
+        if meta is None:
+            raise KeyError(entry_id)
+
+        root_id = meta.get("alias_of") or entry_id
+        if root_id != entry_id:
+            root_meta = self.get_entry_metadata(root_id)
+            if root_meta is None:
+                # Orphaned alias: its root is gone, so there is nothing to keep
+                # consistent. Rewrite the alias itself rather than failing.
+                root_id, root_meta = entry_id, meta
+            meta = root_meta
+
+        edited_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        meta["generalized_answer"] = answer
+        meta["authored"] = authored
+        meta["edited_at"] = edited_at
+        self._collection.update(ids=[root_id], metadatas=[meta])
+
+        try:
+            dependents = self._collection.get(where={"alias_of": root_id}, include=["metadatas"])
+        except Exception:
+            logger.warning("Alias cascade lookup failed for %s", root_id, exc_info=True)
+            dependents = {"ids": [], "metadatas": []}
+
+        # Paired from one zip, not two independent lists: Chroma returning fewer
+        # metadatas than ids would otherwise raise inside `update` - after the
+        # root was already rewritten, leaving a half-applied edit behind a 500.
+        alias_ids: list[str] = []
+        alias_metas: list[dict] = []
+        for alias_id, alias_meta in zip(dependents["ids"], dependents["metadatas"] or []):
+            alias_meta = dict(alias_meta or {})
+            alias_meta["generalized_answer"] = answer
+            alias_meta["authored"] = authored
+            alias_meta["edited_at"] = edited_at
+            alias_ids.append(alias_id)
+            alias_metas.append(alias_meta)
+        if alias_ids:
+            self._collection.update(ids=alias_ids, metadatas=alias_metas)
+            logger.info("Overwrote answer on %d alias(es) of %s", len(alias_ids), root_id)
+
+        logger.info(
+            "Overwrote answer for cache entry %s (authored=%s, aliases=%d)",
+            root_id,
+            authored,
+            len(alias_ids),
+        )
+        return root_id
 
     def get_all_entries(self, limit: int = 50, offset: int = 0) -> list[dict]:
         """Return all cached entries with metadata for the cache viewer."""
@@ -549,9 +643,26 @@ class MemoryService:
         try:
             results = self._collection.get(
                 where={"score": {"$lt": floor}},
-                include=[],
+                include=["metadatas"],
             )
             ids_to_delete = results["ids"]
+            if not ids_to_delete:
+                return 0
+            # A human-written answer is not evicted by inactivity. Somebody
+            # typed it on purpose, and nothing regenerates it if it goes — the
+            # same argument that keeps the RAG collection out of this sweep
+            # (see cache_tasks.evict_low_score_entries). A thumbs-down still
+            # deletes it, so a bad edit is still undoable.
+            # Filtered here rather than with a Chroma `where` clause because
+            # `authored` is absent on every model-generated entry, and presence
+            # filtering is not portable across Chroma versions (see
+            # image_entry_ids).
+            metas = results["metadatas"] or []
+            ids_to_delete = [
+                entry_id
+                for entry_id, meta in zip(ids_to_delete, metas)
+                if (meta or {}).get("authored") != "human"
+            ]
             if not ids_to_delete:
                 return 0
             deleted = sum(1 for entry_id in ids_to_delete if self.delete_entry(entry_id))
@@ -581,6 +692,26 @@ class MemoryService:
     @property
     def count(self) -> int:
         return self._collection.count()
+
+
+def is_human_authored(memory: "MemoryService", entry_id: str) -> bool:
+    """Whether a person wrote the answer at this id through Edit & Save.
+
+    The one copy every store path shares (the Celery task, its in-process
+    fallback, and the feedback-escalation store), so a fourth one cannot ship
+    without the guard.
+
+    Fails OPEN (False) when the metadata cannot be read: a Chroma blip must not
+    turn every background store into a silent no-op. The cost of being wrong in
+    this direction is one regenerated answer; the other direction stops the
+    cache filling at all.
+    """
+    try:
+        meta = memory.get_entry_metadata(entry_id)
+    except Exception:
+        logger.warning("Could not read provenance for %s; proceeding with store", entry_id, exc_info=True)
+        return False
+    return bool(meta and meta.get("authored") == "human")
 
 
 # ---------------------------------------------------------------------------

@@ -32,6 +32,7 @@ async def submit_feedback(
             response_id=body.response_id,
             interaction_id=body.interaction_id,
             messages=body.messages,
+            edited_answer=body.edited_answer,
             rating=body.rating,
             comment=body.comment,
             org=workspace,
@@ -54,10 +55,13 @@ async def submit_feedback(
         raise HTTPException(status_code=404, detail="response_id not found") from exc
 
     has_escalation_fields = result.escalation_status is not None or result.escalated_response is not None
-    if result.status == "deleted" and not has_escalation_fields:
+    # An edit carries its own fields back, so it must not take either of the
+    # two legacy shortcuts below - both drop everything except status/new_score.
+    has_extra_fields = has_escalation_fields or result.edit_status is not None
+    if result.status == "deleted" and not has_extra_fields:
         logger.info("First negative feedback — deleted entry %s", body.response_id)
         return {"status": "deleted"}
-    if not has_escalation_fields:
+    if not has_extra_fields:
         return {"status": "ok", "new_score": result.new_score}
     payload = result.model_dump(exclude_none=True)
     return payload

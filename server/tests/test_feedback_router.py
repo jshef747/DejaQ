@@ -165,3 +165,75 @@ def test_feedback_for_another_workspaces_response_id_is_4xx_not_500(monkeypatch)
 
     assert response.status_code == 422
     assert "does not belong" in response.json()["detail"]
+
+
+def test_feedback_route_forwards_edited_answer_and_returns_edit_fields(monkeypatch):
+    """A save reaches the service as one call carrying both the text and the
+    positive rating, and its extra fields survive the response shaping — the two
+    legacy shortcuts above return status/new_score only."""
+    from app.middleware.api_key import _KEY_CACHE
+    from app.services.feedback_service import FeedbackResult
+
+    captured = {}
+
+    async def _submit_feedback_service(**kwargs):
+        captured.update(kwargs)
+        return FeedbackResult(
+            status="ok",
+            new_score=1.0,
+            edit_status="saved",
+            response_id="acme__eng:root1",
+        )
+
+    monkeypatch.setattr(_KEY_CACHE, "resolve", lambda token: ("acme", 7))
+    monkeypatch.setattr(feedback, "submit_feedback_service", _submit_feedback_service)
+
+    response = TestClient(app).post(
+        "/v1/feedback",
+        headers={"Authorization": "Bearer org-key"},
+        json={
+            "interaction_id": "int_1",
+            "rating": "positive",
+            "edited_answer": "the corrected answer",
+            "messages": [{"role": "user", "content": "Hello"}],
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["edited_answer"] == "the corrected answer"
+    assert response.json() == {
+        "status": "ok",
+        "new_score": 1.0,
+        "edit_status": "saved",
+        "response_id": "acme__eng:root1",
+    }
+
+
+def test_feedback_route_rejects_an_edit_on_a_negative_rating(monkeypatch):
+    """A save IS a like; the two are one action, so the pairing is enforced at
+    the edge rather than inferred in the service."""
+    from app.middleware.api_key import _KEY_CACHE
+
+    monkeypatch.setattr(_KEY_CACHE, "resolve", lambda token: ("acme", 7))
+
+    response = TestClient(app).post(
+        "/v1/feedback",
+        headers={"Authorization": "Bearer org-key"},
+        json={"interaction_id": "int_1", "rating": "negative", "edited_answer": "text"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_feedback_route_rejects_an_edit_without_an_interaction_id(monkeypatch):
+    from app.middleware.api_key import _KEY_CACHE
+
+    monkeypatch.setattr(_KEY_CACHE, "resolve", lambda token: ("acme", 7))
+
+    response = TestClient(app).post(
+        "/v1/feedback",
+        headers={"Authorization": "Bearer org-key"},
+        json={"response_id": "acme--default:doc1", "rating": "positive", "edited_answer": "text"},
+    )
+
+    assert response.status_code == 422

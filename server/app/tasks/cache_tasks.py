@@ -7,7 +7,13 @@ import redis as redis_lib
 
 from app.celery_app import celery_app
 from app.config import REDIS_URL, EVICTION_FLOOR
-from app.services.memory_chromaDB import derive_doc_id, get_memory_service, list_namespaces, _pool
+from app.services.memory_chromaDB import (
+    derive_doc_id,
+    get_memory_service,
+    is_human_authored,
+    list_namespaces,
+    _pool,
+)
 from app.services import llm_config_service, pipeline_config_cache, rag_service
 from app.services.service_factory import get_context_adjuster_service
 
@@ -25,6 +31,10 @@ def _is_suppressed(clean_query: str) -> bool:
         return r.exists(f"skip:{doc_id}") == 1
     except redis_lib.exceptions.RedisError:
         return False  # Redis unavailable: proceed with storage
+
+# Bound, not reimplemented — every store path shares one provenance guard.
+_is_human_authored = is_human_authored
+
 
 _worker_loop: asyncio.AbstractEventLoop | None = None
 
@@ -117,6 +127,23 @@ def generalize_and_store_task(
         headers = getattr(self.request, "headers", None) or {}
         resolved_model_profile = headers.get("dejaq_model_profile") or model_profile
         memory = get_memory_service(cache_namespace)
+        # A person already wrote the answer for this key through Edit & Save, so
+        # this store would silently replace their text with the model's. Real
+        # race, not a theoretical one: a miss advertises its response_id BEFORE
+        # generation (openai_compat.py), so an edit can land while this task is
+        # still queued behind a generalize() call. The human text wins.
+        #
+        # Checked here to skip a pointless generalize(), and AGAIN immediately
+        # before the store below - generalize() takes seconds, which is the
+        # window the edit most likely lands in, so this read alone would be a
+        # check-then-act that misses exactly the case it describes.
+        if _is_human_authored(memory, doc_id):
+            logger.info(
+                "cache_store status=skipped reason=human_authored namespace=%s doc_id=%s",
+                cache_namespace,
+                doc_id,
+            )
+            return {"status": "human_authored", "clean_query": clean_query, "doc_id": doc_id}
         # Attachment-anchored answers are stored verbatim. Generalization strips
         # tone so a TEXT answer survives rephrasing, but it only sees the answer —
         # never the image or the file — so on attachment answers it invents
@@ -137,6 +164,17 @@ def generalize_and_store_task(
                 num_ctx=num_ctx,
             )
             generalized = _run_async_in_worker(context_adjuster.generalize(answer))
+        # The second half of the guard above: re-read right before the upsert,
+        # so an edit that landed DURING generalize() is not overwritten. Not
+        # atomic - Chroma offers no compare-and-set - but it closes the window
+        # from seconds down to the width of this call.
+        if _is_human_authored(memory, doc_id):
+            logger.info(
+                "cache_store status=skipped reason=human_authored_race namespace=%s doc_id=%s",
+                cache_namespace,
+                doc_id,
+            )
+            return {"status": "human_authored", "clean_query": clean_query, "doc_id": doc_id}
         doc_id = memory.store_interaction(
             clean_query, generalized, original_query, user_id,
             image_dhash=image_dhash, image_clip=image_clip,
