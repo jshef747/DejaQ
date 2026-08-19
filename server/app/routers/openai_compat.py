@@ -476,6 +476,20 @@ def _nearest_headers(cache_lookup: CacheLookupResult) -> dict[str, str]:
     })
 
 
+def _enriched_headers(user_query: str, enriched: str, enrich_succeeded: bool) -> dict[str, str]:
+    """The standalone question the enricher rewrote a follow-up into, so a
+    client can show it as the middle step between the user's raw words and
+    the stored question they matched. Absent (not empty) when enrich()
+    returned the message unchanged - a follow-up genuinely rewritten is the
+    only case worth surfacing."""
+    if not enrich_succeeded or enriched == user_query:
+        return {}
+    prompt = _diagnostic_prompt(enriched)
+    if prompt is None:
+        return {}
+    return _sanitize_headers({"x-dejaq-enriched-query": prompt})
+
+
 def _nearest_log_suffix(cache_lookup: CacheLookupResult) -> str:
     prompt = _diagnostic_prompt(cache_lookup.nearest_prompt)
     if cache_lookup.nearest_distance is None or prompt is None:
@@ -1456,6 +1470,7 @@ async def run_chat_pipeline(
                     "x-dejaq-validator-verdict": "valid",
                 })
                 hit_headers.update(_nearest_headers(cache_lookup))
+                hit_headers.update(_enriched_headers(user_query, enriched, enrich_succeeded))
                 return ChatPipelineResult(
                     answer=answer,
                     response_id=response_id,
@@ -1928,6 +1943,7 @@ async def run_chat_pipeline(
                 "x-dejaq-prompt-difficulty-score": f"{float(classification.get('score', 0.0)):.4f}",
             })
             headers.update(_nearest_headers(cache_lookup))
+            headers.update(_enriched_headers(user_query, enriched, enrich_succeeded))
             if rag_context:
                 headers["x-dejaq-rag-chunks"] = str(len(rag_context))
             if response_id:
