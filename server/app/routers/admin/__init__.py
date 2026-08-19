@@ -1,10 +1,11 @@
 from fastapi import APIRouter
 
-from app.routers.admin import available_models, credentials, departments, feedback, keys, llm_config, rag_documents, stats, test_provider, whoami, workspaces
+from app.routers.admin import available_models, credentials, departments, feedback, keys, llm_config, providers, rag_documents, stats, test_provider, whoami, workspaces
 
 router = APIRouter(prefix="/admin/v1")
 router.include_router(whoami.router)
 router.include_router(available_models.router)
+router.include_router(providers.router)
 router.include_router(workspaces.router)
 router.include_router(departments.router)
 router.include_router(keys.router)

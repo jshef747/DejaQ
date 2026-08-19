@@ -6,6 +6,7 @@ from app.db.models.workspace_llm_config import WorkspaceLlmConfig
 
 _CONFIG_FIELDS = {
     "external_model",
+    "external_provider",
     "local_model",
     "generalizer_model",
     "adjuster_model",

@@ -149,20 +149,21 @@ The system SHALL expose `DELETE /admin/v1/workspaces/{workspace_slug}/credential
 
 ---
 
-### Requirement: LLM router resolves workspace credential via provider inference; supports google, openai, anthropic
+### Requirement: LLM router resolves workspace credential from the recorded provider; supports google, openai, anthropic
 
-The system SHALL derive the target provider from the configured external model name via a `provider_for_model(model_name)` helper. The mapping SHALL cover at minimum:
+The system SHALL resolve the target provider through a single `resolve_provider(model_name, stored_provider)` helper, and no call site SHALL reimplement that decision. The helper SHALL use the `external_provider` value recorded on the workspace's LLM config row - written from the provider registry when the model is saved, see the `workspace-llm-config` spec - and SHALL fall back to a `provider_for_model(model_name)` name-prefix guess only when that value is absent (a row written before the column existed and not yet resaved). The name-prefix mapping SHALL cover at minimum:
 
 - `gemini-*` -> `google`
 - `gpt-*`, `o1-*`, `o3-*`, `o4-*`, `chatgpt-*` -> `openai`
 - `claude-*` -> `anthropic`
 
-For each request, the system SHALL look up the calling workspace's encrypted credential for the derived provider and dispatch to the matching provider client. The lookup SHALL decrypt the key using `DEJAQ_CREDENTIAL_ENCRYPTION_KEY`. The system SHALL NOT fall back to any environment variable (`GEMINI_API_KEY` or equivalent) during request processing.
+For each request, the system SHALL look up the calling workspace's encrypted credential for the resolved provider and dispatch to the matching provider client. The lookup SHALL decrypt the key using `DEJAQ_CREDENTIAL_ENCRYPTION_KEY`. The system SHALL NOT fall back to any environment variable (`GEMINI_API_KEY` or equivalent) during request processing.
 
 The system SHALL define `LIVE_PROVIDERS = {"google", "openai", "anthropic"}` - the set of providers wired to a live client. Other entries in `SUPPORTED_PROVIDERS` are storage-only.
 
 Failure modes:
 
+- If the workspace has no external model configured at all - no `external_model` override and no `DEJAQ_EXTERNAL_MODEL` server default - the system SHALL return HTTP 422 naming the fix (configure a provider and model in Settings), and SHALL NOT substitute a model of its own.
 - If `provider_for_model` raises `ValueError` for an unmapped model name, the system SHALL return HTTP 422.
 - If the resolved provider is in `SUPPORTED_PROVIDERS` but NOT in `LIVE_PROVIDERS`, the system SHALL return HTTP 422 - no credential lookup is attempted.
 - If no credential row exists for the workspace and a live provider, the system SHALL return HTTP 402 Payment Required with body `{"detail": "No <provider> API key configured for this organization. Add one via the credentials settings."}`. The wording still says "organization" because that is the shipped string clients match on (`routers/openai_compat.py`).
@@ -170,21 +171,32 @@ Failure modes:
 
 #### Scenario: Hard query routes to Google provider client
 
-- **WHEN** a workspace has a `google` credential and `EXTERNAL_MODEL_NAME` is `gemini-2.5-flash`
-- **THEN** `provider_for_model` resolves `"google"`, the credential is decrypted, and the Google provider client is invoked
+- **WHEN** a workspace has a `google` credential and its configured external model is `gemini-2.5-flash`
+- **THEN** the provider resolves to `"google"`, the credential is decrypted, and the Google provider client is invoked
 - **THEN** the response is HTTP 200 with the generated answer
 
 #### Scenario: Hard query routes to OpenAI provider client
 
-- **WHEN** a workspace has an `openai` credential and `EXTERNAL_MODEL_NAME` is `gpt-4o`
-- **THEN** `provider_for_model` resolves `"openai"`, the credential is decrypted, and the OpenAI provider client is invoked
+- **WHEN** a workspace has an `openai` credential and its configured external model is `gpt-4o`
+- **THEN** the provider resolves to `"openai"`, the credential is decrypted, and the OpenAI provider client is invoked
 - **THEN** the response is HTTP 200 with the generated answer
 
 #### Scenario: Hard query routes to Anthropic provider client
 
-- **WHEN** a workspace has an `anthropic` credential and `EXTERNAL_MODEL_NAME` is `claude-sonnet-4-5`
-- **THEN** `provider_for_model` resolves `"anthropic"`, the credential is decrypted, and the Anthropic provider client is invoked
+- **WHEN** a workspace has an `anthropic` credential and its configured external model is `claude-sonnet-4-5`
+- **THEN** the provider resolves to `"anthropic"`, the credential is decrypted, and the Anthropic provider client is invoked
 - **THEN** the response is HTTP 200 with the generated answer
+
+#### Scenario: Recorded provider wins over the model name
+
+- **WHEN** a workspace's config row records `external_provider` and a hard-classified query is sent
+- **THEN** that recorded provider is used and `provider_for_model` is not consulted, so a model whose name belongs to another vendor's namespace still routes to the provider that was chosen
+
+#### Scenario: Hard query with no external model configured returns 422
+
+- **WHEN** a workspace has no `external_model` override, `DEJAQ_EXTERNAL_MODEL` is unset, and a hard-classified query is sent
+- **THEN** the response is HTTP 422 telling the operator to configure a provider and model
+- **THEN** no credential lookup and no provider client call is made
 
 #### Scenario: Hard query without credential returns 402
 

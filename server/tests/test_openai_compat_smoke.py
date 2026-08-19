@@ -725,6 +725,7 @@ def test_force_hard_external_header_skips_classifier(monkeypatch):
         def predict_complexity(self, query: str) -> dict:
             raise AssertionError("classifier should be skipped")
 
+    monkeypatch.setattr(openai_compat, "EXTERNAL_MODEL_NAME", "gemini-2.5-flash")
     monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
     monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
     monkeypatch.setattr(openai_compat, "_classifier", ExplodingClassifier())
@@ -1235,6 +1236,7 @@ def test_hard_query_without_org_credential_returns_402_without_env_fallback(monk
         return None
 
     monkeypatch.setenv("GEMINI_API_KEY", "platform-key-must-not-be-used")
+    monkeypatch.setattr(openai_compat, "EXTERNAL_MODEL_NAME", "gemini-2.5-flash")
     monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
     monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
     monkeypatch.setattr(openai_compat, "_classifier", HardClassifier())

@@ -8,7 +8,7 @@ class ExternalLLMRequest(BaseModel):
         "You are a helpful assistant. Answer the user's query concisely and accurately.",
         description="System prompt guiding the external model's behavior",
     )
-    model: str = Field("gemini-2.5-flash", description="External model name to use")
+    model: str = Field(..., description="External model name to use")
     max_tokens: int = Field(1024, description="Maximum tokens to generate")
     temperature: float | None = Field(
         None, description="Sampling temperature; omitted from the provider call when unset"

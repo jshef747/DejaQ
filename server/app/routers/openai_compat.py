@@ -45,7 +45,7 @@ from app.services.image_text import (
 )
 from app.services.file_text import FileText, extract as extract_file_text
 from app.dependencies.auth import ResolvedWorkspace, require_org_key
-from app.services.provider_inference import provider_for_model
+from app.services.provider_inference import resolve_provider
 from app.services import cache_filter, llm_config_service, pipeline_config_cache, rag_service
 from app.services.classifier import ClassifierService
 from app.services.context_adjuster import (
@@ -128,8 +128,15 @@ class ModelServices:
 
 @dataclass(frozen=True)
 class EffectiveLlmConfig:
-    external_model: str
+    # None means no external model is configured (no workspace override, no
+    # DEJAQ_EXTERNAL_MODEL env default) - only reachable on a "hard" route,
+    # where it is turned into a 422 PipelineError before any provider lookup.
+    external_model: str | None
     routing_threshold: float
+    # The recorded provider for external_model (None for a row not yet
+    # backfilled - see provider_inference.resolve_provider, the one place
+    # that decides whether to trust this or fall back to the name guess).
+    external_provider: str | None = None
     # Defaulted, not required: existing tests construct this with only the
     # two fields above (they monkeypatch _read_effective_llm_config wholesale
     # and don't care about local/generalizer/adjuster resolution), and a
@@ -250,6 +257,7 @@ def _effective_from_config(config) -> EffectiveLlmConfig:
     """
     return EffectiveLlmConfig(
         external_model=config.external_model,
+        external_provider=config.external_provider,
         routing_threshold=config.routing_threshold,
         local_model=config.local_model,
         generalizer_model=config.generalizer_model,
@@ -1552,8 +1560,14 @@ async def run_chat_pipeline(
         provider: str | None = None
         decrypted_key: str | None = None
         if complexity == "hard":
+            if not llm_config.external_model:
+                raise PipelineError(
+                    422,
+                    "No external model configured for this workspace. "
+                    "Configure a provider and model in Settings.",
+                )
             try:
-                provider = provider_for_model(llm_config.external_model)
+                provider = resolve_provider(llm_config.external_model, llm_config.external_provider)
             except ValueError:
                 raise PipelineError(
                     422,

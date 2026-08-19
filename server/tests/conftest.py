@@ -45,24 +45,47 @@ def _reset_backend() -> None:
     _service_pool.clear()
 
 
+def _org_engine(db_path: Path):
+    """SQLite engine for an org DB, with the same FK pragma app.db.base sets."""
+    engine = create_engine(
+        f"sqlite:///{db_path}",
+        connect_args={"check_same_thread": False},
+    )
+
+    @event.listens_for(engine, "connect")
+    def _enable_foreign_keys(dbapi_connection, _connection_record):
+        dbapi_connection.execute("PRAGMA foreign_keys=ON")
+
+    return engine
+
+
 @pytest.fixture(scope="session", autouse=True)
-def _ensure_default_org_schema() -> None:
-    """Create any missing org tables on the DEFAULT SessionLocal bind.
+def _ensure_default_org_schema(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    """Bind the DEFAULT SessionLocal to a throwaway org DB for the whole run.
 
     Most tests hit the real app through TestClient without asking for
-    `isolated_org_db`, so they read whatever `app.db.base.engine` points at -
-    `server/dejaq.db`, which is gitignored and therefore absent (or an empty
-    0-byte file) in a fresh clone or worktree. Without this the first DB read
-    in the request pipeline raises `no such table: workspaces` and ~39 tests
-    fail for setup reasons alone.
+    `isolated_org_db`, so they read whatever `SessionLocal` is bound to. That
+    default is `server/dejaq.db` - the developer's own DB - which is gitignored
+    and therefore absent (or an empty 0-byte file) in a fresh clone or
+    worktree, so the first DB read in the request pipeline raises `no such
+    table: workspaces` and ~39 tests fail for setup reasons alone.
 
-    `create_all` is checkfirst-by-default, so this adds only what is missing
-    and never drops or rewrites a developer's already-migrated local DB.
-    Test-suite setup only - real deployments still run `alembic upgrade head`.
+    Creating the tables in that file instead would fix the missing-table error
+    but leave the file schema-current and alembic-unstamped, so the next
+    `alembic upgrade head` (start.sh) replays from base onto tables that
+    already exist and aborts; stamping it head afterwards would be worse still
+    on a developer's real DB, since `create_all` skips existing tables and so
+    never applies a pending column migration the stamp would then declare
+    done. A per-run temp DB has neither problem, and keeps a test run from
+    writing to a real deployment DB at all.
     """
-    from app.db.base import engine
-
+    engine = _org_engine(tmp_path_factory.mktemp("org-db") / "dejaq.db")
+    SessionLocal.configure(bind=engine)
     Base.metadata.create_all(bind=engine)
+    try:
+        yield
+    finally:
+        engine.dispose()
 
 
 # ── No-model fixtures (function-scoped for isolation) ──
@@ -115,14 +138,7 @@ def isolated_org_db(tmp_path: Path) -> Iterator[Path]:
     import app.db.models  # noqa: F401 - register metadata models
 
     db_path = tmp_path / "dejaq-test.db"
-    engine = create_engine(
-        f"sqlite:///{db_path}",
-        connect_args={"check_same_thread": False},
-    )
-
-    @event.listens_for(engine, "connect")
-    def _enable_foreign_keys(dbapi_connection, _connection_record):
-        dbapi_connection.execute("PRAGMA foreign_keys=ON")
+    engine = _org_engine(db_path)
 
     previous_bind = SessionLocal.kw["bind"]
     SessionLocal.configure(bind=engine)

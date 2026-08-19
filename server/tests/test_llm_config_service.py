@@ -255,6 +255,66 @@ def test_llm_config_update_does_not_validate_external_model_against_ollama(isola
     assert result.external_model == "gemini-2.5-flash"
 
 
+def test_llm_config_update_records_external_provider_from_registry(isolated_org_db):
+    """Setting external_model also records the matching external_provider,
+    so a newly configured workspace never depends on the name-prefix guess."""
+    from app.services.llm_config_service import read_for_workspace, update_for_workspace
+
+    _create_workspace()
+
+    result = update_for_workspace("acme", {"external_model": "claude-sonnet-5"}, {"external_model"})
+
+    assert result.external_provider == "anthropic"
+    assert read_for_workspace("acme").external_provider == "anthropic"
+
+
+def test_llm_config_update_rejects_an_unknown_external_model(isolated_org_db):
+    """The registry, not the Ollama catalog, gates external_model - a model
+    no provider offers is rejected at write time, naming the offending
+    value, instead of being accepted and failing later at request time."""
+    from app.services.llm_config_service import InvalidLlmConfigUpdate, update_for_workspace
+
+    _create_workspace()
+
+    with pytest.raises(InvalidLlmConfigUpdate) as exc_info:
+        update_for_workspace("acme", {"external_model": "llama-3.3-70b"}, {"external_model"})
+
+    assert "llama-3.3-70b" in str(exc_info.value)
+
+
+def test_llm_config_update_reset_external_model_to_null_clears_external_provider(isolated_org_db):
+    from app.services.llm_config_service import read_for_workspace, update_for_workspace
+
+    _create_workspace()
+    update_for_workspace("acme", {"external_model": "gpt-4o"}, {"external_model"})
+
+    result = update_for_workspace("acme", {"external_model": None}, {"external_model"})
+
+    assert result.external_provider is None
+    assert read_for_workspace("acme").external_provider is None
+
+
+def test_llm_config_read_resolves_null_external_provider_via_guess_fallback(isolated_org_db):
+    """The compatibility case: a row written before the external_provider
+    column existed (or bypassing this write path entirely) still resolves a
+    usable provider through resolve_provider()'s guess fallback."""
+    from app.db import llm_config_repo, workspace_repo
+    from app.db.session import get_session
+    from app.services.llm_config_service import read_for_workspace
+    from app.services.provider_inference import resolve_provider
+
+    with get_session() as session:
+        workspace = workspace_repo.create_workspace(session, "Acme")
+        llm_config_repo.upsert_for_workspace(
+            session, workspace.id, {"external_model": "claude-sonnet-5"}, {"external_model"}
+        )
+
+    result = read_for_workspace("acme")
+
+    assert result.external_provider is None
+    assert resolve_provider(result.external_model, result.external_provider) == "anthropic"
+
+
 # ── Per-workspace resolution ──
 
 

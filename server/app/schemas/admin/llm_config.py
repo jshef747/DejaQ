@@ -14,7 +14,10 @@ PROMPT_FIELDS = (
 
 
 class LlmConfigResponse(BaseModel):
-    external_model: str
+    # None when the workspace has no external_model override and no
+    # DEJAQ_EXTERNAL_MODEL env default is set - "no model configured", not a
+    # silently substituted one.
+    external_model: str | None
     local_model: str
     generalizer_model: str
     adjuster_model: str
