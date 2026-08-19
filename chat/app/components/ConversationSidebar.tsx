@@ -22,9 +22,9 @@ interface Props {
   deptSlug: string;
   connected: boolean;
   collapsed: boolean;
-  // An answer is in flight. New chat is refused while one is (see
-  // startNewConversation in ChatApp), so the control says so.
-  busy: boolean;
+  // Conversations with an answer still generating. Navigating away from one is
+  // allowed, so this is how a user who did knows an answer is still coming.
+  generatingIds: string[];
 }
 
 export default function ConversationSidebar({
@@ -37,18 +37,18 @@ export default function ConversationSidebar({
   deptSlug,
   connected,
   collapsed,
-  busy,
+  generatingIds,
 }: Props) {
   const shortcut = useNewChatShortcutLabel();
-  const canStartNew = connected && !busy;
 
   if (collapsed) {
     return (
       <CollapsedRail
-        onNew={canStartNew ? onNew : undefined}
+        onNew={connected ? onNew : undefined}
         onOpenSettings={onOpenSettings}
         deptSlug={deptSlug}
         shortcut={shortcut}
+        working={generatingIds.length > 0}
       />
     );
   }
@@ -70,27 +70,26 @@ export default function ConversationSidebar({
       <div style={{ padding: "12px 12px 8px" }}>
         <button
           onClick={onNew}
-          disabled={!canStartNew}
-          title={busy ? "Finish or stop the current answer first" : undefined}
+          disabled={!connected}
           style={{
             alignItems: "center",
             background: "var(--bg-3)",
             border: `1px solid var(--border-2)`,
             borderRadius: "9px",
             color: "var(--fg)",
-            cursor: canStartNew ? "pointer" : "not-allowed",
+            cursor: connected ? "pointer" : "not-allowed",
             display: "flex",
             fontSize: "13px",
             fontWeight: 500,
             gap: "8px",
             height: "34px",
-            opacity: canStartNew ? 1 : 0.4,
+            opacity: connected ? 1 : 0.4,
             padding: "0 11px",
             transition: "background var(--t-base), border-color var(--t-base)",
             width: "100%",
           }}
           onMouseEnter={(e) => {
-            if (canStartNew) e.currentTarget.style.background = "var(--bg-hover)";
+            if (connected) e.currentTarget.style.background = "var(--bg-hover)";
           }}
           onMouseLeave={(e) => {
             e.currentTarget.style.background = "var(--bg-3)";
@@ -140,6 +139,7 @@ export default function ConversationSidebar({
                   key={conv.id}
                   conv={conv}
                   active={conv.id === activeId}
+                  working={generatingIds.includes(conv.id)}
                   onSelect={() => onSelect(conv)}
                   onDelete={() => onDelete(conv.id)}
                 />
@@ -183,11 +183,13 @@ function groupConversations(conversations: StoredConversation[]): ConversationGr
 function ConversationRow({
   conv,
   active,
+  working,
   onSelect,
   onDelete,
 }: {
   conv: StoredConversation;
   active: boolean;
+  working: boolean;
   onSelect: () => void;
   onDelete: () => void;
 }) {
@@ -242,10 +244,19 @@ function ConversationRow({
           {conv.title}
         </p>
         <div style={{ alignItems: "center", display: "flex", gap: "7px", marginTop: "6px" }}>
-          <RouteDashes conv={conv} />
-          <p style={{ color: "var(--fg-dimmer)", fontSize: "11px", margin: 0 }}>
-            {formatRelativeDate(conv.lastUpdated)}
-          </p>
+          {working ? (
+            <>
+              <WorkingDot />
+              <p style={{ color: "var(--fg-dim)", fontSize: "11px", margin: 0 }}>Still answering…</p>
+            </>
+          ) : (
+            <>
+              <RouteDashes conv={conv} />
+              <p style={{ color: "var(--fg-dimmer)", fontSize: "11px", margin: 0 }}>
+                {formatRelativeDate(conv.lastUpdated)}
+              </p>
+            </>
+          )}
         </div>
       </div>
 
@@ -378,16 +389,32 @@ function WorkspaceFooter({
 
 // ─── Collapsed rail (< SIDEBAR_COLLAPSE_WIDTH) ─────────────────────────────
 
+// A row's answer is still generating. The dashes it replaces describe finished
+// turns, so the two never need to show at once.
+function WorkingDot() {
+  return (
+    <span
+      aria-hidden
+      className="dq-working-dot"
+      style={{ background: "var(--fg-dim)", borderRadius: "999px", flexShrink: 0, height: "6px", width: "6px" }}
+    />
+  );
+}
+
 function CollapsedRail({
   onNew,
   onOpenSettings,
   deptSlug,
   shortcut,
+  working,
 }: {
   onNew?: () => void;
   onOpenSettings: () => void;
   deptSlug: string;
   shortcut: string;
+  // No conversation rows exist at this width, so the rail can only report that
+  // something is still generating, not which one.
+  working: boolean;
 }) {
   return (
     <aside
@@ -428,6 +455,11 @@ function CollapsedRail({
       >
         <PlusIcon />
       </button>
+      {working && (
+        <div title="An answer is still generating">
+          <WorkingDot />
+        </div>
+      )}
       <div style={{ flex: 1 }} />
       <button
         onClick={onOpenSettings}

@@ -347,3 +347,20 @@
     opacity: 1;
   }
 }
+
+/* A conversation still generating, seen from the sidebar. Opacity only —
+   nothing moves, so a background answer never pulls the eye off the one
+   being read. */
+@keyframes working-dot {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.dq-working-dot {
+  animation: working-dot 1.4s ease-in-out infinite;
+}

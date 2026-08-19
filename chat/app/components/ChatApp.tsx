@@ -45,6 +45,33 @@ function newId() {
   return `msg_${++msgCounter}_${Date.now()}`;
 }
 
+// A conversation with nothing in it yet. Shared instance so the empty
+// transcript keeps a stable identity across renders and the effects that
+// depend on it do not re-run for a conversation that has not changed.
+const NO_MESSAGES: AppMessage[] = [];
+
+// What one in-flight answer looks like from the outside. Generation is tracked
+// per conversation, not once for the app: a send belongs to the conversation
+// that asked, and the user is free to navigate away from it while it runs, so
+// a single global flag cannot describe two conversations where only one is
+// working.
+interface GenerationState {
+  // No content delta has landed yet, so the wait strip is still up. The
+  // whole record's presence, not this flag, means "generating".
+  waiting: boolean;
+  route: Route | null;
+  model: string | null;
+  sinceMs: number | null;
+}
+
+// The mutable half of the same send, reached synchronously from the stream
+// callbacks — they cannot wait for a render to know they have been cancelled.
+interface LiveSend {
+  assistantId: string;
+  controller: AbortController;
+  cancelled: boolean;
+}
+
 // The response detail panel floats above the layout and reserves no room in
 // it, so opening it cannot move or rewrap anything: the reading column, the
 // sidebar and the composer are laid out identically whether it is open or
@@ -70,15 +97,15 @@ function useWindowWidth(): number {
 // ─── ChatApp ───────────────────────────────────────────────────────────────────
 
 export default function ChatApp() {
-  const [messages, setMessages] = useState<AppMessage[]>([]);
+  // Every conversation this session has open or in flight, keyed by id. The
+  // visible transcript is whichever one activeConvId names; a send writes to
+  // the id it captured when it started, so an answer always lands in the
+  // conversation that asked for it even when that is not the one on screen.
+  const [transcripts, setTranscripts] = useState<Record<string, AppMessage[]>>({});
+  // Conversations currently generating, keyed by the same id.
+  const [generating, setGenerating] = useState<Record<string, GenerationState>>({});
   const [input, setInput] = useState("");
   const [attachment, setAttachment] = useState<Attachment | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  // True for the whole lifetime of a send — from the moment it's issued until
-  // the stream finishes, errors, or is stopped. Distinct from isLoading,
-  // which only covers the pre-first-token wait: the Stop control needs to
-  // stay up for the entire generation, not just its first second.
-  const [isGenerating, setIsGenerating] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<ChatSettings>(DEFAULT_CHAT_SETTINGS);
   // Settings load from localStorage after mount. Until then, deptSlug is
@@ -90,48 +117,57 @@ export default function ChatApp() {
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
   const [inspectedMsgId, setInspectedMsgId] = useState<string | null>(null);
   const [inspectorOpen, setInspectorOpen] = useState(false);
-  // The route/model become known as soon as headers land, well before the
-  // first content delta — the wait strip narrates from this. sinceMs is set
-  // the instant the route resolves, so the rail's elapsed counter reflects
-  // actual generation time, not time spent waiting on the cache lookup.
-  const [waitRoute, setWaitRoute] = useState<Route | null>(null);
-  const [waitModel, setWaitModel] = useState<string | null>(null);
-  const [waitSinceMs, setWaitSinceMs] = useState<number | null>(null);
   // A client-side rolling average of this session's non-cache latencies —
   // the only source for "if generated" in the response detail panel. No
   // server field for it; empty until the session has a generated answer.
   const [baselineLatencies, setBaselineLatencies] = useState<number[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const messagesRef = useRef<AppMessage[]>([]);
-  // Stop's abort path. abortControllerRef actually tears down the fetch and
-  // its stream (sendChatMessage forwards the signal); stopRequestedRef is
+  const transcriptsRef = useRef<Record<string, AppMessage[]>>({});
+  const activeConvIdRef = useRef<string | null>(null);
+  // Stop's abort path, one entry per in-flight send. abort() tears down the
+  // real fetch/stream (sendChatMessage forwards the signal); `cancelled` is
   // the app-level companion that makes every callback and the post-await
-  // continuation below become no-ops immediately, without waiting on the
+  // continuation of that send a no-op immediately, without waiting on the
   // network teardown to complete.
-  const stopRequestedRef = useRef(false);
-  // Set by handleStop to the id of the message it marked stopped, so the
-  // committed transcript is written to localStorage from the effect below and
-  // never from inside a state updater. The effect persists only once it can
-  // see that mark in the committed list, so a Stop that changed nothing (no
-  // placeholder yet) cannot leave a write armed for some later, unrelated
-  // change to fire.
-  const persistStoppedIdRef = useRef<string | null>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
-  const activeAssistantIdRef = useRef<string | null>(null);
+  const sendsRef = useRef(new Map<string, LiveSend>());
+  // localStorage writes queued by a transcript update, flushed from the effect
+  // below so nothing writes storage or schedules state from inside a state
+  // updater. A write may carry a predicate: it runs only if the committed
+  // transcript actually shows the change that asked for it, so an update that
+  // turned out to be a no-op cannot leave a write armed for some later,
+  // unrelated change to fire.
+  const pendingPersistRef = useRef<{ convId: string; requires?: (msgs: AppMessage[]) => boolean }[]>([]);
   const windowWidth = useWindowWidth();
   const isNarrow = windowWidth < DRAWER_MAX_WIDTH;
   const sidebarCollapsed = windowWidth < SIDEBAR_COLLAPSE_WIDTH;
 
+  // The transcript on screen. A conversation with no id yet (a brand-new chat)
+  // has nothing to show until its first send gives it one.
+  const messages = (activeConvId ? transcripts[activeConvId] : undefined) ?? NO_MESSAGES;
+  // Everything below reads the conversation on screen. A send running for some
+  // other conversation is deliberately invisible here — it shows up in the
+  // sidebar instead, and in its own transcript when the user goes back to it.
+  const activeGeneration = activeConvId ? generating[activeConvId] : undefined;
+  const isGenerating = Boolean(activeGeneration);
+  const isWaiting = activeGeneration?.waiting ?? false;
+  const generatingIds = Object.keys(generating);
+
   useEffect(() => {
-    messagesRef.current = messages;
-    const stoppedId = persistStoppedIdRef.current;
-    if (stoppedId) {
-      persistStoppedIdRef.current = null;
-      if (messages.some((m) => m.id === stoppedId && m.stopped)) {
-        persistCurrentMessages(messages);
-      }
+    transcriptsRef.current = transcripts;
+    const queued = pendingPersistRef.current;
+    if (queued.length === 0) return;
+    pendingPersistRef.current = [];
+    for (const write of queued) {
+      const msgs = transcripts[write.convId];
+      if (!msgs || msgs.length === 0) continue;
+      if (write.requires && !write.requires(msgs)) continue;
+      persistConversation(write.convId, msgs);
     }
-  }, [messages]);
+  }, [transcripts]);
+
+  useEffect(() => {
+    activeConvIdRef.current = activeConvId;
+  }, [activeConvId]);
 
   // Load settings and conversation history from localStorage on first render.
   useEffect(() => {
@@ -143,7 +179,7 @@ export default function ChatApp() {
   // Scroll to the newest message whenever the list changes.
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isLoading]);
+  }, [messages, isWaiting]);
 
   // New chat shortcut. Binding and the label the sidebar renders both come
   // from NEW_CHAT_SHORTCUT so they cannot drift. No dep array:
@@ -192,16 +228,52 @@ export default function ChatApp() {
     setConversations(loadConversations());
   }
 
-  // Save the current conversation (if any) and start a blank slate. Refused
-  // while an answer is in flight: clearing the transcript under a live send
-  // would land its first delta in an empty chat, an answer with no question.
-  // Stop is the only way to end an in-flight answer, and it is explicit.
-  function startNewConversation() {
-    if (isLoading || isGenerating) return;
-    if (messages.length > 0 && activeConvId) {
+  // The one way a transcript changes. `update` must be pure — the storage write
+  // it may ask for is queued and flushed from the effect above, once the result
+  // has actually been committed.
+  function updateTranscript(
+    convId: string,
+    update: (prev: AppMessage[]) => AppMessage[],
+    persist?: { requires?: (msgs: AppMessage[]) => boolean },
+  ) {
+    if (persist) pendingPersistRef.current.push({ convId, requires: persist.requires });
+    setTranscripts((prev) => ({ ...prev, [convId]: update(prev[convId] ?? NO_MESSAGES) }));
+  }
+
+  function clearTranscript(convId: string) {
+    pendingPersistRef.current = pendingPersistRef.current.filter((w) => w.convId !== convId);
+    setTranscripts((prev) => {
+      if (!(convId in prev)) return prev;
+      const next = { ...prev };
+      delete next[convId];
+      return next;
+    });
+  }
+
+  function endGeneration(convId: string) {
+    setGenerating((prev) => {
+      if (!(convId in prev)) return prev;
+      const next = { ...prev };
+      delete next[convId];
+      return next;
+    });
+  }
+
+  // Save the conversation being navigated away from. Skipped while it is
+  // generating: that send persisted the question itself and will persist the
+  // finished answer, so writing here would only store a half-streamed answer
+  // that nothing marks as unfinished.
+  function persistOnLeave() {
+    if (activeConvId && messages.length > 0 && !isGenerating) {
       persistConversation(activeConvId, messages);
     }
-    setMessages([]);
+  }
+
+  // Navigating away from a generating conversation is allowed: the send keeps
+  // running against the id it captured and its answer appears in that
+  // conversation, whether or not it is the one on screen when it lands.
+  function startNewConversation() {
+    persistOnLeave();
     setActiveConvId(null);
     setInput("");
     setAttachment(null);
@@ -211,12 +283,12 @@ export default function ChatApp() {
 
   // Load a conversation selected from the sidebar.
   function handleSelectConversation(conv: StoredConversation) {
-    // Save the currently open conversation before switching away.
-    if (messages.length > 0 && activeConvId) {
-      persistConversation(activeConvId, messages);
-    }
+    persistOnLeave();
+    // Keep the in-memory copy if there is one: it is never staler than the
+    // stored copy, and for a conversation generating in the background it is
+    // the only one carrying the partial answer.
+    setTranscripts((prev) => (prev[conv.id] ? prev : { ...prev, [conv.id]: conv.messages }));
     setActiveConvId(conv.id);
-    setMessages(conv.messages);
     setInput("");
     // The pin belongs to the conversation it was attached in. A stored
     // conversation never carries one back (see the note in handleSend), so
@@ -227,11 +299,14 @@ export default function ChatApp() {
   }
 
   function handleDeleteConversation(id: string) {
+    // The one case where an in-flight answer has nowhere to land, so it is
+    // aborted rather than left to finish into a conversation that is gone.
+    cancelSend(id, "discard");
     deleteConversation(id);
     setConversations(loadConversations());
+    clearTranscript(id);
     // If the deleted conversation was active, clear the chat area.
     if (id === activeConvId) {
-      setMessages([]);
       setActiveConvId(null);
       setAttachment(null);
       setInspectedMsgId(null);
@@ -239,45 +314,62 @@ export default function ChatApp() {
     }
   }
 
-  function persistCurrentMessages(nextMessages: AppMessage[]) {
-    if (activeConvId) {
-      persistConversation(activeConvId, nextMessages);
-    }
-  }
-
   // The one genuine behaviour change in this stage: Stop must leave the
   // conversation coherent, never looking like a complete answer, and must
   // actually cancel the request rather than just hiding the spinner. abort()
   // tears down the real fetch/stream (sendChatMessage forwards the signal
-  // into fetch and the read loop); stopRequestedRef flips every callback and
-  // the continuation of handleSend below to a no-op immediately, so nothing
-  // has to wait on the network teardown to be coherent. A press before the
-  // first token has landed has no placeholder to mark — the turn just goes
-  // back to normal. A press mid-stream keeps whatever text had already
-  // arrived and marks it stopped.
-  function handleStop() {
-    stopRequestedRef.current = true;
-    abortControllerRef.current?.abort();
-    abortControllerRef.current = null;
-    setIsGenerating(false);
-    setIsLoading(false);
-    setWaitRoute(null);
-    setWaitModel(null);
-    setWaitSinceMs(null);
-    const assistantId = activeAssistantIdRef.current;
-    activeAssistantIdRef.current = null;
-    if (!assistantId) return;
-    persistStoppedIdRef.current = assistantId;
-    setMessages((prev) =>
-      prev.some((m) => m.id === assistantId)
-        ? prev.map((m) => (m.id === assistantId ? { ...m, stopped: true } : m))
-        : prev
+  // into fetch and the read loop); `cancelled` flips every callback and the
+  // continuation of that send to a no-op immediately, so nothing has to wait
+  // on the network teardown to be coherent.
+  //
+  // "stopped" keeps whatever text had already arrived and marks it — a press
+  // before the first token has landed has no placeholder to mark, so that turn
+  // just goes back to normal. "discard" is for a conversation being deleted,
+  // where there is nothing left to mark.
+  function cancelSend(convId: string, mode: "stopped" | "discard") {
+    const send = sendsRef.current.get(convId);
+    if (!send) return;
+    send.cancelled = true;
+    send.controller.abort();
+    sendsRef.current.delete(convId);
+    endGeneration(convId);
+    if (mode === "discard") return;
+    updateTranscript(
+      convId,
+      (prev) =>
+        prev.some((m) => m.id === send.assistantId)
+          ? prev.map((m) => (m.id === send.assistantId ? { ...m, stopped: true } : m))
+          : prev,
+      { requires: (msgs) => msgs.some((m) => m.id === send.assistantId && m.stopped) },
     );
+  }
+
+  // Stop belongs to the conversation on screen, never to whichever send
+  // happens to be running.
+  function handleStop() {
+    if (activeConvId) cancelSend(activeConvId, "stopped");
+  }
+
+  // A send that never produced an answer: put the transcript back the way it
+  // was so storage and the screen agree. A conversation this send created gets
+  // removed outright rather than left as an empty shell.
+  function revertSend(convId: string, preSendMessages: AppMessage[], typedText: string) {
+    if (preSendMessages.length === 0) {
+      deleteConversation(convId);
+      setConversations(loadConversations());
+      clearTranscript(convId);
+      if (activeConvIdRef.current === convId) setActiveConvId(null);
+    } else {
+      updateTranscript(convId, () => preSendMessages, {});
+    }
+    // Only give the text back if the user is still looking at the conversation
+    // it was typed in.
+    if (activeConvIdRef.current === convId) setInput(typedText);
   }
 
   async function handleSend() {
     const text = input.trim();
-    if ((!text && !attachment) || isLoading || isGenerating) return;
+    if ((!text && !attachment) || isGenerating) return;
 
     // The backend needs a non-empty query; default one for attachment-only sends.
     const sentAttachment = attachment;
@@ -301,11 +393,20 @@ export default function ChatApp() {
       attachmentSticky: sentAttachment?.sticky ?? false,
     };
 
+    // The conversation this send belongs to, decided here and never re-read
+    // from the active conversation again: everything below — every delta, the
+    // final answer and its metadata, the storage write — addresses this id, so
+    // navigating away mid-answer cannot land it anywhere else. Persisted right
+    // away so the sidebar can show the conversation, and its still-working
+    // indicator, from the moment the question is asked.
+    const convId = activeConvId ?? `conv_${Date.now()}`;
+
     // Capture snapshot before any state updates so async code works with stable refs.
     const preSendMessages = messages;
     const withUserMsg = [...preSendMessages, userMsg];
 
-    setMessages(withUserMsg);
+    if (!activeConvId) setActiveConvId(convId);
+    updateTranscript(convId, () => withUserMsg, {});
     setInput("");
     // The attachment is NOT cleared here. It stays pinned so every follow-up
     // carries it: without that, turn 2 goes to /v1/chat/completions with no file
@@ -315,15 +416,16 @@ export default function ChatApp() {
     // ponytail: pin lives in memory only. A 10MB base64 data URL does not fit in
     // localStorage, so a reload means re-attaching; persist small ones if
     // surviving a reload is ever asked for.
-    setIsLoading(true);
-    setIsGenerating(true);
-    stopRequestedRef.current = false;
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
 
     // Pre-allocate the assistant message so we can append deltas in-place.
     const assistantId = newId();
-    activeAssistantIdRef.current = assistantId;
+    const send: LiveSend = { assistantId, controller: new AbortController(), cancelled: false };
+    sendsRef.current.set(convId, send);
+    setGenerating((prev) => ({
+      ...prev,
+      [convId]: { waiting: true, route: null, model: null, sinceMs: null },
+    }));
+
     const assistantPlaceholder: AppMessage = {
       id: assistantId,
       role: "assistant",
@@ -333,10 +435,6 @@ export default function ChatApp() {
 
     // Send the full conversation history so the model has context.
     const history = withUserMsg.map((m) => ({ role: m.role, content: m.content }));
-
-    setWaitRoute(null);
-    setWaitModel(null);
-    setWaitSinceMs(null);
 
     let firstDelta = true;
     // The route/model arrive with the headers, before the first delta. The
@@ -350,44 +448,42 @@ export default function ChatApp() {
       settings.routingMode,
       sentAttachment,
       (delta) => {
-        if (stopRequestedRef.current) return;
+        if (send.cancelled) return;
         if (firstDelta) {
           // Show the placeholder bubble and hide the typing indicator on first byte.
           firstDelta = false;
-          setIsLoading(false);
-          setMessages((prev) => [...prev, { ...assistantPlaceholder, ...streamMeta, content: delta }]);
+          setGenerating((prev) =>
+            prev[convId] ? { ...prev, [convId]: { ...prev[convId], waiting: false } } : prev
+          );
+          updateTranscript(convId, (prev) => [...prev, { ...assistantPlaceholder, ...streamMeta, content: delta }]);
         } else {
-          setMessages((prev) =>
+          updateTranscript(convId, (prev) =>
             prev.map((m) => (m.id === assistantId ? { ...m, content: m.content + delta } : m))
           );
         }
       },
       (meta) => {
-        if (stopRequestedRef.current) return;
+        if (send.cancelled) return;
         // Headers land before the first delta, so the wait strip can name the
         // route and model while the answer is still generating.
         streamMeta = { modelUsed: meta.modelUsed, tier: meta.tier };
         const route = classifyRoute(meta.tier, meta.modelUsed);
-        setWaitRoute(route);
-        setWaitModel(meta.modelUsed);
-        setWaitSinceMs(Date.now());
+        setGenerating((prev) =>
+          prev[convId]
+            ? { ...prev, [convId]: { ...prev[convId], route, model: meta.modelUsed, sinceMs: Date.now() } }
+            : prev
+        );
       },
-      controller.signal,
+      send.controller.signal,
     );
 
-    setIsLoading(false);
-    setIsGenerating(false);
-    activeAssistantIdRef.current = null;
-    abortControllerRef.current = null;
-    setWaitRoute(null);
-    setWaitModel(null);
-    setWaitSinceMs(null);
+    sendsRef.current.delete(convId);
+    endGeneration(convId);
 
-    // Stopped while this was in flight: handleStop already finalized the
-    // message (or removed the empty placeholder) and aborted the request.
-    // Nothing below may touch state again — that is exactly the corruption
-    // Stop exists to prevent.
-    if (stopRequestedRef.current) return;
+    // Stopped or deleted while this was in flight: cancelSend already finalized
+    // the message and aborted the request. Nothing below may touch state again
+    // — that is exactly the corruption Stop exists to prevent.
+    if (send.cancelled) return;
 
     if (isApiError(result)) {
       if (result.status === 402) {
@@ -403,8 +499,7 @@ export default function ChatApp() {
       // Revert optimistic messages so the user can retry. The attachment needs
       // no restoring — it was never cleared — and a failed send leaves it
       // un-pinned, so a retry still reads as the first attempt.
-      setMessages(preSendMessages);
-      setInput(text);
+      revertSend(convId, preSendMessages, text);
       return;
     }
 
@@ -423,11 +518,10 @@ export default function ChatApp() {
     // HTTP 200. Never fail silently here.
     if (firstDelta) {
       if (result.text) {
-        setMessages((prev) => [...prev, { ...assistantPlaceholder, content: result.text }]);
+        updateTranscript(convId, (prev) => [...prev, { ...assistantPlaceholder, content: result.text }]);
       } else {
         addToast("error", "Empty answer", "The model returned an empty answer. Try rephrasing, or switch routing to external.");
-        setMessages(preSendMessages);
-        setInput(text);
+        revertSend(convId, preSendMessages, text);
         return;
       }
       firstDelta = false;
@@ -440,10 +534,12 @@ export default function ChatApp() {
       setAttachment((prev) => (prev === sentAttachment ? { ...prev, sticky: true } : prev));
     }
 
-    // Attach metadata to the assistant message now that the stream is complete.
-    const finalMessages = await new Promise<AppMessage[]>((resolve) => {
-      setMessages((prev) => {
-        const updated = prev.map((m) =>
+    // Attach metadata to the assistant message now that the stream is complete,
+    // and write the finished conversation to storage.
+    updateTranscript(
+      convId,
+      (prev) =>
+        prev.map((m) =>
           m.id === assistantId
             ? {
                 ...m,
@@ -463,11 +559,9 @@ export default function ChatApp() {
                 cacheMatchedQuery: result.cacheMatchedQuery,
               }
             : m
-        );
-        resolve(updated);
-        return updated;
-      });
-    });
+        ),
+      {},
+    );
 
     // The response detail panel's "if generated" comparison is a rolling
     // average of this session's own non-cache latencies — never the cache
@@ -475,15 +569,10 @@ export default function ChatApp() {
     if (!result.cacheHit && result.latencyMs > 0) {
       setBaselineLatencies((prev) => [...prev, result.latencyMs]);
     }
-
-    // Assign a conversation ID on the first reply and persist to localStorage.
-    const convId = activeConvId ?? `conv_${Date.now()}`;
-    if (!activeConvId) setActiveConvId(convId);
-    persistConversation(convId, finalMessages);
   }
 
-  function updateFeedbackPhase(msgId: string, phase: FeedbackPhase) {
-    setMessages((prev) =>
+  function updateFeedbackPhase(convId: string, msgId: string, phase: FeedbackPhase) {
+    updateTranscript(convId, (prev) =>
       prev.map((m) => (m.id === msgId ? { ...m, feedbackPhase: phase } : m))
     );
   }
@@ -508,7 +597,12 @@ export default function ChatApp() {
   }
 
   async function handleFeedback(msgId: string, rating: FeedbackRating, comment: string) {
-    const messages = messagesRef.current;
+    // Feedback is given on a turn the user is looking at, so the conversation
+    // it belongs to is the active one — captured here and used for every write
+    // below, since the reply can outlive the user's stay on this screen.
+    const convId = activeConvIdRef.current;
+    if (!convId) return;
+    const messages = transcriptsRef.current[convId] ?? NO_MESSAGES;
     const msgIndex = messages.findIndex((m) => m.id === msgId);
     const msg = msgIndex >= 0 ? messages[msgIndex] : undefined;
     if (!msg?.responseId && !msg?.interactionId) return;
@@ -521,7 +615,7 @@ export default function ChatApp() {
     const precedingUserMsg = [...messages.slice(0, msgIndex)].reverse().find((m) => m.role === "user");
     const isAttachmentAnchored = Boolean(precedingUserMsg?.imageUrl || precedingUserMsg?.fileName);
 
-    updateFeedbackPhase(msgId, "submitting");
+    updateFeedbackPhase(convId, msgId, "submitting");
 
     const result = await sendFeedback(
       msg.responseId ?? null,
@@ -533,7 +627,7 @@ export default function ChatApp() {
     );
 
     if (isApiError(result)) {
-      updateFeedbackPhase(msgId, "error");
+      updateFeedbackPhase(convId, msgId, "error");
       addToast("error", "Feedback failed", result.message);
       return;
     }
@@ -564,13 +658,16 @@ export default function ChatApp() {
           } satisfies AppMessage)
         : null;
 
-    const updatedMessages = messagesRef.current.map((m) =>
-      m.id === msgId ? { ...m, feedbackPhase: rating, feedbackScore } : m
+    updateTranscript(
+      convId,
+      (prev) => {
+        const updated = prev.map((m) =>
+          m.id === msgId ? { ...m, feedbackPhase: rating, feedbackScore } : m
+        );
+        return reanswered ? [...updated, reanswered] : updated;
+      },
+      {},
     );
-    const nextMessages = reanswered ? [...updatedMessages, reanswered] : updatedMessages;
-    messagesRef.current = nextMessages;
-    setMessages(nextMessages);
-    persistCurrentMessages(nextMessages);
 
     if (rating === "negative" && result.escalatedResponse) {
       addToast("success", "Re-answered", `You marked the last one wrong, so it went to ${result.escalatedResponse.tier}.`);
@@ -645,7 +742,7 @@ export default function ChatApp() {
         deptSlug={settings.deptSlug}
         connected={connected}
         collapsed={sidebarCollapsed}
-        busy={isLoading || isGenerating}
+        generatingIds={generatingIds}
       />
 
       <div style={{ display: "flex", flex: 1, flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
@@ -756,7 +853,13 @@ export default function ChatApp() {
                         baselineSampleCount={baselineLatencies.length}
                       />
                     ))}
-                    {isLoading && <TypingIndicator route={waitRoute} modelUsed={waitModel} sinceMs={waitSinceMs} />}
+                    {isWaiting && activeGeneration && (
+                      <TypingIndicator
+                        route={activeGeneration.route}
+                        modelUsed={activeGeneration.model}
+                        sinceMs={activeGeneration.sinceMs}
+                      />
+                    )}
                   </div>
                 )}
                 <div ref={bottomRef} />
@@ -783,7 +886,7 @@ export default function ChatApp() {
               value={input}
               onChange={setInput}
               onSend={handleSend}
-              disabled={isLoading || isGenerating}
+              disabled={isGenerating}
               attachment={attachment}
               onAttachmentChange={setAttachment}
               onAttachmentError={(msg) => addToast("error", "Couldn't attach that file", msg)}
