@@ -47,9 +47,9 @@ is applied to the root. A replacement SHALL report the id it was actually applie
 
 ### Requirement: A human-authored entry is protected from being overwritten, paraphrased, or evicted
 
-The system SHALL NOT replace a human-authored entry with a model-generated answer through the
-background store path, in either the Celery task or the in-process fallback. This applies to the
-task dispatched for the same query before the edit was made.
+The system SHALL NOT replace a human-authored entry with a model-generated answer through any store
+path: the Celery background task, its in-process fallback, or the thumbs-down escalation store. This
+applies to a store dispatched for the same query before the edit was made.
 
 The system SHALL NOT run the context adjuster over a human-authored answer when serving a cache hit,
 so the stored text is returned unchanged.
@@ -66,6 +66,11 @@ SHALL still delete it.
 
 - **WHEN** the same store runs through the `DEJAQ_USE_CELERY=false` / Celery-outage path
 - **THEN** it does not store and the human answer remains
+
+#### Scenario: The thumbs-down escalation store refuses too
+
+- **WHEN** a thumbs-down escalates a turn whose query already has an entry carrying `authored="human"` (the edit created it even though the original turn was never cached)
+- **THEN** the escalated answer is returned to the caller but is not stored, and the human answer remains
 
 #### Scenario: A cache hit on a human answer is served verbatim
 

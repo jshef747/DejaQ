@@ -26,8 +26,8 @@ the context adjuster's paraphrase of it. Each has to be closed separately.
   hit counts and any attachment fingerprints — redirecting an alias-served id to its root and
   cascading the new text to every alias, exactly as `delete_entry` cascades deletions.
 - Entries written this way carry `authored="human"`, which makes them: stored verbatim (no
-  generalizer), skipped by the context adjuster on serve, refused by the background store task, and
-  exempt from score eviction. A thumbs-down still deletes them.
+  generalizer), skipped by the context adjuster on serve, refused by every path that stores a model
+  answer, and exempt from score eviction. A thumbs-down still deletes them.
 - When no entry exists (the cache filter refused the query, or the background store has not landed),
   the server re-derives the cache key from the hash-verified message replay and creates it. This is
   the one place `cache_filter` is deliberately not consulted.
@@ -58,8 +58,9 @@ the context adjuster's paraphrase of it. Each has to be closed separately.
   eviction guard
 - `server/app/services/feedback_service.py`, `server/app/routers/feedback.py`,
   `server/app/schemas/feedback.py` — the request/response contract and the ordering against scoring
-- `server/app/tasks/cache_tasks.py`, `server/app/routers/openai_compat.py` — the two store guards,
-  the adjuster skip, the new header
+- `server/app/tasks/cache_tasks.py`, `server/app/routers/openai_compat.py`,
+  `server/app/services/escalation.py` — the three store guards (one shared
+  `memory_chromaDB.is_human_authored`), the adjuster skip, the new header
 - `server/app/services/request_logger.py` — the `edited` column
 - `chat/` — `edit-draft.ts` (new), `ChatMessage.tsx`, `ChatApp.tsx`, `chat-api.ts`, the feedback and
   chat proxy routes

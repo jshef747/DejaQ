@@ -115,7 +115,7 @@ The chat app runs at `http://localhost:4000` and opens on a connect screen at fi
 - `GET /health`
 - `POST /v1/chat/completions` — OpenAI Chat Completions-compatible gateway, authenticated by DejaQ workspace API key
 - `POST /v1/responses` — OpenAI Responses API (newer recommended format), same auth, stateless (`previous_response_id` rejected)
-- `POST /v1/feedback` — cache feedback with optional thumbs-down escalation to the next serving tier (cache → local → external), authenticated by DejaQ workspace API key
+- `POST /v1/feedback` — cache feedback with optional thumbs-down escalation to the next serving tier (cache → local → external), or an **Edit & Save** that makes a person's corrected text the cached answer (`edited_answer`, see [docs/openai-compat-api.md](docs/openai-compat-api.md#edit--save)); authenticated by DejaQ workspace API key
 - `/admin/v1/*` — management API; unauthenticated dev-admin context, protected by loopback binding
 - `dejaq-admin` — workspace, department, key, stats, and knowledge-base CLI (headless/server-only bootstrap)
 

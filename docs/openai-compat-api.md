@@ -285,9 +285,11 @@ The response adds two fields:
 The edited text **replaces** the model's rather than sitting beside it. Three things would
 otherwise put the old answer back, and each is closed separately: the entry's own answer field is
 overwritten in place (keeping its score, hit counts and any attachment fingerprints), every alias
-of it - which holds a byte-copy - is rewritten too, and the background generalizer refuses to store
-over an entry marked `authored="human"`. On the way out, the context adjuster is skipped for such
-an entry, so the next asker gets the human text byte-identical rather than a 1.5B paraphrase of it.
+of it - which holds a byte-copy - is rewritten too, and every path that stores a model answer
+refuses to write over an entry marked `authored="human"` (the background generalize-and-store task,
+its in-process fallback, and the thumbs-down escalation store, which share one guard). On the way
+out, the context adjuster is skipped for such an entry, so the next asker gets the human text
+byte-identical rather than a 1.5B paraphrase of it.
 A human entry is also exempt from score eviction; a thumbs-down still deletes it, so a bad edit
 stays undoable.
 
