@@ -986,7 +986,7 @@ async def run_chat_pipeline(
     channel that gates the hit. Running a 40-page document through the normalizer
     would produce a useless key and an enormous embedding.
 
-    Raises PipelineError for HTTP-level failures (400, 402, 422, 500).
+    Raises PipelineError for HTTP-level failures (400, 402, 422, 429, 500, 502).
     """
     image_bytes, image_mime = image if image else (None, None)
     _request_has_image = image_bytes is not None

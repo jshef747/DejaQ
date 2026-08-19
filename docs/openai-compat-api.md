@@ -45,7 +45,7 @@ X-DejaQ-Department: <department-slug>
 | `messages` | yes | Last `user` message is the active query. Prior messages are history. |
 | `stream` | no | `false` returns JSON; `true` returns SSE chunks. |
 | `max_tokens` | no | Passed to generation providers where applicable. |
-| `temperature` | no | Passed to generation providers where applicable. |
+| `temperature` | no | Reaches the external provider **only when you send it** - omit it and DejaQ sends no `temperature` at all, because Claude Opus 4.7+/Sonnet 5 and the `gpt-5.x` models reject any non-default value. If you do send one and the provider rejects it by name, the call is retried once without it. The local model path uses its own fixed sampling and ignores this field. |
 
 ## Responses
 
