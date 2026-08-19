@@ -350,29 +350,68 @@ export default function ChatApp() {
     if (activeConvId) cancelSend(activeConvId, "stopped");
   }
 
-  // A send that never produced an answer: put the transcript back the way it
-  // was so storage and the screen agree. A conversation this send created gets
-  // removed outright rather than left as an empty shell.
-  function revertSend(convId: string, preSendMessages: AppMessage[], typedText: string) {
-    if (preSendMessages.length === 0) {
-      deleteConversation(convId);
-      setConversations(loadConversations());
-      clearTranscript(convId);
-      if (activeConvIdRef.current === convId) setActiveConvId(null);
-    } else {
-      updateTranscript(convId, () => preSendMessages, {});
-    }
-    // Only give the text back if the user is still looking at the conversation
-    // it was typed in.
-    if (activeConvIdRef.current === convId) setInput(typedText);
+  // A send that produced no answer. The question is never taken back out of
+  // the transcript — an answer can land in a conversation the user has
+  // navigated away from, so a revert would delete a question out of a screen
+  // nobody is looking at and leave nothing behind. It is marked instead, the
+  // same way Stop marks a cut-off answer, and the mark carries Retry. The mark
+  // goes on whatever ended the turn: a partial answer when the stream dropped
+  // mid-flight, otherwise the question itself.
+  function markSendFailed(convId: string, userMsgId: string, assistantId: string) {
+    updateTranscript(
+      convId,
+      (prev) => {
+        const targetId = prev.some((m) => m.id === assistantId) ? assistantId : userMsgId;
+        return prev.map((m) => (m.id === targetId ? { ...m, failed: true } : m));
+      },
+      {
+        requires: (msgs) =>
+          msgs.some((m) => (m.id === assistantId || m.id === userMsgId) && m.failed),
+      },
+    );
   }
 
   async function handleSend() {
     const text = input.trim();
     if ((!text && !attachment) || isGenerating) return;
 
-    // The backend needs a non-empty query; default one for attachment-only sends.
-    const sentAttachment = attachment;
+    // The conversation this send belongs to, decided here and never re-read
+    // from the active conversation again: everything below — every delta, the
+    // final answer and its metadata, the storage write — addresses this id, so
+    // navigating away mid-answer cannot land it anywhere else.
+    const convId = activeConvId ?? `conv_${Date.now()}`;
+    if (!activeConvId) setActiveConvId(convId);
+    setInput("");
+    await runSend(convId, messages, text, attachment);
+  }
+
+  // Re-run a turn that failed. The question is already in the transcript, so
+  // the retry re-sends its text against the history in front of it and
+  // replaces everything from that turn on — the failed mark, and any partial
+  // answer under it.
+  function handleRetry(msgId: string) {
+    const convId = activeConvIdRef.current;
+    if (!convId || generating[convId]) return;
+    const msgs = transcriptsRef.current[convId] ?? NO_MESSAGES;
+    const index = msgs.findIndex((m) => m.id === msgId);
+    if (index < 0) return;
+    let userIndex = -1;
+    for (let i = index; i >= 0; i--) {
+      if (msgs[i].role === "user") {
+        userIndex = i;
+        break;
+      }
+    }
+    if (userIndex < 0) return;
+    void runSend(convId, msgs.slice(0, userIndex), msgs[userIndex].content, attachment);
+  }
+
+  async function runSend(
+    convId: string,
+    priorMessages: AppMessage[],
+    text: string,
+    sentAttachment: Attachment | null,
+  ) {
     const queryText =
       text ||
       (sentAttachment && sentAttachment.kind !== "image"
@@ -393,21 +432,15 @@ export default function ChatApp() {
       attachmentSticky: sentAttachment?.sticky ?? false,
     };
 
-    // The conversation this send belongs to, decided here and never re-read
-    // from the active conversation again: everything below — every delta, the
-    // final answer and its metadata, the storage write — addresses this id, so
-    // navigating away mid-answer cannot land it anywhere else. Persisted right
-    // away so the sidebar can show the conversation, and its still-working
-    // indicator, from the moment the question is asked.
-    const convId = activeConvId ?? `conv_${Date.now()}`;
+    // The transcript this send writes into: the history in front of the
+    // question, plus the question. A retry passes the history in front of the
+    // turn it re-runs, so replacing the transcript with this drops the failed
+    // mark and any partial answer under it. Persisted right away so the
+    // sidebar can show the conversation, and its still-working indicator, from
+    // the moment the question is asked.
+    const withUserMsg = [...priorMessages, userMsg];
 
-    // Capture snapshot before any state updates so async code works with stable refs.
-    const preSendMessages = messages;
-    const withUserMsg = [...preSendMessages, userMsg];
-
-    if (!activeConvId) setActiveConvId(convId);
     updateTranscript(convId, () => withUserMsg, {});
-    setInput("");
     // The attachment is NOT cleared here. It stays pinned so every follow-up
     // carries it: without that, turn 2 goes to /v1/chat/completions with no file
     // at all — the model answers from its own previous reply, and the answer is
@@ -502,10 +535,10 @@ export default function ChatApp() {
       } else {
         addToast("error", "Request failed", result.message);
       }
-      // Revert optimistic messages so the user can retry. The attachment needs
-      // no restoring — it was never cleared — and a failed send leaves it
-      // un-pinned, so a retry still reads as the first attempt.
-      revertSend(convId, preSendMessages, text);
+      // The question stays where it was asked, marked, with Retry on it. The
+      // attachment needs no restoring — it was never cleared — and a failed
+      // send leaves it un-pinned, so a retry still reads as the first attempt.
+      markSendFailed(convId, userMsg.id, assistantId);
       return;
     }
 
@@ -527,7 +560,7 @@ export default function ChatApp() {
         updateTranscript(convId, (prev) => [...prev, { ...assistantPlaceholder, content: result.text }]);
       } else {
         addToast("error", "Empty answer", "The model returned an empty answer. Try rephrasing, or switch routing to external.");
-        revertSend(convId, preSendMessages, text);
+        markSendFailed(convId, userMsg.id, assistantId);
         return;
       }
       firstDelta = false;
@@ -848,11 +881,17 @@ export default function ChatApp() {
                 ) : (
                   <div style={{ position: "relative" }}>
                     <RailTrack />
-                    {messages.map((msg) => (
+                    {messages.map((msg, i) => (
                       <ChatMessage
                         key={msg.id}
                         message={msg}
                         onFeedback={handleFeedback}
+                        // Retry replaces the failed turn and everything under
+                        // it, so it is only offered while there is nothing
+                        // under it: a failure the user has already moved past
+                        // stays marked, but re-running it can no longer take
+                        // later turns with it.
+                        onRetry={i === messages.length - 1 ? handleRetry : undefined}
                         onInspect={msg.role === "assistant" ? handleInspect : undefined}
                         inspected={msg.id === inspectedMsgId && inspectorOpen}
                         baselineMs={baselineMs}

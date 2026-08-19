@@ -166,7 +166,10 @@ export default function ConnectScreen({ initialSettings, onConnected, dashboardU
           <input
             type="text"
             value={serverBaseUrl}
-            onChange={(e) => setServerBaseUrl(e.target.value)}
+            onChange={(e) => {
+              setServerBaseUrl(e.target.value);
+              if (status !== "idle") setStatus("idle");
+            }}
             placeholder="http://127.0.0.1:8000"
             spellCheck={false}
             autoComplete="off"

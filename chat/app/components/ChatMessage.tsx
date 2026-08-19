@@ -60,12 +60,21 @@ export interface AppMessage {
   // answer — it carries no responseId/interactionId, so the feedback row
   // below simply doesn't render for it.
   stopped?: boolean;
+  // The send this turn belongs to failed (network, 402, a stream that dropped
+  // mid-answer, an empty answer). Same shape as `stopped`: kept and marked,
+  // never erased — the question is not thrown away because the request was —
+  // with Retry on the mark. It sits on the question when nothing streamed, and
+  // on the partial answer when something did.
+  failed?: boolean;
 }
 
 interface Props {
   message: AppMessage;
   // Parent handles the API call and updates feedbackPhase on the message.
   onFeedback: (messageId: string, rating: FeedbackRating, comment: string) => Promise<void>;
+  // Re-runs the turn this message belongs to. Only ever offered on a message
+  // marked `failed`.
+  onRetry?: (messageId: string) => void;
   onInspect?: (messageId: string) => void;
   inspected?: boolean;
   // This session's rolling average non-cache latency, and how many answers
@@ -111,6 +120,7 @@ function cacheAnswerBody(
 export default function ChatMessage({
   message,
   onFeedback,
+  onRetry,
   onInspect,
   inspected,
   baselineMs,
@@ -202,6 +212,12 @@ export default function ChatMessage({
             )}
             {message.content}
           </div>
+          {message.failed && (
+            <FailedRow
+              label="Not sent"
+              onRetry={onRetry ? () => onRetry(message.id) : undefined}
+            />
+          )}
           <span className="dq-hover-meta" style={{ color: "var(--fg-dimmer)", fontSize: "10.5px", marginTop: "6px" }}>
             {formatTs(message.ts)}
           </span>
@@ -293,6 +309,13 @@ export default function ChatMessage({
         </div>
       )}
 
+      {message.failed && (
+        <FailedRow
+          label="Answer failed"
+          onRetry={onRetry ? () => onRetry(message.id) : undefined}
+        />
+      )}
+
       {/* Timestamp + response-detail affordance — hover-revealed; the strip
           above already carries the route, so this row is pure metadata. */}
       <div className="dq-hover-meta" style={{ alignItems: "center", display: "flex", gap: "8px", marginTop: "16px" }}>
@@ -363,6 +386,58 @@ export default function ChatMessage({
         </div>
       )}
     </TurnShell>
+  );
+}
+
+// The failed turn's mark, drawn on the same lines as the Stopped mark above:
+// small, quiet, underneath what it is about. It carries Retry because the
+// question it marks is the only copy of what the user typed — nothing was put
+// back in the composer for them.
+function FailedRow({ label, onRetry }: { label: string; onRetry?: () => void }) {
+  return (
+    <div style={{ alignItems: "center", color: "var(--red)", display: "flex", fontSize: "12px", gap: "10px", marginTop: "10px" }}>
+      <span style={{ alignItems: "center", display: "flex", gap: "6px" }}>
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+          <circle cx="8" cy="8" r="6.3" />
+          <path d="M8 4.9v3.7" />
+          <path d="M8 11.1h.01" />
+        </svg>
+        {label}
+      </span>
+      {onRetry && (
+        <button
+          onClick={onRetry}
+          style={{
+            alignItems: "center",
+            background: "transparent",
+            border: "1px solid var(--border-2)",
+            borderRadius: "999px",
+            color: "var(--fg-dim)",
+            cursor: "pointer",
+            display: "inline-flex",
+            fontSize: "11.5px",
+            fontWeight: 500,
+            gap: "6px",
+            height: "24px",
+            padding: "0 10px",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.color = "var(--fg)";
+            e.currentTarget.style.borderColor = "var(--fg-dimmer)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = "var(--fg-dim)";
+            e.currentTarget.style.borderColor = "var(--border-2)";
+          }}
+        >
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M2.6 8a5.4 5.4 0 0 1 9.2-3.8M13.4 8a5.4 5.4 0 0 1-9.2 3.8" />
+            <path d="M11.9 1.7v3h-3M4.1 14.3v-3h3" />
+          </svg>
+          Retry
+        </button>
+      )}
+    </div>
   );
 }
 
