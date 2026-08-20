@@ -134,6 +134,49 @@ def test_admin_llm_config_defaults_update_and_clear(isolated_org_db, authed_admi
     assert empty.status_code == 422
 
 
+def test_admin_llm_config_surfaces_read_only_vision_capability(isolated_org_db, authed_admin_client, monkeypatch):
+    """The field is read-only - LlmConfigUpdate has no such field, so it
+    cannot be set by a client - and is derived fresh from /api/show, not
+    stored, so it reflects the CURRENT local_model on every read."""
+    import httpx
+
+    from app.services import ollama_catalog
+
+    client, headers = authed_admin_client
+    client.post("/admin/v1/workspaces", json={"name": "Acme"}, headers=headers)
+
+    def _fake_get(url, timeout=None):
+        request = httpx.Request("GET", url)
+        return httpx.Response(
+            200,
+            json={"models": [{"name": "gemma4:e4b"}, {"name": "qwen2.5:1.5b"}]},
+            request=request,
+        )
+
+    def _fake_post(url, json=None, timeout=None):
+        request = httpx.Request("POST", url)
+        capabilities = ["completion", "vision"] if json["model"] == "gemma4:e4b" else ["completion"]
+        return httpx.Response(200, json={"capabilities": capabilities}, request=request)
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+    monkeypatch.setattr(httpx, "post", _fake_post)
+    ollama_catalog._CACHE = ollama_catalog._CatalogCache(ttl_seconds=ollama_catalog._CACHE._ttl)
+    ollama_catalog._CAPABILITY_CACHE = ollama_catalog._CapabilityCache(
+        ttl_seconds=ollama_catalog._CAPABILITY_CACHE._ttl
+    )
+
+    vision_default = client.get("/admin/v1/workspaces/acme/llm-config", headers=headers)
+    assert vision_default.json()["local_model_supports_vision"] is True
+    assert "local_model_supports_vision" not in vision_default.json()["overrides"]
+
+    switched = client.put(
+        "/admin/v1/workspaces/acme/llm-config",
+        json={"local_model": "qwen2.5:1.5b"},
+        headers=headers,
+    )
+    assert switched.json()["local_model_supports_vision"] is False
+
+
 def test_admin_credentials_round_trip_and_llm_config_presence(
     isolated_org_db,
     authed_admin_client,

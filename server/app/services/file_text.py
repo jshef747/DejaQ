@@ -70,6 +70,22 @@ class FileText:
     def cacheable(self) -> bool:
         return self.ok and bool(self.sha)
 
+    @property
+    def readable(self) -> bool:
+        """True when there is any real text to answer from.
+
+        Deliberately independent of `ok`/`cacheable`: `ok` also requires
+        clearing CACHE_FILE_MIN_CHARS, a floor that exists only to keep a
+        near-empty extraction from being hashed into a cache identity (see
+        `_finalize`). A short-but-genuine document (a 4-line memo, a one-line
+        receipt) extracts real, complete text below that floor - refusing to
+        answer from it would be gating answering on a caching threshold, which
+        it must never be. `char_count` (normalised length) is 0 for every
+        genuinely unreadable case - unsupported type, decode/parse failure,
+        scanned PDF with no text layer - so those still correctly return False.
+        """
+        return self.char_count > 0
+
 
 def kind_for(data: bytes, mime: str | None, filename: str | None) -> str:
     """Which extractor handles this upload, or "" if we do not support it.
@@ -295,9 +311,15 @@ def _self_test() -> None:
     not_utf8 = extract(b"\xff\xfe\x00binary garbage", "text/plain", "weird.py")
     assert not not_utf8.ok and not_utf8.kind == ""
 
+    # A short-but-genuine PDF/DOCX: uncacheable (under the floor) but readable
+    # (real, complete text) - answering must not be gated on the caching floor.
+    short_pdf = FileText("pdf", "Invoice total: 42 dollars.", "", 26, ok=False, reason="26 chars extracted (need >= 200)")
+    assert not short_pdf.ok and short_pdf.readable, "short genuine extraction must still be answerable"
+
     # Unreadable PDF bytes are a miss, not an exception.
     broken = extract(b"%PDF-1.4 not really a pdf", "application/pdf", "x.pdf")
     assert not broken.ok and broken.kind == "pdf"
+    assert not broken.readable, "a genuinely unreadable file must not be answerable either"
 
     # Unreadable DOCX bytes are a miss, not an exception, and never sniffed as text.
     broken_docx = extract(b"PK\x03\x04 not really a docx", DOCX_MIME, "x.docx")

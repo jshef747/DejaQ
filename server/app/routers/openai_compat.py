@@ -49,8 +49,15 @@ from app.services.image_text import (
     tokens_from_string,
 )
 from app.services.file_text import FileText, extract as extract_file_text
+from app.services.model_backends import LocalVisionUnsupportedError
 from app.dependencies.auth import ResolvedWorkspace, require_org_key
-from app.services import cache_filter, llm_config_service, pipeline_config_cache, rag_service
+from app.services import (
+    cache_filter,
+    llm_config_service,
+    ollama_catalog,
+    pipeline_config_cache,
+    rag_service,
+)
 from app.services.classifier import ClassifierService
 from app.services.context_adjuster import (
     DEFAULT_ADJUST_SYSTEM_PROMPT,
@@ -239,6 +246,16 @@ class ChatPipelineResult:
     # serves `stream_chunks`; the answer already exists, so there is nothing to
     # wait for and nothing to restructure (a hit answers in ~144ms).
     answer_stream: AsyncGenerator[str, None] | None = None
+    # True only for the specific, narrow failure a caller must be able to
+    # distinguish from a real (if apologetic) answer: a local-vision capability
+    # mismatch discovered mid-stream (LocalVisionUnsupportedError). Deliberately
+    # NOT set for every route="error" case - other failure kinds (a transient
+    # provider hiccup with no distinguishable status code, an uncaught
+    # generation exception) keep falling back to the generic apology text at
+    # 200, which is an existing, separately-tested behavior this must not
+    # change. See app/routers/openai_responses.py's response.failed event.
+    failed: bool = False
+    error_detail: str = ""
 
 
 def _request_model_profile(raw_request: Request) -> str:
@@ -315,15 +332,15 @@ def _services_for_model_profile(model_profile: str, llm_config: EffectiveLlmConf
     # Temporary developer-only weak CPU profile. Keep the default singleton path
     # unchanged so production behavior and existing tests remain stable.
     #
-    # CAPTAIN DECISION, do not re-litigate: on this profile, normalizer/
-    # enricher/adjuster (via WEAK_CPU_MODEL_NAME) all share qwen_0_5b with
-    # llm_router below, which deliberately does not set num_ctx (see
-    # OLLAMA_NUM_CTX in config.py - the exclusion is correct on the default
-    # profile, where llm_router runs gemma4:e4b, a different, larger model
-    # with no rewrite-role sibling). On this profile that same exclusion
-    # reopens the num_ctx split on one shared tag: qwen_0_5b reloads between
-    # normalize()/adjust() and generate() on every miss. Left alone on
-    # purpose - this is a developer-only profile, not the shipped default.
+    # llm_router now sets num_ctx like every other role (see llm_router.py -
+    # added so a large attached file's inlined text can't silently overflow
+    # Ollama's own default window). On this profile that also means
+    # normalizer/enricher/adjuster/llm_router (all via WEAK_CPU_MODEL_NAME,
+    # sharing qwen_0_5b) now agree on one window instead of llm_router being
+    # the one role forcing Ollama to reload the shared tag between
+    # normalize()/adjust() and generate() on every miss - a welcome side
+    # effect of the correctness fix, not something this branch had to do
+    # anything for.
     if model_profile == MODEL_PROFILE_WEAK_CPU:
         return ModelServices(
             normalizer=get_normalizer_service(model_name=WEAK_CPU_MODEL_NAME),
@@ -346,8 +363,13 @@ def _services_for_model_profile(model_profile: str, llm_config: EffectiveLlmConf
             default_system_prompt=(
                 llm_config.local_model_system_prompt if llm_config.local_model_system_prompt_overridden else None
             ),
+            num_ctx=llm_config.ollama_num_ctx if llm_config.ollama_num_ctx_overridden else None,
         )
-        if (llm_config.local_model_overridden or llm_config.local_model_system_prompt_overridden)
+        if (
+            llm_config.local_model_overridden
+            or llm_config.local_model_system_prompt_overridden
+            or llm_config.ollama_num_ctx_overridden
+        )
         else _llm_router
     )
     adjuster = (
@@ -614,12 +636,16 @@ def _evaluate_file_gate(
 
 
 def _query_with_inlined_file(user_query: str, doc: FileText | None) -> str:
-    """Inline an attached Markdown/text/DOCX file into the prompt, fenced and labelled.
+    """Inline an attached Markdown/text/DOCX/PDF file into the prompt, fenced and labelled.
 
-    PDFs do not come through here — they go to the provider as a native document
-    part. Every other kind (Markdown, plain text, source/config files, DOCX) has
-    no such part anywhere, and each one is already just text once extracted, so
-    inlining it via this one mechanism is both the simplest and the only option.
+    On the external branch, a PDF still goes to the provider as a native
+    document part instead (richer: keeps tables, layout, embedded images) - the
+    external call site passes `doc=None` for a PDF to skip inlining there.
+    Local generation has no equivalent of a native document part, so this is
+    the only way it can see a PDF at all: the already-extracted `pypdf` text,
+    with the known cost that tables, layout and any images in the document are
+    lost. Every other kind (Markdown, plain text, source/config files, DOCX)
+    has no native-part option anywhere, so it always inlines here.
 
     The fence and the labelling are not decoration: the file is untrusted input
     from whoever uploaded it, and a document that contains "ignore your
@@ -627,7 +653,7 @@ def _query_with_inlined_file(user_query: str, doc: FileText | None) -> str:
     even more for code, which routinely contains strings and comments that look
     like directives.
     """
-    if doc is None or doc.kind == "pdf" or not doc.text.strip():
+    if doc is None or not doc.text.strip():
         return user_query
     # The document is untrusted input: a literal occurrence of the closing
     # delimiter inside it would close the fence early and put the rest of the
@@ -943,6 +969,23 @@ async def _register_answer_interaction(
 _GENERATION_FAILED_MESSAGE = (
     "I'm sorry, I couldn't process your request right now. Please try again later."
 )
+
+# Room left in the local-answering context window for the system prompt and
+# the inlining fence/labels around an attached file (_query_with_inlined_file)
+# - small and roughly constant regardless of file size, so a flat reserve is
+# enough; see the file-routing size guard in run_chat_pipeline.
+_LOCAL_FILE_PROMPT_RESERVE_TOKENS = 256
+
+
+def _estimate_tokens(text: str) -> int:
+    """A deliberately conservative (over-)estimate, for a safety check only.
+
+    Real English text tokenizes at roughly 4 chars/token; dividing by 3 errs
+    toward counting MORE tokens than a real tokenizer would, which is the
+    safe direction for the local-file size guard - it may route a file
+    external slightly earlier than strictly necessary, never later.
+    """
+    return len(text) // 3
 
 
 def answer_pieces(result: ChatPipelineResult) -> AsyncGenerator[str, None]:
@@ -1538,16 +1581,76 @@ async def run_chat_pipeline(
 
         # 4. Cache miss — classify then route
         if _request_has_image:
-            # The local model is text-only; image queries must go to a vision-capable
-            # external provider regardless of difficulty or routing mode.
-            classification = {"complexity": "hard", "score": 1.0, "task_type": "image_external"}
+            # Ask Ollama's /api/show (cached, ollama_catalog.supports_vision) whether
+            # the workspace's configured local model actually reports "vision" -
+            # not /api/tags, which is measured wrong for this on the shipped default
+            # model (see ollama_catalog.py). This is the primary mechanism; the
+            # LocalVisionUnsupportedError catch below the generation call is the
+            # safety net for the window between here and a stale capability cache
+            # entry (model swapped in Ollama after the last refresh).
+            _local_supports_vision = ollama_catalog.supports_vision(llm_config.local_model)
+            if _local_supports_vision and routing_mode != ROUTING_MODE_HARD_EXTERNAL:
+                classification = {"complexity": "easy", "score": 0.0, "task_type": "image_local"}
+            else:
+                classification = {"complexity": "hard", "score": 1.0, "task_type": "image_external"}
         elif _request_has_file:
-            # ponytail: files route external unconditionally, like images. A PDF
-            # genuinely has to (the provider parses it natively), and Markdown
-            # rides along for one rule instead of two. Upgrade path when it costs
-            # too much: keep markdown local by letting the classifier see the
-            # question, since the document text is inlined into the prompt anyway.
-            classification = {"complexity": "hard", "score": 1.0, "task_type": "file_external"}
+            # Every kind - DOCX/Markdown/text/code AND now PDF - is already
+            # deterministically extracted to text by file_text.py, so the local
+            # model needs no new capability, just that text inlined into the
+            # prompt (below): pypdf's plain-text extraction for PDF (no tables,
+            # no layout, no embedded images - a real quality cost the external
+            # branch's native document part does not pay). A file we could not
+            # read at all (no usable text - e.g. a scanned PDF) stays external,
+            # since local generation would otherwise answer as if the document
+            # were blank instead of the "answered but uncacheable" behavior this
+            # preserves. An explicit hard_external override always wins.
+            #
+            # `.readable`, not `.ok`/`.cacheable` - `.ok` also requires clearing
+            # CACHE_FILE_MIN_CHARS, a floor for cache identity only. A short but
+            # genuine DOCX/PDF (a one-paragraph memo) extracts real, complete
+            # text below that floor; routing it external anyway would gate
+            # answering on a caching threshold, and in a credential-less
+            # workspace it 422s instead of answering at all. See file_text.py.
+            #
+            # Local answering has no native document part (unlike the
+            # external branch's PDF handling), so the file's full extracted
+            # text is inlined into the prompt as plain text below
+            # (_query_with_inlined_file) - the only thing standing between a
+            # large attachment and Ollama's context window. Left unbounded,
+            # Ollama silently drops the HEAD of a prompt that overflows it
+            # (confirmed: a 60,001-line file with its marker on line 1
+            # answered as if only the last ~800 lines existed - no error, a
+            # confident wrong answer). This is new exposure this feature
+            # creates: a file this size previously always routed external,
+            # where a provider accepts the whole document. `_estimate_tokens`
+            # deliberately overestimates (real English text is usually less
+            # dense than 3 chars/token) - the failure mode this guards is
+            # silent and confident, so erring toward routing external too
+            # early costs a slower answer; erring the other way costs a wrong
+            # one.
+            _file_prompt_budget = (
+                llm_config.ollama_num_ctx - _max_tokens - _LOCAL_FILE_PROMPT_RESERVE_TOKENS
+            )
+            _file_estimated_tokens = (
+                _estimate_tokens(file_doc.text) + _estimate_tokens(user_query)
+                if file_doc is not None else 0
+            )
+            _file_fits_locally = _file_estimated_tokens <= max(_file_prompt_budget, 0)
+            _file_usable_locally = (
+                file_doc is not None and file_doc.readable and _file_fits_locally
+            )
+            if _file_usable_locally and routing_mode != ROUTING_MODE_HARD_EXTERNAL:
+                classification = {"complexity": "easy", "score": 0.0, "task_type": "file_local"}
+            elif file_doc is not None and file_doc.readable and not _file_fits_locally:
+                classification = {"complexity": "hard", "score": 1.0, "task_type": "file_external_oversized"}
+                logger.info(
+                    "file too large for local answering (~%d estimated tokens > "
+                    "%d budget = num_ctx %d - max_tokens %d - reserve %d); routing external",
+                    _file_estimated_tokens, max(_file_prompt_budget, 0), llm_config.ollama_num_ctx,
+                    _max_tokens, _LOCAL_FILE_PROMPT_RESERVE_TOKENS,
+                )
+            else:
+                classification = {"complexity": "hard", "score": 1.0, "task_type": "file_external"}
         elif routing_mode == ROUTING_MODE_EASY_LOCAL:
             classification = {"complexity": "easy", "score": 0.0, "task_type": "forced_local"}
         elif routing_mode == ROUTING_MODE_HARD_EXTERNAL:
@@ -1597,6 +1700,18 @@ async def run_chat_pipeline(
             classification = {**classification, "complexity": "hard", "task_type": "rag_external"}
         # The prompt actually sent to whichever model runs, grounded if RAG hit.
         gen_query = _query_with_rag_context(user_query, rag_context)
+        # Local generation has no native document part, so it needs the file's
+        # text folded into the prompt the same way the external branch already
+        # does for non-PDF kinds. A no-op when there is no file (or no usable
+        # text), same helper the external branch uses - the untrusted-input
+        # fencing applies here too.
+        local_gen_query = _query_with_inlined_file(gen_query, file_doc)
+        # Ollama's own images field, same base64 bytes the external branch sends
+        # as image_b64 below - only ever populated when the classification step
+        # above just decided the local model can see it.
+        local_images = (
+            [base64.b64encode(image_bytes).decode("ascii")] if _request_has_image else None
+        )
 
         # Provider + credential resolution happens HERE, not inside the generation
         # step, and that placement is load-bearing: every failure below is an HTTP
@@ -1731,6 +1846,10 @@ async def run_chat_pipeline(
             "finish_reason": "stop",
             # set below only on a successful external call; real provider usage lives on it
             "ext_response": None,
+            # See ChatPipelineResult.failed - set only by the streaming twin of
+            # the LocalVisionUnsupportedError branch below.
+            "failed": False,
+            "error_detail": "",
         }
         if route == "external":
             # The external model name is known up front and is exactly what every
@@ -1749,8 +1868,15 @@ async def run_chat_pipeline(
             try:
                 with trace.step("generate"):
                     if complexity == "hard":
+                        # A PDF goes as a native document part below instead -
+                        # richer than its extracted text - so it is excluded
+                        # here to avoid sending both. Every other kind has no
+                        # native part, so it always inlines.
                         ext_request = ExternalLLMRequest(
-                            query=_query_with_inlined_file(gen_query, file_doc),
+                            query=_query_with_inlined_file(
+                                gen_query,
+                                file_doc if (file_doc and file_doc.kind != "pdf") else None,
+                            ),
                             history=history,
                             model=llm_config.external_model,
                             max_tokens=_max_tokens,
@@ -1797,12 +1923,22 @@ async def run_chat_pipeline(
                         # when set, otherwise the hardcoded literal. Hardcoding
                         # the literal here too would silently shadow that
                         # override (same reasoning as escalation.py).
+                        # images= is only ever passed when this is actually an
+                        # image request - most local-router test doubles across
+                        # the suite predate stage 4 and don't accept the kwarg,
+                        # and the real LLMRouterService already defaults it to
+                        # None, so omitting it for the (overwhelmingly common)
+                        # text/file case is a no-op, not a workaround.
+                        local_kwargs = {
+                            "history": history,
+                            "max_tokens": _max_tokens,
+                            "system_prompt": system_prompt,
+                        }
+                        if local_images:
+                            local_kwargs["images"] = local_images
                         if stream:
                             async for chunk in services.llm_router.stream_local_response(
-                                gen_query,
-                                history=history,
-                                max_tokens=_max_tokens,
-                                system_prompt=system_prompt,
+                                local_gen_query, **local_kwargs
                             ):
                                 if chunk.done_reason is not None:
                                     gen["finish_reason"] = (
@@ -1812,10 +1948,7 @@ async def run_chat_pipeline(
                                     yield chunk.text
                         else:
                             text, _, done_reason = await services.llm_router.generate_local_response(
-                                gen_query,
-                                history=history,
-                                max_tokens=_max_tokens,
-                                system_prompt=system_prompt,
+                                local_gen_query, **local_kwargs
                             )
                             gen["finish_reason"] = "length" if done_reason == "length" else "stop"
                             yield text
@@ -1867,6 +2000,51 @@ async def run_chat_pipeline(
                 logger.exception("ExternalLLMService failed")
                 yield _GENERATION_FAILED_MESSAGE
                 gen.update(model_used="error", route="error")
+            except LocalVisionUnsupportedError as exc:
+                # The safety net named in section 5 of the plan: the capability
+                # check above said this model could see, but Ollama disagrees at
+                # call time - the model was swapped after the last capability-
+                # cache refresh (stale read, not a code bug). Naming the real
+                # cause here is the whole point of this stage; falling through
+                # to the generic apology below would recreate the invisible-
+                # failure problem the ExternalLLMError handling above already
+                # avoids for the external path.
+                # Matched defensively by status code alone (any 400/500 on an
+                # image-bearing call - see LocalVisionUnsupportedError's own
+                # docstring), so exc.detail is not always a capability
+                # rejection: Ollama returns the same shape for "does not
+                # support image input" and for "Failed to load image or audio
+                # file" (a malformed image payload, nothing to do with
+                # capability). Naming only the capability explanation blames
+                # the wrong thing for the second population - state both
+                # possibilities and include Ollama's own text so the real
+                # cause is visible either way.
+                detail = (
+                    f"The workspace's local model ({exc.model_name}) rejected this "
+                    f"image-bearing request: {exc.detail} This can mean the model does "
+                    "not support image input (it may have been changed after DejaQ last "
+                    "checked its capabilities, or the capability cache is stale), or that "
+                    "the attached image itself could not be processed. Configure a "
+                    "vision-capable local model, check the image, or force external "
+                    "routing (X-DejaQ-Routing-Mode: hard_external) for this workspace."
+                )
+                if not stream:
+                    logger.warning("Local model rejected image-bearing request: %s", exc)
+                    raise PipelineError(422, detail) from exc
+                # The safety net named in section 5 of the plan: the capability
+                # check above said this model could see, but Ollama disagrees at
+                # call time. Naming the real cause here is the whole point of
+                # this stage; falling through to the generic apology below
+                # would recreate the invisible-failure problem the
+                # ExternalLLMError handling above already avoids for the
+                # external path - which is exactly what yielding
+                # _GENERATION_FAILED_MESSAGE here used to do: the only path the
+                # real chat app (always streams) ever takes. No text is
+                # yielded on this branch; `gen["failed"]`/`error_detail` tell
+                # the Responses SSE encoder to end the stream on a
+                # `response.failed` event instead of a fake `response.completed`.
+                logger.exception("Local model rejected image-bearing request")
+                gen.update(model_used="error", route="error", failed=True, error_detail=detail)
             except Exception:
                 logger.exception("LLM generation failed")
                 yield _GENERATION_FAILED_MESSAGE
@@ -2126,6 +2304,8 @@ async def run_chat_pipeline(
                 ) = await _finalize(result.answer, interaction)
                 result.model_used = gen["model_used"]
                 result.finish_reason = gen["finish_reason"]
+                result.failed = gen["failed"]
+                result.error_detail = gen["error_detail"]
 
             result.answer_stream = _streamed_answer()
             return result

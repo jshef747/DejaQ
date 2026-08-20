@@ -295,24 +295,35 @@ RAG_FORCE_EXTERNAL = _get_bool("DEJAQ_RAG_FORCE_EXTERNAL", False)
 OLLAMA_URL = _get_text("DEJAQ_OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_TIMEOUT_SECONDS = _get_float("DEJAQ_OLLAMA_TIMEOUT_SECONDS", 60.0)
 
-# Context window for the two REWRITE roles only (generalize, adjust) - every
-# other role keeps Ollama's own runtime default. Ollama's default is independent
-# of what a model supports and far smaller than both models here allow
-# (qwen2.5:1.5b 32768, gemma4:e2b 131072), and num_ctx bounds the PROMPT as well
-# as the generation: left unset, a REWRITE_MAX_TOKENS generation over a long
-# answer overflows the window and Ollama silently drops the head of the prompt,
-# so the rewrite never sees the tail of the answer it was told to preserve - the
-# same silently-truncated stored copy the budget exists to prevent, reached from
-# the other side. 32768 is the smaller model's own maximum, so it is safe on
-# both. Only the two rewrite roles NEED it; every other role that shares one of
-# their two models sends it anyway (enricher on qwen2.5:1.5b, normalizer and
-# validator on gemma4:e2b), because Ollama treats a changed runner option as a
-# reload of that model - two windows on one model tag unload and reload it
-# between consecutive roles on the same request, on the synchronous serve path.
-# That costs no extra memory over the rewrite roles alone: the model is already
-# loaded at this window whenever generalize()/adjust() run. gemma4:e4b, the
-# largest model in the stack, is not a rewrite role and shares one with none, so
-# it keeps Ollama's own default.
+# Context window for every Ollama-backed role, local answering (gemma4:e4b)
+# included. Ollama's own runtime default is independent of what a model
+# supports and far smaller than every model here allows (qwen2.5:1.5b 32768,
+# gemma4:e2b 131072), and num_ctx bounds the PROMPT as well as the
+# generation: left unset, a long enough prompt or generation overflows the
+# window and Ollama silently drops the head of the prompt. For the two
+# REWRITE roles (generalize, adjust) that means the rewrite never sees the
+# tail of the answer it was told to preserve - the same silently-truncated
+# stored copy REWRITE_MAX_TOKENS exists to prevent, reached from the other
+# side. For local answering it means a large attachment's inlined text
+# (openai_compat.py's _query_with_inlined_file - local generation has no
+# native document part, so a big PDF/DOCX/text file rides in the prompt as
+# plain text) can silently lose everything but its tail: confirmed, a
+# 60,001-line file with a marker on line 1 answered as if only the last ~800
+# lines existed, no error. 32768 is the smaller rewrite model's own maximum,
+# so it is safe there; local answering runs gemma4:e4b, a different, larger
+# model, but shares this same value rather than a bespoke one - one property
+# to reason about, and the size guard in openai_compat.py (routing a file too
+# large for THIS budget to the external provider instead of generating
+# against it) is what actually keeps large attachments from silently
+# truncating, not the size of the window alone. Every role that shares one of
+# the two rewrite models' tags sends it too (enricher on qwen2.5:1.5b,
+# normalizer and validator on gemma4:e2b, local answering wherever a
+# workspace happens to point it at one of them), because Ollama treats a
+# changed runner option as a reload of that model - two windows on one model
+# tag unload and reload it between consecutive roles on the same request, on
+# the synchronous serve path. That costs no extra memory over the rewrite
+# roles alone: the model is already loaded at this window whenever
+# generalize()/adjust()/generate() run.
 #
 # A workspace may override this value (workspace_llm_configs.ollama_num_ctx), and
 # doing so reintroduces that same reload between WORKSPACES rather than between

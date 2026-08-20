@@ -30,6 +30,39 @@ class ModelNotFoundError(Exception):
         super().__init__(f"Ollama model not found: {model_name}")
 
 
+class LocalVisionUnsupportedError(Exception):
+    """Raised when Ollama rejects an image-bearing call because the model
+    itself cannot accept images - the model exists (unlike ModelNotFoundError),
+    it just isn't vision-capable.
+
+    This is the safety net for the capability cache's staleness window
+    (ollama_catalog.supports_vision, TTL-cached): a caller should check
+    capability before sending an image, but between a cache refresh and an
+    admin swapping the workspace's local model in Ollama, the cached answer
+    can be wrong. Matched defensively by status code (400 or 500) on a call
+    that carried images, not by Ollama's exact error text, which is
+    version-dependent (confirmed 400 + "Multimodal data provided, but model
+    does not support multimodal requests." on server 0.32.5; older builds are
+    reported to return 500 with different wording).
+    """
+
+    def __init__(self, model_name: str, detail: str) -> None:
+        self.model_name = model_name
+        self.detail = detail
+        super().__init__(f"Ollama model {model_name} rejected an image-bearing request: {detail}")
+
+
+def _ollama_error_detail(body: bytes) -> str:
+    """Best-effort human-readable text from an Ollama error response body."""
+    try:
+        data = json.loads(body)
+    except (ValueError, TypeError):
+        return body.decode("utf-8", errors="replace")
+    if isinstance(data, dict):
+        return str(data.get("error", data))
+    return str(data)
+
+
 class PromptMessage(TypedDict):
     role: str
     content: str
@@ -48,6 +81,10 @@ class CompletionRequest:
     # plus generation can approach it has anything to gain. Set it there, not
     # here — see generalize()/adjust() in services/context_adjuster.py.
     num_ctx: int | None = None
+    # Base64-encoded images, attached to the final message per Ollama's wire
+    # format (`images` on a chat message, not a top-level request field). Unused
+    # by every caller today - no code path passes this yet.
+    images: list[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -180,9 +217,15 @@ class OllamaBackend:
         return logical_model_name
 
     def _payload(self, request: CompletionRequest, ollama_model: str, stream: bool) -> dict:
+        messages = request.messages
+        if request.images:
+            # Ollama attaches images per-message, not at the request top level.
+            # Copy rather than mutate the caller's last message dict in place.
+            messages = list(messages)
+            messages[-1] = {**messages[-1], "images": request.images}
         payload = {
             "model": ollama_model,
-            "messages": request.messages,
+            "messages": messages,
             "stream": stream,
             # Gemma 4 is a thinking model: left alone it emits a `thinking` block
             # BEFORE `content`, and both are drawn from the same num_predict
@@ -230,6 +273,11 @@ class OllamaBackend:
             # day-2-drift case a workspace override cannot be pre-validated
             # against (§ ModelNotFoundError above).
             raise ModelNotFoundError(ollama_model)
+        if request.images and response.status_code in (400, 500):
+            # § LocalVisionUnsupportedError - only for an image-bearing call,
+            # so an unrelated 400/500 on a text-only request is never
+            # misattributed to a capability mismatch.
+            raise LocalVisionUnsupportedError(ollama_model, _ollama_error_detail(response.content))
         response.raise_for_status()
         data = response.json()
         message = data.get("message", {})
@@ -256,24 +304,30 @@ class OllamaBackend:
         )
         payload = self._payload(request, ollama_model, stream=True)
 
+        has_images = bool(request.images)
         if self._client is not None:
-            async for chunk in self._stream_lines(self._client, payload, ollama_model):
+            async for chunk in self._stream_lines(self._client, payload, ollama_model, has_images):
                 yield chunk
             return
         async with httpx.AsyncClient(
             base_url=self._base_url,
             timeout=self._timeout_seconds,
         ) as client:
-            async for chunk in self._stream_lines(client, payload, ollama_model):
+            async for chunk in self._stream_lines(client, payload, ollama_model, has_images):
                 yield chunk
 
     @staticmethod
     async def _stream_lines(
-        client: httpx.AsyncClient, payload: dict, ollama_model: str
+        client: httpx.AsyncClient, payload: dict, ollama_model: str, has_images: bool = False
     ) -> AsyncGenerator[CompletionChunk, None]:
         async with client.stream("POST", "/api/chat", json=payload) as response:
             if response.status_code == 404:
                 raise ModelNotFoundError(ollama_model)
+            if has_images and response.status_code in (400, 500):
+                # § LocalVisionUnsupportedError - streaming twin of the check in
+                # complete(); the body isn't loaded yet on a streamed response.
+                body = await response.aread()
+                raise LocalVisionUnsupportedError(ollama_model, _ollama_error_detail(body))
             response.raise_for_status()
             async for line in response.aiter_lines():
                 line = line.strip()

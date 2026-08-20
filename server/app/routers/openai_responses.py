@@ -24,6 +24,7 @@ from app.schemas.openai_responses import (
     ResponseContentPartAddedEvent,
     ResponseContentPartDoneEvent,
     ResponseCreatedEvent,
+    ResponseFailedEvent,
     ResponseIncompleteEvent,
     ResponseOutputItemAddedEvent,
     ResponseOutputItemDoneEvent,
@@ -229,6 +230,26 @@ async def _stream_responses_generator(
             f"event: response.output_text.delta\n"
             f"data: {ResponseOutputTextDeltaEvent(item_id=item_id, delta=piece).model_dump_json()}\n\n"
         )
+
+    # A failure (result.failed, e.g. a local-vision capability rejection
+    # discovered mid-stream) yields no text above - full_text is empty here.
+    # Ending on `response.failed` instead of the usual done/completed events
+    # is what stops this from rendering as an answered response: without it,
+    # a client sees content_part.added -> ... -> completed with empty/apology
+    # text and no way to distinguish that from a real (if terse) answer.
+    if result.failed:
+        failed_response = {
+            "id": response_id,
+            "object": "response",
+            "created_at": _now_ts(),
+            "model": model,
+            "status": "failed",
+            "error": {"message": result.error_detail or "Generation failed."},
+            "output": [],
+            "output_text": "",
+        }
+        yield f"event: response.failed\ndata: {ResponseFailedEvent(response=failed_response).model_dump_json()}\n\n"
+        return
 
     # One message, one text. `result.answer` is the canonical answer - stripped
     # on the streaming path exactly as OllamaBackend strips it on the buffered

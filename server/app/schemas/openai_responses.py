@@ -147,3 +147,16 @@ class ResponseIncompleteEvent(BaseModel):
     """
     type: Literal["response.incomplete"] = "response.incomplete"
     response: dict
+
+
+class ResponseFailedEvent(BaseModel):
+    """Terminal event for a stream that failed outright (e.g. a mid-stream
+    local-vision capability rejection - see ChatPipelineResult.failed).
+
+    Same idea as ResponseIncompleteEvent, one step further: the answer never
+    started, so there is no output to carry a status on. A client that
+    branches on event type gets an unambiguous failure instead of a
+    `response.completed` body whose text merely happens to be an apology.
+    """
+    type: Literal["response.failed"] = "response.failed"
+    response: dict

@@ -59,6 +59,10 @@ Inside `op.batch_alter_table(..., recreate="always")` SQLite rebuilds the table,
 
 `tests/test_litellm_single_import.py::test_litellm_is_imported_in_exactly_the_allowed_modules` fails the build the moment a new module does `import litellm` - it is not a lint suggestion. Route new litellm-touching code through one of the already-allowed modules (`llm_providers/_litellm_config.py`, `llm_providers/litellm_transport.py`, `services/model_catalog.py`) instead of adding a new importer; if a stage genuinely needs a new one, add it to that test's `_ALLOWED_IMPORTERS` in the same commit; the migration plan's exit-seam argument (§4) is why this exists at all.
 
+## Ollama's /api/tags capabilities are wrong; /api/show is correct
+
+Both endpoints report a per-model `capabilities` array, but they disagree, and `/api/tags` is the one already cached (`ollama_catalog.list_available_models`, backing the Pipeline model pickers). Measured live: `/api/tags` omits `"vision"` for `gemma4:e4b` even though the model demonstrably reads images and `/api/show` reports it correctly. Any future capability check (routing, gating, display) must call `/api/show` per model - see `ollama_catalog.supports_vision` and its call-site comment. Do not "optimise" a capability check back onto the already-cached `/api/tags` data.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.

@@ -157,15 +157,20 @@ def get_validator_service(
 def get_llm_router_service(
     model_name: str | None = None,
     default_system_prompt: str | None = None,
+    num_ctx: int | None = None,
 ) -> LLMRouterService:
     resolved_model_name = model_name or config.LOCAL_LLM_MODEL_NAME
-    service_key = _service_key("llm_router", resolved_model_name, default_system_prompt or "")
+    resolved_num_ctx = num_ctx if num_ctx is not None else config.OLLAMA_NUM_CTX
+    service_key = _service_key(
+        "llm_router", resolved_model_name, default_system_prompt or "", str(resolved_num_ctx)
+    )
     service = _service_pool.get(service_key)
     if service is None:
         service = LLMRouterService(
             backend=_get_backend(),
             model_name=resolved_model_name,
             default_system_prompt=default_system_prompt,
+            num_ctx=num_ctx,
         )
         _service_pool[service_key] = service
         logger.info("Configured service role=local_llm model=%s", resolved_model_name)

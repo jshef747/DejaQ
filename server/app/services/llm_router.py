@@ -2,7 +2,7 @@ import time
 import logging
 from collections.abc import AsyncGenerator
 
-from app.config import LOCAL_LLM_MODEL_NAME
+from app.config import LOCAL_LLM_MODEL_NAME, OLLAMA_NUM_CTX
 from app.services.model_backends import (
     CompletionChunk,
     CompletionRequest,
@@ -17,7 +17,13 @@ DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant. Answer the user's query co
 
 
 class LLMRouterService:
-    def __init__(self, backend: ModelBackend, model_name: str, default_system_prompt: str | None = None):
+    def __init__(
+        self,
+        backend: ModelBackend,
+        model_name: str,
+        default_system_prompt: str | None = None,
+        num_ctx: int | None = None,
+    ):
         self.backend = backend
         self.model_name = model_name
         # The per-workspace default for this role - only used when a caller
@@ -26,6 +32,13 @@ class LLMRouterService:
         self.default_system_prompt = (
             default_system_prompt if default_system_prompt is not None else DEFAULT_SYSTEM_PROMPT
         )
+        # An attached file's extracted text is inlined straight into the
+        # prompt (openai_compat.py's _query_with_inlined_file) - unbounded,
+        # Ollama silently drops the head of a prompt that overflows its own
+        # (undocumented, smaller) default context window. See config.py's
+        # OLLAMA_NUM_CTX comment for why this role used to be the one
+        # exception that left it unset.
+        self.num_ctx = num_ctx if num_ctx is not None else OLLAMA_NUM_CTX
 
     def is_hard(self, complexity: str) -> bool:
         return complexity == "hard"
@@ -36,9 +49,10 @@ class LLMRouterService:
         history: list[dict] | None = None,
         max_tokens: int = 1024,
         system_prompt: str | None = None,
+        images: list[str] | None = None,
     ) -> tuple[str, float, str | None]:
         """Generate a response using the local model. Returns (text, latency_ms, done_reason)."""
-        request = self._completion_request(query, history, max_tokens, system_prompt)
+        request = self._completion_request(query, history, max_tokens, system_prompt, images)
         start = time.time()
         # A workspace override may name a model since uninstalled from Ollama -
         # write-time validation can't catch this day-2 drift, so fall back to
@@ -56,6 +70,7 @@ class LLMRouterService:
         history: list[dict] | None,
         max_tokens: int,
         system_prompt: str | None,
+        images: list[str] | None = None,
     ) -> CompletionRequest:
         if system_prompt is None:
             system_prompt = self.default_system_prompt
@@ -68,6 +83,8 @@ class LLMRouterService:
             messages=messages,
             max_tokens=max_tokens,
             temperature=0.7,
+            images=images,
+            num_ctx=self.num_ctx,
         )
 
     async def stream_local_response(
@@ -76,6 +93,7 @@ class LLMRouterService:
         history: list[dict] | None = None,
         max_tokens: int = 1024,
         system_prompt: str | None = None,
+        images: list[str] | None = None,
     ) -> AsyncGenerator[CompletionChunk, None]:
         """Streaming twin of `generate_local_response`.
 
@@ -83,7 +101,7 @@ class LLMRouterService:
         `done_reason`, which the caller reads for truncation exactly as it
         reads `CompletionResult.done_reason` on the non-streaming call.
         """
-        request = self._completion_request(query, history, max_tokens, system_prompt)
+        request = self._completion_request(query, history, max_tokens, system_prompt, images)
         start = time.time()
         async for chunk in stream_with_default_fallback(
             self.backend, request, LOCAL_LLM_MODEL_NAME, "local answering"

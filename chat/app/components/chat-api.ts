@@ -89,17 +89,25 @@ const HTTP_MESSAGES: Record<number, string> = {
 async function parseErrorDetail(res: Response): Promise<string> {
   try {
     const body = await res.json();
-    return body?.message ?? body?.detail ?? "";
+    // FastAPI's own request-validation errors put a list of {loc, msg, ...}
+    // objects here, not a string — that's not a user-facing message, so it
+    // falls through to HTTP_MESSAGES/generic below instead of being shown raw.
+    const detail = body?.message ?? body?.detail;
+    return typeof detail === "string" ? detail : "";
   } catch {
     return "";
   }
 }
 
+// The server's own message always wins — HTTP_MESSAGES is a last resort for
+// responses that carry no usable detail/message, not a competing source of
+// truth. Never add a per-status special case here again: a status the server
+// already explains (424, DEJAQ_API_BASE_URL misconfig, ...) is handled by
+// this same fallback-first check, with no table entry required.
 function userFacingError(status: number, fallback: string): string {
-  if (status === 424 || fallback.includes("DEJAQ_API_BASE_URL")) {
-    return fallback.trim() || `Request failed (HTTP ${status}).`;
-  }
-  return HTTP_MESSAGES[status] ?? (fallback.trim() || `Request failed (HTTP ${status}).`);
+  const trimmed = fallback.trim();
+  if (trimmed) return trimmed;
+  return HTTP_MESSAGES[status] ?? `Request failed (HTTP ${status}).`;
 }
 
 export async function sendChatMessage(

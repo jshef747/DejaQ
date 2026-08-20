@@ -90,6 +90,10 @@ export type RagDocumentItem = {
 export type LlmConfigResponse = {
   external_model: string | null;
   local_model: string | null;
+  // Read-only, derived fresh from Ollama's /api/show on every read - not an
+  // override, so it has no counterpart in LlmConfigUpdate. null means
+  // unknown (Ollama unreachable, or local_model not installed there).
+  local_model_supports_vision: boolean | null;
   generalizer_model: string | null;
   adjuster_model: string | null;
   enricher_model: string | null;
