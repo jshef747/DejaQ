@@ -17,6 +17,16 @@ only because `server/tests/test_provider_registry_consistency.py`
 still checks it). Don't add a second live-provider list here; check
 that test before touching either.
 
+## Dev-tools indicator vs. sidebar user block
+
+Next's on-screen dev indicator defaults to `bottom-left` (`devIndicators.position`
+in `next.config.mjs`), the same corner the sidebar (`components/Sidebar.tsx`)
+uses for the signed-in user block (avatar + email + role). Left at the
+default, the indicator's fixed button paints on top of that block. Pinned to
+`bottom-right` in `next.config.mjs`. If a future page anchors something else
+to bottom-right, move the indicator or the conflicting element instead of
+reverting this.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.
