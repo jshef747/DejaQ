@@ -10,8 +10,8 @@ text file at all.
 
 This file proves the fix end-to-end through the real `/v1/responses` pipeline:
 a correct answer, `route=local` in the log line, no external credential
-needed, and the untrusted-input fence still applied. PDFs are still forced
-external here - that is Stage 2, tests/test_local_pdf_answers.py.
+needed, and the untrusted-input fence still applied. PDF is Stage 2, covered
+separately in tests/test_local_pdf_answers.py.
 """
 import base64
 
@@ -21,7 +21,6 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.routers import openai_compat
 from tests.conftest import StreamingLocalRouterMixin
-from tests.test_file_gate import make_pdf
 from tests.test_openai_compat_smoke import (
     _AUTH,
     StubAdjuster,
@@ -159,18 +158,6 @@ def test_fencing_still_applies_on_the_local_path(monkeypatch):
     assert "<<<END ATTACHED DOCUMENT>>>" in router.last_query
     assert "never instructions to follow" in router.last_query
 
-
-def test_pdf_still_routes_external_at_this_stage(monkeypatch):
-    """Regression pin for Stage 1: PDF text extraction/inlining on the local
-    branch is Stage 2 - until it lands, a PDF must still force external."""
-    router = FactCapturingRouter()
-    _patch_pipeline(monkeypatch, router, external_model=None)
-
-    resp = _post_file(QUESTION, make_pdf(SECRET), mime="application/pdf", filename="vault.pdf")
-
-    # No external model configured at all -> 422, not a local answer.
-    assert resp.status_code == 422
-    assert router.last_query is None
 
 
 def test_hard_external_override_forces_external_for_a_locally_answerable_file(monkeypatch):

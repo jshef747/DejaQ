@@ -282,9 +282,15 @@ def test_docx_is_inlined_through_the_same_fence():
     assert "<<<ATTACHED DOCUMENT>>>" in prompt and "<<<END ATTACHED DOCUMENT>>>" in prompt
 
 
-def test_pdf_is_not_inlined_because_it_goes_as_a_document_part():
+def test_pdf_is_inlined_too_the_external_branch_just_chooses_not_to():
+    """_query_with_inlined_file itself now inlines PDF text same as any other
+    kind (Stage 2: this is what the local branch, which has no native document
+    part, relies on). The external branch still gets the richer native part
+    instead - by passing doc=None at that one call site, not by this helper
+    special-casing PDF."""
     doc = file_text.extract(make_pdf(LONG), "application/pdf", "a.pdf")
-    assert openai_compat._query_with_inlined_file("q", doc) == "q"
+    prompt = openai_compat._query_with_inlined_file("q", doc)
+    assert "<<<ATTACHED DOCUMENT>>>" in prompt and "<<<END ATTACHED DOCUMENT>>>" in prompt
     assert openai_compat._query_with_inlined_file("q", None) == "q"
 
 
