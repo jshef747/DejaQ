@@ -145,6 +145,21 @@ if [[ ! -d "$SERVER_DIR" ]]; then
   echo -e "${RED}Expected server directory at $SERVER_DIR${NC}"; exit 1
 fi
 
+# ── Dependency sync ──────────────────────────────────────────────────────────
+# Run before anything starts, so a stale/missing environment fails here with a
+# named cause instead of surfacing later as a mysterious "backend unavailable".
+if ! command -v uv &>/dev/null; then
+  echo -e "${RED}uv not found. Install it: https://docs.astral.sh/uv/getting-started/installation/${NC}"; exit 1
+fi
+UV_SYNC_OUT="$(cd "$SERVER_DIR" && uv sync 2>&1)" || {
+  echo -e "${RED}Python dependency sync failed (cd server && uv sync). Output:${NC}"
+  echo "$UV_SYNC_OUT" >&2
+  exit 1
+}
+if grep -qE '^(Installed|Uninstalled) ' <<<"$UV_SYNC_OUT"; then
+  echo -e "${CYAN}Synced server/ Python dependencies (uv sync installed changes)${NC}"
+fi
+
 # ── Platform detection ──────────────────────────────────────────────────────
 # Windows (git-bash) uses .venv/Scripts/*.exe and runs Redis inside WSL; Unix
 # uses .venv/bin/* with a native redis-server. Detected by venv layout.
@@ -464,16 +479,16 @@ ensure_node_app_ready() {
   if [[ ! -f "$dir/package.json" ]]; then
     echo -e "${RED}$name package.json not found at $dir${NC}"; exit 1
   fi
-  if [[ ! -d "$dir/node_modules" ]]; then
-    echo -e "${RED}$name dependencies missing. Run: cd $dir && npm install${NC}"; exit 1
-  fi
-  # npm writes node_modules/.package-lock.json to reflect what's actually installed.
-  # If it's older than package-lock.json, node_modules is stale. Skip the check (do
-  # not block startup) when either file is missing — nothing to compare.
-  if [[ -f "$dir/package-lock.json" && -f "$dir/node_modules/.package-lock.json" ]]; then
-    if [[ "$dir/package-lock.json" -nt "$dir/node_modules/.package-lock.json" ]]; then
-      echo -e "${RED}$name dependencies out of date. Run: cd $dir && npm install${NC}"; exit 1
-    fi
+  # npm install is a no-op (fast) when node_modules already matches the
+  # lockfile; prefer it over `npm ci`, which deletes and reinstalls every run.
+  local out
+  out="$(cd "$dir" && npm install 2>&1)" || {
+    echo -e "${RED}$name dependency install failed (cd $dir && npm install). Output:${NC}"
+    echo "$out" >&2
+    exit 1
+  }
+  if grep -qE '^(added|removed|changed) [0-9]+ package' <<<"$out"; then
+    echo -e "  ${CYAN}$name dependencies updated (npm install)${NC}"
   fi
 }
 
