@@ -332,15 +332,15 @@ def _services_for_model_profile(model_profile: str, llm_config: EffectiveLlmConf
     # Temporary developer-only weak CPU profile. Keep the default singleton path
     # unchanged so production behavior and existing tests remain stable.
     #
-    # CAPTAIN DECISION, do not re-litigate: on this profile, normalizer/
-    # enricher/adjuster (via WEAK_CPU_MODEL_NAME) all share qwen_0_5b with
-    # llm_router below, which deliberately does not set num_ctx (see
-    # OLLAMA_NUM_CTX in config.py - the exclusion is correct on the default
-    # profile, where llm_router runs gemma4:e4b, a different, larger model
-    # with no rewrite-role sibling). On this profile that same exclusion
-    # reopens the num_ctx split on one shared tag: qwen_0_5b reloads between
-    # normalize()/adjust() and generate() on every miss. Left alone on
-    # purpose - this is a developer-only profile, not the shipped default.
+    # llm_router now sets num_ctx like every other role (see llm_router.py -
+    # added so a large attached file's inlined text can't silently overflow
+    # Ollama's own default window). On this profile that also means
+    # normalizer/enricher/adjuster/llm_router (all via WEAK_CPU_MODEL_NAME,
+    # sharing qwen_0_5b) now agree on one window instead of llm_router being
+    # the one role forcing Ollama to reload the shared tag between
+    # normalize()/adjust() and generate() on every miss - a welcome side
+    # effect of the correctness fix, not something this branch had to do
+    # anything for.
     if model_profile == MODEL_PROFILE_WEAK_CPU:
         return ModelServices(
             normalizer=get_normalizer_service(model_name=WEAK_CPU_MODEL_NAME),
@@ -363,8 +363,13 @@ def _services_for_model_profile(model_profile: str, llm_config: EffectiveLlmConf
             default_system_prompt=(
                 llm_config.local_model_system_prompt if llm_config.local_model_system_prompt_overridden else None
             ),
+            num_ctx=llm_config.ollama_num_ctx if llm_config.ollama_num_ctx_overridden else None,
         )
-        if (llm_config.local_model_overridden or llm_config.local_model_system_prompt_overridden)
+        if (
+            llm_config.local_model_overridden
+            or llm_config.local_model_system_prompt_overridden
+            or llm_config.ollama_num_ctx_overridden
+        )
         else _llm_router
     )
     adjuster = (
@@ -964,6 +969,23 @@ async def _register_answer_interaction(
 _GENERATION_FAILED_MESSAGE = (
     "I'm sorry, I couldn't process your request right now. Please try again later."
 )
+
+# Room left in the local-answering context window for the system prompt and
+# the inlining fence/labels around an attached file (_query_with_inlined_file)
+# - small and roughly constant regardless of file size, so a flat reserve is
+# enough; see the file-routing size guard in run_chat_pipeline.
+_LOCAL_FILE_PROMPT_RESERVE_TOKENS = 256
+
+
+def _estimate_tokens(text: str) -> int:
+    """A deliberately conservative (over-)estimate, for a safety check only.
+
+    Real English text tokenizes at roughly 4 chars/token; dividing by 3 errs
+    toward counting MORE tokens than a real tokenizer would, which is the
+    safe direction for the local-file size guard - it may route a file
+    external slightly earlier than strictly necessary, never later.
+    """
+    return len(text) // 3
 
 
 def answer_pieces(result: ChatPipelineResult) -> AsyncGenerator[str, None]:
@@ -1589,9 +1611,44 @@ async def run_chat_pipeline(
             # text below that floor; routing it external anyway would gate
             # answering on a caching threshold, and in a credential-less
             # workspace it 422s instead of answering at all. See file_text.py.
-            _file_usable_locally = file_doc is not None and file_doc.readable
+            #
+            # Local answering has no native document part (unlike the
+            # external branch's PDF handling), so the file's full extracted
+            # text is inlined into the prompt as plain text below
+            # (_query_with_inlined_file) - the only thing standing between a
+            # large attachment and Ollama's context window. Left unbounded,
+            # Ollama silently drops the HEAD of a prompt that overflows it
+            # (confirmed: a 60,001-line file with its marker on line 1
+            # answered as if only the last ~800 lines existed - no error, a
+            # confident wrong answer). This is new exposure this feature
+            # creates: a file this size previously always routed external,
+            # where a provider accepts the whole document. `_estimate_tokens`
+            # deliberately overestimates (real English text is usually less
+            # dense than 3 chars/token) - the failure mode this guards is
+            # silent and confident, so erring toward routing external too
+            # early costs a slower answer; erring the other way costs a wrong
+            # one.
+            _file_prompt_budget = (
+                llm_config.ollama_num_ctx - _max_tokens - _LOCAL_FILE_PROMPT_RESERVE_TOKENS
+            )
+            _file_estimated_tokens = (
+                _estimate_tokens(file_doc.text) + _estimate_tokens(user_query)
+                if file_doc is not None else 0
+            )
+            _file_fits_locally = _file_estimated_tokens <= max(_file_prompt_budget, 0)
+            _file_usable_locally = (
+                file_doc is not None and file_doc.readable and _file_fits_locally
+            )
             if _file_usable_locally and routing_mode != ROUTING_MODE_HARD_EXTERNAL:
                 classification = {"complexity": "easy", "score": 0.0, "task_type": "file_local"}
+            elif file_doc is not None and file_doc.readable and not _file_fits_locally:
+                classification = {"complexity": "hard", "score": 1.0, "task_type": "file_external_oversized"}
+                logger.info(
+                    "file too large for local answering (~%d estimated tokens > "
+                    "%d budget = num_ctx %d - max_tokens %d - reserve %d); routing external",
+                    _file_estimated_tokens, max(_file_prompt_budget, 0), llm_config.ollama_num_ctx,
+                    _max_tokens, _LOCAL_FILE_PROMPT_RESERVE_TOKENS,
+                )
             else:
                 classification = {"complexity": "hard", "score": 1.0, "task_type": "file_external"}
         elif routing_mode == ROUTING_MODE_EASY_LOCAL:
