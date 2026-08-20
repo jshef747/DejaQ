@@ -10,8 +10,8 @@ from app.schemas.chat import ExternalLLMRequest
 from app.schemas.test_provider import TestProviderRequest, TestProviderResponse
 from app.services.credential_service import SUPPORTED_PROVIDERS, CredentialService
 from app.services.external_llm import ExternalLLMService
+from app.services.llm_config_service import resolve_provider_for_model
 from app.services.llm_providers import LIVE_PROVIDERS, redact_api_key
-from app.services.provider_registry import provider_for_registered_model
 from app.utils.exceptions import ExternalLLMAuthError, ExternalLLMError, ExternalLLMTimeoutError
 
 logger = logging.getLogger("dejaq.routers.admin.test_provider")
@@ -54,9 +54,10 @@ async def test_provider(
     body: TestProviderRequest,
 ):
     # No stored config row applies here - body.model is a candidate the admin
-    # may not have saved yet, so this is placed from the registry alone. No
-    # name-prefix guess: an unregistered model is refused rather than guessed.
-    provider = provider_for_registered_model(body.model)
+    # may not have saved yet. Resolved via the legacy exact table for a bare
+    # legacy id, or LiteLLM's own qualified-name resolution otherwise - no
+    # name-prefix guess either way (see llm_config_service.resolve_provider_for_model).
+    provider = resolve_provider_for_model(body.model)
     if provider is None:
         raise HTTPException(
             status_code=422, detail=f"Unknown provider for model '{body.model}'."

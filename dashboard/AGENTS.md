@@ -8,14 +8,10 @@ This version has breaking changes — APIs, conventions, and file structure may 
 
 `app/dashboard/settings` reads the LiteLLM-backed model catalog via
 `app/actions/model-catalog.ts` (`GET /admin/v1/model-catalog/providers`
-and `.../providers/{key}/models`), not `app/actions/providers.ts`'s
-`GET /admin/v1/providers`. The latter endpoint and
-`server/app/services/provider_registry.py` still exist server-side and
-are still tested - they are deleted in a later migration stage (see
-`dashboard/lib/types.ts`'s `Provider`/`LIVE_PROVIDERS` comment, kept
-only because `server/tests/test_provider_registry_consistency.py`
-still checks it). Don't add a second live-provider list here; check
-that test before touching either.
+and `.../providers/{key}/models`). The old `GET /admin/v1/providers`
+endpoint and `server/app/services/provider_registry.py` it served from
+are both deleted (migration stage A1c) - don't add a new caller of that
+path back, it's gone server-side.
 
 ## Dev-tools indicator vs. sidebar user block
 

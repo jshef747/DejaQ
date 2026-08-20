@@ -1,10 +1,10 @@
-"""The new LiteLLM-backed catalog surface (migration stage A1a).
+"""The LiteLLM-backed catalog surface (migration stage A1).
 
-Additive only: `GET /admin/v1/providers` (provider_registry.py's shape) is
-untouched. These two endpoints are new paths so the dashboard can switch to
-them later (A1b) without a breaking change now. Models are fetched per
-provider, never all at once - the full catalog with capability fields is
-349 KB and must never land in one page load (plan section 2.11).
+The only catalog surface now - the old `GET /admin/v1/providers`
+(`provider_registry.py`'s shape) was deleted in A1c once the dashboard
+picker (A1b) no longer called it. Models are fetched per provider, never
+all at once - the full catalog with capability fields is 349 KB and must
+never land in one page load (plan section 2.11).
 """
 
 from fastapi import APIRouter, HTTPException

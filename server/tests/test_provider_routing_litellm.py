@@ -77,9 +77,9 @@ def test_external_llm_dispatcher_redacts_api_key_on_error(monkeypatch, caplog):
 
 def test_groq_vision_model_attachment_reaches_the_wire_through_litellm(monkeypatch):
     """Groq serves both vision-capable and text-only models; qwen/qwen3.6-27b
-    is the vision one (provider_registry.py). The image part must survive
-    routing through the transport unchanged - groq speaks the same
-    OpenAI-shaped wire format DejaQ already builds, no translation needed."""
+    is the vision one. The image part must survive routing through the
+    transport unchanged - groq speaks the same OpenAI-shaped wire format
+    DejaQ already builds, no translation needed."""
     request = ExternalLLMRequest(
         query="describe this",
         history=[],

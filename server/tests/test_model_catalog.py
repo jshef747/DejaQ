@@ -56,27 +56,15 @@ def test_catalog_provider_counts_and_models_endpoints():
     assert missing.status_code == 404
 
 
-def test_existing_admin_providers_endpoint_response_shape_is_unchanged():
-    """A1a is additive only - the old GET /admin/v1/providers endpoint (which
-    the dashboard currently calls) must keep serving provider_registry.PROVIDERS,
-    unchanged, until A1b switches the dashboard over."""
+def test_old_admin_providers_endpoint_is_gone():
+    """A1c: the old GET /admin/v1/providers endpoint (provider_registry.py's
+    shape) is deleted now that the dashboard picker (A1b) no longer calls it -
+    model-catalog's own endpoints, covered above, are the only surface left."""
     from app.main import app
-    from app.services.provider_registry import PROVIDERS
 
     client = TestClient(app)
     resp = client.get("/admin/v1/providers")
-    assert resp.status_code == 200
-
-    data = resp.json()
-    assert set(data.keys()) == {"providers"}
-    by_key = {p["key"]: p for p in data["providers"]}
-    assert set(by_key) == set(PROVIDERS)
-    for key, spec in PROVIDERS.items():
-        entry = by_key[key]
-        assert set(entry.keys()) == {"key", "live", "client_shape", "models"}
-        assert entry["live"] == spec.live
-        assert entry["client_shape"] == (spec.client_shape.value if spec.client_shape else None)
-        assert {m["id"] for m in entry["models"]} == {m.id for m in spec.models}
+    assert resp.status_code == 404
 
 
 # ── Write-time validation (llm_config_service._validate_and_resolve_external_model) ──

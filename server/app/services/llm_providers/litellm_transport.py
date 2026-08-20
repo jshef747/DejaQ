@@ -24,6 +24,16 @@ _LITELLM_PROVIDER_KEYS = {
     "fireworks": "fireworks_ai",
 }
 
+# Exit seam (plan section 4, row 7): the three non-default hosts the deleted
+# `provider_registry.ProviderSpec.base_url` used to carry, so a hand-written
+# client restored later already knows every host instead of re-deriving them
+# from vendor docs under pressure. Dead as data - LiteLLM resolves each
+# provider's host internally from the `provider/model` string, nothing here
+# reads these.
+#   xai:      https://api.x.ai/v1
+#   deepseek: https://api.deepseek.com
+#   groq:     https://api.groq.com/openai/v1
+
 # litellm.request_timeout defaults to 6000.0 seconds (100 minutes); every
 # call must pass its own timeout rather than inherit that.
 _REQUEST_TIMEOUT_SECONDS = 60.0
@@ -139,10 +149,10 @@ def _mapped_errors(api_key: str, provider: str) -> Iterator[None]:
 class LiteLLMTransportClient:
     """One `LLMProviderClient` implementation routing through LiteLLM.
 
-    Nothing constructs this yet - it is wired to a provider in later stages
-    of the LiteLLM migration (L2-L5). `provider` is DejaQ's own provider key
-    (`app.services.provider_registry`); `_litellm_key` translates it into
-    LiteLLM's provider namespace for the model string only.
+    One instance per key in `llm_providers.LIVE_PROVIDERS`, built by
+    `external_llm._PROVIDER_CLIENTS`. `provider` is DejaQ's own provider key;
+    `_litellm_key` translates it into LiteLLM's provider namespace for the
+    model string only.
     """
 
     def __init__(self, provider: str) -> None:

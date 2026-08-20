@@ -87,14 +87,6 @@ export type RagDocumentItem = {
   updated_at: string;
 };
 
-// Still checked against app/services/provider_registry.py by
-// server/tests/test_provider_registry_consistency.py - that registry and its
-// test are deleted together in a later migration stage (plan section 2.11),
-// not here. Nothing in the dashboard imports this anymore.
-export type Provider = "google" | "openai" | "anthropic" | "xai" | "deepseek" | "groq";
-
-export const LIVE_PROVIDERS: Provider[] = ["google", "openai", "anthropic", "xai", "deepseek", "groq"];
-
 export type LlmConfigResponse = {
   external_model: string | null;
   local_model: string | null;

@@ -51,7 +51,6 @@ from app.services.image_text import (
 from app.services.file_text import FileText, extract as extract_file_text
 from app.dependencies.auth import ResolvedWorkspace, require_org_key
 from app.services import cache_filter, llm_config_service, pipeline_config_cache, rag_service
-from app.services.provider_registry import provider_for_registered_model
 from app.services.classifier import ClassifierService
 from app.services.context_adjuster import (
     DEFAULT_ADJUST_SYSTEM_PROMPT,
@@ -1617,9 +1616,9 @@ async def run_chat_pipeline(
             # sync at write time and by the qualification migration). A row
             # with no recorded provider - chiefly the server-wide
             # DEJAQ_EXTERNAL_MODEL default, which has no database row to
-            # record one in - still resolves through the registry alone, no
-            # name-prefix guess.
-            provider = llm_config.external_provider or provider_for_registered_model(
+            # record one in - still resolves through the legacy fallback
+            # table alone, no name-prefix guess.
+            provider = llm_config.external_provider or llm_config_service.resolve_provider_for_model(
                 llm_config.external_model
             )
             if provider is None:

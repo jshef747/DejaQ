@@ -16,7 +16,6 @@ from app.services.chat_messages import extract_pipeline_inputs
 from app.services.credential_service import CredentialService
 from app.services.external_llm import ExternalLLMService
 from app.services.memory_chromaDB import get_memory_service, is_human_authored
-from app.services.provider_registry import provider_for_registered_model
 from app.services.request_logger import request_logger
 from app.services.response_registry import response_registry
 from app.services.service_factory import (
@@ -417,7 +416,9 @@ async def _escalate_to_external(
         config = llm_config_service.read_for_workspace(interaction.workspace_slug)
         if not config.external_model:
             raise ValueError("workspace has no external model configured")
-        provider = config.external_provider or provider_for_registered_model(config.external_model)
+        provider = config.external_provider or llm_config_service.resolve_provider_for_model(
+            config.external_model
+        )
         if provider is None:
             raise ValueError(
                 f"external model '{config.external_model}' is not mapped to a supported provider"
