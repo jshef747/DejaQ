@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from typing import Literal
@@ -15,6 +16,13 @@ from app.services.request_logger import ensure_stats_schema, request_logger
 from app.services.response_registry import compute_messages_hash, response_registry
 
 logger = logging.getLogger("dejaq.services.feedback")
+
+# Background store (generalize_and_store_task) writes the cache entry AFTER
+# the response is already returned to the user, so a feedback submitted right
+# after the answer arrives can race it - measured 0.99s-9.9s on this stack.
+# Retry the lookup with a short bounded backoff before giving up; a genuinely
+# bad response_id just pays this same delay and then correctly 404s.
+_FEEDBACK_RETRY_DELAYS_SECONDS = (0.2, 0.5, 1.0)
 
 
 class FeedbackNotFound(Exception):
@@ -178,7 +186,7 @@ def _checked_namespace(
     return namespace, doc_id
 
 
-def _apply_cache_feedback(
+async def _apply_cache_feedback(
     *,
     response_id: str,
     rating: Literal["positive", "negative"],
@@ -196,7 +204,8 @@ def _apply_cache_feedback(
     )
 
     memory = get_memory_service(namespace)
-    try:
+
+    def _apply() -> FeedbackResult:
         if rating == "negative":
             neg_count = memory.get_negative_count(doc_id)
             if neg_count == 0:
@@ -204,8 +213,22 @@ def _apply_cache_feedback(
                 return FeedbackResult(status="deleted")
             return FeedbackResult(status="ok", new_score=memory.update_score(doc_id, -2.0))
         return FeedbackResult(status="ok", new_score=memory.update_score(doc_id, 1.0))
-    except KeyError as exc:
-        raise FeedbackNotFound(response_id) from exc
+
+    attempts = len(_FEEDBACK_RETRY_DELAYS_SECONDS) + 1
+    for attempt in range(attempts):
+        try:
+            return _apply()
+        except KeyError as exc:
+            if attempt == attempts - 1:
+                logger.warning(
+                    "Feedback for %s still not found in cache after %d retries "
+                    "(background store may be unusually slow)",
+                    response_id,
+                    attempt,
+                )
+                raise FeedbackNotFound(response_id) from exc
+            await asyncio.sleep(_FEEDBACK_RETRY_DELAYS_SECONDS[attempt])
+    raise AssertionError("unreachable")
 
 
 async def submit_feedback(
@@ -293,7 +316,7 @@ async def submit_feedback(
     _edit_landed = edit_outcome is None or edit_outcome.edit_status in ("saved", "created")
     if cache_response_id and _edit_landed:
         try:
-            result = _apply_cache_feedback(
+            result = await _apply_cache_feedback(
                 response_id=cache_response_id,
                 rating=rating,
                 workspace=workspace,

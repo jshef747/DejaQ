@@ -80,7 +80,6 @@ const HTTP_MESSAGES: Record<number, string> = {
   401: "The DejaQ API key was rejected. Check the key in Settings, or DEJAQ_API_KEY in chat/.env.local.",
   402: "No external LLM credential configured for this organization. Add a provider key in the DejaQ dashboard.",
   403: "Access denied to this organization.",
-  404: "Endpoint not found. Verify the chat app API routes and backend URL.",
   422: "Malformed request body.",
   429: "Rate limited. Wait a moment and try again.",
   500: "Internal server error from the DejaQ backend.",
