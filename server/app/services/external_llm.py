@@ -26,6 +26,8 @@ _PROVIDER_CLIENTS: dict[str, LLMProviderClient] = {
         if spec.live and spec.client_shape == provider_registry.ClientShape.OPENAI_CHAT_COMPLETIONS
     },
     "deepseek": LiteLLMTransportClient("deepseek"),
+    "xai": LiteLLMTransportClient("xai"),
+    "groq": LiteLLMTransportClient("groq"),
 }
 
 
