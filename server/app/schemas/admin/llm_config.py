@@ -19,6 +19,11 @@ class LlmConfigResponse(BaseModel):
     # silently substituted one.
     external_model: str | None
     local_model: str
+    # Read-only: whether local_model reports Ollama's "vision" capability via
+    # /api/show. None means unknown (Ollama unreachable, or the model isn't
+    # installed there). Nothing reads this to route or gate anything yet -
+    # it exists purely so an admin can see what the system believes.
+    local_model_supports_vision: bool | None
     generalizer_model: str
     adjuster_model: str
     enricher_model: str

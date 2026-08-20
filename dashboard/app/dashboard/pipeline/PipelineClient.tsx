@@ -557,6 +557,20 @@ function LockedNode({ name, model, sub, wide }: { name: string; model: string; s
   );
 }
 
+// Read-only - no click handler, no way to set this from here. The value
+// comes from Ollama's /api/show (see server/app/services/ollama_catalog.py
+// supports_vision), never from admin input. Nothing routes on this yet.
+function VisionCapabilityBadge({ supportsVision }: { supportsVision: boolean | null }) {
+  if (supportsVision === null) {
+    return <span className="ds-pill ds-pill-amber">Vision support unknown — Ollama unreachable</span>;
+  }
+  return supportsVision ? (
+    <span className="ds-pill ds-pill-green">Reads images</span>
+  ) : (
+    <span className="ds-pill ds-pill-neutral">Text only — cannot read images</span>
+  );
+}
+
 function StageEditor({
   stage,
   overridden,
@@ -641,6 +655,12 @@ function StageEditor({
         {!modelsUnknown && (
           <div className="ds-field-hint" style={{ marginTop: -8, marginBottom: 14 }}>
             installed: {availableModels.join(" · ") || "none found"}
+          </div>
+        )}
+
+        {stage.key === "local_model" && (
+          <div style={{ marginTop: -8, marginBottom: 14 }}>
+            <VisionCapabilityBadge supportsVision={config.local_model_supports_vision} />
           </div>
         )}
 

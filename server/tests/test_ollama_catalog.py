@@ -4,6 +4,8 @@ from fastapi.testclient import TestClient
 
 from app.services import ollama_catalog
 
+pytestmark = pytest.mark.no_model
+
 
 def _stub_get(monkeypatch, responses):
     """responses: list of (status_code, json_body) consumed in call order."""
@@ -19,13 +21,33 @@ def _stub_get(monkeypatch, responses):
     return calls
 
 
+def _stub_post(monkeypatch, responses):
+    """responses: list of (status_code, json_body) consumed in call order."""
+    calls: list[tuple[str, dict]] = []
+
+    def _fake_post(url, json=None, timeout=None):
+        calls.append((url, json))
+        status, body = responses[len(calls) - 1]
+        request = httpx.Request("POST", url)
+        return httpx.Response(status, json=body, request=request)
+
+    monkeypatch.setattr(httpx, "post", _fake_post)
+    return calls
+
+
 @pytest.fixture(autouse=True)
 def _reset_catalog_cache():
-    """The module-level cache is process-lifetime - reset it around every
-    test so one test's fetch doesn't leak into the next."""
+    """The module-level caches are process-lifetime - reset them around
+    every test so one test's fetch doesn't leak into the next."""
     ollama_catalog._CACHE = ollama_catalog._CatalogCache(ttl_seconds=ollama_catalog._CACHE._ttl)
+    ollama_catalog._CAPABILITY_CACHE = ollama_catalog._CapabilityCache(
+        ttl_seconds=ollama_catalog._CAPABILITY_CACHE._ttl
+    )
     yield
     ollama_catalog._CACHE = ollama_catalog._CatalogCache(ttl_seconds=ollama_catalog._CACHE._ttl)
+    ollama_catalog._CAPABILITY_CACHE = ollama_catalog._CapabilityCache(
+        ttl_seconds=ollama_catalog._CAPABILITY_CACHE._ttl
+    )
 
 
 def test_list_available_models_returns_sorted_tags(monkeypatch):
@@ -113,3 +135,71 @@ def test_available_models_endpoint_reports_a_clear_error_when_ollama_is_unreacha
     body = response.json()
     assert body["models"] == []
     assert "unreachable" in body["error"].lower()
+
+
+# ── supports_vision (/api/show, deliberately not /api/tags) ──
+
+
+def test_supports_vision_true_when_capabilities_include_vision(monkeypatch):
+    calls = _stub_post(monkeypatch, [(200, {"capabilities": ["completion", "vision", "tools"]})])
+
+    assert ollama_catalog.supports_vision("gemma4:e4b") is True
+    assert calls == [(f"{ollama_catalog.OLLAMA_URL}/api/show", {"model": "gemma4:e4b"})]
+
+
+def test_supports_vision_false_when_capabilities_omit_vision(monkeypatch):
+    _stub_post(monkeypatch, [(200, {"capabilities": ["completion", "tools"]})])
+
+    assert ollama_catalog.supports_vision("qwen2.5:1.5b") is False
+
+
+def test_supports_vision_caches_within_ttl(monkeypatch):
+    calls = _stub_post(monkeypatch, [(200, {"capabilities": ["completion", "vision"]})] * 3)
+
+    ollama_catalog.supports_vision("gemma4:e4b")
+    ollama_catalog.supports_vision("gemma4:e4b")
+    ollama_catalog.supports_vision("gemma4:e4b")
+
+    assert len(calls) == 1
+
+
+def test_supports_vision_caches_independently_per_model(monkeypatch):
+    calls = _stub_post(monkeypatch, [
+        (200, {"capabilities": ["completion", "vision"]}),
+        (200, {"capabilities": ["completion"]}),
+    ])
+
+    assert ollama_catalog.supports_vision("gemma4:e4b") is True
+    assert ollama_catalog.supports_vision("qwen2.5:1.5b") is False
+    assert len(calls) == 2
+
+
+def test_supports_vision_degrades_to_none_when_ollama_unreachable(monkeypatch):
+    """A read-only indicator - unreachable Ollama must never raise or block."""
+    def _fake_post(url, json=None, timeout=None):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(httpx, "post", _fake_post)
+
+    assert ollama_catalog.supports_vision("gemma4:e4b") is None
+
+
+def test_supports_vision_degrades_to_none_when_model_not_found(monkeypatch):
+    """/api/show 404s for a model that isn't installed - also just 'unknown'."""
+    _stub_post(monkeypatch, [(404, {"error": "model not found"})])
+
+    assert ollama_catalog.supports_vision("does-not-exist:latest") is None
+
+
+def test_supports_vision_force_refresh_bypasses_the_cache(monkeypatch):
+    calls = _stub_post(monkeypatch, [
+        (200, {"capabilities": ["completion", "vision"]}),
+        (200, {"capabilities": ["completion"]}),
+    ])
+
+    first = ollama_catalog.supports_vision("gemma4:e4b")
+    second = ollama_catalog.supports_vision("gemma4:e4b", force_refresh=True)
+
+    assert len(calls) == 2
+    assert first is True
+    assert second is False
