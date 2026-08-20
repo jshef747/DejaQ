@@ -46,6 +46,7 @@ from app.services.image_text import (
     OcrResult,
     extract as extract_image_text,
     matches as text_matches,
+    ocr_plaintext as ocr_image_plaintext,
     tokens_from_string,
 )
 from app.services.file_text import FileText, extract as extract_file_text
@@ -667,6 +668,67 @@ def _query_with_inlined_file(user_query: str, doc: FileText | None) -> str:
         f"{safe_text}\n"
         "<<<END ATTACHED DOCUMENT>>>"
     )
+
+
+# Judge system prompt for hard-content routing (file text and OCR'd document
+# images, via _judge_hard_content below). Every clause here was measured, not
+# guessed - do NOT "tidy" this prompt without re-measuring against a real hard
+# document buried behind filler. A generic-sounding rewrite of this same idea
+# was measured to answer EASY on a hard document buried behind filler text; the
+# wording below, with these specific clauses, came back HARD on the same input.
+#   - "may be located anywhere ... including deep within it" - without this
+#     the model anchors on where in the document it's currently reading rather
+#     than the document as a whole, and misses hard content that isn't in the
+#     first paragraph.
+#   - "even if the user's own question sounds generic or simple" - the failure
+#     case this whole feature exists for is a generic question ("what does
+#     this say?", "help me with this") over a hard document; without this
+#     clause the model reads a generic question as evidence the request itself
+#     is easy and never inspects the document's content at all.
+#   - "judge the DOCUMENT's content, not just the question's phrasing" - a
+#     direct instruction against exactly the shortcut the clause above exists
+#     to block.
+#   - forcing exactly one word (HARD or EASY) keeps num_predict=8 sufficient
+#     and the answer trivially parseable - a free-form version of this prompt
+#     spent its whole token budget describing the content instead of
+#     committing to a verdict.
+_HARD_CONTENT_JUDGE_SYSTEM_PROMPT = (
+    "You are judging whether a document requires advanced, specialized "
+    "expertise to answer correctly - the kind of question that needs "
+    "graduate-level reasoning, formal proofs, rigorous multi-step "
+    "derivations, or deep domain expertise (advanced mathematics, physics, "
+    "law, medicine, finance, engineering, computer science, philosophy, "
+    "etc). The hard content may be located anywhere in the document, "
+    "including deep within it, even if the user's own question sounds "
+    "generic or simple (e.g. \"what does this say?\" or \"help me with "
+    "this\") - judge the DOCUMENT's content, not just the question's "
+    "phrasing. Ordinary documents (schedules, receipts, notes, "
+    "correspondence, simple instructions, casual conversation) are EASY, "
+    "even if long or repetitive. Reply with exactly one word: HARD or EASY. "
+    "No explanation."
+)
+
+
+async def _judge_hard_content(llm_router, judge_text: str) -> bool:
+    """Ask the local model whether attached content (inlined file text, or a
+    document image's OCR'd text) needs the external model instead of local
+    generation. Returns True for "hard" (route external), False for "easy".
+
+    Never raises: any exception, timeout, or answer that doesn't clearly say
+    HARD defaults to EASY, which routes local - the cheap direction to be
+    wrong in. Logged, never propagated into the request.
+    """
+    try:
+        text, _, _ = await llm_router.generate_local_response(
+            judge_text,
+            history=None,
+            max_tokens=8,
+            system_prompt=_HARD_CONTENT_JUDGE_SYSTEM_PROMPT,
+        )
+    except Exception:
+        logger.exception("Hard-content judge failed; defaulting to easy")
+        return False
+    return "HARD" in text.strip().upper()
 
 
 def _query_with_rag_context(user_query: str, chunks: list) -> str:
@@ -1590,7 +1652,29 @@ async def run_chat_pipeline(
             # entry (model swapped in Ollama after the last refresh).
             _local_supports_vision = ollama_catalog.supports_vision(llm_config.local_model)
             if _local_supports_vision and routing_mode != ROUTING_MODE_HARD_EXTERNAL:
-                classification = {"complexity": "easy", "score": 0.0, "task_type": "image_local"}
+                # A confident document image gets the same hard-content judge a
+                # file does, on its OCR'd text - the vision model is never asked
+                # to judge raw pixels (measured unreliable: 4/4 wrong on exactly
+                # the case that matters, see _HARD_CONTENT_JUDGE_SYSTEM_PROMPT's
+                # sibling investigation). A photo, or an ambiguous low-confidence
+                # read, has no reliable text to judge and keeps today's
+                # unconditional local routing unchanged.
+                _image_is_hard = False
+                if image_ocr is not None and image_ocr.is_document:
+                    with trace.step("hard_content_judge"):
+                        _image_ocr_text = await run_in_threadpool(ocr_image_plaintext, image_bytes)
+                        _image_judge_query = _query_with_inlined_file(
+                            user_query,
+                            FileText(
+                                kind="image_ocr", text=_image_ocr_text, sha="",
+                                char_count=len(_image_ocr_text), ok=True, reason="",
+                            ),
+                        )
+                        _image_is_hard = await _judge_hard_content(services.llm_router, _image_judge_query)
+                if _image_is_hard:
+                    classification = {"complexity": "hard", "score": 1.0, "task_type": "image_external_judged_hard"}
+                else:
+                    classification = {"complexity": "easy", "score": 0.0, "task_type": "image_local"}
             else:
                 classification = {"complexity": "hard", "score": 1.0, "task_type": "image_external"}
         elif _request_has_file:
@@ -1640,7 +1724,18 @@ async def run_chat_pipeline(
                 file_doc is not None and file_doc.readable and _file_fits_locally
             )
             if _file_usable_locally and routing_mode != ROUTING_MODE_HARD_EXTERNAL:
-                classification = {"complexity": "easy", "score": 0.0, "task_type": "file_local"}
+                # File fits the local context window - but "fits" isn't "easy".
+                # Judge on the same inlined text generation would see (reusing
+                # _query_with_inlined_file, not hand-rolled fencing, so a
+                # document that says "ignore your instructions" still reads as
+                # DATA to the judge, not a command).
+                with trace.step("hard_content_judge"):
+                    _file_judge_query = _query_with_inlined_file(user_query, file_doc)
+                    _file_is_hard = await _judge_hard_content(services.llm_router, _file_judge_query)
+                if _file_is_hard:
+                    classification = {"complexity": "hard", "score": 1.0, "task_type": "file_external_judged_hard"}
+                else:
+                    classification = {"complexity": "easy", "score": 0.0, "task_type": "file_local"}
             elif file_doc is not None and file_doc.readable and not _file_fits_locally:
                 classification = {"complexity": "hard", "score": 1.0, "task_type": "file_external_oversized"}
                 logger.info(
@@ -1676,8 +1771,11 @@ async def run_chat_pipeline(
         # curated knowledge base. Retrieval sees the normalized query; retrieved
         # chunks are injected into the generation prompt as fenced DATA and NEVER
         # enter the cache key (same side-channel rule attachments follow). Skipped
-        # for attachment requests, which already carry their own context and route
-        # external. See services/rag_service.py.
+        # for attachment requests - not because they route external (they may
+        # well route local, per the hard-content judge above), but because they
+        # already carry their own content as context; injecting a second,
+        # unrelated context on top of an attached file or image would just
+        # dilute the prompt. See services/rag_service.py.
         rag_context: list = []
         if RAG_ENABLED and not _request_has_image and not _request_has_file:
             try:

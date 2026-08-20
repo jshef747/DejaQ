@@ -122,6 +122,10 @@ def _patch_pipeline(monkeypatch, router, *, external_model: str | None = None, s
     monkeypatch.setattr(
         openai_compat, "extract_image_text", lambda data: DOCUMENT_OCR
     )
+    # The hard-content judge's own OCR pass (image_text.ocr_plaintext) is a
+    # second, separate tesseract call from extract_image_text above - stub it
+    # too so these tests don't depend on real OCR of a fake PNG.
+    monkeypatch.setattr(openai_compat, "ocr_image_plaintext", lambda data: "some ordinary document text")
     monkeypatch.setattr(
         openai_compat.ollama_catalog, "supports_vision", lambda model, force_refresh=False: supports_vision
     )
@@ -176,7 +180,11 @@ def test_image_answered_locally_with_no_external_credential(monkeypatch, caplog)
     assert resp.status_code == 200
     assert resp.json()["output_text"] == ANSWER
     assert resp.headers["x-dejaq-model-used"] == openai_compat.LOCAL_LLM_MODEL_NAME
-    assert router.calls == 1
+    # 2 calls: the hard-content judge on the OCR'd text, then generation. The
+    # stub answers every call with ANSWER, which doesn't parse as HARD, so the
+    # judge defaults to easy and the route stays local - same outcome as
+    # before the judge existed, just one extra call to reach it.
+    assert router.calls == 2
     assert router.last_images == [base64.b64encode(IMAGE_BYTES).decode("ascii")], (
         "the image bytes must reach the local generation call"
     )
