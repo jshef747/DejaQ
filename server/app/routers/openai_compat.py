@@ -304,7 +304,7 @@ def _read_effective_llm_config(workspace_slug: str, workspace_id: int | None) ->
     try:
         config = pipeline_config_cache.get_effective_config(workspace_slug)
     except llm_config_service.WorkspaceNotFound:
-        logger.warning("LLM config requested for missing org slug=%s; using defaults", workspace_slug)
+        logger.warning("LLM config requested for missing workspace slug=%s; using defaults", workspace_slug)
         return EffectiveLlmConfig(external_model=EXTERNAL_MODEL_NAME, routing_threshold=ROUTING_THRESHOLD)
     return _effective_from_config(config)
 
@@ -1072,12 +1072,12 @@ async def run_chat_pipeline(
         query = content_snippet(user_query)
         if query:
             logger.info(
-                "start org=%s dept=%s namespace=%s model=%s query=%s",
+                "start workspace=%s dept=%s namespace=%s model=%s query=%s",
                 workspace_slug, dept, cache_namespace, model, query,
             )
         else:
             logger.info(
-                "start org=%s dept=%s namespace=%s model=%s",
+                "start workspace=%s dept=%s namespace=%s model=%s",
                 workspace_slug, dept, cache_namespace, model,
             )
 

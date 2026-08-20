@@ -35,7 +35,7 @@ async def submit_feedback(
             edited_answer=body.edited_answer,
             rating=body.rating,
             comment=body.comment,
-            org=workspace,
+            workspace=workspace,
             workspace_id=workspace_id,
             department=dept,
             validate_namespace=True,

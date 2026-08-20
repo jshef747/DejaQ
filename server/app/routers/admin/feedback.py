@@ -17,7 +17,7 @@ def list_feedback(
     offset: int = Query(default=0, ge=0),
 ):
     return feedback_service.list_feedback(
-        org=workspace,
+        workspace=workspace,
         department=department,
         response_id=response_id,
         limit=limit,
@@ -35,7 +35,7 @@ async def submit_feedback(body: AdminFeedbackRequest):
             response_id=body.response_id,
             rating=body.rating,
             comment=body.comment,
-            org=body.workspace,
+            workspace=body.workspace,
             department=body.department,
             validate_namespace=True,
         )
