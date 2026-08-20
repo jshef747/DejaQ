@@ -751,7 +751,7 @@ echo -e "\n${YELLOW}Press Ctrl+C to stop all services.${NC}\n"
 if [[ "$LOG_MODE" == "requests" && "$RUN_BACKEND" == "true" ]]; then
   (
     tail -n 0 -f "$LOG_DIR/uvicorn.log" \
-      | grep --line-buffered -E "router\.openai_compat.*(start org=|done cache=|validator rejected)" \
+      | grep --line-buffered -E "router\.openai_compat.*(start workspace=|done cache=|validator rejected)" \
       | format_terminal_logs
   ) &
 else

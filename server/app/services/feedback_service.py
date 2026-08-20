@@ -53,7 +53,7 @@ class FeedbackResult(BaseModel):
 
 def list_feedback(
     *,
-    org: str | None = None,
+    workspace: str | None = None,
     department: str | None = None,
     response_id: str | None = None,
     limit: int = 100,
@@ -61,9 +61,9 @@ def list_feedback(
 ) -> FeedbackListResponse:
     clauses: list[str] = []
     params: list[object] = []
-    if org:
+    if workspace:
         clauses.append("workspace = ?")
-        params.append(org)
+        params.append(workspace)
     if department:
         clauses.append("department = ?")
         params.append(department)
@@ -105,7 +105,7 @@ def list_feedback(
     )
 
 
-def _namespace_for(org: str, department: str) -> str:
+def _namespace_for(workspace: str, department: str) -> str:
     """Best-effort reconstruction of a namespace from workspace + department slug.
 
     Only a fallback for callers that have no request state to read it from (the
@@ -116,8 +116,8 @@ def _namespace_for(org: str, department: str) -> str:
     used should do so - see `cache_namespace` on submit_feedback().
     """
     if department == "default":
-        return f"{org}--default"
-    return f"{org}__{department}"
+        return f"{workspace}--default"
+    return f"{workspace}__{department}"
 
 
 def _split_response_id(response_id: str) -> tuple[str, str]:
@@ -158,7 +158,7 @@ def _validate_messages(messages: list[dict]) -> None:
 def _checked_namespace(
     *,
     response_id: str,
-    org: str,
+    workspace: str,
     department: str,
     validate_namespace: bool,
     cache_namespace: str | None,
@@ -172,7 +172,7 @@ def _checked_namespace(
     namespace that never existed).
     """
     namespace, doc_id = _split_response_id(response_id)
-    expected = cache_namespace or _namespace_for(org, department)
+    expected = cache_namespace or _namespace_for(workspace, department)
     if validate_namespace and namespace != expected:
         raise FeedbackNamespaceMismatch(response_id)
     return namespace, doc_id
@@ -182,14 +182,14 @@ def _apply_cache_feedback(
     *,
     response_id: str,
     rating: Literal["positive", "negative"],
-    org: str,
+    workspace: str,
     department: str,
     validate_namespace: bool,
     cache_namespace: str | None = None,
 ) -> FeedbackResult:
     namespace, doc_id = _checked_namespace(
         response_id=response_id,
-        org=org,
+        workspace=workspace,
         department=department,
         validate_namespace=validate_namespace,
         cache_namespace=cache_namespace,
@@ -216,7 +216,7 @@ async def submit_feedback(
     edited_answer: str | None = None,
     rating: Literal["positive", "negative"],
     comment: str | None,
-    org: str,
+    workspace: str,
     workspace_id: int | None = None,
     department: str,
     validate_namespace: bool,
@@ -239,7 +239,7 @@ async def submit_feedback(
         interaction = await response_registry.validate_owner(
             interaction_id,
             workspace_id=workspace_id,
-            workspace_slug=org,
+            workspace_slug=workspace,
             department=department,
         )
         if interaction is None:
@@ -262,7 +262,7 @@ async def submit_feedback(
         if cache_response_id:
             _checked_namespace(
                 response_id=cache_response_id,
-                org=org,
+                workspace=workspace,
                 department=department,
                 validate_namespace=validate_namespace,
                 cache_namespace=cache_namespace,
@@ -296,7 +296,7 @@ async def submit_feedback(
             result = _apply_cache_feedback(
                 response_id=cache_response_id,
                 rating=rating,
-                org=org,
+                workspace=workspace,
                 department=department,
                 validate_namespace=validate_namespace,
                 cache_namespace=cache_namespace,
@@ -324,7 +324,7 @@ async def submit_feedback(
     if interaction_id:
         await request_logger.log_feedback(
             cache_response_id or interaction_id,
-            org,
+            workspace,
             department,
             rating,
             comment,
@@ -332,7 +332,7 @@ async def submit_feedback(
             edited=edited_answer is not None,
         )
     else:
-        await request_logger.log_feedback(cache_response_id or "", org, department, rating, comment)
+        await request_logger.log_feedback(cache_response_id or "", workspace, department, rating, comment)
 
     if not interaction_id or rating != "negative":
         return result
