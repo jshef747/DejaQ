@@ -256,14 +256,111 @@ def test_admin_test_provider_uses_stored_org_credential(
     }
     assert len(calls) == 1
     request, provider, api_key = calls[0]
-    assert request.query == "Reply with exactly: OK"
+    assert request.query == "Say hello."
     assert request.model == "claude-sonnet-4-6"
-    assert request.max_tokens == 8
+    assert request.max_tokens == 64
     # No temperature sent - the diagnostic must not send its own non-default
     # value, or it 400s on exactly the models it exists to test.
     assert request.temperature is None
     assert provider == "anthropic"
     assert api_key == "sk-ant-live"
+
+
+def test_admin_test_provider_accepts_non_ok_response(
+    isolated_org_db,
+    authed_admin_client,
+    monkeypatch,
+):
+    # Reproduces the reported bug: a reasoning model (e.g. groq/openai/gpt-oss-120b)
+    # answers something other than a bare "OK" - the call still succeeded and must
+    # be reported as success, not a 502.
+    from cryptography.fernet import Fernet
+    import app.config as config
+    from app.routers.admin import test_provider
+    from app.schemas.chat import ExternalLLMResponse
+
+    monkeypatch.setattr(test_provider, "_provider_test_last_success", {})
+    key = Fernet.generate_key().decode()
+    monkeypatch.setenv("DEJAQ_CREDENTIAL_ENCRYPTION_KEY", key)
+    monkeypatch.setattr(config, "CREDENTIAL_ENCRYPTION_KEY", key, raising=False)
+
+    class StubExternalLLM:
+        async def generate_response(self, request, provider, api_key):
+            return ExternalLLMResponse(
+                text="Okay, hello! How can I help you today?",
+                model_used=request.model,
+                prompt_tokens=5,
+                completion_tokens=10,
+                latency_ms=20.0,
+            )
+
+    monkeypatch.setattr(test_provider, "_external_llm", StubExternalLLM())
+
+    client, headers = authed_admin_client
+    client.post("/admin/v1/workspaces", json={"name": "Acme"}, headers=headers)
+    client.put(
+        "/admin/v1/workspaces/acme/credentials/groq",
+        json={"api_key": "gsk-live"},
+        headers=headers,
+    )
+
+    response = client.post(
+        "/admin/v1/workspaces/acme/test-provider",
+        json={"model": "groq/openai/gpt-oss-120b"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+
+
+def test_admin_test_provider_accepts_empty_response(
+    isolated_org_db,
+    authed_admin_client,
+    monkeypatch,
+):
+    # A reasoning model can spend its whole token budget on hidden reasoning
+    # tokens and return no visible text at all. The call still succeeded (no
+    # exception), which is what this button measures, so it is still a pass.
+    from cryptography.fernet import Fernet
+    import app.config as config
+    from app.routers.admin import test_provider
+    from app.schemas.chat import ExternalLLMResponse
+
+    monkeypatch.setattr(test_provider, "_provider_test_last_success", {})
+    key = Fernet.generate_key().decode()
+    monkeypatch.setenv("DEJAQ_CREDENTIAL_ENCRYPTION_KEY", key)
+    monkeypatch.setattr(config, "CREDENTIAL_ENCRYPTION_KEY", key, raising=False)
+
+    class StubExternalLLM:
+        async def generate_response(self, request, provider, api_key):
+            return ExternalLLMResponse(
+                text="",
+                model_used=request.model,
+                prompt_tokens=5,
+                completion_tokens=64,
+                latency_ms=20.0,
+                finish_reason="length",
+            )
+
+    monkeypatch.setattr(test_provider, "_external_llm", StubExternalLLM())
+
+    client, headers = authed_admin_client
+    client.post("/admin/v1/workspaces", json={"name": "Acme"}, headers=headers)
+    client.put(
+        "/admin/v1/workspaces/acme/credentials/groq",
+        json={"api_key": "gsk-live"},
+        headers=headers,
+    )
+
+    response = client.post(
+        "/admin/v1/workspaces/acme/test-provider",
+        json={"model": "groq/openai/gpt-oss-120b"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
 
 
 def test_admin_test_provider_rate_limits_successful_checks(
