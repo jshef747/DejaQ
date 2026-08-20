@@ -47,6 +47,10 @@ Inside `op.batch_alter_table(..., recreate="always")` SQLite rebuilds the table,
 
 `tests/_fake_llm_server.py`'s `FakeLLMServer` records real wire bytes; point LiteLLM at it per provider with an env var, not a client monkeypatch (that seam does not exist under LiteLLM): `OPENAI_API_BASE` (openai/xai/deepseek all resolve through the openai-compatible path), `GROQ_API_BASE`, `ANTHROPIC_API_BASE`, `GEMINI_API_BASE` (not `GOOGLE_API_BASE` - `google` is not a real LiteLLM provider key, see `litellm_transport._LITELLM_PROVIDER_KEYS`). Groq's response transformer reads `service_tier` off the reply unconditionally (`litellm/llms/groq/chat/transformation.py`); a scripted Groq response body without it raises `AttributeError` inside LiteLLM, surfaced as a generic `APIConnectionError` with no hint it's a fixture problem, not a transport bug.
 
+## Provider resolution needs a registry fallback, not just the stored column
+
+`workspace_llm_configs.external_provider` is null for more than "an old unmigrated row": the server-wide `DEJAQ_EXTERNAL_MODEL` env default has no database row at all, so it can never carry a stored provider. Any call site resolving a provider from `(external_model, external_provider)` (`openai_compat.py`, `escalation.py`) must fall back to `provider_registry.provider_for_registered_model` (an exact, curated lookup) when the stored value is null, not just 422 - that env-default path is live and tested (`tests/test_unconfigured_external_model.py`). Do not confuse this safe registry fallback with the deleted `provider_inference.py` name-prefix guess (`gemini-` -> `google`, etc.) - that guess is gone for good (migration `f7a8b9c0d1e2` is now the only place it ever runs, once, at backfill time); a call site should never resurrect it.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.
