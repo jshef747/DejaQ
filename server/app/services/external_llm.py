@@ -4,7 +4,6 @@ from collections.abc import AsyncGenerator
 from app.schemas.chat import ExternalLLMRequest, ExternalLLMResponse, ExternalStreamChunk
 from app.services import provider_registry
 from app.services.llm_providers import LLMProviderClient, redact_api_key
-from app.services.llm_providers.google import GoogleProviderClient
 from app.services.llm_providers.litellm_transport import LiteLLMTransportClient
 from app.services.llm_providers.openai import OpenAIProviderClient
 from app.utils.exceptions import ExternalLLMError
@@ -17,7 +16,7 @@ logger = logging.getLogger("dejaq.services.external_llm")
 # Providers migrated onto the LiteLLM transport (migration stages L2-L5) are
 # listed explicitly below, overriding their entry from the comprehension.
 _PROVIDER_CLIENTS: dict[str, LLMProviderClient] = {
-    "google": GoogleProviderClient(),
+    "google": LiteLLMTransportClient("google"),
     "anthropic": LiteLLMTransportClient("anthropic"),
     **{
         key: OpenAIProviderClient(base_url=spec.base_url)

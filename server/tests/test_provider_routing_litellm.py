@@ -8,7 +8,6 @@ import pytest
 
 from app.schemas.chat import ExternalLLMRequest
 from app.services import external_llm
-from app.services.llm_providers.google import GoogleProviderClient
 from app.services.llm_providers.litellm_transport import LiteLLMTransportClient
 from app.services.llm_providers.openai import OpenAIProviderClient
 from tests._fake_llm_server import FakeLLMServer
@@ -17,12 +16,19 @@ pytestmark = pytest.mark.no_model
 
 
 def test_deepseek_routes_through_litellm_transport_and_every_other_provider_is_untouched():
+    """"Every other provider" as of L2: `openai` is the control that never
+    migrates. `google` is asserted separately once L5 routes it below."""
     deepseek_client = external_llm._PROVIDER_CLIENTS["deepseek"]
     assert isinstance(deepseek_client, LiteLLMTransportClient)
     assert deepseek_client._provider == "deepseek"
 
-    assert isinstance(external_llm._PROVIDER_CLIENTS["google"], GoogleProviderClient)
     assert isinstance(external_llm._PROVIDER_CLIENTS["openai"], OpenAIProviderClient)
+
+
+def test_google_routes_through_litellm_transport():
+    google_client = external_llm._PROVIDER_CLIENTS["google"]
+    assert isinstance(google_client, LiteLLMTransportClient)
+    assert google_client._provider == "google"
 
 
 def test_xai_and_groq_route_through_litellm_transport():

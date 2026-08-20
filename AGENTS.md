@@ -43,6 +43,10 @@ Inside `op.batch_alter_table(..., recreate="always")` SQLite rebuilds the table,
 
 `chrome-devtools-axi` runs against a machine-wide shared browser bridge whose own process cwd is unrelated to any worktree. Its `screenshot`/`take_screenshot` silently no-ops outside the bridge's configured MCP "workspace roots" (the CLI still prints a success line and the resolved path you asked for) - `/tmp` is always allowed. Screenshot to `/tmp/<name>.png` and `cp` into the worktree afterward; do not trust a `screenshot` success message alone without checking the file landed.
 
+## Testing the LiteLLM transport against a fake server
+
+`tests/_fake_llm_server.py`'s `FakeLLMServer` records real wire bytes; point LiteLLM at it per provider with an env var, not a client monkeypatch (that seam does not exist under LiteLLM): `OPENAI_API_BASE` (openai/xai/deepseek all resolve through the openai-compatible path), `GROQ_API_BASE`, `ANTHROPIC_API_BASE`, `GEMINI_API_BASE` (not `GOOGLE_API_BASE` - `google` is not a real LiteLLM provider key, see `litellm_transport._LITELLM_PROVIDER_KEYS`). Groq's response transformer reads `service_tier` off the reply unconditionally (`litellm/llms/groq/chat/transformation.py`); a scripted Groq response body without it raises `AttributeError` inside LiteLLM, surfaced as a generic `APIConnectionError` with no hint it's a fixture problem, not a transport bug.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.
