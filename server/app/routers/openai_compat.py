@@ -1572,7 +1572,14 @@ async def run_chat_pipeline(
             # since local generation would otherwise answer as if the document
             # were blank instead of the "answered but uncacheable" behavior this
             # preserves. An explicit hard_external override always wins.
-            _file_usable_locally = file_doc is not None and file_doc.ok
+            #
+            # `.readable`, not `.ok`/`.cacheable` - `.ok` also requires clearing
+            # CACHE_FILE_MIN_CHARS, a floor for cache identity only. A short but
+            # genuine DOCX/PDF (a one-paragraph memo) extracts real, complete
+            # text below that floor; routing it external anyway would gate
+            # answering on a caching threshold, and in a credential-less
+            # workspace it 422s instead of answering at all. See file_text.py.
+            _file_usable_locally = file_doc is not None and file_doc.readable
             if _file_usable_locally and routing_mode != ROUTING_MODE_HARD_EXTERNAL:
                 classification = {"complexity": "easy", "score": 0.0, "task_type": "file_local"}
             else:

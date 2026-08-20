@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.routers import openai_compat
 from tests.conftest import StreamingLocalRouterMixin
+from tests.test_file_gate import make_docx
 from tests.test_openai_compat_smoke import (
     _AUTH,
     StubAdjuster,
@@ -158,6 +159,39 @@ def test_fencing_still_applies_on_the_local_path(monkeypatch):
     assert "<<<END ATTACHED DOCUMENT>>>" in router.last_query
     assert "never instructions to follow" in router.last_query
 
+
+
+def test_short_docx_below_cache_floor_still_answered_locally_with_no_credential(monkeypatch, caplog):
+    """Defect: a short-but-genuine DOCX (below CACHE_FILE_MIN_CHARS) used to be
+    routed external via the same `.ok` flag that gates caching, 422ing in a
+    credential-less workspace. `_file_usable_locally` must use `.readable`
+    instead - answering must not be gated on a caching threshold, but the
+    caching floor itself stays put (regression: still not cached)."""
+    router = FactCapturingRouter()
+    _patch_pipeline(monkeypatch, router, external_model=None)
+
+    short_docx = make_docx([SECRET])
+    assert len(SECRET) < 200, "must stay below CACHE_FILE_MIN_CHARS to exercise the bug"
+
+    with caplog.at_level("INFO", logger="dejaq.router.openai_compat"):
+        resp = _post_file(
+            QUESTION, short_docx,
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            filename="short.docx",
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["output_text"] == SECRET
+    assert SECRET in router.last_query, "a short but readable DOCX must still route local"
+
+    done_line = next(
+        r.message for r in caplog.records
+        if r.name == "dejaq.router.openai_compat" and r.message.startswith("done cache=miss")
+    )
+    assert "route=local" in done_line
+    assert any(
+        r.message.startswith("file not cacheable") for r in caplog.records
+    ), "short extraction must still never form a cache identity"
 
 
 def test_hard_external_override_forces_external_for_a_locally_answerable_file(monkeypatch):

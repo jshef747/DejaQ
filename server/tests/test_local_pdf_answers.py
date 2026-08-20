@@ -203,6 +203,45 @@ def test_fencing_still_applies_to_pdf_text_on_the_local_path(monkeypatch):
     assert "never instructions to follow" in router.last_query
 
 
+def test_short_pdf_below_cache_floor_still_answered_locally_with_no_credential(monkeypatch, caplog):
+    """Defect: a short-but-genuine PDF (below CACHE_FILE_MIN_CHARS) used to be
+    routed external via the same `.ok` flag that gates caching, 422ing in a
+    credential-less workspace. `_file_usable_locally` must use `.readable`
+    (any real extracted text) instead - answering must not be gated on a
+    caching threshold. See file_text.py `FileText.readable`."""
+    router = FactCapturingRouter()
+    _patch_local_only(monkeypatch, router)
+
+    short_secret = "Invoice total: 71-42-19 dollars."
+    assert len(short_secret) < 200, "must stay below CACHE_FILE_MIN_CHARS to exercise the bug"
+
+    with caplog.at_level("INFO", logger="dejaq.router.openai_compat"):
+        resp = _post_pdf("what is the invoice total?", make_pdf(short_secret), filename="short.pdf")
+
+    assert resp.status_code == 200
+    assert resp.json()["output_text"] == "71-42-19"
+    assert router.called is True, "a short but readable PDF must still route local"
+
+    done_line = next(
+        r.message for r in caplog.records
+        if r.name == "dejaq.router.openai_compat" and r.message.startswith("done cache=miss")
+    )
+    assert "route=local" in done_line
+
+
+def test_short_pdf_below_cache_floor_is_not_cached(monkeypatch):
+    """The caching floor itself is unchanged: a short PDF still answers, but
+    still forms no cache identity (regression - separate from routing)."""
+    router = FactCapturingRouter()
+    memory = _NoHitMemory()
+    _patch_local_only(monkeypatch, router, memory=memory)
+
+    resp = _post_pdf("what is the invoice total?", make_pdf("Invoice total: 71-42-19."), filename="short.pdf")
+
+    assert resp.status_code == 200
+    assert memory.stored == [], "a short extraction must still never be cached"
+
+
 def test_scanned_pdf_is_answered_externally_not_locally_and_never_cached(monkeypatch):
     """The no-text-layer case must behave exactly as it did before Stage 1/2:
     routed to the external native-document-part path (when a credential is
