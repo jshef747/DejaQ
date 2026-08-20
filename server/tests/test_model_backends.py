@@ -8,7 +8,12 @@ import pytest
 from app.services.context_adjuster import ContextAdjusterService
 from app.services.context_enricher import ContextEnricherService
 from app.services.llm_router import LLMRouterService
-from app.services.model_backends import CompletionRequest, CompletionResult, OllamaBackend
+from app.services.model_backends import (
+    CompletionRequest,
+    CompletionResult,
+    LocalVisionUnsupportedError,
+    OllamaBackend,
+)
 from app.services.normalizer import NormalizerService
 
 # Every test here runs against FakeBackend or a mocked httpx transport - no
@@ -152,6 +157,119 @@ def test_no_images_key_appears_on_an_ordinary_text_request():
 
     assert "images" not in payload["messages"][0]
     assert "images" not in payload
+
+
+def test_complete_raises_local_vision_unsupported_on_400_for_an_image_bearing_call():
+    """Ollama's real, observed shape for "this model can't see": 400 +
+    "Multimodal data provided, but model does not support multimodal
+    requests." (server 0.32.5). Matched by status code, not the exact text -
+    that text is version-dependent (older builds reportedly use 500)."""
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                400,
+                json={"error": {"message": "Multimodal data provided, but model does not support multimodal requests."}},
+            )
+        ),
+        base_url="http://ollama.test",
+    )
+    backend = OllamaBackend(base_url="http://ollama.test", timeout_seconds=5.0, client=client)
+
+    with pytest.raises(LocalVisionUnsupportedError) as exc_info:
+        asyncio.run(
+            backend.complete(
+                CompletionRequest(
+                    model_name="qwen_1_5b",
+                    messages=[{"role": "user", "content": "what is this?"}],
+                    max_tokens=32,
+                    temperature=0.0,
+                    images=["ZmFrZQ=="],
+                )
+            )
+        )
+    asyncio.run(client.aclose())
+    assert exc_info.value.model_name == "qwen2.5:1.5b"
+    assert "multimodal" in exc_info.value.detail.lower()
+
+
+def test_complete_raises_local_vision_unsupported_on_500_for_an_image_bearing_call():
+    """Defensive second match: some Ollama builds reportedly answer this case
+    with 500 instead of 400 - status-code matched, not text-matched, either way."""
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(500, text="this model is missing data required for image input")
+        ),
+        base_url="http://ollama.test",
+    )
+    backend = OllamaBackend(base_url="http://ollama.test", timeout_seconds=5.0, client=client)
+
+    with pytest.raises(LocalVisionUnsupportedError):
+        asyncio.run(
+            backend.complete(
+                CompletionRequest(
+                    model_name="gemma_local",
+                    messages=[{"role": "user", "content": "what is this?"}],
+                    max_tokens=32,
+                    temperature=0.0,
+                    images=["ZmFrZQ=="],
+                )
+            )
+        )
+    asyncio.run(client.aclose())
+
+
+def test_a_400_on_a_text_only_call_is_not_misattributed_to_vision():
+    """The gate that matters: without images on the request, a 400 is an
+    ordinary httpx error, never LocalVisionUnsupportedError - an unrelated
+    bad request must not be mislabeled as a capability mismatch."""
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(400, json={"error": "bad request"})),
+        base_url="http://ollama.test",
+    )
+    backend = OllamaBackend(base_url="http://ollama.test", timeout_seconds=5.0, client=client)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        asyncio.run(
+            backend.complete(
+                CompletionRequest(
+                    model_name="qwen_1_5b",
+                    messages=[{"role": "user", "content": "hello"}],
+                    max_tokens=32,
+                    temperature=0.0,
+                )
+            )
+        )
+    asyncio.run(client.aclose())
+
+
+def test_stream_raises_local_vision_unsupported_on_400_for_an_image_bearing_call():
+    async def _drain():
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    400,
+                    json={"error": "Multimodal data provided, but model does not support multimodal requests."},
+                )
+            ),
+            base_url="http://ollama.test",
+        )
+        backend = OllamaBackend(base_url="http://ollama.test", timeout_seconds=5.0, client=client)
+        try:
+            async for _ in backend.stream(
+                CompletionRequest(
+                    model_name="qwen_1_5b",
+                    messages=[{"role": "user", "content": "what is this?"}],
+                    max_tokens=32,
+                    temperature=0.0,
+                    images=["ZmFrZQ=="],
+                )
+            ):
+                pass
+        finally:
+            await client.aclose()
+
+    with pytest.raises(LocalVisionUnsupportedError):
+        asyncio.run(_drain())
 
 
 def test_ollama_backend_posts_chat_request():

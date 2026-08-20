@@ -49,8 +49,15 @@ from app.services.image_text import (
     tokens_from_string,
 )
 from app.services.file_text import FileText, extract as extract_file_text
+from app.services.model_backends import LocalVisionUnsupportedError
 from app.dependencies.auth import ResolvedWorkspace, require_org_key
-from app.services import cache_filter, llm_config_service, pipeline_config_cache, rag_service
+from app.services import (
+    cache_filter,
+    llm_config_service,
+    ollama_catalog,
+    pipeline_config_cache,
+    rag_service,
+)
 from app.services.classifier import ClassifierService
 from app.services.context_adjuster import (
     DEFAULT_ADJUST_SYSTEM_PROMPT,
@@ -1542,9 +1549,18 @@ async def run_chat_pipeline(
 
         # 4. Cache miss — classify then route
         if _request_has_image:
-            # The local model is text-only; image queries must go to a vision-capable
-            # external provider regardless of difficulty or routing mode.
-            classification = {"complexity": "hard", "score": 1.0, "task_type": "image_external"}
+            # Ask Ollama's /api/show (cached, ollama_catalog.supports_vision) whether
+            # the workspace's configured local model actually reports "vision" -
+            # not /api/tags, which is measured wrong for this on the shipped default
+            # model (see ollama_catalog.py). This is the primary mechanism; the
+            # LocalVisionUnsupportedError catch below the generation call is the
+            # safety net for the window between here and a stale capability cache
+            # entry (model swapped in Ollama after the last refresh).
+            _local_supports_vision = ollama_catalog.supports_vision(llm_config.local_model)
+            if _local_supports_vision and routing_mode != ROUTING_MODE_HARD_EXTERNAL:
+                classification = {"complexity": "easy", "score": 0.0, "task_type": "image_local"}
+            else:
+                classification = {"complexity": "hard", "score": 1.0, "task_type": "image_external"}
         elif _request_has_file:
             # Every kind - DOCX/Markdown/text/code AND now PDF - is already
             # deterministically extracted to text by file_text.py, so the local
@@ -1616,6 +1632,12 @@ async def run_chat_pipeline(
         # text), same helper the external branch uses - the untrusted-input
         # fencing applies here too.
         local_gen_query = _query_with_inlined_file(gen_query, file_doc)
+        # Ollama's own images field, same base64 bytes the external branch sends
+        # as image_b64 below - only ever populated when the classification step
+        # above just decided the local model can see it.
+        local_images = (
+            [base64.b64encode(image_bytes).decode("ascii")] if _request_has_image else None
+        )
 
         # Provider + credential resolution happens HERE, not inside the generation
         # step, and that placement is load-bearing: every failure below is an HTTP
@@ -1823,12 +1845,22 @@ async def run_chat_pipeline(
                         # when set, otherwise the hardcoded literal. Hardcoding
                         # the literal here too would silently shadow that
                         # override (same reasoning as escalation.py).
+                        # images= is only ever passed when this is actually an
+                        # image request - most local-router test doubles across
+                        # the suite predate stage 4 and don't accept the kwarg,
+                        # and the real LLMRouterService already defaults it to
+                        # None, so omitting it for the (overwhelmingly common)
+                        # text/file case is a no-op, not a workaround.
+                        local_kwargs = {
+                            "history": history,
+                            "max_tokens": _max_tokens,
+                            "system_prompt": system_prompt,
+                        }
+                        if local_images:
+                            local_kwargs["images"] = local_images
                         if stream:
                             async for chunk in services.llm_router.stream_local_response(
-                                local_gen_query,
-                                history=history,
-                                max_tokens=_max_tokens,
-                                system_prompt=system_prompt,
+                                local_gen_query, **local_kwargs
                             ):
                                 if chunk.done_reason is not None:
                                     gen["finish_reason"] = (
@@ -1838,10 +1870,7 @@ async def run_chat_pipeline(
                                     yield chunk.text
                         else:
                             text, _, done_reason = await services.llm_router.generate_local_response(
-                                local_gen_query,
-                                history=history,
-                                max_tokens=_max_tokens,
-                                system_prompt=system_prompt,
+                                local_gen_query, **local_kwargs
                             )
                             gen["finish_reason"] = "length" if done_reason == "length" else "stop"
                             yield text
@@ -1891,6 +1920,28 @@ async def run_chat_pipeline(
                     logger.warning("External provider error surfaced to caller: %s", exc)
                     raise PipelineError(*surfaced) from exc
                 logger.exception("ExternalLLMService failed")
+                yield _GENERATION_FAILED_MESSAGE
+                gen.update(model_used="error", route="error")
+            except LocalVisionUnsupportedError as exc:
+                # The safety net named in section 5 of the plan: the capability
+                # check above said this model could see, but Ollama disagrees at
+                # call time - the model was swapped after the last capability-
+                # cache refresh (stale read, not a code bug). Naming the real
+                # cause here is the whole point of this stage; falling through
+                # to the generic apology below would recreate the invisible-
+                # failure problem the ExternalLLMError handling above already
+                # avoids for the external path.
+                detail = (
+                    f"The workspace's local model ({exc.model_name}) does not support "
+                    "image input. Either the model was changed after DejaQ last checked "
+                    "its capabilities, or the capability cache is stale - configure a "
+                    "vision-capable local model, or force external routing "
+                    "(X-DejaQ-Routing-Mode: hard_external) for this workspace."
+                )
+                if not stream:
+                    logger.warning("Local model rejected image-bearing request: %s", exc)
+                    raise PipelineError(422, detail) from exc
+                logger.exception("Local model rejected image-bearing request")
                 yield _GENERATION_FAILED_MESSAGE
                 gen.update(model_used="error", route="error")
             except Exception:
