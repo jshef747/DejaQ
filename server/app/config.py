@@ -337,6 +337,24 @@ OLLAMA_TIMEOUT_SECONDS = _get_float("DEJAQ_OLLAMA_TIMEOUT_SECONDS", 60.0)
 # (schemas/admin/llm_config.py reads it rather than restating a literal).
 OLLAMA_NUM_CTX = int(_get_float("DEJAQ_OLLAMA_NUM_CTX", 32768))
 
+# Ceiling on an attached FILE's extracted-text size (estimated tokens) for
+# local answering, independent of whatever the context window would still
+# technically fit. Exists because the hard-content judge (openai_compat.py's
+# _judge_hard_content_over_text) gets measurably less reliable past roughly
+# 30KB of surrounding text even with chunking narrowing the gap - a workspace
+# running a stronger local model on more powerful hardware can afford to
+# raise this, which is exactly why it is a per-workspace override
+# (workspace_llm_configs.local_attachment_max_tokens) alongside OLLAMA_NUM_CTX,
+# not a hard-coded constant. 8000 tokens (~32KB) is the measured point past
+# which single-pass judging started missing buried hard content. Above the
+# cap, a file routes external on the existing oversized-file path and the
+# judge is never called - this is the one case where skipping the judge
+# entirely is correct, since the judge call itself is what gets expensive on
+# a large document. The context window is still a HARD precondition on top of
+# this: openai_compat.py takes the smaller of the two, so raising this cap
+# past what OLLAMA_NUM_CTX can hold has no effect.
+LOCAL_ATTACHMENT_MAX_TOKENS = int(_get_float("DEJAQ_LOCAL_ATTACHMENT_MAX_TOKENS", 8000))
+
 # Deadline for adjust() alone, the one rewrite role on the synchronous
 # cache-hit path. Its budget is REWRITE_MAX_TOKENS, sized so a full-fidelity
 # rewrite of the largest stored answer fits; without a deadline of its own the

@@ -94,6 +94,7 @@ from app.config import (
     ENRICHER_MODEL_NAME,
     EXTERNAL_MODEL_NAME,
     GENERALIZER_MODEL_NAME,
+    LOCAL_ATTACHMENT_MAX_TOKENS,
     LOCAL_LLM_MODEL_NAME,
     NORMALIZER_MODEL_NAME,
     OLLAMA_NUM_CTX,
@@ -177,6 +178,11 @@ class EffectiveLlmConfig:
     default_max_tokens: int = DEFAULT_MAX_TOKENS
     rewrite_max_tokens: int = REWRITE_MAX_TOKENS
     ollama_num_ctx: int = OLLAMA_NUM_CTX
+    # Ceiling on an attached file's extracted-text size (tokens) for local
+    # answering - see LOCAL_ATTACHMENT_MAX_TOKENS in app/config.py. Never
+    # gates service-pool selection (no *_overridden flag needed): it is a
+    # plain comparison value read only by the file-routing size gate below.
+    local_attachment_max_tokens: int = LOCAL_ATTACHMENT_MAX_TOKENS
     # Which of the fields above are workspace overrides rather than shipped
     # defaults - used to decide whether the request path needs a freshly
     # resolved service instance or can reuse the default-model singleton
@@ -300,6 +306,7 @@ def _effective_from_config(config) -> EffectiveLlmConfig:
         default_max_tokens=config.default_max_tokens,
         rewrite_max_tokens=config.rewrite_max_tokens,
         ollama_num_ctx=config.ollama_num_ctx,
+        local_attachment_max_tokens=config.local_attachment_max_tokens,
         local_model_overridden="local_model" in config.overrides,
         generalizer_model_overridden="generalizer_model" in config.overrides,
         adjuster_model_overridden="adjuster_model" in config.overrides,
@@ -729,6 +736,61 @@ async def _judge_hard_content(llm_router, judge_text: str) -> bool:
         logger.exception("Hard-content judge failed; defaulting to easy")
         return False
     return "HARD" in text.strip().upper()
+
+
+# A single judge call over a long document misses hard content - measured: a
+# five-question hard exam section buried in the middle of a document was
+# missed past roughly 30KB of surrounding text, and 0 of 4 different ~40KB
+# documents (different filler styles) had their buried hard section caught by
+# one pass. Slicing into overlapping windows and treating any HARD slice as
+# HARD fixes it - measured 4 of 4 caught with ~12,000-char slices and ~2,000
+# chars of overlap (0 of 4 with no overlap missed the case where the hard
+# content straddled a slice boundary), at the same total latency, since the
+# same total text is read either way, just across more calls. These sizes are
+# what was measured - re-measure before changing them.
+_JUDGE_CHUNK_CHARS = 12_000
+_JUDGE_CHUNK_OVERLAP_CHARS = 2_000
+
+
+def _chunk_for_judge(text: str) -> list[str]:
+    """Split `text` into overlapping windows for the hard-content judge.
+
+    A document that already fits in one window is returned as a single-item
+    list - same one call as before this existed, no behavior change for the
+    common case (short/ordinary attachments).
+    """
+    if len(text) <= _JUDGE_CHUNK_CHARS:
+        return [text]
+    step = _JUDGE_CHUNK_CHARS - _JUDGE_CHUNK_OVERLAP_CHARS
+    chunks = []
+    start = 0
+    while True:
+        end = start + _JUDGE_CHUNK_CHARS
+        chunks.append(text[start:end])
+        if end >= len(text):
+            break
+        start += step
+    return chunks
+
+
+async def _judge_hard_content_over_text(llm_router, user_query: str, text: str) -> bool:
+    """Judge `text` (a file's extracted text, or a document image's OCR'd
+    text) for hard content, chunking it first (see _chunk_for_judge) so a
+    hard passage past the first window isn't missed. Each chunk gets the same
+    fencing _query_with_inlined_file already gives a whole document - reused
+    per chunk, not hand-rolled. Short-circuits on the first HARD verdict: a
+    later chunk cannot change a HARD answer back to EASY, and skipping the
+    remaining calls is exactly the saving that matters on a document whose
+    hard part is early.
+    """
+    for chunk in _chunk_for_judge(text):
+        judge_query = _query_with_inlined_file(
+            user_query,
+            FileText(kind="", text=chunk, sha="", char_count=len(chunk), ok=True, reason=""),
+        )
+        if await _judge_hard_content(llm_router, judge_query):
+            return True
+    return False
 
 
 def _query_with_rag_context(user_query: str, chunks: list) -> str:
@@ -1663,14 +1725,9 @@ async def run_chat_pipeline(
                 if image_ocr is not None and image_ocr.is_document:
                     with trace.step("hard_content_judge"):
                         _image_ocr_text = await run_in_threadpool(ocr_image_plaintext, image_bytes)
-                        _image_judge_query = _query_with_inlined_file(
-                            user_query,
-                            FileText(
-                                kind="image_ocr", text=_image_ocr_text, sha="",
-                                char_count=len(_image_ocr_text), ok=True, reason="",
-                            ),
+                        _image_is_hard = await _judge_hard_content_over_text(
+                            services.llm_router, user_query, _image_ocr_text
                         )
-                        _image_is_hard = await _judge_hard_content(services.llm_router, _image_judge_query)
                 if _image_is_hard:
                     classification = {"complexity": "hard", "score": 1.0, "task_type": "image_external_judged_hard"}
                 else:
@@ -1712,9 +1769,20 @@ async def run_chat_pipeline(
             # silent and confident, so erring toward routing external too
             # early costs a slower answer; erring the other way costs a wrong
             # one.
-            _file_prompt_budget = (
+            #
+            # A second, independent ceiling sits alongside the context-window
+            # budget: LOCAL_ATTACHMENT_MAX_TOKENS (llm_config.local_attachment_max_tokens)
+            # caps extracted-text size regardless of what the context window
+            # would still technically hold, because the hard-content judge
+            # itself gets measurably less reliable well before the context
+            # window fills up. The smaller of the two always wins - a
+            # workspace override can only ever lower the effective budget
+            # below the context-window figure, never raise it past what the
+            # window can actually hold.
+            _file_ctx_budget = (
                 llm_config.ollama_num_ctx - _max_tokens - _LOCAL_FILE_PROMPT_RESERVE_TOKENS
             )
+            _file_prompt_budget = min(_file_ctx_budget, llm_config.local_attachment_max_tokens)
             _file_estimated_tokens = (
                 _estimate_tokens(file_doc.text) + _estimate_tokens(user_query)
                 if file_doc is not None else 0
@@ -1730,19 +1798,26 @@ async def run_chat_pipeline(
                 # document that says "ignore your instructions" still reads as
                 # DATA to the judge, not a command).
                 with trace.step("hard_content_judge"):
-                    _file_judge_query = _query_with_inlined_file(user_query, file_doc)
-                    _file_is_hard = await _judge_hard_content(services.llm_router, _file_judge_query)
+                    _file_is_hard = await _judge_hard_content_over_text(
+                        services.llm_router, user_query, file_doc.text
+                    )
                 if _file_is_hard:
                     classification = {"complexity": "hard", "score": 1.0, "task_type": "file_external_judged_hard"}
                 else:
                     classification = {"complexity": "easy", "score": 0.0, "task_type": "file_local"}
             elif file_doc is not None and file_doc.readable and not _file_fits_locally:
                 classification = {"complexity": "hard", "score": 1.0, "task_type": "file_external_oversized"}
+                _limiting = (
+                    "attachment cap" if llm_config.local_attachment_max_tokens < _file_ctx_budget
+                    else "context window"
+                )
                 logger.info(
-                    "file too large for local answering (~%d estimated tokens > "
-                    "%d budget = num_ctx %d - max_tokens %d - reserve %d); routing external",
-                    _file_estimated_tokens, max(_file_prompt_budget, 0), llm_config.ollama_num_ctx,
-                    _max_tokens, _LOCAL_FILE_PROMPT_RESERVE_TOKENS,
+                    "file too large for local answering (~%d estimated tokens > %d budget, "
+                    "limited by %s: ctx_budget=%d (num_ctx %d - max_tokens %d - reserve %d) "
+                    "attachment_cap=%d); routing external, judge never called",
+                    _file_estimated_tokens, max(_file_prompt_budget, 0), _limiting,
+                    max(_file_ctx_budget, 0), llm_config.ollama_num_ctx, _max_tokens,
+                    _LOCAL_FILE_PROMPT_RESERVE_TOKENS, llm_config.local_attachment_max_tokens,
                 )
             else:
                 classification = {"complexity": "hard", "score": 1.0, "task_type": "file_external"}

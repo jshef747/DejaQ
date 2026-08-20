@@ -9,6 +9,7 @@ from app.config import (
     ENRICHER_MODEL_NAME,
     EXTERNAL_MODEL_NAME,
     GENERALIZER_MODEL_NAME,
+    LOCAL_ATTACHMENT_MAX_TOKENS,
     LOCAL_LLM_MODEL_NAME,
     NORMALIZER_MODEL_NAME,
     OLLAMA_NUM_CTX,
@@ -129,14 +130,20 @@ class LlmConfigResult(BaseModel):
     default_max_tokens: int
     rewrite_max_tokens: int
     ollama_num_ctx: int
-    # The shipped/global default for each of the three fields above, ALWAYS -
-    # regardless of whether this workspace overrides it. The three fields
-    # above are the EFFECTIVE value (override-or-default), so once a
-    # workspace has an override set, nothing else in this response still
-    # names what clearing it restores; a client (the dashboard's "empty uses
-    # the default" placeholder) needs the true default value, not the
-    # override, to render that correctly. Hardcoding these client-side would
-    # drift from a deployment that sets DEJAQ_DEFAULT_MAX_TOKENS etc.
+    # Ceiling on an attached file's extracted-text size (tokens) for local
+    # answering - see LOCAL_ATTACHMENT_MAX_TOKENS in app/config.py. Not part
+    # of the three-way generation-budget relationship above (it bounds
+    # attachment size, not generation length), so it is not validated
+    # against them.
+    local_attachment_max_tokens: int
+    # The shipped/global default for each of the four fields above, ALWAYS -
+    # regardless of whether this workspace overrides it. The fields above are
+    # the EFFECTIVE value (override-or-default), so once a workspace has an
+    # override set, nothing else in this response still names what clearing
+    # it restores; a client (the dashboard's "empty uses the default"
+    # placeholder) needs the true default value, not the override, to render
+    # that correctly. Hardcoding these client-side would drift from a
+    # deployment that sets DEJAQ_DEFAULT_MAX_TOKENS etc.
     token_budget_defaults: dict[str, int]
     overrides: dict[str, str | float | int]
     updated_at: datetime | None
@@ -230,6 +237,10 @@ def _effective(row, credentials_configured: list[str] | None = None) -> LlmConfi
         "ollama_num_ctx": (
             row.ollama_num_ctx if row and row.ollama_num_ctx is not None else OLLAMA_NUM_CTX
         ),
+        "local_attachment_max_tokens": (
+            row.local_attachment_max_tokens if row and row.local_attachment_max_tokens is not None
+            else LOCAL_ATTACHMENT_MAX_TOKENS
+        ),
     }
     overrides: dict[str, str | float | int] = {}
     if row:
@@ -252,6 +263,7 @@ def _effective(row, credentials_configured: list[str] | None = None) -> LlmConfi
             "default_max_tokens",
             "rewrite_max_tokens",
             "ollama_num_ctx",
+            "local_attachment_max_tokens",
         ):
             stored = getattr(row, field)
             if stored is not None:
@@ -263,6 +275,7 @@ def _effective(row, credentials_configured: list[str] | None = None) -> LlmConfi
             "default_max_tokens": DEFAULT_MAX_TOKENS,
             "rewrite_max_tokens": REWRITE_MAX_TOKENS,
             "ollama_num_ctx": OLLAMA_NUM_CTX,
+            "local_attachment_max_tokens": LOCAL_ATTACHMENT_MAX_TOKENS,
         },
         overrides=overrides,
         updated_at=row.updated_at if row else None,

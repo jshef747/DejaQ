@@ -40,6 +40,7 @@ class LlmConfigResponse(BaseModel):
     default_max_tokens: int
     rewrite_max_tokens: int
     ollama_num_ctx: int
+    local_attachment_max_tokens: int
     # The shipped/global default for each token budget field, regardless of
     # whether this workspace overrides it - see LlmConfigResult in
     # llm_config_service.py for why the effective fields above can't serve
@@ -79,6 +80,14 @@ class LlmConfigUpdate(BaseModel):
     default_max_tokens: int | None = Field(default=None, gt=0)
     rewrite_max_tokens: int | None = Field(default=None, gt=0)
     ollama_num_ctx: int | None = Field(default=None, gt=0)
+    # Ceiling on an attached file's extracted-text size (tokens) for local
+    # answering - see LOCAL_ATTACHMENT_MAX_TOKENS in app/config.py. Bounds
+    # attachment size, not generation length, so unlike the three fields
+    # above it is not validated against them - only this per-field bound.
+    # openai_compat.py still takes the smaller of this and the context
+    # window at request time, so a value raised past what the context window
+    # can hold is harmless, not rejected here.
+    local_attachment_max_tokens: int | None = Field(default=None, gt=0)
 
     @field_validator(*PROMPT_FIELDS)
     @classmethod

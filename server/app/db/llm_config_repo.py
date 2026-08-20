@@ -24,6 +24,7 @@ _CONFIG_FIELDS = {
     "default_max_tokens",
     "rewrite_max_tokens",
     "ollama_num_ctx",
+    "local_attachment_max_tokens",
 }
 
 

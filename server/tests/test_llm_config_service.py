@@ -484,7 +484,9 @@ def test_llm_config_two_workspaces_resolve_prompts_independently(isolated_org_db
 
 
 def test_llm_config_read_defaults_cover_token_budgets(isolated_org_db):
-    from app.config import DEFAULT_MAX_TOKENS, OLLAMA_NUM_CTX, REWRITE_MAX_TOKENS
+    from app.config import (
+        DEFAULT_MAX_TOKENS, LOCAL_ATTACHMENT_MAX_TOKENS, OLLAMA_NUM_CTX, REWRITE_MAX_TOKENS,
+    )
     from app.services.llm_config_service import read_for_workspace
 
     _create_workspace()
@@ -494,13 +496,16 @@ def test_llm_config_read_defaults_cover_token_budgets(isolated_org_db):
     assert result.default_max_tokens == DEFAULT_MAX_TOKENS
     assert result.rewrite_max_tokens == REWRITE_MAX_TOKENS
     assert result.ollama_num_ctx == OLLAMA_NUM_CTX
+    assert result.local_attachment_max_tokens == LOCAL_ATTACHMENT_MAX_TOKENS
     assert "default_max_tokens" not in result.overrides
     assert "rewrite_max_tokens" not in result.overrides
     assert "ollama_num_ctx" not in result.overrides
+    assert "local_attachment_max_tokens" not in result.overrides
     assert result.token_budget_defaults == {
         "default_max_tokens": DEFAULT_MAX_TOKENS,
         "rewrite_max_tokens": REWRITE_MAX_TOKENS,
         "ollama_num_ctx": OLLAMA_NUM_CTX,
+        "local_attachment_max_tokens": LOCAL_ATTACHMENT_MAX_TOKENS,
     }
 
 
@@ -510,7 +515,9 @@ def test_llm_config_token_budget_defaults_survive_an_override(isolated_org_db):
     dashboard's empty-field-uses-the-default placeholder) needs to show what
     clearing the override restores. The three top-level effective fields
     can't serve that once overridden, since they report the override itself."""
-    from app.config import DEFAULT_MAX_TOKENS, OLLAMA_NUM_CTX, REWRITE_MAX_TOKENS
+    from app.config import (
+        DEFAULT_MAX_TOKENS, LOCAL_ATTACHMENT_MAX_TOKENS, OLLAMA_NUM_CTX, REWRITE_MAX_TOKENS,
+    )
     from app.services.llm_config_service import update_for_workspace
 
     _create_workspace()
@@ -522,6 +529,7 @@ def test_llm_config_token_budget_defaults_survive_an_override(isolated_org_db):
         "default_max_tokens": DEFAULT_MAX_TOKENS,
         "rewrite_max_tokens": REWRITE_MAX_TOKENS,
         "ollama_num_ctx": OLLAMA_NUM_CTX,
+        "local_attachment_max_tokens": LOCAL_ATTACHMENT_MAX_TOKENS,
     }
 
 

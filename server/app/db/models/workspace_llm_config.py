@@ -39,6 +39,11 @@ class WorkspaceLlmConfig(Base):
     default_max_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     rewrite_max_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ollama_num_ctx: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Ceiling on an attached file's extracted-text size (estimated tokens) for
+    # local answering - independent of the three budgets above. Mirrors
+    # LOCAL_ATTACHMENT_MAX_TOKENS in app/config.py; NULL falls back to it. See
+    # that constant's comment and the size gate in openai_compat.py.
+    local_attachment_max_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
