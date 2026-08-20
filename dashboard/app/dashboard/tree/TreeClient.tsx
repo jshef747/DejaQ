@@ -56,8 +56,8 @@ export default function TreeClient({ workspaces, allDepts, statsMap, error }: Pr
   return (
     <div className="ds-page">
       <SectionHeader
-        title="Org Tree"
-        subtitle="Collapsible view of the full organization → department hierarchy."
+        title="Workspace Tree"
+        subtitle="Collapsible view of the full workspace → department hierarchy."
         action={
           <div style={{ display: "flex", gap: 8 }}>
             <Button size="sm" onClick={expandAll}>Expand all</Button>

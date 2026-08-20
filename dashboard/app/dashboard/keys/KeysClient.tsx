@@ -197,7 +197,7 @@ export default function KeysClient({ workspaceSlug, keys, error }: Props) {
         {generateConflict && (
           <div style={{ background: "var(--amber-bg)", border: "1px solid var(--amber-border)", borderRadius: 5, padding: "10px 12px", marginBottom: 10 }}>
             <p style={{ margin: "0 0 8px", fontSize: 12, color: "var(--fg)" }}>
-              An active key already exists for this org.
+              An active key already exists for this workspace.
             </p>
             <Button variant="ghost-danger" size="sm" onClick={() => handleGenerate(true)} loading={generateBusy}>
               Rotate (revoke &amp; replace)

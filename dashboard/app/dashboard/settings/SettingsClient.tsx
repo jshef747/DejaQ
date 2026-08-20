@@ -159,7 +159,7 @@ export default function SettingsClient({
     : currentCredential
       ? `Testing with the stored ${providerLabel(provider)} key.`
       : provider
-        ? `No ${providerLabel(provider)} API key configured for this organization.`
+        ? `No ${providerLabel(provider)} API key configured for this workspace.`
         : "Choose a provider first.";
   const canSave = !!provider && !!externalModel;
 
@@ -283,7 +283,7 @@ export default function SettingsClient({
       <section className="ds-settings-section" style={{ marginBottom: 28 }}>
         <div className="ds-settings-header">
           <h2 className="ds-settings-title">LLM Configuration</h2>
-          <p className="ds-settings-sub">Choose where hard queries go, and keep provider credentials scoped to this organization.</p>
+          <p className="ds-settings-sub">Choose where hard queries go, and keep provider credentials scoped to this workspace.</p>
         </div>
         <div className="ds-card" style={{ overflow: "hidden" }}>
           <div style={{ padding: "10px 20px", borderBottom: "1px solid var(--border)", fontSize: 12, color: "var(--fg-dim)" }}>
@@ -305,7 +305,7 @@ export default function SettingsClient({
                 >
                   <option value="" disabled>Choose a provider</option>
                   {groupedProviders.credentialed.length > 0 && (
-                    <optgroup label="Configured for this organization">
+                    <optgroup label="Configured for this workspace">
                       {groupedProviders.credentialed.map((item) => (
                         <option key={item.key} value={item.key}>
                           {providerLabel(item.key)} ({item.model_count})
@@ -408,7 +408,7 @@ export default function SettingsClient({
       <section className="ds-settings-section" style={{ marginBottom: 28 }}>
         <div className="ds-settings-header">
           <h2 className="ds-settings-title">Provider Test</h2>
-          <p className="ds-settings-sub">Verify that the saved organization key can reach the selected external model.</p>
+          <p className="ds-settings-sub">Verify that the saved workspace key can reach the selected external model.</p>
         </div>
         <div className="ds-card">
           <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 12 }}>
@@ -434,7 +434,7 @@ export default function SettingsClient({
         <div style={{ background: "var(--bg-2)", border: "1px solid var(--red-border)", borderRadius: 6, overflow: "hidden" }}>
           <div style={{ padding: "16px 20px", display: "flex", alignItems: "center", gap: 18, justifyContent: "space-between" }}>
             <div>
-              <h4 style={{ color: "var(--fg)", fontSize: 13, margin: "0 0 4px" }}>Delete organization</h4>
+              <h4 style={{ color: "var(--fg)", fontSize: 13, margin: "0 0 4px" }}>Delete workspace</h4>
               <p style={{ color: "var(--fg-dim)", fontSize: 12, lineHeight: 1.55, margin: 0 }}>
                 Permanently remove {workspaceName}, including all departments, API keys, cache data, and credentials.
               </p>
@@ -513,7 +513,7 @@ function ProviderTestResult({ result }: { result: TestResult }) {
 }
 
 function testErrorText(status: number | undefined, error: string, provider: string | null) {
-  if (status === 402) return `No ${providerLabel(provider)} API key configured for this organization.`;
+  if (status === 402) return `No ${providerLabel(provider)} API key configured for this workspace.`;
   if (status === 429) return "Provider test recently succeeded. Please wait before running it again.";
   if (status === 422) return error;
   return error || "Provider test failed.";
