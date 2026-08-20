@@ -243,10 +243,10 @@ Collection responses SHALL include resources from every workspace.
 - **WHEN** a client calls any `/admin/v1/*` endpoint with `Authorization: Bearer wrong`
 - **THEN** the system returns HTTP 401 with `{"detail": "Invalid admin token"}`
 
-#### Scenario: Admin token is not processed as an org API key
+#### Scenario: Admin token is not processed as a workspace API key
 
 - **WHEN** a client calls `/admin/v1/whoami` with a valid admin bearer token
-- **THEN** the org API-key middleware is not invoked for token lookup and no unknown API-key warning is logged for that token
+- **THEN** the workspace API-key middleware is not invoked for token lookup and no unknown API-key warning is logged for that token
 
 ### Requirement: Admin router fails closed when no admin token is configured
 **Reason**: `DEJAQ_ADMIN_TOKEN` is no longer the management API authentication mechanism.

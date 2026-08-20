@@ -71,6 +71,21 @@ def test_dry_run_does_not_print_validator_env_var():
     assert "DEJAQ_VALIDATOR_ENABLED" not in result.stdout
 
 
+def test_start_script_log_grep_pattern_matches_openai_compat_log_format():
+    """start.sh greps the live log for the literal text openai_compat.py's
+    'start ...' log line actually emits. Renaming the log format string
+    without updating the grep pattern makes the log pane go silent with no
+    error - see the log format string in app/routers/openai_compat.py."""
+    start_contents = START_SCRIPT.read_text()
+    grep_match = re.search(r'grep --line-buffered -E "([^"]+)"', start_contents)
+    assert grep_match, "expected a --line-buffered grep pattern in start.sh"
+    pattern = grep_match.group(1)
+
+    openai_compat = (ROOT_DIR / "server" / "app" / "routers" / "openai_compat.py").read_text()
+    assert re.search(pattern, 'router.openai_compat: start workspace=acme dept=default namespace=x model=y')
+    assert '"start workspace=%s' in openai_compat
+
+
 def test_terminal_log_formatter_adds_separator_without_rewriting_input():
     result = subprocess.run(
         ["bash", str(START_SCRIPT), "--format-log-lines"],
