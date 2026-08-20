@@ -1,5 +1,6 @@
 import litellm
 import pytest
+from fastapi.testclient import TestClient
 
 from app.services import model_catalog
 from app.services.model_catalog import STRUCTURED_CREDENTIAL_PROVIDERS
@@ -31,3 +32,48 @@ def test_catalog_excludes_structured_credential_providers():
     stores one opaque string per provider and cannot hold SigV4 or endpoint+api-version+deployment."""
     providers_present = {m.provider for m in model_catalog.all_models()}
     assert providers_present.isdisjoint(STRUCTURED_CREDENTIAL_PROVIDERS)
+
+
+def test_catalog_provider_counts_and_models_endpoints():
+    from app.main import app
+
+    client = TestClient(app)
+
+    providers_resp = client.get("/admin/v1/model-catalog/providers")
+    assert providers_resp.status_code == 200
+    providers = {p["key"]: p["model_count"] for p in providers_resp.json()["providers"]}
+    assert providers, "expected a non-empty provider list"
+    assert STRUCTURED_CREDENTIAL_PROVIDERS.isdisjoint(providers)
+
+    some_key = next(iter(providers))
+    models_resp = client.get(f"/admin/v1/model-catalog/providers/{some_key}/models")
+    assert models_resp.status_code == 200
+    body = models_resp.json()
+    assert body["provider"] == some_key
+    assert len(body["models"]) == providers[some_key]
+
+    missing = client.get("/admin/v1/model-catalog/providers/not-a-real-provider/models")
+    assert missing.status_code == 404
+
+
+def test_existing_admin_providers_endpoint_response_shape_is_unchanged():
+    """A1a is additive only - the old GET /admin/v1/providers endpoint (which
+    the dashboard currently calls) must keep serving provider_registry.PROVIDERS,
+    unchanged, until A1b switches the dashboard over."""
+    from app.main import app
+    from app.services.provider_registry import PROVIDERS
+
+    client = TestClient(app)
+    resp = client.get("/admin/v1/providers")
+    assert resp.status_code == 200
+
+    data = resp.json()
+    assert set(data.keys()) == {"providers"}
+    by_key = {p["key"]: p for p in data["providers"]}
+    assert set(by_key) == set(PROVIDERS)
+    for key, spec in PROVIDERS.items():
+        entry = by_key[key]
+        assert set(entry.keys()) == {"key", "live", "client_shape", "models"}
+        assert entry["live"] == spec.live
+        assert entry["client_shape"] == (spec.client_shape.value if spec.client_shape else None)
+        assert {m["id"] for m in entry["models"]} == {m.id for m in spec.models}
