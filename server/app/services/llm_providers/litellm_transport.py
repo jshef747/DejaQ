@@ -1,12 +1,12 @@
 import logging
 import time
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncGenerator, Iterator
+from contextlib import aclosing, contextmanager
 
 import litellm
 import openai
 
-from app.schemas.chat import ExternalLLMRequest, ExternalLLMResponse
+from app.schemas.chat import ExternalLLMRequest, ExternalLLMResponse, ExternalStreamChunk
 from app.services.llm_providers._litellm_config import DEFAULT_CALL_KWARGS
 from app.services.llm_providers.common import elapsed_ms, ensure_query, normalize_finish_reason, redact_api_key
 from app.utils.exceptions import ExternalLLMAuthError, ExternalLLMError, ExternalLLMTimeoutError
@@ -182,3 +182,54 @@ class LiteLLMTransportClient:
             latency_ms=latency_ms,
             finish_reason=normalize_finish_reason(choice.finish_reason),
         )
+
+    async def stream_response(
+        self, request: ExternalLLMRequest, api_key: str
+    ) -> AsyncGenerator[ExternalStreamChunk, None]:
+        """Streaming twin of `generate_response`.
+
+        Uses `contextlib.aclosing`, not `async with`: LiteLLM's
+        `CustomStreamWrapper` has `aclose` but no `__aenter__`. Get this
+        wrong and DejaQ leaks a connection per abandoned stream.
+        """
+        ensure_query(request)
+        messages = _build_messages(request)
+        model = f"{_litellm_key(self._provider)}/{request.model}"
+
+        logger.debug(
+            "Streaming hard query via LiteLLM provider=%s model=%s history_turns=%d",
+            self._provider, request.model, len(request.history),
+        )
+        start = time.perf_counter()
+        text = ""
+        prompt_tokens = completion_tokens = 0
+        finish_reason = None
+        with _mapped_errors(api_key, self._provider):
+            stream = await _complete_with_temperature_retry(
+                request, messages, model, api_key,
+                stream=True, stream_options={"include_usage": True},
+            )
+        async with aclosing(stream):
+            async for chunk in stream:
+                usage = getattr(chunk, "usage", None)
+                if usage:
+                    prompt_tokens = usage.prompt_tokens or prompt_tokens
+                    completion_tokens = usage.completion_tokens or completion_tokens
+                if not chunk.choices:
+                    continue
+                choice = chunk.choices[0]
+                if choice.finish_reason:
+                    finish_reason = choice.finish_reason
+                piece = (choice.delta.content if choice.delta else None) or ""
+                if piece:
+                    text += piece
+                    yield ExternalStreamChunk(text=piece)
+
+        yield ExternalStreamChunk(final=ExternalLLMResponse(
+            text=text,
+            model_used=request.model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            latency_ms=elapsed_ms(start),
+            finish_reason=normalize_finish_reason(finish_reason),
+        ))
