@@ -88,6 +88,18 @@ class RejectingRouter:
         )
 
 
+class StreamingRejectingRouter:
+    """Same day-2-drift rejection as RejectingRouter, but on the streaming
+    call - the only path the real chat app (which always streams) uses."""
+
+    def __init__(self, detail: str = "Multimodal data provided, but model does not support multimodal requests."):
+        self.detail = detail
+
+    async def stream_local_response(self, query, history=None, max_tokens=1024, system_prompt=None, images=None):
+        raise LocalVisionUnsupportedError("qwen2.5:1.5b", self.detail)
+        yield  # pragma: no cover - never reached, makes this an async generator
+
+
 class ExplodingExternalLLM:
     async def generate_response(self, request, provider=None, api_key=None):
         raise AssertionError("external route must not be used when the local model can see")
@@ -125,7 +137,10 @@ def _patch_pipeline(monkeypatch, router, *, external_model: str | None = None, s
     monkeypatch.setattr(openai_compat, "USE_CELERY", False)
 
 
-def _post_image(query: str, image: bytes = IMAGE_BYTES, *, mime: str = "image/png", headers: dict | None = None):
+def _post_image(
+    query: str, image: bytes = IMAGE_BYTES, *, mime: str = "image/png",
+    headers: dict | None = None, stream: bool = False,
+):
     content = [
         {"type": "input_text", "text": query},
         {"type": "input_image", "image_url": f"data:{mime};base64," + base64.b64encode(image).decode()},
@@ -134,8 +149,19 @@ def _post_image(query: str, image: bytes = IMAGE_BYTES, *, mime: str = "image/pn
     req_headers.update(headers or {})
     return TestClient(app, headers=req_headers).post(
         "/v1/responses",
-        json={"model": "gpt-4o", "input": [{"role": "user", "content": content}], "stream": False},
+        json={"model": "gpt-4o", "input": [{"role": "user", "content": content}], "stream": stream},
     )
+
+
+def _sse_events(response) -> list[dict]:
+    """Parse `data:` payloads out of an SSE body."""
+    import json
+
+    return [
+        json.loads(line[len("data: "):])
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
 
 
 def test_image_answered_locally_with_no_external_credential(monkeypatch, caplog):
@@ -201,3 +227,81 @@ def test_local_vision_mismatch_surfaces_a_specific_error_not_the_generic_apology
     assert "does not support image input" in detail
     assert "qwen2.5:1.5b" in detail
     assert "I'm sorry" not in detail
+
+
+def test_local_vision_mismatch_does_not_only_blame_capability_for_a_malformed_image(monkeypatch):
+    """Defect: the message always said "does not support image input", even
+    when Ollama's own text (a 400/500 on any image-bearing call is matched
+    defensively, per LocalVisionUnsupportedError's docstring) says the image
+    itself could not be loaded - a clear message pointing at the wrong cause.
+    The real Ollama text must survive into the surfaced detail."""
+    class MalformedImageRouter:
+        async def generate_local_response(self, query, history=None, max_tokens=1024, system_prompt=None, images=None):
+            raise LocalVisionUnsupportedError(
+                "gemma4:e4b", "Failed to load image or audio file",
+            )
+
+    _patch_pipeline(monkeypatch, MalformedImageRouter(), external_model=None, supports_vision=True)
+
+    resp = _post_image(QUESTION)
+
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert "Failed to load image or audio file" in detail, "Ollama's real text must survive into the message"
+    assert "could not be processed" in detail, "must not assert capability as the only possible cause"
+
+
+def test_failed_local_image_on_the_streaming_path_reaches_the_user_as_a_failure(monkeypatch, caplog):
+    """Defect 2, the headline bug: the real chat app always streams, and on
+    that path a failed local image generation used to fall through to the
+    generic apology yielded as ordinary answer text - `route=error` in the
+    log, but nothing in the SSE stream told the client the request failed.
+    The stream must now end on a distinct `response.failed` event, carrying
+    the real detail, with no output_text.delta/response.completed hiding it
+    as an answered response."""
+    router = StreamingRejectingRouter()
+    _patch_pipeline(monkeypatch, router, external_model=None, supports_vision=True)
+
+    with caplog.at_level("INFO", logger="dejaq.router.openai_compat"):
+        resp = _post_image(QUESTION, stream=True)
+
+    assert resp.status_code == 200  # SSE headers already flushed; the failure is in-band
+    events = _sse_events(resp)
+
+    assert "event: response.failed\n" in resp.text
+    assert "event: response.completed\n" not in resp.text
+    assert not any(e.get("type") == "response.output_text.delta" for e in events), (
+        "no apology text may be streamed as if it were the answer"
+    )
+
+    failed_events = [e for e in events if e.get("type") == "response.failed"]
+    assert len(failed_events) == 1
+    failed = failed_events[0]
+    assert failed["response"]["status"] == "failed"
+    assert "does not support image input" in failed["response"]["error"]["message"]
+    assert "qwen2.5:1.5b" in failed["response"]["error"]["message"]
+    assert "I'm sorry" not in failed["response"]["error"]["message"]
+
+    done_line = next(
+        r.message for r in caplog.records
+        if r.name == "dejaq.router.openai_compat" and r.message.startswith("done cache=miss")
+    )
+    assert "route=error" in done_line
+
+
+def test_successful_streamed_local_image_answer_still_reports_completed(monkeypatch):
+    """Control: the fix must not turn a real successful streamed answer into
+    a failure - only the actual failure path ends on response.failed."""
+    router = VisionCapturingRouter()
+    _patch_pipeline(monkeypatch, router, external_model=None, supports_vision=True)
+
+    resp = _post_image(QUESTION, stream=True)
+
+    assert resp.status_code == 200
+    events = _sse_events(resp)
+    assert "event: response.completed\n" in resp.text
+    assert "event: response.failed\n" not in resp.text
+    full_text = "".join(
+        e["delta"] for e in events if e.get("type") == "response.output_text.delta"
+    )
+    assert full_text == ANSWER

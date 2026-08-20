@@ -246,6 +246,16 @@ class ChatPipelineResult:
     # serves `stream_chunks`; the answer already exists, so there is nothing to
     # wait for and nothing to restructure (a hit answers in ~144ms).
     answer_stream: AsyncGenerator[str, None] | None = None
+    # True only for the specific, narrow failure a caller must be able to
+    # distinguish from a real (if apologetic) answer: a local-vision capability
+    # mismatch discovered mid-stream (LocalVisionUnsupportedError). Deliberately
+    # NOT set for every route="error" case - other failure kinds (a transient
+    # provider hiccup with no distinguishable status code, an uncaught
+    # generation exception) keep falling back to the generic apology text at
+    # 200, which is an existing, separately-tested behavior this must not
+    # change. See app/routers/openai_responses.py's response.failed event.
+    failed: bool = False
+    error_detail: str = ""
 
 
 def _request_model_profile(raw_request: Request) -> str:
@@ -1779,6 +1789,10 @@ async def run_chat_pipeline(
             "finish_reason": "stop",
             # set below only on a successful external call; real provider usage lives on it
             "ext_response": None,
+            # See ChatPipelineResult.failed - set only by the streaming twin of
+            # the LocalVisionUnsupportedError branch below.
+            "failed": False,
+            "error_detail": "",
         }
         if route == "external":
             # The external model name is known up front and is exactly what every
@@ -1938,19 +1952,42 @@ async def run_chat_pipeline(
                 # to the generic apology below would recreate the invisible-
                 # failure problem the ExternalLLMError handling above already
                 # avoids for the external path.
+                # Matched defensively by status code alone (any 400/500 on an
+                # image-bearing call - see LocalVisionUnsupportedError's own
+                # docstring), so exc.detail is not always a capability
+                # rejection: Ollama returns the same shape for "does not
+                # support image input" and for "Failed to load image or audio
+                # file" (a malformed image payload, nothing to do with
+                # capability). Naming only the capability explanation blames
+                # the wrong thing for the second population - state both
+                # possibilities and include Ollama's own text so the real
+                # cause is visible either way.
                 detail = (
-                    f"The workspace's local model ({exc.model_name}) does not support "
-                    "image input. Either the model was changed after DejaQ last checked "
-                    "its capabilities, or the capability cache is stale - configure a "
-                    "vision-capable local model, or force external routing "
-                    "(X-DejaQ-Routing-Mode: hard_external) for this workspace."
+                    f"The workspace's local model ({exc.model_name}) rejected this "
+                    f"image-bearing request: {exc.detail} This can mean the model does "
+                    "not support image input (it may have been changed after DejaQ last "
+                    "checked its capabilities, or the capability cache is stale), or that "
+                    "the attached image itself could not be processed. Configure a "
+                    "vision-capable local model, check the image, or force external "
+                    "routing (X-DejaQ-Routing-Mode: hard_external) for this workspace."
                 )
                 if not stream:
                     logger.warning("Local model rejected image-bearing request: %s", exc)
                     raise PipelineError(422, detail) from exc
+                # The safety net named in section 5 of the plan: the capability
+                # check above said this model could see, but Ollama disagrees at
+                # call time. Naming the real cause here is the whole point of
+                # this stage; falling through to the generic apology below
+                # would recreate the invisible-failure problem the
+                # ExternalLLMError handling above already avoids for the
+                # external path - which is exactly what yielding
+                # _GENERATION_FAILED_MESSAGE here used to do: the only path the
+                # real chat app (always streams) ever takes. No text is
+                # yielded on this branch; `gen["failed"]`/`error_detail` tell
+                # the Responses SSE encoder to end the stream on a
+                # `response.failed` event instead of a fake `response.completed`.
                 logger.exception("Local model rejected image-bearing request")
-                yield _GENERATION_FAILED_MESSAGE
-                gen.update(model_used="error", route="error")
+                gen.update(model_used="error", route="error", failed=True, error_detail=detail)
             except Exception:
                 logger.exception("LLM generation failed")
                 yield _GENERATION_FAILED_MESSAGE
@@ -2210,6 +2247,8 @@ async def run_chat_pipeline(
                 ) = await _finalize(result.answer, interaction)
                 result.model_used = gen["model_used"]
                 result.finish_reason = gen["finish_reason"]
+                result.failed = gen["failed"]
+                result.error_detail = gen["error_detail"]
 
             result.answer_stream = _streamed_answer()
             return result
