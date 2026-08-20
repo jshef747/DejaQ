@@ -614,12 +614,16 @@ def _evaluate_file_gate(
 
 
 def _query_with_inlined_file(user_query: str, doc: FileText | None) -> str:
-    """Inline an attached Markdown/text/DOCX file into the prompt, fenced and labelled.
+    """Inline an attached Markdown/text/DOCX/PDF file into the prompt, fenced and labelled.
 
-    PDFs do not come through here — they go to the provider as a native document
-    part. Every other kind (Markdown, plain text, source/config files, DOCX) has
-    no such part anywhere, and each one is already just text once extracted, so
-    inlining it via this one mechanism is both the simplest and the only option.
+    On the external branch, a PDF still goes to the provider as a native
+    document part instead (richer: keeps tables, layout, embedded images) - the
+    external call site passes `doc=None` for a PDF to skip inlining there.
+    Local generation has no equivalent of a native document part, so this is
+    the only way it can see a PDF at all: the already-extracted `pypdf` text,
+    with the known cost that tables, layout and any images in the document are
+    lost. Every other kind (Markdown, plain text, source/config files, DOCX)
+    has no native-part option anywhere, so it always inlines here.
 
     The fence and the labelling are not decoration: the file is untrusted input
     from whoever uploaded it, and a document that contains "ignore your
@@ -627,7 +631,7 @@ def _query_with_inlined_file(user_query: str, doc: FileText | None) -> str:
     even more for code, which routinely contains strings and comments that look
     like directives.
     """
-    if doc is None or doc.kind == "pdf" or not doc.text.strip():
+    if doc is None or not doc.text.strip():
         return user_query
     # The document is untrusted input: a literal occurrence of the closing
     # delimiter inside it would close the fence early and put the rest of the
@@ -1542,12 +1546,21 @@ async def run_chat_pipeline(
             # external provider regardless of difficulty or routing mode.
             classification = {"complexity": "hard", "score": 1.0, "task_type": "image_external"}
         elif _request_has_file:
-            # ponytail: files route external unconditionally, like images. A PDF
-            # genuinely has to (the provider parses it natively), and Markdown
-            # rides along for one rule instead of two. Upgrade path when it costs
-            # too much: keep markdown local by letting the classifier see the
-            # question, since the document text is inlined into the prompt anyway.
-            classification = {"complexity": "hard", "score": 1.0, "task_type": "file_external"}
+            # Every kind - DOCX/Markdown/text/code AND now PDF - is already
+            # deterministically extracted to text by file_text.py, so the local
+            # model needs no new capability, just that text inlined into the
+            # prompt (below): pypdf's plain-text extraction for PDF (no tables,
+            # no layout, no embedded images - a real quality cost the external
+            # branch's native document part does not pay). A file we could not
+            # read at all (no usable text - e.g. a scanned PDF) stays external,
+            # since local generation would otherwise answer as if the document
+            # were blank instead of the "answered but uncacheable" behavior this
+            # preserves. An explicit hard_external override always wins.
+            _file_usable_locally = file_doc is not None and file_doc.ok
+            if _file_usable_locally and routing_mode != ROUTING_MODE_HARD_EXTERNAL:
+                classification = {"complexity": "easy", "score": 0.0, "task_type": "file_local"}
+            else:
+                classification = {"complexity": "hard", "score": 1.0, "task_type": "file_external"}
         elif routing_mode == ROUTING_MODE_EASY_LOCAL:
             classification = {"complexity": "easy", "score": 0.0, "task_type": "forced_local"}
         elif routing_mode == ROUTING_MODE_HARD_EXTERNAL:
@@ -1597,6 +1610,12 @@ async def run_chat_pipeline(
             classification = {**classification, "complexity": "hard", "task_type": "rag_external"}
         # The prompt actually sent to whichever model runs, grounded if RAG hit.
         gen_query = _query_with_rag_context(user_query, rag_context)
+        # Local generation has no native document part, so it needs the file's
+        # text folded into the prompt the same way the external branch already
+        # does for non-PDF kinds. A no-op when there is no file (or no usable
+        # text), same helper the external branch uses - the untrusted-input
+        # fencing applies here too.
+        local_gen_query = _query_with_inlined_file(gen_query, file_doc)
 
         # Provider + credential resolution happens HERE, not inside the generation
         # step, and that placement is load-bearing: every failure below is an HTTP
@@ -1749,8 +1768,15 @@ async def run_chat_pipeline(
             try:
                 with trace.step("generate"):
                     if complexity == "hard":
+                        # A PDF goes as a native document part below instead -
+                        # richer than its extracted text - so it is excluded
+                        # here to avoid sending both. Every other kind has no
+                        # native part, so it always inlines.
                         ext_request = ExternalLLMRequest(
-                            query=_query_with_inlined_file(gen_query, file_doc),
+                            query=_query_with_inlined_file(
+                                gen_query,
+                                file_doc if (file_doc and file_doc.kind != "pdf") else None,
+                            ),
                             history=history,
                             model=llm_config.external_model,
                             max_tokens=_max_tokens,
@@ -1799,7 +1825,7 @@ async def run_chat_pipeline(
                         # override (same reasoning as escalation.py).
                         if stream:
                             async for chunk in services.llm_router.stream_local_response(
-                                gen_query,
+                                local_gen_query,
                                 history=history,
                                 max_tokens=_max_tokens,
                                 system_prompt=system_prompt,
@@ -1812,7 +1838,7 @@ async def run_chat_pipeline(
                                     yield chunk.text
                         else:
                             text, _, done_reason = await services.llm_router.generate_local_response(
-                                gen_query,
+                                local_gen_query,
                                 history=history,
                                 max_tokens=_max_tokens,
                                 system_prompt=system_prompt,
