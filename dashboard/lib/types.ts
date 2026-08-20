@@ -87,6 +87,10 @@ export type RagDocumentItem = {
   updated_at: string;
 };
 
+// Still checked against app/services/provider_registry.py by
+// server/tests/test_provider_registry_consistency.py - that registry and its
+// test are deleted together in a later migration stage (plan section 2.11),
+// not here. Nothing in the dashboard imports this anymore.
 export type Provider = "google" | "openai" | "anthropic" | "xai" | "deepseek" | "groq";
 
 export const LIVE_PROVIDERS: Provider[] = ["google", "openai", "anthropic", "xai", "deepseek", "groq"];
@@ -180,21 +184,26 @@ export type CredentialItem = {
   updated_at: string;
 };
 
-export type ProviderModel = {
-  id: string;
-  label: string;
-  input_kinds: string[];
-};
-
-export type ProviderCatalogItem = {
+// The new LiteLLM-backed catalog (migration stage A1). Providers are listed
+// with counts only - GET /admin/v1/model-catalog/providers/{key}/models is
+// fetched per provider, never all at once (the full catalog is 349 KB).
+export type CatalogProviderItem = {
   key: string;
-  live: boolean;
-  client_shape: string | null;
-  models: ProviderModel[];
+  model_count: number;
 };
 
-export type ProvidersListResponse = {
-  providers: ProviderCatalogItem[];
+export type CatalogProvidersListResponse = {
+  providers: CatalogProviderItem[];
+};
+
+export type CatalogModel = {
+  id: string;
+  deprecation_date: string | null;
+};
+
+export type CatalogProviderModelsResponse = {
+  provider: string;
+  models: CatalogModel[];
 };
 
 export type TestProviderResponse = {

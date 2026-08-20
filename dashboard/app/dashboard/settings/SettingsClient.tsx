@@ -11,15 +11,21 @@ import SectionHeader from "@/components/ui/SectionHeader";
 import { deleteCredential, upsertCredential } from "@/app/actions/credentials";
 import { deleteWorkspace } from "@/app/actions/workspaces";
 import { updateLlmConfig } from "@/app/actions/llm-config";
+import { getCatalogProviderModels } from "@/app/actions/model-catalog";
 import { testProvider } from "@/app/actions/test-provider";
 import type {
+  CatalogModel,
+  CatalogProviderItem,
   CredentialItem,
   LlmConfigResponse,
   LlmConfigUpdate,
-  Provider,
-  ProviderCatalogItem,
   TestProviderResponse,
 } from "@/lib/types";
+
+// LiteLLM's own model catalog site - link only, per the captain's ruling
+// that capability display (badges, warnings) is out of scope. Users read it
+// themselves to check what a model supports (files, images, etc).
+const MODEL_INFO_URL = "https://models.litellm.ai/";
 
 const PROVIDER_LABEL: Record<string, string> = {
   google: "Google",
@@ -31,18 +37,15 @@ const PROVIDER_LABEL: Record<string, string> = {
 };
 
 function providerLabel(key: string | null) {
-  if (!key) return "provider";
-  return PROVIDER_LABEL[key] ?? key;
+  if (!key) return "Provider";
+  if (PROVIDER_LABEL[key]) return PROVIDER_LABEL[key];
+  return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function providerForModel(providers: ProviderCatalogItem[], modelId: string | null | undefined): Provider | null {
+function initialProviderFor(modelsByProvider: Record<string, CatalogModel[]>, modelId: string | null | undefined) {
   if (!modelId) return null;
-  const key = providers.find((p) => p.models.some((m) => m.id === modelId))?.key;
-  return (key as Provider | undefined) ?? null;
-}
-
-function modelBelongsToProvider(providers: ProviderCatalogItem[], modelId: string, providerKey: Provider) {
-  return providers.find((p) => p.key === providerKey)?.models.some((m) => m.id === modelId) ?? false;
+  const entry = Object.entries(modelsByProvider).find(([, models]) => models.some((m) => m.id === modelId));
+  return entry?.[0] ?? null;
 }
 
 type Status = { kind: "idle" | "success" | "error" | "info"; text: string };
@@ -56,7 +59,8 @@ interface Props {
   workspaceName: string;
   initialConfig: LlmConfigResponse;
   initialCredentials: CredentialItem[];
-  providers: ProviderCatalogItem[];
+  catalogProviders: CatalogProviderItem[];
+  initialModelsByProvider: Record<string, CatalogModel[]>;
   loadError: string | null;
 }
 
@@ -65,17 +69,22 @@ export default function SettingsClient({
   workspaceName,
   initialConfig,
   initialCredentials,
-  providers,
+  catalogProviders,
+  initialModelsByProvider,
   loadError,
 }: Props) {
   const router = useRouter();
-  const initialProvider = providerForModel(providers, initialConfig.external_model);
 
-  const [provider, setProvider] = useState<Provider | null>(initialProvider);
+  const [provider, setProvider] = useState<string | null>(
+    initialProviderFor(initialModelsByProvider, initialConfig.external_model),
+  );
   const [externalModel, setExternalModel] = useState(initialConfig.external_model ?? "");
   const [threshold, setThreshold] = useState(initialConfig.routing_threshold ?? 0.75);
   const [apiKey, setApiKey] = useState("");
   const [credentials, setCredentials] = useState(initialCredentials);
+  const [modelsByProvider, setModelsByProvider] = useState(initialModelsByProvider);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
 
   const [saveBusy, setSaveBusy] = useState(false);
   const [removeBusy, setRemoveBusy] = useState(false);
@@ -103,22 +112,45 @@ export default function SettingsClient({
   const credsKey = JSON.stringify(initialCredentials);
 
   useEffect(() => {
-    const nextProvider = providerForModel(providers, initialConfig.external_model);
-    setProvider(nextProvider);
+    setProvider(initialProviderFor(initialModelsByProvider, initialConfig.external_model));
     setExternalModel(initialConfig.external_model ?? "");
     setThreshold(initialConfig.routing_threshold ?? 0.75);
     setCredentials(initialCredentials);
+    setModelsByProvider(initialModelsByProvider);
     setApiKey("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configKey, credsKey]);
 
+  // Models are fetched per provider, on demand, and cached - never the whole
+  // catalog at once (plan section 2.11: the full catalog is 349 KB).
+  useEffect(() => {
+    if (!provider || modelsByProvider[provider]) return;
+    let cancelled = false;
+    setModelsLoading(true);
+    setModelsError(null);
+    getCatalogProviderModels(provider).then((res) => {
+      if (cancelled) return;
+      setModelsLoading(false);
+      if (res.ok) {
+        setModelsByProvider((prev) => ({ ...prev, [provider]: res.data.models }));
+      } else {
+        setModelsError(res.error);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [provider, modelsByProvider]);
+
+  const credentialedKeys = useMemo(() => new Set(credentials.map((item) => item.provider)), [credentials]);
+  const groupedProviders = useMemo(() => {
+    const credentialed = catalogProviders.filter((p) => credentialedKeys.has(p.key));
+    const rest = catalogProviders.filter((p) => !credentialedKeys.has(p.key));
+    return { credentialed, rest };
+  }, [catalogProviders, credentialedKeys]);
+
   const currentCredential = credentials.find((item) => item.provider === provider);
-  const models = useMemo(() => {
-    if (!provider) return [];
-    const catalog = providers.find((p) => p.key === provider)?.models ?? [];
-    if (!externalModel || catalog.some((model) => model.id === externalModel)) return catalog;
-    return [{ id: externalModel, label: `${externalModel} (custom)`, input_kinds: [] }, ...catalog];
-  }, [externalModel, provider, providers]);
+  const models = (provider && modelsByProvider[provider]) || [];
 
   const hasUnsavedKey = apiKey.trim().length > 0;
   const canTest = !!currentCredential && !hasUnsavedKey && !testBusy;
@@ -131,9 +163,9 @@ export default function SettingsClient({
         : "Choose a provider first.";
   const canSave = !!provider && !!externalModel;
 
-  function onProviderChange(next: Provider) {
+  function onProviderChange(next: string) {
     setProvider(next);
-    setExternalModel((prev) => (modelBelongsToProvider(providers, prev, next) ? prev : ""));
+    setExternalModel((prev) => ((modelsByProvider[next] ?? []).some((m) => m.id === prev) ? prev : ""));
     setApiKey("");
     setTestResult(null);
   }
@@ -198,8 +230,7 @@ export default function SettingsClient({
       setSaveStatus({ kind: "error", text: res.error });
       return;
     }
-    const nextProvider = providerForModel(providers, res.data.external_model);
-    setProvider(nextProvider);
+    setProvider(initialProviderFor(modelsByProvider, res.data.external_model));
     setExternalModel(res.data.external_model ?? "");
     setThreshold(res.data.routing_threshold ?? 0.75);
     setApiKey("");
@@ -268,29 +299,58 @@ export default function SettingsClient({
               <Field label="External provider" hint="Choose a provider, then a model from its list">
                 <select
                   value={provider ?? ""}
-                  onChange={(e) => onProviderChange(e.target.value as Provider)}
+                  onChange={(e) => onProviderChange(e.target.value)}
                   className="ds-input"
                   style={{ cursor: "pointer" }}
                 >
                   <option value="" disabled>Choose a provider</option>
-                  {providers.map((item) => (
-                    <option key={item.key} value={item.key}>{providerLabel(item.key)}</option>
-                  ))}
+                  {groupedProviders.credentialed.length > 0 && (
+                    <optgroup label="Configured for this organization">
+                      {groupedProviders.credentialed.map((item) => (
+                        <option key={item.key} value={item.key}>
+                          {providerLabel(item.key)} ({item.model_count})
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  <optgroup label="All providers">
+                    {groupedProviders.rest.map((item) => (
+                      <option key={item.key} value={item.key}>
+                        {providerLabel(item.key)} ({item.model_count})
+                      </option>
+                    ))}
+                  </optgroup>
                 </select>
               </Field>
-              <Field label="External model (hard queries)" hint="Used on cache misses that exceed the threshold">
-                <select
+              <Field
+                label="External model (hard queries)"
+                hint={
+                  modelsLoading
+                    ? "Loading models..."
+                    : modelsError
+                      ? modelsError
+                      : "Used on cache misses that exceed the threshold. Type to filter, or type a model not listed."
+                }
+                labelRight={
+                  <a href={MODEL_INFO_URL} target="_blank" rel="noreferrer" style={{ color: "var(--accent)", fontSize: 11 }}>
+                    Model info
+                  </a>
+                }
+              >
+                <Input
+                  list="external-model-options"
                   value={externalModel}
                   onChange={(e) => setExternalModel(e.target.value)}
-                  className="ds-input"
-                  style={{ cursor: "pointer" }}
+                  placeholder={provider ? "Choose or type a model" : "Choose a provider first"}
                   disabled={!provider}
-                >
-                  <option value="" disabled>{provider ? "Choose a model" : "Choose a provider first"}</option>
+                />
+                <datalist id="external-model-options">
                   {models.map((model) => (
-                    <option key={model.id} value={model.id}>{model.label}</option>
+                    <option key={model.id} value={model.id}>
+                      {model.deprecation_date ? `${model.id} (deprecated ${model.deprecation_date})` : model.id}
+                    </option>
                   ))}
-                </select>
+                </datalist>
               </Field>
             </div>
 
@@ -452,7 +512,7 @@ function ProviderTestResult({ result }: { result: TestResult }) {
   );
 }
 
-function testErrorText(status: number | undefined, error: string, provider: Provider | null) {
+function testErrorText(status: number | undefined, error: string, provider: string | null) {
   if (status === 402) return `No ${providerLabel(provider)} API key configured for this organization.`;
   if (status === 429) return "Provider test recently succeeded. Please wait before running it again.";
   if (status === 422) return error;
