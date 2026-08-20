@@ -5,9 +5,8 @@ The model list is load-bearing at write time, not documentation:
 `llm_config_service` treats `PROVIDERS` as an allowlist through
 `provider_for_registered_model` below, so a workspace's `external_model` is
 rejected with 422 when no provider here offers it, and its provider is
-recorded from this lookup. `provider_inference.provider_for_model` consults
-the same lookup before its name-prefix guess, so a model listed here never
-depends on its name matching a vendor prefix.
+recorded from this lookup. `routers/admin/test_provider.py` consults the
+same lookup for a candidate model that has not been saved anywhere yet.
 `routers/admin/providers.py` serves the same data publicly as
 `GET /admin/v1/providers`, which is where the dashboard's model picker gets
 its options. Adding a `ModelSpec` is safe; removing or renaming one breaks
@@ -195,9 +194,9 @@ def provider_for_registered_model(model_id: str) -> str | None:
     """Which provider lists `model_id`, or None if none does.
 
     The one registry lookup: `llm_config_service` uses it to validate and
-    record `external_provider` at write time, and `provider_inference`
-    consults it before falling back to its name-prefix guess, so a model
-    listed here is placed by the list rather than by its name.
+    record `external_provider` at write time, and `routers/admin/test_provider.py`
+    uses it directly for a candidate model that has not been saved anywhere
+    yet - no name-prefix guess for a model absent from the list.
     """
     for provider_key, spec in PROVIDERS.items():
         if any(model.id == model_id for model in spec.models):

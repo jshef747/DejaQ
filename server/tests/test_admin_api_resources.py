@@ -334,7 +334,7 @@ def test_admin_test_provider_missing_credential_returns_402(
 
     response = client.post(
         "/admin/v1/workspaces/acme/test-provider",
-        json={"model": "gpt-5.4-mini"},
+        json={"model": "gpt-4o-mini"},
         headers=headers,
     )
 

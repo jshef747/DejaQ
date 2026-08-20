@@ -106,9 +106,9 @@ class LlmConfigResult(BaseModel):
     external_model: str | None
     # The provider recorded for external_model (app.services.provider_registry),
     # or None for a row written before this column existed / a workspace that
-    # has never changed its external_model - resolve_provider() in
-    # provider_inference.py is what falls back to the name-prefix guess for
-    # that case; nothing here guesses on its behalf.
+    # has never changed its external_model. The qualification migration
+    # (f7a8b9c0d1e2) backfills every placeable row once; nothing at read time
+    # guesses on a row's behalf any more.
     external_provider: str | None
     local_model: str
     generalizer_model: str

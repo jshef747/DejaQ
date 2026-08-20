@@ -294,14 +294,14 @@ def test_llm_config_update_reset_external_model_to_null_clears_external_provider
     assert read_for_workspace("acme").external_provider is None
 
 
-def test_llm_config_read_resolves_null_external_provider_via_guess_fallback(isolated_org_db):
-    """The compatibility case: a row written before the external_provider
-    column existed (or bypassing this write path entirely) still resolves a
-    usable provider through resolve_provider()'s guess fallback."""
+def test_llm_config_read_leaves_null_external_provider_unguessed(isolated_org_db):
+    """A row written before the external_provider column existed (or
+    bypassing this write path entirely) is no longer guessed at read time -
+    the qualification migration (f7a8b9c0d1e2) is the only place that ever
+    backfills such a row, once, from a frozen copy of this same guess."""
     from app.db import llm_config_repo, workspace_repo
     from app.db.session import get_session
     from app.services.llm_config_service import read_for_workspace
-    from app.services.provider_inference import resolve_provider
 
     with get_session() as session:
         workspace = workspace_repo.create_workspace(session, "Acme")
@@ -312,7 +312,6 @@ def test_llm_config_read_resolves_null_external_provider_via_guess_fallback(isol
     result = read_for_workspace("acme")
 
     assert result.external_provider is None
-    assert resolve_provider(result.external_model, result.external_provider) == "anthropic"
 
 
 # ── Per-workspace resolution ──

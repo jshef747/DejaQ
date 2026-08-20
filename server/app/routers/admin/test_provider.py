@@ -11,7 +11,7 @@ from app.schemas.test_provider import TestProviderRequest, TestProviderResponse
 from app.services.credential_service import SUPPORTED_PROVIDERS, CredentialService
 from app.services.external_llm import ExternalLLMService
 from app.services.llm_providers import LIVE_PROVIDERS, redact_api_key
-from app.services.provider_inference import resolve_provider
+from app.services.provider_registry import provider_for_registered_model
 from app.utils.exceptions import ExternalLLMAuthError, ExternalLLMError, ExternalLLMTimeoutError
 
 logger = logging.getLogger("dejaq.routers.admin.test_provider")
@@ -53,14 +53,14 @@ async def test_provider(
     workspace_slug: str,
     body: TestProviderRequest,
 ):
-    try:
-        # No stored config row applies here - body.model is a candidate the
-        # admin may not have saved yet, so this always falls through to
-        # provider_for_model, which places it from the registry (see
-        # provider_inference.py).
-        provider = resolve_provider(body.model, None)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    # No stored config row applies here - body.model is a candidate the admin
+    # may not have saved yet, so this is placed from the registry alone. No
+    # name-prefix guess: an unregistered model is refused rather than guessed.
+    provider = provider_for_registered_model(body.model)
+    if provider is None:
+        raise HTTPException(
+            status_code=422, detail=f"Unknown provider for model '{body.model}'."
+        )
 
     if provider in SUPPORTED_PROVIDERS and provider not in LIVE_PROVIDERS:
         raise HTTPException(status_code=422, detail=f"Provider '{provider}' is not yet wired.")

@@ -50,8 +50,8 @@ from app.services.image_text import (
 )
 from app.services.file_text import FileText, extract as extract_file_text
 from app.dependencies.auth import ResolvedWorkspace, require_org_key
-from app.services.provider_inference import resolve_provider
 from app.services import cache_filter, llm_config_service, pipeline_config_cache, rag_service
+from app.services.provider_registry import provider_for_registered_model
 from app.services.classifier import ClassifierService
 from app.services.context_adjuster import (
     DEFAULT_ADJUST_SYSTEM_PROMPT,
@@ -138,9 +138,12 @@ class EffectiveLlmConfig:
     # where it is turned into a 422 PipelineError before any provider lookup.
     external_model: str | None
     routing_threshold: float
-    # The recorded provider for external_model (None for a row not yet
-    # backfilled - see provider_inference.resolve_provider, the one place
-    # that decides whether to trust this or fall back to the name guess).
+    # The recorded provider for external_model - the credential lookup key.
+    # None for a row with no recorded provider (never saved, or a model the
+    # qualification migration f7a8b9c0d1e2 could not place) or for the
+    # env-default EXTERNAL_MODEL_NAME, which has no database row at all. The
+    # hard-query path below falls back to a registry-only lookup (no
+    # name-prefix guess) and only then 422s naming the fix.
     external_provider: str | None = None
     # Defaulted, not required: existing tests construct this with only the
     # two fields above (they monkeypatch _read_effective_llm_config wholesale
@@ -1610,9 +1613,16 @@ async def run_chat_pipeline(
                     "No external model configured for this workspace. "
                     "Configure a provider and model in Settings.",
                 )
-            try:
-                provider = resolve_provider(llm_config.external_model, llm_config.external_provider)
-            except ValueError:
+            # Prefer the recorded provider (the credential lookup key, kept in
+            # sync at write time and by the qualification migration). A row
+            # with no recorded provider - chiefly the server-wide
+            # DEJAQ_EXTERNAL_MODEL default, which has no database row to
+            # record one in - still resolves through the registry alone, no
+            # name-prefix guess.
+            provider = llm_config.external_provider or provider_for_registered_model(
+                llm_config.external_model
+            )
+            if provider is None:
                 raise PipelineError(
                     422,
                     f"Configured external model '{llm_config.external_model}' "
