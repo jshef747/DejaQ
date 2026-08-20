@@ -8,6 +8,7 @@ import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
 import Field from "@/components/ui/Field";
 import SectionHeader from "@/components/ui/SectionHeader";
+import Combobox from "@/components/ui/Combobox";
 import { deleteCredential, upsertCredential } from "@/app/actions/credentials";
 import { deleteWorkspace } from "@/app/actions/workspaces";
 import { updateLlmConfig } from "@/app/actions/llm-config";
@@ -151,6 +152,32 @@ export default function SettingsClient({
 
   const currentCredential = credentials.find((item) => item.provider === provider);
   const models = (provider && modelsByProvider[provider]) || [];
+
+  const providerGroups = useMemo(() => {
+    const toOption = (item: CatalogProviderItem) => ({
+      value: item.key,
+      label: `${providerLabel(item.key)} (${item.model_count})`,
+    });
+    const groups = [];
+    if (groupedProviders.credentialed.length > 0) {
+      groups.push({ label: "Configured for this workspace", options: groupedProviders.credentialed.map(toOption) });
+    }
+    groups.push({ label: "All providers", options: groupedProviders.rest.map(toOption) });
+    return groups;
+  }, [groupedProviders]);
+
+  const filteredModels = useMemo(() => {
+    const q = externalModel.trim().toLowerCase();
+    const list = q ? models.filter((m) => m.id.toLowerCase().includes(q)) : models;
+    return [
+      {
+        options: list.map((model) => ({
+          value: model.id,
+          label: model.deprecation_date ? `${model.id} (deprecated ${model.deprecation_date})` : model.id,
+        })),
+      },
+    ];
+  }, [models, externalModel]);
 
   const hasUnsavedKey = apiKey.trim().length > 0;
   const canTest = !!currentCredential && !hasUnsavedKey && !testBusy;
@@ -297,30 +324,12 @@ export default function SettingsClient({
           <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 0 }}>
             <div style={{ display: "grid", gap: 12, gridTemplateColumns: "220px 1fr" }}>
               <Field label="External provider" hint="Choose a provider, then a model from its list">
-                <select
+                <Combobox
+                  groups={providerGroups}
                   value={provider ?? ""}
-                  onChange={(e) => onProviderChange(e.target.value)}
-                  className="ds-input"
-                  style={{ cursor: "pointer" }}
-                >
-                  <option value="" disabled>Choose a provider</option>
-                  {groupedProviders.credentialed.length > 0 && (
-                    <optgroup label="Configured for this workspace">
-                      {groupedProviders.credentialed.map((item) => (
-                        <option key={item.key} value={item.key}>
-                          {providerLabel(item.key)} ({item.model_count})
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                  <optgroup label="All providers">
-                    {groupedProviders.rest.map((item) => (
-                      <option key={item.key} value={item.key}>
-                        {providerLabel(item.key)} ({item.model_count})
-                      </option>
-                    ))}
-                  </optgroup>
-                </select>
+                  onChange={onProviderChange}
+                  placeholder="Choose a provider"
+                />
               </Field>
               <Field
                 label="External model (hard queries)"
@@ -337,20 +346,15 @@ export default function SettingsClient({
                   </a>
                 }
               >
-                <Input
-                  list="external-model-options"
+                <Combobox
+                  groups={filteredModels}
                   value={externalModel}
-                  onChange={(e) => setExternalModel(e.target.value)}
+                  onChange={setExternalModel}
                   placeholder={provider ? "Choose or type a model" : "Choose a provider first"}
                   disabled={!provider}
+                  filterable
+                  emptyText="No matching models"
                 />
-                <datalist id="external-model-options">
-                  {models.map((model) => (
-                    <option key={model.id} value={model.id}>
-                      {model.deprecation_date ? `${model.id} (deprecated ${model.deprecation_date})` : model.id}
-                    </option>
-                  ))}
-                </datalist>
               </Field>
             </div>
 

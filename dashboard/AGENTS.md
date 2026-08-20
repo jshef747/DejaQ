@@ -23,6 +23,41 @@ default, the indicator's fixed button paints on top of that block. Pinned to
 to bottom-right, move the indicator or the conflicting element instead of
 reverting this.
 
+## Styleable dropdowns
+
+A native `<select>`/`<optgroup>` and an `<input list>`/`<datalist>` both render
+their open popup with OS chrome that no CSS in this app can reach - it will
+always look like a different program next to the dark theme. Use
+`components/ui/Combobox.tsx` instead: one component covers both a grouped,
+non-editable picker (`SettingsClient.tsx`'s provider field) and a filterable,
+free-text picker (its model field, `filterable` prop), built from the
+dashboard's own `.ds-combo*` styles in `design-system.css`. It implements the
+full WAI-ARIA combobox keyboard/focus contract (arrows, Home/End, typeahead,
+Escape-reverts, click-outside/scroll/blur close) - reuse it rather than
+reaching for a plain `<select>` or a new dependency.
+
+One easy-to-miss pitfall when writing a component like this: keyboard
+navigation's `scrollIntoView` can scroll a new option under a stationary
+mouse cursor, which fires a real `mouseenter`/`mouseover` on it and hijacks
+the keyboard selection. Handle hover with `onMouseMove`, not `onMouseEnter` -
+`mousemove` only fires on actual pointer movement, not on content shifting
+under a still pointer.
+
+## Verifying with chrome-devtools-axi
+
+`chrome-devtools-axi screenshot <path>` silently fails to write outside a
+narrow sandbox root when invoked from an agent shell - it reports success and
+even prints the path you asked for, but nothing lands there. Screenshot to a
+relative path or somewhere under `/tmp` or the session scratchpad instead,
+then `cp` the file out to wherever it actually needs to end up. Confirm with
+`ls` after the first shot in a session, since the failure mode gives no error.
+
+Likewise, prefer real keystroke simulation (`chrome-devtools-axi type "..."`,
+or one `press <key>` per call with a fresh `snapshot`/`eval` read after each)
+over setting an input's `.value` directly or the `fill` command - both bypass
+React's controlled-input event chain, so the DOM shows the new text but
+component state never updates.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.
