@@ -42,13 +42,13 @@ def test_llm_config_update_preserves_omitted_fields_and_clears_nulls(isolated_or
 
     first = update_for_workspace(
         "acme",
-        {"external_model": "gemini-2.5-pro", "local_model": "gemma-4-e4b"},
+        {"external_model": "gemini/gemini-2.5-pro", "local_model": "gemma-4-e4b"},
         {"external_model", "local_model"},
     )
-    assert first.external_model == "gemini-2.5-pro"
+    assert first.external_model == "gemini/gemini-2.5-pro"
     assert first.local_model == "gemma-4-e4b"
     assert first.overrides == {
-        "external_model": "gemini-2.5-pro",
+        "external_model": "gemini/gemini-2.5-pro",
         "local_model": "gemma-4-e4b",
     }
 
@@ -239,8 +239,9 @@ def test_llm_config_update_rejects_when_ollama_is_unreachable(isolated_org_db, m
 
 
 def test_llm_config_update_does_not_validate_external_model_against_ollama(isolated_org_db, monkeypatch):
-    """external_model names a provider model string (e.g. "gemini-2.5-flash"),
-    never an Ollama tag - it must never be checked against the Ollama catalog."""
+    """external_model names a LiteLLM-qualified model string (e.g.
+    "gemini/gemini-2.5-flash"), never an Ollama tag - it must never be
+    checked against the Ollama catalog."""
     from app.services import llm_config_service
     from app.services.llm_config_service import update_for_workspace
 
@@ -250,27 +251,27 @@ def test_llm_config_update_does_not_validate_external_model_against_ollama(isola
     monkeypatch.setattr(llm_config_service.ollama_catalog, "list_available_models", _explode)
     _create_workspace()
 
-    result = update_for_workspace("acme", {"external_model": "gemini-2.5-flash"}, {"external_model"})
+    result = update_for_workspace("acme", {"external_model": "gemini/gemini-2.5-flash"}, {"external_model"})
 
-    assert result.external_model == "gemini-2.5-flash"
+    assert result.external_model == "gemini/gemini-2.5-flash"
 
 
-def test_llm_config_update_records_external_provider_from_registry(isolated_org_db):
+def test_llm_config_update_records_external_provider_resolved_via_litellm(isolated_org_db):
     """Setting external_model also records the matching external_provider,
-    so a newly configured workspace never depends on the name-prefix guess."""
+    resolved via litellm.get_llm_provider - not the registry (A1)."""
     from app.services.llm_config_service import read_for_workspace, update_for_workspace
 
     _create_workspace()
 
-    result = update_for_workspace("acme", {"external_model": "claude-sonnet-5"}, {"external_model"})
+    result = update_for_workspace("acme", {"external_model": "anthropic/claude-sonnet-5"}, {"external_model"})
 
     assert result.external_provider == "anthropic"
     assert read_for_workspace("acme").external_provider == "anthropic"
 
 
-def test_llm_config_update_rejects_an_unknown_external_model(isolated_org_db):
-    """The registry, not the Ollama catalog, gates external_model - a model
-    no provider offers is rejected at write time, naming the offending
+def test_llm_config_update_rejects_an_unqualified_external_model(isolated_org_db):
+    """A model LiteLLM cannot place a provider for (no qualifying prefix and
+    no bare-name match) is rejected at write time, naming the offending
     value, instead of being accepted and failing later at request time."""
     from app.services.llm_config_service import InvalidLlmConfigUpdate, update_for_workspace
 
@@ -286,7 +287,7 @@ def test_llm_config_update_reset_external_model_to_null_clears_external_provider
     from app.services.llm_config_service import read_for_workspace, update_for_workspace
 
     _create_workspace()
-    update_for_workspace("acme", {"external_model": "gpt-4o"}, {"external_model"})
+    update_for_workspace("acme", {"external_model": "openai/gpt-4o"}, {"external_model"})
 
     result = update_for_workspace("acme", {"external_model": None}, {"external_model"})
 

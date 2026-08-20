@@ -117,7 +117,7 @@ def test_admin_llm_config_defaults_update_and_clear(isolated_org_db, authed_admi
     defaulted = client.get("/admin/v1/workspaces/acme/llm-config", headers=headers)
     updated = client.put(
         "/admin/v1/workspaces/acme/llm-config",
-        json={"external_model": "gemini-2.5-pro"},
+        json={"external_model": "gemini/gemini-2.5-pro"},
         headers=headers,
     )
     cleared = client.put(
@@ -129,7 +129,7 @@ def test_admin_llm_config_defaults_update_and_clear(isolated_org_db, authed_admi
 
     assert defaulted.status_code == 200
     assert defaulted.json()["is_default"] is True
-    assert updated.json()["overrides"] == {"external_model": "gemini-2.5-pro"}
+    assert updated.json()["overrides"] == {"external_model": "gemini/gemini-2.5-pro"}
     assert cleared.json()["overrides"] == {}
     assert empty.status_code == 422
 

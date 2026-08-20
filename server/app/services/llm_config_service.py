@@ -19,14 +19,16 @@ from app.config import (
 from app.db import credential_repo, llm_config_repo
 from app.db.models.workspace import Workspace
 from app.db.session import get_session
-from app.services import ollama_catalog
+from app.services import model_catalog, ollama_catalog
 from app.services.context_adjuster import (
     DEFAULT_ADJUST_SYSTEM_PROMPT,
     DEFAULT_GENERALIZE_SYSTEM_PROMPT,
 )
 from app.services.context_enricher import DEFAULT_SYSTEM_PROMPT as ENRICHER_DEFAULT_SYSTEM_PROMPT
+from app.services.llm_providers.litellm_transport import _LITELLM_PROVIDER_KEYS, _litellm_key
 from app.services.llm_router import DEFAULT_SYSTEM_PROMPT as LOCAL_DEFAULT_SYSTEM_PROMPT
 from app.services.model_backends import MODEL_RUNTIME_SPECS
+from app.services.model_catalog import STRUCTURED_CREDENTIAL_PROVIDERS
 from app.services.normalizer import DEFAULT_SYSTEM_PROMPT as NORMALIZER_DEFAULT_SYSTEM_PROMPT
 from app.services.provider_registry import provider_for_registered_model
 from app.services.validator import (
@@ -420,9 +422,36 @@ def _validate_token_budget_overrides(
         )
 
 
+# Inverse of litellm_transport's DejaQ->LiteLLM provider-key map: DejaQ's
+# credential lookup (get_workspace_provider_key, still keyed on DejaQ's own
+# provider names) needs the DejaQ key back from whatever LiteLLM's
+# get_llm_provider() resolves. Migration stage A1's provider-key-namespace
+# unification (plan section 2.11, "M7") deletes both maps together; it is
+# not part of this stage.
+_DEJAQ_PROVIDER_KEYS = {litellm_key: dejaq_key for dejaq_key, litellm_key in _LITELLM_PROVIDER_KEYS.items()}
+
+
 def _validate_and_resolve_external_model(payload: dict[str, Any], fields_set: set[str]) -> dict[str, Any]:
-    """Reject an external_model the registry doesn't know, and return the
-    external_provider to persist alongside it.
+    """Accept every model LiteLLM can address; reject only what it cannot.
+
+    Four assertions, in this order (plan `dejaq-litellm-migration-plan-v2/
+    report.md` section 2.11):
+
+    1. `litellm.get_llm_provider(model)` must not raise, and the returned
+       provider must be a real LiteLLM provider. This is what rejects a bare
+       model name like 'grok-4.6'.
+    2. The resolved provider and the DejaQ credential-lookup key this
+       function is about to store for it agree (round-trip through the same
+       map `litellm_transport` uses to build the wire model string).
+    3. The provider is not in STRUCTURED_CREDENTIAL_PROVIDERS (Bedrock/Azure
+       and their sibling keys) - workspace_provider_credentials stores one
+       opaque string per provider, and SigV4 / endpoint+api-version+deployment
+       don't fit. This is what stops a hand-typed 'bedrock/...' model from
+       walking around the catalog filter (app/services/model_catalog.py).
+    4. Nothing else - specifically NOT "is this model in litellm.model_cost".
+       A model LiteLLM has never heard of (e.g. groq/compound) must stay
+       callable; refusing unknown models breaks the product the day a vendor
+       ships one.
 
     Only reachable when this update actually touches external_model, same
     guard style as _validate_ollama_overrides/_validate_prompt_overrides. A
@@ -435,13 +464,33 @@ def _validate_and_resolve_external_model(payload: dict[str, Any], fields_set: se
     model = payload.get("external_model")
     if model is None:
         return {"external_provider": None}
-    provider = provider_for_registered_model(model)
-    if provider is None:
+
+    try:
+        litellm_provider = model_catalog.resolve_provider(model)
+    except ValueError as exc:
+        hint_provider = provider_for_registered_model(model)
+        example = f"{_litellm_key(hint_provider)}/{model}" if hint_provider else f"<provider>/{model}"
         raise InvalidLlmConfigUpdate(
-            f"external_model: '{model}' is not a known model - no provider in "
-            "the registry offers it (app/services/provider_registry.py)."
+            f"external_model: '{model}' is not addressable by LiteLLM - qualify it "
+            f"with its provider, e.g. '{example}' (see litellm.provider_list)."
+        ) from exc
+
+    external_provider = _DEJAQ_PROVIDER_KEYS.get(litellm_provider, litellm_provider)
+    if _litellm_key(external_provider) != litellm_provider:
+        raise InvalidLlmConfigUpdate(
+            f"external_model: '{model}' - provider '{litellm_provider}' does not "
+            "round-trip through DejaQ's provider-key map."
         )
-    return {"external_provider": provider}
+
+    if litellm_provider in STRUCTURED_CREDENTIAL_PROVIDERS:
+        raise InvalidLlmConfigUpdate(
+            f"external_model: '{model}' - provider '{litellm_provider}' needs a "
+            "structured credential (more than one field) that "
+            "workspace_provider_credentials cannot store yet "
+            "(app/services/model_catalog.py:STRUCTURED_CREDENTIAL_PROVIDERS)."
+        )
+
+    return {"external_provider": external_provider}
 
 
 def _get_workspace(session, workspace_slug: str) -> Workspace:
