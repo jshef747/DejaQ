@@ -10,7 +10,7 @@ from tests._fake_llm_server import FakeLLMServer
 pytestmark = pytest.mark.no_model
 
 
-def _request(model: str = "fake-model", *, temperature: float | None = 0.2) -> ExternalLLMRequest:
+def _request(model: str = "openai/fake-model", *, temperature: float | None = 0.2) -> ExternalLLMRequest:
     return ExternalLLMRequest(
         query="Hello",
         history=[{"role": "assistant", "content": "Hi"}],
@@ -37,11 +37,11 @@ def _call(server: FakeLLMServer, request: ExternalLLMRequest, monkeypatch, provi
 
 def test_returns_contract_shape_and_wire_bytes(monkeypatch):
     with FakeLLMServer([(200, _ok_openai_response())]) as server:
-        response = _call(server, _request("fake-model"), monkeypatch)
+        response = _call(server, _request(), monkeypatch)
 
     assert isinstance(response, ExternalLLMResponse)
     assert response.text == "OpenAI answer"
-    assert response.model_used == "fake-model"
+    assert response.model_used == "openai/fake-model"
     assert response.prompt_tokens == 5
     assert response.completion_tokens == 6
     assert response.finish_reason == "stop"
@@ -57,7 +57,7 @@ def test_returns_contract_shape_and_wire_bytes(monkeypatch):
 def test_no_api_key_logged_on_success(monkeypatch, caplog):
     with FakeLLMServer([(200, _ok_openai_response())]) as server:
         with caplog.at_level("DEBUG"):
-            _call(server, _request("fake-model"), monkeypatch)
+            _call(server, _request(), monkeypatch)
 
     assert "sk-test-secret" not in caplog.text
 
@@ -66,7 +66,7 @@ def test_api_key_redacted_in_logs_on_error(monkeypatch, caplog):
     responses = [(401, {"error": {"message": "Incorrect API key provided: sk-test-secret.", "type": "invalid_request_error", "code": "invalid_api_key"}})]
     with FakeLLMServer(responses) as server:
         with caplog.at_level("ERROR"), pytest.raises(ExternalLLMAuthError):
-            _call(server, _request("fake-model"), monkeypatch)
+            _call(server, _request(), monkeypatch)
 
     assert "sk-test-secret" not in caplog.text
     assert "<redacted>" in caplog.text
@@ -78,7 +78,7 @@ def test_o_series_reasoning_model_sends_max_completion_tokens_not_max_tokens(mon
     in `get_model_info`, verified for o3-mini/o4-mini) - not a DejaQ prefix
     check (deleted with `llm_providers/openai.py` in migration stage L6)."""
     with FakeLLMServer([(200, _ok_openai_response())]) as server:
-        _call(server, _request("o4-mini"), monkeypatch)
+        _call(server, _request("openai/o4-mini"), monkeypatch)
 
     sent = server.requests[0]
     assert sent["max_completion_tokens"] == 64
@@ -92,30 +92,30 @@ def test_model_used_is_dejaqs_request_field_not_litellms_echo(monkeypatch):
     body = _ok_openai_response()
     body["model"] = "some-other-echoed-name"
     with FakeLLMServer([(200, body)]) as server:
-        response = _call(server, _request("fake-model"), monkeypatch)
+        response = _call(server, _request(), monkeypatch)
 
-    assert response.model_used == "fake-model"
+    assert response.model_used == "openai/fake-model"
 
 
 def test_finish_reason_length_is_normalized(monkeypatch):
     body = _ok_openai_response()
     body["choices"][0]["finish_reason"] = "length"
     with FakeLLMServer([(200, body)]) as server:
-        response = _call(server, _request("fake-model"), monkeypatch)
+        response = _call(server, _request(), monkeypatch)
 
     assert response.finish_reason == "length"
 
 
 def test_temperature_omitted_from_wire_when_caller_sent_none(monkeypatch):
     with FakeLLMServer([(200, _ok_openai_response())]) as server:
-        _call(server, _request("fake-model", temperature=None), monkeypatch)
+        _call(server, _request(temperature=None), monkeypatch)
 
     assert "temperature" not in server.requests[0]
 
 
 def test_temperature_sent_on_wire_when_caller_set_one(monkeypatch):
     with FakeLLMServer([(200, _ok_openai_response())]) as server:
-        _call(server, _request("fake-model", temperature=0.7), monkeypatch)
+        _call(server, _request(temperature=0.7), monkeypatch)
 
     assert server.requests[0]["temperature"] == 0.7
 
@@ -126,7 +126,7 @@ def test_retries_once_without_temperature_when_vendor_names_it(monkeypatch):
         (200, _ok_openai_response()),
     ]
     with FakeLLMServer(responses) as server:
-        response = _call(server, _request("fake-model", temperature=0.7), monkeypatch)
+        response = _call(server, _request(temperature=0.7), monkeypatch)
 
     assert response.text == "OpenAI answer"
     assert len(server.requests) == 2
@@ -138,7 +138,7 @@ def test_does_not_retry_on_an_unrelated_bad_request(monkeypatch):
     responses = [(400, {"error": {"message": "invalid_request_error - Incorrect API key provided", "type": "invalid_request_error"}})]
     with FakeLLMServer(responses) as server:
         with pytest.raises(ExternalLLMError):
-            _call(server, _request("fake-model", temperature=0.7), monkeypatch)
+            _call(server, _request(temperature=0.7), monkeypatch)
 
     assert len(server.requests) == 1
 
@@ -147,7 +147,7 @@ def test_authentication_error_is_classified_and_key_never_leaks(monkeypatch):
     responses = [(401, {"error": {"message": "Incorrect API key provided: sk-test-secret.", "type": "invalid_request_error", "code": "invalid_api_key"}})]
     with FakeLLMServer(responses) as server:
         with pytest.raises(ExternalLLMAuthError) as exc_info:
-            _call(server, _request("fake-model"), monkeypatch)
+            _call(server, _request(), monkeypatch)
 
     assert "sk-test-secret" not in str(exc_info.value)
 
@@ -156,7 +156,7 @@ def test_rate_limit_error_is_classified(monkeypatch):
     responses = [(429, {"error": {"message": "rate limited", "type": "rate_limit_error"}})]
     with FakeLLMServer(responses) as server:
         with pytest.raises(ExternalLLMError) as exc_info:
-            _call(server, _request("fake-model"), monkeypatch)
+            _call(server, _request(), monkeypatch)
 
     assert not isinstance(exc_info.value, ExternalLLMAuthError)
     assert not isinstance(exc_info.value, ExternalLLMTimeoutError)
@@ -166,7 +166,7 @@ def test_ordinary_bad_request_is_classified_but_not_auth(monkeypatch):
     responses = [(400, {"error": {"message": "invalid_request_error - malformed request", "type": "invalid_request_error"}})]
     with FakeLLMServer(responses) as server:
         with pytest.raises(ExternalLLMError) as exc_info:
-            _call(server, _request("fake-model"), monkeypatch)
+            _call(server, _request(), monkeypatch)
 
     assert not isinstance(exc_info.value, ExternalLLMAuthError)
 
@@ -175,7 +175,7 @@ def test_timeout_is_classified(monkeypatch):
     monkeypatch.setenv("OPENAI_API_BASE", "http://127.0.0.1:1/v1")  # nothing listens; connection refused/timeout
     client = LiteLLMTransportClient("openai")
     with pytest.raises((ExternalLLMTimeoutError, ExternalLLMError)):
-        asyncio.run(client.generate_response(_request("fake-model"), "sk-test-secret"))
+        asyncio.run(client.generate_response(_request(), "sk-test-secret"))
 
 
 def test_gemini_permission_denied_403_is_an_auth_error(monkeypatch):
@@ -184,7 +184,7 @@ def test_gemini_permission_denied_403_is_an_auth_error(monkeypatch):
         monkeypatch.setenv("GEMINI_API_BASE", server.base_url)
         client = LiteLLMTransportClient("google")
         with pytest.raises(ExternalLLMAuthError):
-            asyncio.run(client.generate_response(_request("gemini-2.5-flash"), "sk-test-secret"))
+            asyncio.run(client.generate_response(_request("gemini/gemini-2.5-flash"), "sk-test-secret"))
 
 
 def test_gemini_api_key_invalid_is_an_auth_error(monkeypatch):
@@ -198,7 +198,7 @@ def test_gemini_api_key_invalid_is_an_auth_error(monkeypatch):
         monkeypatch.setenv("GEMINI_API_BASE", server.base_url)
         client = LiteLLMTransportClient("google")
         with pytest.raises(ExternalLLMAuthError):
-            asyncio.run(client.generate_response(_request("gemini-2.5-flash"), "sk-test-secret"))
+            asyncio.run(client.generate_response(_request("gemini/gemini-2.5-flash"), "sk-test-secret"))
 
 
 def test_gemini_ordinary_bad_request_is_not_mistaken_for_an_auth_error(monkeypatch):
@@ -207,14 +207,19 @@ def test_gemini_ordinary_bad_request_is_not_mistaken_for_an_auth_error(monkeypat
         monkeypatch.setenv("GEMINI_API_BASE", server.base_url)
         client = LiteLLMTransportClient("google")
         with pytest.raises(ExternalLLMError) as exc_info:
-            asyncio.run(client.generate_response(_request("gemini-2.5-flash", temperature=None), "sk-test-secret"))
+            asyncio.run(client.generate_response(_request("gemini/gemini-2.5-flash", temperature=None), "sk-test-secret"))
 
     assert not isinstance(exc_info.value, ExternalLLMAuthError)
 
 
-def test_model_string_is_qualified_with_the_litellm_provider_key(monkeypatch):
-    """google -> gemini, not google - `google` is not a real LiteLLM provider
-    name. Built inside the transport module only."""
+def test_qualified_model_is_sent_to_the_wire_unmodified_not_reprefixed(monkeypatch):
+    """request.model already carries its LiteLLM provider prefix (e.g.
+    'gemini/gemini-2.5-flash') - the transport must not re-derive or
+    re-prefix it from `self._provider` ('google', not a real LiteLLM
+    provider name). Regression for the double-prefix bug: a re-added
+    prefix here would build 'google/gemini/gemini-2.5-flash', which
+    LiteLLM cannot resolve, and the request would never reach the fake
+    Gemini host at all."""
     body = {
         "candidates": [{"content": {"parts": [{"text": "hi"}], "role": "model"}, "finishReason": "STOP", "index": 0}],
         "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
@@ -222,7 +227,7 @@ def test_model_string_is_qualified_with_the_litellm_provider_key(monkeypatch):
     with FakeLLMServer([(200, body)]) as server:
         monkeypatch.setenv("GEMINI_API_BASE", server.base_url)
         client = LiteLLMTransportClient("google")
-        asyncio.run(client.generate_response(_request("gemini-2.5-flash", temperature=None), "sk-test-secret"))
+        asyncio.run(client.generate_response(_request("gemini/gemini-2.5-flash", temperature=None), "sk-test-secret"))
 
     assert server.requests[0]  # the request was actually served by the fake Gemini host
 
@@ -245,4 +250,4 @@ def test_gemini_response_without_usage_metadata_is_still_an_error_upstream(monke
         monkeypatch.setenv("GEMINI_API_BASE", server.base_url)
         client = LiteLLMTransportClient("google")
         with pytest.raises(ExternalLLMError):
-            asyncio.run(client.generate_response(_request("gemini-2.5-flash", temperature=None), "sk-test-secret"))
+            asyncio.run(client.generate_response(_request("gemini/gemini-2.5-flash", temperature=None), "sk-test-secret"))

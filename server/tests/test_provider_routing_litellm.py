@@ -84,7 +84,7 @@ def test_groq_vision_model_attachment_reaches_the_wire_through_litellm(monkeypat
         query="describe this",
         history=[],
         system_prompt="Be useful.",
-        model="qwen/qwen3.6-27b",
+        model="groq/qwen/qwen3.6-27b",
         max_tokens=64,
         image_b64="aGVsbG8=",
         image_mime="image/png",

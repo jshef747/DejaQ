@@ -14,12 +14,14 @@ class FakeLLMServer:
 
     Each request pops the next scripted response (repeating the last one
     once exhausted) and records the parsed request body in `.requests` for
-    wire-level assertions.
+    wire-level assertions. The request path is recorded in `.paths` too -
+    Gemini's API puts the model in the URL, not the JSON body.
     """
 
     def __init__(self, responses: list[tuple[int, dict]]) -> None:
         self.responses = responses
         self.requests: list[dict] = []
+        self.paths: list[str] = []
         self._server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), self._make_handler())
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 
@@ -31,6 +33,7 @@ class FakeLLMServer:
                 length = int(self.headers.get("Content-Length", 0))
                 body = self.rfile.read(length)
                 outer.requests.append(json.loads(body) if body else {})
+                outer.paths.append(self.path)
                 index = min(len(outer.requests) - 1, len(outer.responses) - 1)
                 status, payload = outer.responses[index]
                 self.send_response(status)

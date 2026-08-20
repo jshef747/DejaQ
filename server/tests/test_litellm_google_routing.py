@@ -21,7 +21,7 @@ from tests._fake_llm_server import FakeLLMServer
 pytestmark = pytest.mark.no_model
 
 
-def _request(model: str = "gemini-2.5-flash", *, temperature: float | None = None) -> ExternalLLMRequest:
+def _request(model: str = "gemini/gemini-2.5-flash", *, temperature: float | None = None) -> ExternalLLMRequest:
     return ExternalLLMRequest(
         query="Hello",
         history=[{"role": "assistant", "content": "Hi"}],

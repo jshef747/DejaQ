@@ -150,9 +150,10 @@ class LiteLLMTransportClient:
     """One `LLMProviderClient` implementation routing through LiteLLM.
 
     One instance per key in `llm_providers.LIVE_PROVIDERS`, built by
-    `external_llm._PROVIDER_CLIENTS`. `provider` is DejaQ's own provider key;
-    `_litellm_key` translates it into LiteLLM's provider namespace for the
-    model string only.
+    `external_llm._PROVIDER_CLIENTS`. `provider` is DejaQ's own provider key,
+    used only for error logging/mapping here - the wire model string comes
+    straight from `request.model`, which is already LiteLLM-qualified (see
+    `generate_response`).
     """
 
     def __init__(self, provider: str) -> None:
@@ -161,7 +162,10 @@ class LiteLLMTransportClient:
     async def generate_response(self, request: ExternalLLMRequest, api_key: str) -> ExternalLLMResponse:
         ensure_query(request)
         messages = _build_messages(request)
-        model = f"{_litellm_key(self._provider)}/{request.model}"
+        # request.model is already provider-qualified (stage A2's migration
+        # qualified every stored row; stage A1a's write-time validation
+        # rejects an unqualified name) - do not re-prefix it here.
+        model = request.model
 
         logger.debug(
             "Sending hard query via LiteLLM provider=%s model=%s history_turns=%d",
@@ -204,7 +208,8 @@ class LiteLLMTransportClient:
         """
         ensure_query(request)
         messages = _build_messages(request)
-        model = f"{_litellm_key(self._provider)}/{request.model}"
+        # See generate_response - request.model is already provider-qualified.
+        model = request.model
 
         logger.debug(
             "Streaming hard query via LiteLLM provider=%s model=%s history_turns=%d",

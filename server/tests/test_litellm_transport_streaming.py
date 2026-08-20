@@ -10,7 +10,7 @@ from tests._fake_llm_server import FakeSSEServer
 pytestmark = pytest.mark.no_model
 
 
-def _request(model: str = "fake-model") -> ExternalLLMRequest:
+def _request(model: str = "openai/fake-model") -> ExternalLLMRequest:
     return ExternalLLMRequest(
         query="Hello",
         history=[{"role": "assistant", "content": "Hi"}],
@@ -37,7 +37,7 @@ def test_streams_incremental_chunks_and_a_terminal_chunk_with_usage(monkeypatch)
     final = chunks[-1]
     assert final.final is not None
     assert final.final.text == "Hello"
-    assert final.final.model_used == "fake-model"
+    assert final.final.model_used == "openai/fake-model"
     assert final.final.prompt_tokens == 3
     assert final.final.completion_tokens == 2
     assert final.final.finish_reason == "stop"
