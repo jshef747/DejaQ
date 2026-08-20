@@ -13,26 +13,26 @@ depends on its name matching a vendor prefix.
 its options. Adding a `ModelSpec` is safe; removing or renaming one breaks
 config writes that name it and changes that endpoint's output.
 
-The provider list is mirrored rather than derived, so five other places carry
-their own copy - `external_llm._PROVIDER_CLIENTS` (which builds every
-`openai_chat_completions` entry from this registry and hand-lists only
-`google`/`anthropic`), `llm_providers.LIVE_PROVIDERS`,
+The provider list is mirrored rather than derived, so four other places carry
+their own copy - `llm_providers.LIVE_PROVIDERS` (migration stage L6:
+`external_llm._PROVIDER_CLIENTS` now builds one `LiteLLMTransportClient` per
+key in that set, so it is no longer an independent mirror itself),
 `credential_service.SUPPORTED_PROVIDERS`, `schemas.credentials.ProviderEnum`,
-and the dashboard's own `Provider`/`LIVE_PROVIDERS`. All five are checked
-against this one by `tests/test_provider_registry_consistency.py`. The
+and the dashboard's own `Provider`/`LIVE_PROVIDERS`. All are checked against
+this one by `tests/test_provider_registry_consistency.py`. The
 `workspace_provider_credentials` CHECK constraint used to be a sixth mirror;
 it was dropped (migration e5f6a7b8c9d0) because every new provider cost a
 full SQLite table rebuild, and this registry already validates provider names
 in Python.
 
-Input kinds are NOT uniform across every live provider. google.py, openai.py,
-and anthropic.py each attach an image or file part unconditionally whatever
-the model, so google/openai/anthropic models all get every kind. xAI,
-DeepSeek, and Groq speak the same `openai_chat_completions` wire shape (no new
-client needed) but do not share that uniformity: DeepSeek's models take text
-only, and Groq's vision support is per-model, not per-provider - most Groq
-models are text-only. `input_kinds` is set per `ModelSpec` for exactly this
-reason; do not assume every model of a live provider matches its neighbours.
+Input kinds are NOT uniform across every live provider, even though every
+live provider now shares one client (`llm_providers.litellm_transport`,
+migration stage L6) that attaches an image or file part unconditionally
+whatever the model. DeepSeek's models take text only, and Groq's vision
+support is per-model, not per-provider - most Groq models are text-only.
+`input_kinds` is set per `ModelSpec` for exactly this reason and enforced
+before the client is ever called; do not assume every model of a live
+provider matches its neighbours.
 """
 
 from dataclasses import dataclass, field
