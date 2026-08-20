@@ -47,6 +47,11 @@ dependencies = [
     # Required by FastAPI to parse multipart/form-data — the RAG document upload
     # endpoint (routers/admin/rag_documents.py) uses UploadFile/Form.
     "python-multipart>=0.0.9",
+    # LiteLLM provider transport (migration L0). Pinned with `==`, never a
+    # range: this dependency ships multiple releases a week and every call
+    # site relies on specific exception-mapping and retry behaviour measured
+    # against this exact version. Bump deliberately, not on a `uv sync`.
+    "litellm==1.97.0",
 ]
 
 [project.scripts]
