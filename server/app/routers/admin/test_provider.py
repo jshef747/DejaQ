@@ -10,15 +10,18 @@ from app.schemas.chat import ExternalLLMRequest
 from app.schemas.test_provider import TestProviderRequest, TestProviderResponse
 from app.services.credential_service import SUPPORTED_PROVIDERS, CredentialService
 from app.services.external_llm import ExternalLLMService
+from app.services.llm_config_service import resolve_provider_for_model
 from app.services.llm_providers import LIVE_PROVIDERS, redact_api_key
-from app.services.provider_inference import resolve_provider
 from app.utils.exceptions import ExternalLLMAuthError, ExternalLLMError, ExternalLLMTimeoutError
 
 logger = logging.getLogger("dejaq.routers.admin.test_provider")
 
 router = APIRouter()
 _external_llm = ExternalLLMService()
-_PROVIDER_TEST_PROMPT = "Reply with exactly: OK"
+# Nothing checks the text against this anymore (see the removed exact-match
+# assertion below) - a minimal neutral prompt is cheaper and does not tempt a
+# reasoning model into spending its budget reasoning about matching a format.
+_PROVIDER_TEST_PROMPT = "Say hello."
 _PROVIDER_TEST_COOLDOWN_SECONDS = 60.0
 _provider_test_last_success: dict[tuple[str, str], float] = {}
 
@@ -53,14 +56,15 @@ async def test_provider(
     workspace_slug: str,
     body: TestProviderRequest,
 ):
-    try:
-        # No stored config row applies here - body.model is a candidate the
-        # admin may not have saved yet, so this always falls through to
-        # provider_for_model, which places it from the registry (see
-        # provider_inference.py).
-        provider = resolve_provider(body.model, None)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    # No stored config row applies here - body.model is a candidate the admin
+    # may not have saved yet. Resolved via the legacy exact table for a bare
+    # legacy id, or LiteLLM's own qualified-name resolution otherwise - no
+    # name-prefix guess either way (see llm_config_service.resolve_provider_for_model).
+    provider = resolve_provider_for_model(body.model)
+    if provider is None:
+        raise HTTPException(
+            status_code=422, detail=f"Unknown provider for model '{body.model}'."
+        )
 
     if provider in SUPPORTED_PROVIDERS and provider not in LIVE_PROVIDERS:
         raise HTTPException(status_code=422, detail=f"Provider '{provider}' is not yet wired.")
@@ -76,7 +80,13 @@ async def test_provider(
         history=[],
         system_prompt="You are a helpful assistant for connectivity testing.",
         model=body.model,
-        max_tokens=8,
+        # 8 was fine while the catalog was 36 curated (non-reasoning) models.
+        # A reasoning model spends this budget on hidden reasoning tokens
+        # before it emits any visible text, so 8 came back empty even on a
+        # fully successful call. 64 gives a reasoning model realistic room to
+        # finish a one-line reply while staying far below a real-answer
+        # budget - this runs on a button press, on the workspace's own key.
+        max_tokens=64,
     )
     try:
         response = await _external_llm.generate_response(request, provider=provider, api_key=api_key)
@@ -102,9 +112,13 @@ async def test_provider(
         detail = redact_api_key(exc, api_key)
         raise HTTPException(status_code=502, detail=f"Provider request failed: {detail}") from exc
 
-    if response.text.strip().upper() != "OK":
-        raise HTTPException(status_code=502, detail="Provider test returned an unexpected response.")
-
+    # This button answers "can this key reach this model", not "does the
+    # model follow instructions" - a response arriving at all (no exception
+    # above) proves that, whatever the model chose to say. An empty
+    # `response.text` still counts: a reasoning model can spend the whole
+    # budget on hidden reasoning tokens and return no visible text while the
+    # call itself succeeded, and that is a model-behavior quirk, not a
+    # connectivity failure.
     _record_provider_test_success(workspace_slug, provider)
 
     return TestProviderResponse(

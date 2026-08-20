@@ -8,18 +8,25 @@ import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
 import Field from "@/components/ui/Field";
 import SectionHeader from "@/components/ui/SectionHeader";
+import Combobox from "@/components/ui/Combobox";
 import { deleteCredential, upsertCredential } from "@/app/actions/credentials";
 import { deleteWorkspace } from "@/app/actions/workspaces";
 import { updateLlmConfig } from "@/app/actions/llm-config";
+import { getCatalogProviderModels } from "@/app/actions/model-catalog";
 import { testProvider } from "@/app/actions/test-provider";
 import type {
+  CatalogModel,
+  CatalogProviderItem,
   CredentialItem,
   LlmConfigResponse,
   LlmConfigUpdate,
-  Provider,
-  ProviderCatalogItem,
   TestProviderResponse,
 } from "@/lib/types";
+
+// LiteLLM's own model catalog site - link only, per the captain's ruling
+// that capability display (badges, warnings) is out of scope. Users read it
+// themselves to check what a model supports (files, images, etc).
+const MODEL_INFO_URL = "https://models.litellm.ai/";
 
 const PROVIDER_LABEL: Record<string, string> = {
   google: "Google",
@@ -31,18 +38,15 @@ const PROVIDER_LABEL: Record<string, string> = {
 };
 
 function providerLabel(key: string | null) {
-  if (!key) return "provider";
-  return PROVIDER_LABEL[key] ?? key;
+  if (!key) return "Provider";
+  if (PROVIDER_LABEL[key]) return PROVIDER_LABEL[key];
+  return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function providerForModel(providers: ProviderCatalogItem[], modelId: string | null | undefined): Provider | null {
+function initialProviderFor(modelsByProvider: Record<string, CatalogModel[]>, modelId: string | null | undefined) {
   if (!modelId) return null;
-  const key = providers.find((p) => p.models.some((m) => m.id === modelId))?.key;
-  return (key as Provider | undefined) ?? null;
-}
-
-function modelBelongsToProvider(providers: ProviderCatalogItem[], modelId: string, providerKey: Provider) {
-  return providers.find((p) => p.key === providerKey)?.models.some((m) => m.id === modelId) ?? false;
+  const entry = Object.entries(modelsByProvider).find(([, models]) => models.some((m) => m.id === modelId));
+  return entry?.[0] ?? null;
 }
 
 type Status = { kind: "idle" | "success" | "error" | "info"; text: string };
@@ -56,7 +60,8 @@ interface Props {
   workspaceName: string;
   initialConfig: LlmConfigResponse;
   initialCredentials: CredentialItem[];
-  providers: ProviderCatalogItem[];
+  catalogProviders: CatalogProviderItem[];
+  initialModelsByProvider: Record<string, CatalogModel[]>;
   loadError: string | null;
 }
 
@@ -65,17 +70,22 @@ export default function SettingsClient({
   workspaceName,
   initialConfig,
   initialCredentials,
-  providers,
+  catalogProviders,
+  initialModelsByProvider,
   loadError,
 }: Props) {
   const router = useRouter();
-  const initialProvider = providerForModel(providers, initialConfig.external_model);
 
-  const [provider, setProvider] = useState<Provider | null>(initialProvider);
+  const [provider, setProvider] = useState<string | null>(
+    initialProviderFor(initialModelsByProvider, initialConfig.external_model),
+  );
   const [externalModel, setExternalModel] = useState(initialConfig.external_model ?? "");
   const [threshold, setThreshold] = useState(initialConfig.routing_threshold ?? 0.75);
   const [apiKey, setApiKey] = useState("");
   const [credentials, setCredentials] = useState(initialCredentials);
+  const [modelsByProvider, setModelsByProvider] = useState(initialModelsByProvider);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
 
   const [saveBusy, setSaveBusy] = useState(false);
   const [removeBusy, setRemoveBusy] = useState(false);
@@ -103,22 +113,71 @@ export default function SettingsClient({
   const credsKey = JSON.stringify(initialCredentials);
 
   useEffect(() => {
-    const nextProvider = providerForModel(providers, initialConfig.external_model);
-    setProvider(nextProvider);
+    setProvider(initialProviderFor(initialModelsByProvider, initialConfig.external_model));
     setExternalModel(initialConfig.external_model ?? "");
     setThreshold(initialConfig.routing_threshold ?? 0.75);
     setCredentials(initialCredentials);
+    setModelsByProvider(initialModelsByProvider);
     setApiKey("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configKey, credsKey]);
 
+  // Models are fetched per provider, on demand, and cached - never the whole
+  // catalog at once (plan section 2.11: the full catalog is 349 KB).
+  useEffect(() => {
+    if (!provider || modelsByProvider[provider]) return;
+    let cancelled = false;
+    setModelsLoading(true);
+    setModelsError(null);
+    getCatalogProviderModels(provider).then((res) => {
+      if (cancelled) return;
+      setModelsLoading(false);
+      if (res.ok) {
+        setModelsByProvider((prev) => ({ ...prev, [provider]: res.data.models }));
+      } else {
+        setModelsError(res.error);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [provider, modelsByProvider]);
+
+  const credentialedKeys = useMemo(() => new Set(credentials.map((item) => item.provider)), [credentials]);
+  const groupedProviders = useMemo(() => {
+    const credentialed = catalogProviders.filter((p) => credentialedKeys.has(p.key));
+    const rest = catalogProviders.filter((p) => !credentialedKeys.has(p.key));
+    return { credentialed, rest };
+  }, [catalogProviders, credentialedKeys]);
+
   const currentCredential = credentials.find((item) => item.provider === provider);
-  const models = useMemo(() => {
-    if (!provider) return [];
-    const catalog = providers.find((p) => p.key === provider)?.models ?? [];
-    if (!externalModel || catalog.some((model) => model.id === externalModel)) return catalog;
-    return [{ id: externalModel, label: `${externalModel} (custom)`, input_kinds: [] }, ...catalog];
-  }, [externalModel, provider, providers]);
+  const models = (provider && modelsByProvider[provider]) || [];
+
+  const providerGroups = useMemo(() => {
+    const toOption = (item: CatalogProviderItem) => ({
+      value: item.key,
+      label: `${providerLabel(item.key)} (${item.model_count})`,
+    });
+    const groups = [];
+    if (groupedProviders.credentialed.length > 0) {
+      groups.push({ label: "Configured for this workspace", options: groupedProviders.credentialed.map(toOption) });
+    }
+    groups.push({ label: "All providers", options: groupedProviders.rest.map(toOption) });
+    return groups;
+  }, [groupedProviders]);
+
+  const filteredModels = useMemo(() => {
+    const q = externalModel.trim().toLowerCase();
+    const list = q ? models.filter((m) => m.id.toLowerCase().includes(q)) : models;
+    return [
+      {
+        options: list.map((model) => ({
+          value: model.id,
+          label: model.deprecation_date ? `${model.id} (deprecated ${model.deprecation_date})` : model.id,
+        })),
+      },
+    ];
+  }, [models, externalModel]);
 
   const hasUnsavedKey = apiKey.trim().length > 0;
   const canTest = !!currentCredential && !hasUnsavedKey && !testBusy;
@@ -127,13 +186,13 @@ export default function SettingsClient({
     : currentCredential
       ? `Testing with the stored ${providerLabel(provider)} key.`
       : provider
-        ? `No ${providerLabel(provider)} API key configured for this organization.`
+        ? `No ${providerLabel(provider)} API key configured for this workspace.`
         : "Choose a provider first.";
   const canSave = !!provider && !!externalModel;
 
-  function onProviderChange(next: Provider) {
+  function onProviderChange(next: string) {
     setProvider(next);
-    setExternalModel((prev) => (modelBelongsToProvider(providers, prev, next) ? prev : ""));
+    setExternalModel((prev) => ((modelsByProvider[next] ?? []).some((m) => m.id === prev) ? prev : ""));
     setApiKey("");
     setTestResult(null);
   }
@@ -198,8 +257,7 @@ export default function SettingsClient({
       setSaveStatus({ kind: "error", text: res.error });
       return;
     }
-    const nextProvider = providerForModel(providers, res.data.external_model);
-    setProvider(nextProvider);
+    setProvider(initialProviderFor(modelsByProvider, res.data.external_model));
     setExternalModel(res.data.external_model ?? "");
     setThreshold(res.data.routing_threshold ?? 0.75);
     setApiKey("");
@@ -252,7 +310,7 @@ export default function SettingsClient({
       <section className="ds-settings-section" style={{ marginBottom: 28 }}>
         <div className="ds-settings-header">
           <h2 className="ds-settings-title">LLM Configuration</h2>
-          <p className="ds-settings-sub">Choose where hard queries go, and keep provider credentials scoped to this organization.</p>
+          <p className="ds-settings-sub">Choose where hard queries go, and keep provider credentials scoped to this workspace.</p>
         </div>
         <div className="ds-card" style={{ overflow: "hidden" }}>
           <div style={{ padding: "10px 20px", borderBottom: "1px solid var(--border)", fontSize: 12, color: "var(--fg-dim)" }}>
@@ -266,31 +324,37 @@ export default function SettingsClient({
           <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 0 }}>
             <div style={{ display: "grid", gap: 12, gridTemplateColumns: "220px 1fr" }}>
               <Field label="External provider" hint="Choose a provider, then a model from its list">
-                <select
+                <Combobox
+                  groups={providerGroups}
                   value={provider ?? ""}
-                  onChange={(e) => onProviderChange(e.target.value as Provider)}
-                  className="ds-input"
-                  style={{ cursor: "pointer" }}
-                >
-                  <option value="" disabled>Choose a provider</option>
-                  {providers.map((item) => (
-                    <option key={item.key} value={item.key}>{providerLabel(item.key)}</option>
-                  ))}
-                </select>
+                  onChange={onProviderChange}
+                  placeholder="Choose a provider"
+                />
               </Field>
-              <Field label="External model (hard queries)" hint="Used on cache misses that exceed the threshold">
-                <select
+              <Field
+                label="External model (hard queries)"
+                hint={
+                  modelsLoading
+                    ? "Loading models..."
+                    : modelsError
+                      ? modelsError
+                      : "Used on cache misses that exceed the threshold. Type to filter, or type a model not listed."
+                }
+                labelRight={
+                  <a href={MODEL_INFO_URL} target="_blank" rel="noreferrer" style={{ color: "var(--accent)", fontSize: 11 }}>
+                    Model info
+                  </a>
+                }
+              >
+                <Combobox
+                  groups={filteredModels}
                   value={externalModel}
-                  onChange={(e) => setExternalModel(e.target.value)}
-                  className="ds-input"
-                  style={{ cursor: "pointer" }}
+                  onChange={setExternalModel}
+                  placeholder={provider ? "Choose or type a model" : "Choose a provider first"}
                   disabled={!provider}
-                >
-                  <option value="" disabled>{provider ? "Choose a model" : "Choose a provider first"}</option>
-                  {models.map((model) => (
-                    <option key={model.id} value={model.id}>{model.label}</option>
-                  ))}
-                </select>
+                  filterable
+                  emptyText="No matching models"
+                />
               </Field>
             </div>
 
@@ -348,7 +412,7 @@ export default function SettingsClient({
       <section className="ds-settings-section" style={{ marginBottom: 28 }}>
         <div className="ds-settings-header">
           <h2 className="ds-settings-title">Provider Test</h2>
-          <p className="ds-settings-sub">Verify that the saved organization key can reach the selected external model.</p>
+          <p className="ds-settings-sub">Verify that the saved workspace key can reach the selected external model.</p>
         </div>
         <div className="ds-card">
           <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 12 }}>
@@ -374,7 +438,7 @@ export default function SettingsClient({
         <div style={{ background: "var(--bg-2)", border: "1px solid var(--red-border)", borderRadius: 6, overflow: "hidden" }}>
           <div style={{ padding: "16px 20px", display: "flex", alignItems: "center", gap: 18, justifyContent: "space-between" }}>
             <div>
-              <h4 style={{ color: "var(--fg)", fontSize: 13, margin: "0 0 4px" }}>Delete organization</h4>
+              <h4 style={{ color: "var(--fg)", fontSize: 13, margin: "0 0 4px" }}>Delete workspace</h4>
               <p style={{ color: "var(--fg-dim)", fontSize: 12, lineHeight: 1.55, margin: 0 }}>
                 Permanently remove {workspaceName}, including all departments, API keys, cache data, and credentials.
               </p>
@@ -452,8 +516,8 @@ function ProviderTestResult({ result }: { result: TestResult }) {
   );
 }
 
-function testErrorText(status: number | undefined, error: string, provider: Provider | null) {
-  if (status === 402) return `No ${providerLabel(provider)} API key configured for this organization.`;
+function testErrorText(status: number | undefined, error: string, provider: string | null) {
+  if (status === 402) return `No ${providerLabel(provider)} API key configured for this workspace.`;
   if (status === 429) return "Provider test recently succeeded. Please wait before running it again.";
   if (status === 422) return error;
   return error || "Provider test failed.";

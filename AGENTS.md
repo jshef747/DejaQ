@@ -43,6 +43,22 @@ Inside `op.batch_alter_table(..., recreate="always")` SQLite rebuilds the table,
 
 `chrome-devtools-axi` runs against a machine-wide shared browser bridge whose own process cwd is unrelated to any worktree. Its `screenshot`/`take_screenshot` silently no-ops outside the bridge's configured MCP "workspace roots" (the CLI still prints a success line and the resolved path you asked for) - `/tmp` is always allowed. Screenshot to `/tmp/<name>.png` and `cp` into the worktree afterward; do not trust a `screenshot` success message alone without checking the file landed.
 
+## Testing the LiteLLM transport against a fake server
+
+`tests/_fake_llm_server.py`'s `FakeLLMServer` records real wire bytes; point LiteLLM at it per provider with an env var, not a client monkeypatch (that seam does not exist under LiteLLM): `OPENAI_API_BASE` (openai/xai/deepseek all resolve through the openai-compatible path), `GROQ_API_BASE`, `ANTHROPIC_API_BASE`, `GEMINI_API_BASE` (not `GOOGLE_API_BASE` - `google` is not a real LiteLLM provider key, see `litellm_transport._LITELLM_PROVIDER_KEYS`). Groq's response transformer reads `service_tier` off the reply unconditionally (`litellm/llms/groq/chat/transformation.py`); a scripted Groq response body without it raises `AttributeError` inside LiteLLM, surfaced as a generic `APIConnectionError` with no hint it's a fixture problem, not a transport bug.
+
+## Provider resolution needs a legacy fallback, not just the stored column
+
+`workspace_llm_configs.external_provider` is null for more than "an old unmigrated row": the server-wide `DEJAQ_EXTERNAL_MODEL` env default has no database row at all, so it can never carry a stored provider. Any call site resolving a provider from `(external_model, external_provider)` (`openai_compat.py`, `escalation.py`, `routers/admin/test_provider.py`) must fall back to `llm_config_service.resolve_provider_for_model` when the stored value is null, not just 422 - that env-default path is live and tested (`tests/test_unconfigured_external_model.py`). That function tries a frozen exact table first (`_LEGACY_BARE_MODEL_PROVIDERS`, all that survives of the deleted `provider_registry.PROVIDERS` after A1c - a bare model name still needs an EXACT lookup, never a guess: LiteLLM's own bare-name resolution is provably wrong for several of DejaQ's defaults, e.g. every `gemini-*` id resolves to `vertex_ai`, not `gemini`) and only then LiteLLM's own qualified-name resolution. Do not confuse this with the deleted `provider_inference.py` name-prefix guess (`gemini-` -> `google`, etc.) - that guess is gone for good (migration `f7a8b9c0d1e2` is now the only place it ever runs, once, at backfill time); a call site should never resurrect it.
+
+## Two provider-key maps exist on purpose, until A1's namespace unification deletes both
+
+`litellm_transport._LITELLM_PROVIDER_KEYS` (DejaQ -> LiteLLM: `google`->`gemini`, `together`->`together_ai`, `fireworks`->`fireworks_ai`) and `llm_config_service._DEJAQ_PROVIDER_KEYS` (its inverse) are two views of the same 3-entry fact, not independent drift. `external_provider` stays in DejaQ's own provider namespace (it is still the credential-lookup key `get_workspace_provider_key` reads directly) until migration stage A1's provider-key-namespace unification (plan `dejaq-litellm-migration-plan-v2/report.md` section 2.11, "M7") moves `workspace_provider_credentials.provider` onto LiteLLM's own names and deletes both maps together. Do not "simplify" one without the other, and do not add a third copy - if a new call site needs this translation, import `_litellm_key`/`_LITELLM_PROVIDER_KEYS` from `litellm_providers.litellm_transport` rather than hand-rolling it again.
+
+## litellm import is confined by a guardrail test
+
+`tests/test_litellm_single_import.py::test_litellm_is_imported_in_exactly_the_allowed_modules` fails the build the moment a new module does `import litellm` - it is not a lint suggestion. Route new litellm-touching code through one of the already-allowed modules (`llm_providers/_litellm_config.py`, `llm_providers/litellm_transport.py`, `services/model_catalog.py`) instead of adding a new importer; if a stage genuinely needs a new one, add it to that test's `_ALLOWED_IMPORTERS` in the same commit; the migration plan's exit-seam argument (§4) is why this exists at all.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.

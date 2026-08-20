@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { responseErrorMessage as errorMessage } from "@/app/actions/errors";
 import { apiFetch } from "@/lib/api";
-import type { CredentialItem, Provider } from "@/lib/types";
+import type { CredentialItem } from "@/lib/types";
 
 export async function listCredentials(workspaceSlug: string): Promise<CredentialItem[]> {
   const res = await apiFetch(`/admin/v1/workspaces/${encodeURIComponent(workspaceSlug)}/credentials`);
@@ -13,7 +13,7 @@ export async function listCredentials(workspaceSlug: string): Promise<Credential
 
 export async function upsertCredential(
   workspaceSlug: string,
-  provider: Provider,
+  provider: string,
   apiKey: string,
 ): Promise<{ ok: true; data: CredentialItem } | { ok: false; error: string }> {
   let res: Response;
@@ -40,7 +40,7 @@ export async function upsertCredential(
 
 export async function deleteCredential(
   workspaceSlug: string,
-  provider: Provider,
+  provider: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   let res: Response;
   try {

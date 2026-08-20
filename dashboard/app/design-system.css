@@ -435,6 +435,59 @@ a { color: inherit; }
 .ds-textarea { resize: vertical; min-height: 80px; }
 .ds-select { cursor: pointer; }
 
+/* ── Combobox (styleable replacement for <select>/<input list>) ──── */
+.ds-combo { position: relative; width: 100%; }
+.ds-combo-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font: inherit;
+  text-align: left;
+}
+.ds-combo-trigger:disabled { opacity: 0.45; cursor: not-allowed; }
+.ds-combo-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ds-combo-placeholder { color: var(--fg-dimmer); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ds-combo-chevron { flex-shrink: 0; color: var(--fg-dim); }
+.ds-combo-popup {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--bg-2);
+  border: 1px solid var(--border-2);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  padding: 4px;
+}
+.ds-combo-group-label {
+  padding: 6px 8px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-dimmer);
+}
+.ds-combo-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--fg);
+  cursor: pointer;
+}
+.ds-combo-option span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ds-combo-option-active { background: var(--bg-3); }
+.ds-combo-option-selected { color: var(--accent); }
+.ds-combo-check { flex-shrink: 0; color: var(--accent); }
+.ds-combo-empty { padding: 10px 8px; font-size: 12px; color: var(--fg-dimmer); }
+
 /* password-reveal wrapper */
 .ds-input-wrap {
   position: relative;

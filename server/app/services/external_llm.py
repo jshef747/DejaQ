@@ -2,26 +2,16 @@ import logging
 from collections.abc import AsyncGenerator
 
 from app.schemas.chat import ExternalLLMRequest, ExternalLLMResponse, ExternalStreamChunk
-from app.services import provider_registry
-from app.services.llm_providers import LLMProviderClient, redact_api_key
-from app.services.llm_providers.anthropic import AnthropicProviderClient
-from app.services.llm_providers.google import GoogleProviderClient
-from app.services.llm_providers.openai import OpenAIProviderClient
+from app.services.llm_providers import LIVE_PROVIDERS, LLMProviderClient, redact_api_key
+from app.services.llm_providers.litellm_transport import LiteLLMTransportClient
 from app.utils.exceptions import ExternalLLMError
 
 logger = logging.getLogger("dejaq.services.external_llm")
 
-# Every live provider speaking the OpenAI chat-completions wire shape shares
-# one client class; only the host differs, and that host comes from the
-# registry's own row rather than being hardcoded per provider here.
+# Migration stage L6: every live provider now routes through the one
+# LiteLLM transport - no hand-written vendor clients left.
 _PROVIDER_CLIENTS: dict[str, LLMProviderClient] = {
-    "google": GoogleProviderClient(),
-    "anthropic": AnthropicProviderClient(),
-    **{
-        key: OpenAIProviderClient(base_url=spec.base_url)
-        for key, spec in provider_registry.PROVIDERS.items()
-        if spec.live and spec.client_shape == provider_registry.ClientShape.OPENAI_CHAT_COMPLETIONS
-    },
+    provider: LiteLLMTransportClient(provider) for provider in LIVE_PROVIDERS
 }
 
 

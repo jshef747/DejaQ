@@ -130,7 +130,7 @@ export default function DepartmentsClient({ workspaceSlug, workspaces, depts, st
     <div className="ds-page">
       <SectionHeader
         title="Departments"
-        subtitle="Cache partitions inside a single organization. Drag rows to reorder; click a row to inspect its configuration."
+        subtitle="Cache partitions inside a single workspace. Drag rows to reorder; click a row to inspect its configuration."
         action={
           <Button variant="primary" onClick={() => { setCreateName(""); setCreateErr(null); setCreateOpen(true); }}>
             <Plus size={13} /> New department

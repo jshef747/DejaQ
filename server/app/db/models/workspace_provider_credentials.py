@@ -8,9 +8,10 @@ from app.db.base import Base
 
 class WorkspaceProviderCredentials(Base):
     """No CHECK constraint on `provider`: the set of valid providers is
-    `app.services.provider_registry`, validated in Python at write time.
-    Dropped by migration e5f6a7b8c9d0 - see that file for the constraint's
-    actual (misnamed) name on already-migrated databases.
+    validated in Python at write time (`app.services.credential_service.
+    SUPPORTED_PROVIDERS`). Dropped by migration e5f6a7b8c9d0 - see that file
+    for the constraint's actual (misnamed) name on already-migrated
+    databases.
     """
 
     __tablename__ = "workspace_provider_credentials"

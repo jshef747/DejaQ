@@ -3,9 +3,9 @@ import Topbar from "@/components/Topbar";
 import { listWorkspaces } from "@/app/actions/workspaces";
 import { getLlmConfig } from "@/app/actions/llm-config";
 import { listCredentials } from "@/app/actions/credentials";
-import { getProviders } from "@/app/actions/providers";
+import { getCatalogProviderModels, getCatalogProviders } from "@/app/actions/model-catalog";
 import SettingsClient from "./SettingsClient";
-import type { CredentialItem, LlmConfigResponse, ProviderCatalogItem, WorkspaceItem } from "@/lib/types";
+import type { CatalogModel, CatalogProviderItem, CredentialItem, LlmConfigResponse, WorkspaceItem } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -64,22 +64,35 @@ export default async function SettingsPage({
   const activeWorkspace = workspaces.find((item) => item.slug === activeSlug);
   let config: LlmConfigResponse | null = null;
   let credentials: CredentialItem[] = [];
-  let providers: ProviderCatalogItem[] = [];
+  let catalogProviders: CatalogProviderItem[] = [];
+  let initialModelsByProvider: Record<string, CatalogModel[]> = {};
   let error: string | null = null;
 
   try {
     const [configRes, credentialsList, providersRes] = await Promise.all([
       getLlmConfig(activeSlug),
       listCredentials(activeSlug),
-      getProviders(),
+      getCatalogProviders(),
     ]);
     config = configRes;
     credentials = credentialsList;
     if (providersRes.ok) {
-      providers = providersRes.data.providers.filter((item) => item.live && item.models.length > 0);
+      catalogProviders = providersRes.data.providers;
     } else {
       error = providersRes.error;
     }
+
+    // Preload models for providers this workspace already holds a credential
+    // for (usually one or two) so the picker opens with the right provider
+    // and model already selected. Every other provider's models are fetched
+    // on demand when chosen - the full catalog is never loaded at once.
+    const credentialedKeys = [...new Set(credentials.map((item) => item.provider))].filter((key) =>
+      catalogProviders.some((p) => p.key === key),
+    );
+    const modelLists = await Promise.all(credentialedKeys.map((key) => getCatalogProviderModels(key)));
+    modelLists.forEach((res, i) => {
+      if (res.ok) initialModelsByProvider[credentialedKeys[i]] = res.data.models;
+    });
   } catch (e) {
     error = (e as Error).message;
   }
@@ -93,7 +106,8 @@ export default async function SettingsPage({
           workspaceName={activeWorkspace?.name ?? activeSlug}
           initialConfig={config}
           initialCredentials={credentials}
-          providers={providers}
+          catalogProviders={catalogProviders}
+          initialModelsByProvider={initialModelsByProvider}
           loadError={error}
         />
       ) : (

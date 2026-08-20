@@ -18,7 +18,6 @@ dependencies = [
     "chromadb>=0.6.0",
     "celery[redis]>=5.4.0",
     "redis>=5.0.0",
-    "google-genai>=1.0.0",
     "python-dotenv>=1.2.1",
     "sentence-transformers>=3.0.0",
     "openai>=2.31.0",
@@ -28,7 +27,6 @@ dependencies = [
     "rich>=14.3.3",
     "aiosqlite>=0.22.1",
     "cryptography>=46.0.6",
-    "anthropic>=0.97.0",
     "aiohttp>=3.13.5",
     # PDF text extraction for the file gate. pure-Python and MIT, unlike pymupdf
     # (AGPL) — and we only need the characters, since they are hashed immediately
@@ -47,6 +45,11 @@ dependencies = [
     # Required by FastAPI to parse multipart/form-data — the RAG document upload
     # endpoint (routers/admin/rag_documents.py) uses UploadFile/Form.
     "python-multipart>=0.0.9",
+    # LiteLLM provider transport (migration L0). Pinned with `==`, never a
+    # range: this dependency ships multiple releases a week and every call
+    # site relies on specific exception-mapping and retry behaviour measured
+    # against this exact version. Bump deliberately, not on a `uv sync`.
+    "litellm==1.97.0",
 ]
 
 [project.scripts]
