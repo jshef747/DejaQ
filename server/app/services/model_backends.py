@@ -48,6 +48,10 @@ class CompletionRequest:
     # plus generation can approach it has anything to gain. Set it there, not
     # here — see generalize()/adjust() in services/context_adjuster.py.
     num_ctx: int | None = None
+    # Base64-encoded images, attached to the final message per Ollama's wire
+    # format (`images` on a chat message, not a top-level request field). Unused
+    # by every caller today - no code path passes this yet.
+    images: list[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -180,9 +184,15 @@ class OllamaBackend:
         return logical_model_name
 
     def _payload(self, request: CompletionRequest, ollama_model: str, stream: bool) -> dict:
+        messages = request.messages
+        if request.images:
+            # Ollama attaches images per-message, not at the request top level.
+            # Copy rather than mutate the caller's last message dict in place.
+            messages = list(messages)
+            messages[-1] = {**messages[-1], "images": request.images}
         payload = {
             "model": ollama_model,
-            "messages": request.messages,
+            "messages": messages,
             "stream": stream,
             # Gemma 4 is a thinking model: left alone it emits a `thinking` block
             # BEFORE `content`, and both are drawn from the same num_predict
