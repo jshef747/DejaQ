@@ -1542,12 +1542,20 @@ async def run_chat_pipeline(
             # external provider regardless of difficulty or routing mode.
             classification = {"complexity": "hard", "score": 1.0, "task_type": "image_external"}
         elif _request_has_file:
-            # ponytail: files route external unconditionally, like images. A PDF
-            # genuinely has to (the provider parses it natively), and Markdown
-            # rides along for one rule instead of two. Upgrade path when it costs
-            # too much: keep markdown local by letting the classifier see the
-            # question, since the document text is inlined into the prompt anyway.
-            classification = {"complexity": "hard", "score": 1.0, "task_type": "file_external"}
+            # Non-PDF kinds (DOCX/Markdown/text/code) are already deterministically
+            # extracted to text by file_text.py, so the local model needs no new
+            # capability - it just needs that text inlined into the prompt (below).
+            # PDFs still force external: there is no extraction here yet for them
+            # (see Stage 2), only the provider's native document part. A file we
+            # could not read at all (no usable text) also stays external, since
+            # local generation would otherwise answer as if the document were
+            # blank instead of the "answered but uncacheable" behavior this
+            # preserves. An explicit hard_external override always wins.
+            _file_usable_locally = file_doc is not None and file_doc.ok and file_doc.kind != "pdf"
+            if _file_usable_locally and routing_mode != ROUTING_MODE_HARD_EXTERNAL:
+                classification = {"complexity": "easy", "score": 0.0, "task_type": "file_local"}
+            else:
+                classification = {"complexity": "hard", "score": 1.0, "task_type": "file_external"}
         elif routing_mode == ROUTING_MODE_EASY_LOCAL:
             classification = {"complexity": "easy", "score": 0.0, "task_type": "forced_local"}
         elif routing_mode == ROUTING_MODE_HARD_EXTERNAL:
@@ -1597,6 +1605,12 @@ async def run_chat_pipeline(
             classification = {**classification, "complexity": "hard", "task_type": "rag_external"}
         # The prompt actually sent to whichever model runs, grounded if RAG hit.
         gen_query = _query_with_rag_context(user_query, rag_context)
+        # Local generation has no native document part, so it needs the file's
+        # text folded into the prompt the same way the external branch already
+        # does for non-PDF kinds. A no-op when there is no file (or no usable
+        # text), same helper the external branch uses - the untrusted-input
+        # fencing applies here too.
+        local_gen_query = _query_with_inlined_file(gen_query, file_doc)
 
         # Provider + credential resolution happens HERE, not inside the generation
         # step, and that placement is load-bearing: every failure below is an HTTP
@@ -1799,7 +1813,7 @@ async def run_chat_pipeline(
                         # override (same reasoning as escalation.py).
                         if stream:
                             async for chunk in services.llm_router.stream_local_response(
-                                gen_query,
+                                local_gen_query,
                                 history=history,
                                 max_tokens=_max_tokens,
                                 system_prompt=system_prompt,
@@ -1812,7 +1826,7 @@ async def run_chat_pipeline(
                                     yield chunk.text
                         else:
                             text, _, done_reason = await services.llm_router.generate_local_response(
-                                gen_query,
+                                local_gen_query,
                                 history=history,
                                 max_tokens=_max_tokens,
                                 system_prompt=system_prompt,
