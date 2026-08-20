@@ -54,6 +54,38 @@ def test_returns_contract_shape_and_wire_bytes(monkeypatch):
     assert sent["messages"][-1] == {"role": "user", "content": "Hello"}
 
 
+def test_no_api_key_logged_on_success(monkeypatch, caplog):
+    with FakeLLMServer([(200, _ok_openai_response())]) as server:
+        with caplog.at_level("DEBUG"):
+            _call(server, _request("fake-model"), monkeypatch)
+
+    assert "sk-test-secret" not in caplog.text
+
+
+def test_api_key_redacted_in_logs_on_error(monkeypatch, caplog):
+    responses = [(401, {"error": {"message": "Incorrect API key provided: sk-test-secret.", "type": "invalid_request_error", "code": "invalid_api_key"}})]
+    with FakeLLMServer(responses) as server:
+        with caplog.at_level("ERROR"), pytest.raises(ExternalLLMAuthError):
+            _call(server, _request("fake-model"), monkeypatch)
+
+    assert "sk-test-secret" not in caplog.text
+    assert "<redacted>" in caplog.text
+
+
+def test_o_series_reasoning_model_sends_max_completion_tokens_not_max_tokens(monkeypatch):
+    """o1-/o3-/o4- models reject `max_tokens` and non-default `temperature`.
+    LiteLLM's own model registry does this remap now (`supports_reasoning`
+    in `get_model_info`, verified for o3-mini/o4-mini) - not a DejaQ prefix
+    check (deleted with `llm_providers/openai.py` in migration stage L6)."""
+    with FakeLLMServer([(200, _ok_openai_response())]) as server:
+        _call(server, _request("o4-mini"), monkeypatch)
+
+    sent = server.requests[0]
+    assert sent["max_completion_tokens"] == 64
+    assert "max_tokens" not in sent
+    assert "temperature" not in sent
+
+
 def test_model_used_is_dejaqs_request_field_not_litellms_echo(monkeypatch):
     """LiteLLM's echoed `model` in the response is not the requested name for
     a proxied/fake host - model_used must come from the request instead."""

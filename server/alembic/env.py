@@ -12,7 +12,11 @@ config = context.config
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers defaults to True, which disables every
+    # logger created before this call for the rest of the process (e.g.
+    # dejaq's own loggers) - fatal for a test suite that runs a migration
+    # and then asserts on caplog output in the same session.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # Import all models so autogenerate can detect them
 from app.db.base import Base  # noqa: E402

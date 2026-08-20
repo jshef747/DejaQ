@@ -49,6 +49,26 @@ def _ok_groq_response(content: str = "Groq answer") -> dict:
     }
 
 
+def test_external_llm_dispatcher_redacts_api_key_on_error(monkeypatch, caplog):
+    """Moved from test_provider_clients_logging.py (deleted, migration stage
+    L6): this tests external_llm.py's own dispatcher wrapper, not any of the
+    deleted vendor clients, so it survives unchanged."""
+    secret = "SecretKey123"
+
+    class FakeClient:
+        async def generate_response(self, request, api_key):
+            raise RuntimeError(f"provider echoed {secret}")
+
+    monkeypatch.setitem(external_llm._PROVIDER_CLIENTS, "fake", FakeClient())
+
+    request = ExternalLLMRequest(query="Hello", model="provider-model")
+    with caplog.at_level("DEBUG"), pytest.raises(RuntimeError):
+        asyncio.run(external_llm.ExternalLLMService().generate_response(request, "fake", secret))
+
+    assert secret not in caplog.text
+    assert "<redacted>" in caplog.text
+
+
 def test_groq_vision_model_attachment_reaches_the_wire_through_litellm(monkeypatch):
     """Groq serves both vision-capable and text-only models; qwen/qwen3.6-27b
     is the vision one (provider_registry.py). The image part must survive
