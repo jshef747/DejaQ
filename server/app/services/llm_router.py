@@ -36,9 +36,10 @@ class LLMRouterService:
         history: list[dict] | None = None,
         max_tokens: int = 1024,
         system_prompt: str | None = None,
+        images: list[str] | None = None,
     ) -> tuple[str, float, str | None]:
         """Generate a response using the local model. Returns (text, latency_ms, done_reason)."""
-        request = self._completion_request(query, history, max_tokens, system_prompt)
+        request = self._completion_request(query, history, max_tokens, system_prompt, images)
         start = time.time()
         # A workspace override may name a model since uninstalled from Ollama -
         # write-time validation can't catch this day-2 drift, so fall back to
@@ -56,6 +57,7 @@ class LLMRouterService:
         history: list[dict] | None,
         max_tokens: int,
         system_prompt: str | None,
+        images: list[str] | None = None,
     ) -> CompletionRequest:
         if system_prompt is None:
             system_prompt = self.default_system_prompt
@@ -68,6 +70,7 @@ class LLMRouterService:
             messages=messages,
             max_tokens=max_tokens,
             temperature=0.7,
+            images=images,
         )
 
     async def stream_local_response(
@@ -76,6 +79,7 @@ class LLMRouterService:
         history: list[dict] | None = None,
         max_tokens: int = 1024,
         system_prompt: str | None = None,
+        images: list[str] | None = None,
     ) -> AsyncGenerator[CompletionChunk, None]:
         """Streaming twin of `generate_local_response`.
 
@@ -83,7 +87,7 @@ class LLMRouterService:
         `done_reason`, which the caller reads for truncation exactly as it
         reads `CompletionResult.done_reason` on the non-streaming call.
         """
-        request = self._completion_request(query, history, max_tokens, system_prompt)
+        request = self._completion_request(query, history, max_tokens, system_prompt, images)
         start = time.time()
         async for chunk in stream_with_default_fallback(
             self.backend, request, LOCAL_LLM_MODEL_NAME, "local answering"
