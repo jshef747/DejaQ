@@ -3,7 +3,6 @@ import asyncio
 import base64
 import inspect
 import logging
-import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -61,6 +60,7 @@ from app.services import (
     rag_service,
 )
 from app.services.classifier import ClassifierService
+from app.services.labse_classifier import LabseClassifierService
 from app.services.context_adjuster import (
     DEFAULT_ADJUST_SYSTEM_PROMPT,
     DEFAULT_GENERALIZE_SYSTEM_PROMPT,
@@ -95,8 +95,7 @@ from app.config import (
     ENRICHER_MODEL_NAME,
     EXTERNAL_MODEL_NAME,
     GENERALIZER_MODEL_NAME,
-    HEBREW_ROUTING_ENABLED,
-    HEBREW_ROUTING_FRACTION,
+    LABSE_SHADOW_ENABLED,
     LOCAL_ATTACHMENT_MAX_TOKENS,
     LOCAL_LLM_MODEL_NAME,
     NORMALIZER_MODEL_NAME,
@@ -221,6 +220,7 @@ _adjuster = get_context_adjuster_service()
 _enricher = get_context_enricher_service()
 _validator = get_validator_service()
 _classifier = ClassifierService()
+_labse_classifier = LabseClassifierService() if LABSE_SHADOW_ENABLED else None
 _external_llm = ExternalLLMService()
 # MemoryService is namespace-aware; use get_memory_service(namespace) per-request
 logger.info("OpenAI-compat services ready.")
@@ -729,9 +729,8 @@ async def _judge_hard_content(
 ) -> bool:
     """Ask a local model whether `judge_text` needs the external model instead
     of local generation. Returns True for "hard" (route external), False for
-    "easy". Shared by the attachment hard-content judge (its own model, its
-    own document-aware prompt) and the Hebrew routing judge below (qwen_1_5b,
-    a plain question-only prompt) - same one-word-verdict mechanism, only the
+    "easy". Shared by every attachment hard-content judge caller (image OCR
+    text, inlined file text) - same one-word-verdict mechanism, only the
     model and prompt differ per caller.
 
     Never raises: any exception, timeout, or answer that doesn't clearly say
@@ -754,64 +753,6 @@ async def _judge_hard_content(
         logger.exception("Hard-content judge failed; defaulting to easy")
         return False
     return "HARD" in text.strip().upper()
-
-
-# Fraction-based Hebrew detection, not "contains any Hebrew character": a
-# question that is essentially English with one stray Hebrew word (a proper
-# noun, a courtesy word) should stay on the classifier path, not pay the
-# extra judge round trip. Measured against the edge cases that matter
-# (dejaq-routing-weights-hebrew): a pure Hebrew question, a Hebrew question
-# with an embedded English acronym/technical term, and Russian/Arabic text
-# (different Unicode blocks, must never trigger) all classify correctly at
-# this fraction; "mostly-English text with one Hebrew word" correctly does
-# NOT trigger, where a naive any-Hebrew-character test would.
-_HEBREW_CHAR_RE = re.compile(r"[֐-׿]")
-_LETTER_RE = re.compile(r"[^\W\d_]", re.UNICODE)
-
-
-def _is_hebrew_query(text: str) -> bool:
-    letters = _LETTER_RE.findall(text)
-    if not letters:
-        return False
-    hebrew_count = sum(1 for ch in letters if _HEBREW_CHAR_RE.match(ch))
-    return (hebrew_count / len(letters)) >= HEBREW_ROUTING_FRACTION
-
-
-# dejaq-refresh-corrections: the original plain baseline prompt measured
-# 95.3% Hebrew over-fire / 39.5% English over-fire on this deployment (up from
-# the originally-reported 27%, once the judge's temperature=0.7 sampling bug
-# was fixed - see config.HEBREW_ROUTING_FRACTION's comment). Two prior
-# attempts (few-shot Hebrew examples, an explicit "ignore the language"
-# instruction) both made it WORSE. This EASY-biased variant - the opposite
-# lever, telling the model to default to EASY rather than adding more
-# instructions - measured better: 62.8% Hebrew / 7.0% English over-fire, FN
-# still 0/18. A real improvement, but still far above 27%, which is why
-# HEBREW_ROUTING_ENABLED defaults to False (config.py) even with this prompt.
-_HEBREW_HARD_JUDGE_SYSTEM_PROMPT = (
-    "You are judging whether a question requires advanced, specialized "
-    "expertise to answer correctly - the kind of question that needs "
-    "graduate-level reasoning, formal proofs, rigorous multi-step "
-    "derivations, or deep domain expertise (advanced mathematics, physics, "
-    "law, medicine, finance, engineering, computer science, philosophy, "
-    "etc). Ordinary questions are EASY, even if long or technical-sounding. "
-    "Default to EASY unless the question clearly and specifically asks for "
-    "a formal proof, derivation, or graduate-level analysis. Most everyday, "
-    "factual, or how-to questions are EASY. "
-    "Reply with exactly one word: HARD or EASY. No explanation."
-)
-
-
-async def _judge_hebrew_hard(user_query: str) -> bool:
-    """Hebrew-routing judge: qwen_1_5b, not the workspace's configured local
-    answering model - already resident (shared with the context enricher and
-    adjuster), so this adds no new Ollama tag. Originally measured 85.1%
-    accuracy / ~27% easy-Hebrew over-fire; re-measured materially worse on
-    this deployment (see HEBREW_ROUTING_FRACTION's comment) - gated behind
-    HEBREW_ROUTING_ENABLED (default False) at the call site until that's
-    resolved.
-    """
-    judge_router = get_llm_router_service(model_name=CONTEXT_ADJUSTER_MODEL_NAME)
-    return await _judge_hard_content(judge_router, user_query, _HEBREW_HARD_JUDGE_SYSTEM_PROMPT)
 
 
 # A single judge call over a long document misses hard content - measured: a
@@ -1918,19 +1859,15 @@ async def run_chat_pipeline(
             classification = {"complexity": "easy", "score": 0.0, "task_type": "forced_local"}
         elif routing_mode == ROUTING_MODE_HARD_EXTERNAL:
             classification = {"complexity": "hard", "score": 1.0, "task_type": "forced_external"}
-        elif HEBREW_ROUTING_ENABLED and _is_hebrew_query(user_query):
-            # The classifier under-scores Hebrew hard content severely enough
-            # that no weight re-tuning reaches it (see HEBREW_ROUTING_FRACTION's
-            # comment) - detected-Hebrew questions skip the classifier entirely
-            # and route through a dedicated judge instead.
-            with trace.step("hebrew_hard_judge"):
-                _hebrew_is_hard = await _judge_hebrew_hard(user_query)
-            classification = {
-                "complexity": "hard" if _hebrew_is_hard else "easy",
-                "score": 1.0 if _hebrew_is_hard else 0.0,
-                "task_type": "hebrew_judged_hard" if _hebrew_is_hard else "hebrew_judged_easy",
-            }
         else:
+            # Hebrew used to skip this classifier entirely (it misses
+            # essentially all hard Hebrew - see classifier.py's routing
+            # weights comment) and route through a dedicated judge instead.
+            # That judge is gone: the LaBSE shadow classifier below was
+            # trained on labelled Hebrew directly, so Hebrew now falls
+            # through this same path like every other language, same as
+            # before the judge existed, until the captain reviews the shadow
+            # log and cuts over.
             try:
                 with trace.step("classify"):
                     classification = _classifier.predict_complexity(user_query)
@@ -1943,6 +1880,25 @@ async def run_chat_pipeline(
                     **classification,
                     "complexity": "hard" if score >= llm_config.routing_threshold else "easy",
                 }
+
+            # Shadow mode (dejaq-classifier-probe-multilang/report.md): compute
+            # and log the LaBSE head's decision alongside today's classifier,
+            # but never let it affect `classification`/routing - the captain
+            # reviews this log before any cutover. Never allowed to affect
+            # serving: any failure here is caught and only logged.
+            if _labse_classifier is not None:
+                try:
+                    with trace.step("labse_shadow"):
+                        _shadow = _labse_classifier.predict_complexity(user_query)
+                    logger.info(
+                        "labse_shadow complexity=%s score=%.4f current_complexity=%s "
+                        "current_score=%.4f agree=%s",
+                        _shadow["complexity"], _shadow["score"],
+                        classification["complexity"], float(classification.get("score", 0.0)),
+                        _shadow["complexity"] == classification["complexity"],
+                    )
+                except Exception:
+                    logger.exception("LaBSE shadow classifier failed")
 
         complexity = classification["complexity"]
         route = "external" if complexity == "hard" else "local"

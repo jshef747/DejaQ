@@ -94,39 +94,29 @@ EXTERNAL_MODEL_NAME = os.getenv("DEJAQ_EXTERNAL_MODEL")
 # openai_compat.py's routing step.
 ROUTING_THRESHOLD = _get_float("DEJAQ_ROUTING_THRESHOLD", 0.2986)
 
-# The classifier under-scores Hebrew hard content severely (measured: 21/21
-# Hebrew hard items missed under every weight scheme tried, dejaq-routing-
-# weights-hebrew) - reweighting cannot fix a deficiency in the six component
-# scores themselves. Text-only requests whose Hebrew-letter fraction (of all
-# letters in the query) is at or above this threshold skip the classifier
-# entirely and route through a qwen_1_5b one-word HARD/EASY judge instead
-# (openai_compat.py). ~15% was the measured recommendation: it correctly
-# leaves a mostly-English question with one stray Hebrew word on the
-# classifier path (a simple any-Hebrew-character test does not), while still
-# catching genuine Hebrew questions, including ones with an embedded English
-# acronym. Originally measured on the hybrid: 85.1% accuracy on Hebrew, zero
-# missed hard questions, at the cost of over-firing on ~27% of easy Hebrew
-# questions.
-#
-# Re-measured on this deployment (dejaq-refresh-corrections, after fixing the
-# judge's temperature=0.7 non-determinism - see HEBREW_ROUTING_ENABLED below):
-# still 0% missed-hard, but 95.3% over-fire (39/41 easy Hebrew items) on the
-# baseline prompt, and 39.5% over-fire on the ENGLISH translations of the same
-# items - confirming the predecessor's finding that this is a judge+prompt
-# property on this Ollama build, not something specific to Hebrew. An
-# EASY-biased prompt variant (see _HEBREW_HARD_JUDGE_SYSTEM_PROMPT) cut it to
-# 62.8% Hebrew / 7.0% English, a real but insufficient improvement - still far
-# above the original 27%. See dejaq-refresh-corrections/report.md.
-HEBREW_ROUTING_FRACTION = _get_float("DEJAQ_HEBREW_ROUTING_FRACTION", 0.15)
-# Default ON, captain-approved (dejaq-preflight-acceptance): firstmate
-# re-measured the same shipped (EASY-biased) prompt on ten ordinary
-# everyday Hebrew questions and got 30% over-fire, close to the original
-# 27% this was approved on - the refresh-corrections report's 62.8% was
-# corpus composition (a harder, less representative sample), not a change
-# in the mechanism. Both measurements agree on 0% missed-hard against a
-# classifier that misses 100% of hard Hebrew questions with the hybrid
-# off - that gap is why this ships on.
-HEBREW_ROUTING_ENABLED = _get_bool("DEJAQ_HEBREW_ROUTING_ENABLED", True)
+# Shadow-mode multilingual difficulty classifier (LaBSE embedding + a
+# LogisticRegression head trained on 770 items across seven languages,
+# dejaq-classifier-probe-multilang) - computed and logged on every text
+# request alongside today's routing decision, but never used to route one
+# itself, so a bad surprise here is cheap to observe and costs nothing in
+# production until the captain reviews the shadow log and says to cut over
+# (see LABSE_SHADOW_ENABLED below and openai_compat.py's "classify" step).
+# This head also replaces the old Hebrew-specific judge: it was trained on
+# labelled Hebrew directly (unlike the classifier it shadows, which misses
+# essentially all hard Hebrew - see classifier.py's routing weights comment),
+# so Hebrew no longer needs a separate routing path once the captain cuts
+# over. Threshold 0.5 is the LogisticRegression default decision boundary;
+# class_weight="balanced" during training already corrects for the 60/40
+# easy/hard class imbalance, so 0.5 is not naively biased toward the
+# majority class. Not swept against a captain-specified cost ratio between
+# the two routing-error directions - predict_proba exposes every point on
+# the ROC curve if one is ever specified.
+LABSE_CLASSIFIER_THRESHOLD = _get_float("DEJAQ_LABSE_CLASSIFIER_THRESHOLD", 0.5)
+# Default ON: shadow-only, so there is no serving risk to gate behind a
+# captain decision the way HEBREW_ROUTING_ENABLED (removed - see above) was.
+# Set false to skip the extra embed+predict call entirely (e.g. a
+# resource-constrained deployment that doesn't want the shadow signal yet).
+LABSE_SHADOW_ENABLED = _get_bool("DEJAQ_LABSE_SHADOW_ENABLED", True)
 CREDENTIAL_ENCRYPTION_KEY = os.getenv("DEJAQ_CREDENTIAL_ENCRYPTION_KEY", "")
 
 # API key cache

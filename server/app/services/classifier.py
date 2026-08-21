@@ -152,8 +152,11 @@ class CustomModel(nn.Module, PyTorchModelHubMixin):
         # either way, four proof questions score slightly LOWER) - the gain
         # lives in the broad middle of the corpus, not the hard-proof tail.
         # It also does not touch Hebrew: every Hebrew hard item still misses
-        # under these weights (see the Hebrew hybrid in openai_compat.py's
-        # routing step instead). Must ship together with
+        # under these weights (Hebrew previously routed around this classifier
+        # entirely via a dedicated judge; that judge is gone as of the LaBSE
+        # shadow classifier - see config.LABSE_CLASSIFIER_THRESHOLD - and
+        # Hebrew now falls through to this classifier like every other
+        # language until the captain cuts over). Must ship together with
         # DEJAQ_ROUTING_THRESHOLD's own move to 0.2986 - this weight vector
         # was searched jointly with that threshold, not independently.
         result["prompt_complexity_score"] = [
