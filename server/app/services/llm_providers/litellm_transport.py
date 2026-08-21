@@ -8,8 +8,15 @@ import openai
 
 from app.schemas.chat import ExternalLLMRequest, ExternalLLMResponse, ExternalStreamChunk
 from app.services.llm_providers._litellm_config import DEFAULT_CALL_KWARGS
-from app.services.llm_providers.common import elapsed_ms, ensure_query, normalize_finish_reason, redact_api_key
+from app.services.llm_providers.common import (
+    elapsed_ms,
+    ensure_query,
+    estimate_tokens,
+    normalize_finish_reason,
+    redact_api_key,
+)
 from app.utils.exceptions import (
+    ExternalAttachmentTooLargeError,
     ExternalAttachmentUnsupportedError,
     ExternalLLMAuthError,
     ExternalLLMError,
@@ -66,6 +73,22 @@ def _confirmed_incapable(model: str, capability_field: str) -> bool:
     return not info.get(capability_field)
 
 
+def _confirmed_context_budget(model: str) -> int | None:
+    """The model's own max input-token budget, per LiteLLM's catalog, or
+    None when the catalog has no entry for it.
+
+    None is deliberately "unknown, don't block" (the same conservative bias
+    `_confirmed_incapable` uses) rather than falling back to a hardcoded
+    guess - an uncatalogued model reaches the provider exactly as it did
+    before this check existed.
+    """
+    try:
+        info = litellm.get_model_info(model)
+    except Exception:
+        return None
+    return info.get("max_input_tokens") or info.get("max_tokens")
+
+
 def _build_messages(request: ExternalLLMRequest) -> list[dict]:
     messages = [{"role": "system", "content": request.system_prompt}]
     messages.extend(request.history)
@@ -89,6 +112,22 @@ def _build_messages(request: ExternalLLMRequest) -> list[dict]:
             }},
         ]
     else:
+        # No native attachment part on this branch - a plain query, or a
+        # text/Markdown/code attachment already inlined into request.query
+        # by _query_with_inlined_file. Nothing bounds that text against the
+        # model's own context window before it reaches the wire, unlike the
+        # local path's local_attachment_max_tokens - so check it here, the
+        # one place both generate_response and stream_response route
+        # through, rather than in every caller.
+        budget = _confirmed_context_budget(request.model)
+        if budget is not None:
+            history_chars = sum(
+                len(m.get("content", "")) for m in request.history if isinstance(m.get("content"), str)
+            )
+            estimated_tokens = estimate_tokens(request.system_prompt) + estimate_tokens(request.query)
+            estimated_tokens += history_chars // 3
+            if estimated_tokens + request.max_tokens > budget:
+                raise ExternalAttachmentTooLargeError(request.model, estimated_tokens, budget)
         user_content = request.query
     messages.append({"role": "user", "content": user_content})
     return messages

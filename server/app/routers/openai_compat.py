@@ -113,7 +113,12 @@ from app.config import (
     VALIDATOR_SKIP_DISTANCE,
 )
 from app.db.session import get_session
-from app.utils.exceptions import ExternalAttachmentUnsupportedError, ExternalLLMAuthError, ExternalLLMError
+from app.utils.exceptions import (
+    ExternalAttachmentTooLargeError,
+    ExternalAttachmentUnsupportedError,
+    ExternalLLMAuthError,
+    ExternalLLMError,
+)
 from app.utils.logger import clear_request_id, content_snippet, hide_content, set_request_id
 from app.utils.pipeline_trace import PipelineTrace
 from app.schemas.chat import ExternalLLMRequest
@@ -2290,6 +2295,23 @@ async def run_chat_pipeline(
                     logger.warning("External model attachment capability check failed: %s", exc)
                     raise PipelineError(422, detail) from exc
                 logger.warning("External model attachment capability check failed: %s", exc)
+                gen.update(model_used="error", route="error", failed=True, error_detail=detail)
+            except ExternalAttachmentTooLargeError as exc:
+                # Proactive twin of the ExternalLLMError 400 branch above, for
+                # size rather than modality: caught before the request reaches
+                # the provider (see litellm_transport._confirmed_context_budget),
+                # so the caller gets the real reason instead of the provider's
+                # own generic rejection of an oversized prompt.
+                detail = (
+                    f"This request is too large for the workspace's external model "
+                    f"({exc.model_name}): estimated ~{exc.estimated_tokens} tokens against its "
+                    f"~{exc.budget_tokens}-token input limit. Attach a smaller file, or ask as "
+                    "plain text without it."
+                )
+                if not stream:
+                    logger.warning("External model context budget check failed: %s", exc)
+                    raise PipelineError(422, detail) from exc
+                logger.warning("External model context budget check failed: %s", exc)
                 gen.update(model_used="error", route="error", failed=True, error_detail=detail)
             except LocalVisionUnsupportedError as exc:
                 # The safety net named in section 5 of the plan: the capability
