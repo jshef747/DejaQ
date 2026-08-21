@@ -14,6 +14,8 @@ from app.config import (
     CACHE_TRUST_DISTANCE,
     CHROMA_HOST,
     CHROMA_PORT,
+    TEXT_EMBEDDING_MODEL,
+    TEXT_EMBEDDING_QUERY_PREFIX,
 )
 from app.services.lexical_match import align
 
@@ -34,13 +36,13 @@ _embedder: SentenceTransformer | None = None
 def _get_embedder() -> SentenceTransformer:
     global _embedder
     if _embedder is None:
-        logger.info("Loading BAAI/bge-small-en-v1.5 embedder...")
-        _embedder = SentenceTransformer("BAAI/bge-small-en-v1.5")
+        logger.info("Loading %s embedder...", TEXT_EMBEDDING_MODEL)
+        _embedder = SentenceTransformer(TEXT_EMBEDDING_MODEL)
     return _embedder
 
 
 def _embed(text: str) -> list[float]:
-    return _get_embedder().encode(text, normalize_embeddings=True).tolist()
+    return _get_embedder().encode(TEXT_EMBEDDING_QUERY_PREFIX + text, normalize_embeddings=True).tolist()
 
 
 def embed_text(text: str) -> list[float]:

@@ -11,9 +11,10 @@ Design notes:
   ("{workspace_slug}__{dept}"). The cache is volatile — score-evicted and
   deleted on a thumbs-down — and curated knowledge must never be wiped that way.
   The "__rag_kb" suffix is load-bearing: the eviction beat task skips it.
-- Chunks are embedded with the SAME BGE model the cache uses
-  (`memory_chromaDB.embed_text`), so retrieval distances are comparable to cache
-  distances and there is one embedder loaded in-process, not two.
+- Chunks are embedded with the SAME text embedder the cache uses
+  (`memory_chromaDB.embed_text`, model configured via `TEXT_EMBEDDING_MODEL`),
+  so retrieval distances are comparable to cache distances and there is one
+  embedder loaded in-process, not two.
 - A chunk's id is deterministic ("{rag_document_id}:{index}") so re-indexing a
   document upserts over its old chunks instead of duplicating them.
 """

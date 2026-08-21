@@ -51,6 +51,30 @@ REDIS_URL = os.getenv("DEJAQ_REDIS_URL", "redis://localhost:6379/0")
 CHROMA_HOST = os.getenv("DEJAQ_CHROMA_HOST", "127.0.0.1")
 CHROMA_PORT = int(os.getenv("DEJAQ_CHROMA_PORT", "8001"))
 
+# Text-matching embedder, shared by the Q->A cache and RAG (memory_chromaDB.py,
+# rag_service.py both call embed_text). Qwen3-Embedding-0.6B replaces
+# BAAI/bge-small-en-v1.5 (384-dim) - measured on a 172-pair EN/HE corpus
+# (dejaq-hebrew-model-swap report): Hebrew sibling-trap false merges 27/37 ->
+# 11/37, English 19/37 -> 6/37, at the unchanged 0.15/0.20 trust/band
+# thresholds. Cost: ~5x single-item encode latency (20ms -> 95ms on this
+# machine) and 1024 vs 384 dims, so every existing ChromaDB collection needs
+# rebuilding (Chroma fixes a collection's dimension on first insert - a
+# dimension change is a hard error on the old collection, not a degraded
+# result). Revert to "BAAI/bge-small-en-v1.5" with TEXT_EMBEDDING_QUERY_PREFIX
+# set to "" to roll back; the collections must be rebuilt again either way.
+TEXT_EMBEDDING_MODEL = _get_text("DEJAQ_TEXT_EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
+# Qwen3-Embedding's instructed variant - measured best of 5 candidates in the
+# same report. Applied uniformly to every embed_text call (cache queries, RAG
+# chunks, RAG queries): the shared function has no query/document distinction
+# today, and the evaluation that picked this prefix measured it the same way -
+# symmetric question-to-question comparison, matching how the cache actually
+# uses embed_text. Set to "" for a model with no instruction format (e.g. the
+# original bge-small).
+TEXT_EMBEDDING_QUERY_PREFIX = _get_text(
+    "DEJAQ_TEXT_EMBEDDING_QUERY_PREFIX",
+    "Instruct: Given a question, retrieve a question that asks the same thing\nQuery: ",
+)
+
 # External LLM
 # No baked-in default: an unset DEJAQ_EXTERNAL_MODEL means no external model
 # is configured server-wide, and every consumer must treat that as "ask the
