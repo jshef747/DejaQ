@@ -64,9 +64,15 @@ Inside `op.batch_alter_table(..., recreate="always")` SQLite rebuilds the table,
 
 Both endpoints report a per-model `capabilities` array, but they disagree, and `/api/tags` is the one already cached (`ollama_catalog.list_available_models`, backing the Pipeline model pickers). Measured live: `/api/tags` omits `"vision"` for `gemma4:e4b` even though the model demonstrably reads images and `/api/show` reports it correctly. Any future capability check (routing, gating, display) must call `/api/show` per model - see `ollama_catalog.supports_vision` and its call-site comment. Do not "optimise" a capability check back onto the already-cached `/api/tags` data.
 
-## The HARD/EASY judge mechanism is non-deterministic
+## The HARD/EASY judge mechanism is deterministic (fixed on `fm/dejaq-refresh-corrections`)
 
-`_judge_hard_content` (`openai_compat.py`, shared by the attachment hard-content judge and the Hebrew routing judge) calls `LLMRouterService.generate_local_response`, which hardcodes `temperature=0.7` with no override. Measured: the same question through the same judge/prompt can flip HARD/EASY across identical repeated calls (5 draws on one question: `['EASY','HARD','HARD','EASY','HARD']`). Any future caller of this mechanism for a routing decision (not just a quality check) should know the verdict is a coin flip near the model's decision boundary, not a stable property of the input - see `dejaq-model-refresh-implement/report.md`'s Hebrew-hybrid findings for a worked example.
+`_judge_hard_content` (`openai_compat.py`, shared by the attachment hard-content judge and the Hebrew routing judge) used to hardcode `temperature=0.7` on `LLMRouterService.generate_local_response`, and the same question could flip HARD/EASY across identical repeated calls (5 draws: `['EASY','HARD','HARD','EASY','HARD']`) - see `dejaq-model-refresh-implement/report.md`. Fixed by passing `temperature=0.0` explicitly at this call site (both `generate_local_response` and `_completion_request` gained the parameter; ordinary answer generation still defaults to `0.7`). Measured after the fix: 0/80 flips across 5 repeated draws each. Do not reintroduce sampling on a routing-decision judge call.
+
+## Only two Groq gotchas exist so far, both bit on first real use
+
+The first real (non-credential-boundary) exercise of external routing, against `groq/openai/gpt-oss-120b`, surfaced two things no text-only test had caught (`dejaq-preflight-acceptance/report.md`):
+- **Provider resolution**: the *unqualified* id `openai/gpt-oss-120b` resolves through `model_catalog.resolve_provider` (LiteLLM) to provider `openai`, not `groq` - this exact trap is already documented in `llm_config_service.py`'s `_LEGACY_BARE_MODEL_PROVIDERS` comment, but the admin `PUT .../llm-config` write path does not consult that table, only LiteLLM's own (wrong, for this id) resolution. Always set `external_model` to the fully-qualified `groq/openai/gpt-oss-120b`, never the bare id.
+- **No vision/document capability**: `gpt-oss-120b` is text-only. Any attachment (image or PDF) correctly routed to it - including cases where DejaQ's own routing logic got the hard/easy call right - fails with `400 "The groq request was rejected (groq error). The model or its parameters may not be supported."` instead of a graceful fallback. A workspace using a Groq `gpt-oss-*`/`compound*` model for `external_model` cannot currently serve any attachment traffic; nothing in the codebase detects or works around this today.
 
 ## Maintaining this file
 
