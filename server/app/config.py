@@ -94,11 +94,15 @@ ROUTING_THRESHOLD = _get_float("DEJAQ_ROUTING_THRESHOLD", 0.2986)
 # 62.8% Hebrew / 7.0% English, a real but insufficient improvement - still far
 # above the original 27%. See dejaq-refresh-corrections/report.md.
 HEBREW_ROUTING_FRACTION = _get_float("DEJAQ_HEBREW_ROUTING_FRACTION", 0.15)
-# Default OFF: the re-measured over-fire rate (above) is materially worse than
-# the number this feature was approved on. The code stays in place - a
-# workspace can opt back in - but it must not fire by default until the
-# over-fire rate is brought down further. Captain's call to re-enable.
-HEBREW_ROUTING_ENABLED = _get_bool("DEJAQ_HEBREW_ROUTING_ENABLED", False)
+# Default ON, captain-approved (dejaq-preflight-acceptance): firstmate
+# re-measured the same shipped (EASY-biased) prompt on ten ordinary
+# everyday Hebrew questions and got 30% over-fire, close to the original
+# 27% this was approved on - the refresh-corrections report's 62.8% was
+# corpus composition (a harder, less representative sample), not a change
+# in the mechanism. Both measurements agree on 0% missed-hard against a
+# classifier that misses 100% of hard Hebrew questions with the hybrid
+# off - that gap is why this ships on.
+HEBREW_ROUTING_ENABLED = _get_bool("DEJAQ_HEBREW_ROUTING_ENABLED", True)
 CREDENTIAL_ENCRYPTION_KEY = os.getenv("DEJAQ_CREDENTIAL_ENCRYPTION_KEY", "")
 
 # API key cache
