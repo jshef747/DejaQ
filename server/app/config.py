@@ -443,10 +443,14 @@ ENRICHER_MODEL_NAME = _get_text("DEJAQ_ENRICHER_MODEL_NAME", "qwen_1_5b")
 # granite4.1:3b: same accuracy as gemma_e2b on the measured cases (5/5,
 # cluster-consistent, deterministic), ~2x faster (~170ms vs ~390ms median).
 NORMALIZER_MODEL_NAME = _get_text("DEJAQ_NORMALIZER_MODEL_NAME", "granite4_1_3b")
-# phi4-mini:3.8b: quality held on a 5-question breadth check, 2-4x faster,
-# MIT-licensed, 2.5GB vs gemma_local's 9.6GB on disk. qwen3:4b was rejected -
-# it leaked chain-of-thought preamble into every answer despite think:false.
-LOCAL_LLM_MODEL_NAME = _get_text("DEJAQ_LOCAL_LLM_MODEL_NAME", "phi4_mini_3_8b")
+# Reverted from phi4_mini_3_8b (correction #2, dejaq-refresh-corrections):
+# phi4-mini:3.8b reports only `completion, tools` on Ollama's own /api/show -
+# no vision - so every image request silently routed external unconditionally,
+# undoing the local-image feature. gemma4:e4b reports `completion, vision,
+# audio, tools, thinking`. phi4-mini's speed/size win was real but not worth
+# losing local image answering for; a vision-capable local model is required
+# on this role.
+LOCAL_LLM_MODEL_NAME = _get_text("DEJAQ_LOCAL_LLM_MODEL_NAME", "gemma_local")
 
 # Swapped from phi_generalizer (phi3.5:latest) to gemma_e2b (gemma4:e2b):
 # on a 20-query batch of fresh raw answers run through the real generalize()

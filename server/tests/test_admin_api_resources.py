@@ -167,18 +167,17 @@ def test_admin_llm_config_surfaces_read_only_vision_capability(isolated_org_db, 
         ttl_seconds=ollama_catalog._CAPABILITY_CACHE._ttl
     )
 
-    # Shipped default local model (phi4-mini:3.8b) has no vision capability -
-    # unlike its predecessor (gemma4:e4b), so the default case is now False.
+    # Shipped default local model (gemma4:e4b) has vision capability.
     vision_default = client.get("/admin/v1/workspaces/acme/llm-config", headers=headers)
-    assert vision_default.json()["local_model_supports_vision"] is False
+    assert vision_default.json()["local_model_supports_vision"] is True
     assert "local_model_supports_vision" not in vision_default.json()["overrides"]
 
     switched = client.put(
         "/admin/v1/workspaces/acme/llm-config",
-        json={"local_model": "gemma4:e4b"},
+        json={"local_model": "phi4-mini:3.8b"},
         headers=headers,
     )
-    assert switched.json()["local_model_supports_vision"] is True
+    assert switched.json()["local_model_supports_vision"] is False
 
 
 def test_admin_credentials_round_trip_and_llm_config_presence(

@@ -731,6 +731,10 @@ async def _judge_hard_content(
     Never raises: any exception, timeout, or answer that doesn't clearly say
     HARD defaults to EASY, which routes local - the cheap direction to be
     wrong in. Logged, never propagated into the request.
+
+    temperature=0.0: a routing verdict must be deterministic - the same
+    question must not route differently on two runs. Ordinary answer
+    generation (generate_local_response's own default) keeps sampling.
     """
     try:
         text, _, _ = await llm_router.generate_local_response(
@@ -738,6 +742,7 @@ async def _judge_hard_content(
             history=None,
             max_tokens=8,
             system_prompt=system_prompt,
+            temperature=0.0,
         )
     except Exception:
         logger.exception("Hard-content judge failed; defaulting to easy")
