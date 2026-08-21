@@ -56,14 +56,35 @@ CHROMA_PORT = int(os.getenv("DEJAQ_CHROMA_PORT", "8001"))
 # is configured server-wide, and every consumer must treat that as "ask the
 # workspace to configure a provider" rather than silently picking one.
 EXTERNAL_MODEL_NAME = os.getenv("DEJAQ_EXTERNAL_MODEL")
-# 0.26 rather than 0.30: on a 77-question hand-labelled corpus this moved
-# accuracy 76.6% -> 85.7% and cut questions wrongly kept local from 16 to 8,
-# at the cost of one additional question wrongly sent to the paid provider
-# (2 to 3). It helps questions sitting near the line and does NOT rescue
-# hard proofs, which score 0.11-0.26 - well below either threshold (7 of 8
-# measured hard-proof questions are still missed at 0.26). Not a fix for
-# proof routing.
-ROUTING_THRESHOLD = _get_float("DEJAQ_ROUTING_THRESHOLD", 0.26)
+# 0.2986 goes with classifier.py's re-derived score weights, not the old
+# 0.30/0.26 sweep of NVIDIA's weights - the two were searched jointly
+# (dejaq-routing-weights-hebrew) and shipping one without the other is an
+# untested combination, not "the best of both". 0.26 was the accuracy-
+# maximizing threshold for the OLD weights only; once the weights changed,
+# so does the distance distribution the threshold is cutting. On the
+# weights' own 122-item corpus this combination is a strict improvement
+# over the old 0.26/old-weights config (fewer false positives AND fewer
+# false negatives), cross-validated at +5.7 accuracy points over baseline.
+# Like the weights themselves, it does not rescue hard proofs or Hebrew -
+# see classifier.py's process_logits comment and the Hebrew hybrid in
+# openai_compat.py's routing step.
+ROUTING_THRESHOLD = _get_float("DEJAQ_ROUTING_THRESHOLD", 0.2986)
+
+# The classifier under-scores Hebrew hard content severely (measured: 21/21
+# Hebrew hard items missed under every weight scheme tried, dejaq-routing-
+# weights-hebrew) - reweighting cannot fix a deficiency in the six component
+# scores themselves. Text-only requests whose Hebrew-letter fraction (of all
+# letters in the query) is at or above this threshold skip the classifier
+# entirely and route through a qwen_1_5b one-word HARD/EASY judge instead
+# (openai_compat.py). ~15% was the measured recommendation: it correctly
+# leaves a mostly-English question with one stray Hebrew word on the
+# classifier path (a simple any-Hebrew-character test does not), while still
+# catching genuine Hebrew questions, including ones with an embedded English
+# acronym. Measured on the hybrid: 85.1% accuracy on Hebrew, zero missed hard
+# questions, at the cost of over-firing (routing an easy question through the
+# extra judge call) on ~27% of easy Hebrew questions - accepted as the honest
+# cost of catching every hard one.
+HEBREW_ROUTING_FRACTION = _get_float("DEJAQ_HEBREW_ROUTING_FRACTION", 0.15)
 CREDENTIAL_ENCRYPTION_KEY = os.getenv("DEJAQ_CREDENTIAL_ENCRYPTION_KEY", "")
 
 # API key cache
@@ -407,9 +428,25 @@ ADJUST_TIMEOUT_SECONDS = _get_float("DEJAQ_ADJUST_TIMEOUT_SECONDS", 30.0)
 ADMIN_LOOPBACK_ONLY = _get_bool("DEJAQ_ADMIN_LOOPBACK_ONLY", True)
 BIND_HOST = _get_text("DEJAQ_BIND_HOST", "127.0.0.1")
 
+# Enricher stays on qwen_1_5b (qwen2.5:1.5b), NOT switched to qwen3:0.6b as
+# dejaq-model-roles-refresh proposed: that switch was conditional on the
+# target deployment holding a 4th distinct resident Ollama tag alongside the
+# other three, and this machine measured (see fm-dejaq-model-refresh-implement
+# report) that it does not reliably keep even today's 3 tags resident under
+# rapid sequential load - it evicts down to one. A 4th tag that evicts the
+# adjuster's qwen_1_5b tag (which the enricher shares today, by design, so a
+# single cache-hit request never triggers a same-tag reload between the two)
+# would replace the contention penalty this switch targets with a strictly
+# worse cross-tag cold-load penalty. Left unchanged; see the implementation
+# report for the measurement.
 ENRICHER_MODEL_NAME = _get_text("DEJAQ_ENRICHER_MODEL_NAME", "qwen_1_5b")
-NORMALIZER_MODEL_NAME = _get_text("DEJAQ_NORMALIZER_MODEL_NAME", "gemma_e2b")
-LOCAL_LLM_MODEL_NAME = _get_text("DEJAQ_LOCAL_LLM_MODEL_NAME", "gemma_local")
+# granite4.1:3b: same accuracy as gemma_e2b on the measured cases (5/5,
+# cluster-consistent, deterministic), ~2x faster (~170ms vs ~390ms median).
+NORMALIZER_MODEL_NAME = _get_text("DEJAQ_NORMALIZER_MODEL_NAME", "granite4_1_3b")
+# phi4-mini:3.8b: quality held on a 5-question breadth check, 2-4x faster,
+# MIT-licensed, 2.5GB vs gemma_local's 9.6GB on disk. qwen3:4b was rejected -
+# it leaked chain-of-thought preamble into every answer despite think:false.
+LOCAL_LLM_MODEL_NAME = _get_text("DEJAQ_LOCAL_LLM_MODEL_NAME", "phi4_mini_3_8b")
 
 # Swapped from phi_generalizer (phi3.5:latest) to gemma_e2b (gemma4:e2b):
 # on a 20-query batch of fresh raw answers run through the real generalize()
@@ -424,13 +461,39 @@ LOCAL_LLM_MODEL_NAME = _get_text("DEJAQ_LOCAL_LLM_MODEL_NAME", "gemma_local")
 # but it is a real content-fidelity gap worth watching, not a clean bill of
 # health. See the incident report (dejaq-generalizer-runaway) for the full
 # comparison.
-GENERALIZER_MODEL_NAME = _get_text("DEJAQ_GENERALIZER_MODEL_NAME", "gemma_e2b")
+# granite4.1:3b: no fabrication regression on the known defect's two inputs,
+# comparable-or-faster than gemma_e2b, and bundles onto the same tag as the
+# normalizer/validator below - three roles sharing one (smaller) tag, same
+# shape as today.
+GENERALIZER_MODEL_NAME = _get_text("DEJAQ_GENERALIZER_MODEL_NAME", "granite4_1_3b")
+# Every other candidate tested (qwen3:0.6b/1.7b, granite4.1:3b, phi4-mini:3.8b)
+# failed the "give me the short version" case - output was a near-verbatim
+# copy of the input instead of a genuine condensation. qwen_1_5b is the only
+# model that reliably shortens on request, and this role sits on the hot
+# cache-hit path, so it stays.
 CONTEXT_ADJUSTER_MODEL_NAME = _get_text("DEJAQ_CONTEXT_ADJUSTER_MODEL_NAME", "qwen_1_5b")
-VALIDATOR_MODEL_NAME = _get_text("DEJAQ_VALIDATOR_MODEL_NAME", "gemma_e2b")
+# granite4.1:3b: ties gemma_e2b on the broad accuracy set, ~2x faster, never
+# produced an unparseable verdict (unlike two rejected candidates). NOT
+# adopted because it "fixes a named defect" - an independent reconstruction
+# of that defect (dejaq-thread-followup-form-mismatch) found the current
+# model already answers it correctly, so the original claim doesn't hold; the
+# swap rests on speed and equal accuracy alone.
+VALIDATOR_MODEL_NAME = _get_text("DEJAQ_VALIDATOR_MODEL_NAME", "granite4_1_3b")
 # Cache hits at or below this cosine distance are near-identical to the stored
 # query; skip the validator and serve them directly (the embedding already
 # guarantees the cached answer covers the question).
-VALIDATOR_SKIP_DISTANCE = _get_float("DEJAQ_VALIDATOR_SKIP_DISTANCE", 0.05)
+# Lowered from 0.05: a 172-pair labelled corpus (bge-small-en-v1.5, the
+# shipped embedder) measured the smallest observed non-match distance at
+# ~0.0036 overall / ~0.0103 Hebrew-only - so 0.05 left a real population of
+# genuinely-different sibling questions fully unchecked (no validator, no
+# inspection at all). 0.003 sits below that measured floor with margin, the
+# same half-the-zero-false-merge-ceiling logic the image gate uses for its
+# own thresholds. This is a mitigation, not a fix: the sibling-merge bug
+# (dejaq-cache-sibling-merge) reproduces at distances as high as 0.0476, well
+# above even the old 0.05 skip line, because the failure lives partly in the
+# validator's own judgment on "same template, swapped differentiator"
+# questions, not only in what skips it entirely.
+VALIDATOR_SKIP_DISTANCE = _get_float("DEJAQ_VALIDATOR_SKIP_DISTANCE", 0.003)
 
 # Below this cosine distance, on a single-turn request only (no prior
 # conversation history - see openai_compat.py's use of `history`), skip

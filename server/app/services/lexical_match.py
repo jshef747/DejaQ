@@ -28,7 +28,11 @@ _STOPWORDS = frozenset({
     "can", "be",
 })
 
-_NON_ALNUM = re.compile(r"[^a-z0-9 ]")
+# Unicode \w (Python 3 str patterns default to Unicode matching) so any
+# script's letters/digits survive tokenizing, not just ASCII - the old
+# a-z0-9 class stripped Hebrew (and every other non-Latin script) entirely,
+# so align() returned aligned=False for two byte-identical Hebrew strings.
+_NON_ALNUM = re.compile(r"[^\w ]", re.UNICODE)
 
 # Question words are semantically loaded despite being short: "why" vs "who"
 # are 0.667 letter-similar but ask different things. A question word may only

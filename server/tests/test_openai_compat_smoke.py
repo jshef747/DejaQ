@@ -147,6 +147,29 @@ class StubHitMemory:
         return None
 
 
+class StubHitMemoryVeryClose:
+    """Same shape as StubHitMemory but at a distance below
+    VALIDATOR_SKIP_DISTANCE (0.003) as well as ADJUSTER_SKIP_DISTANCE -
+    for tests that need the validator itself skipped, not just adjust()."""
+
+    def lookup_cache(self, clean_query: str):
+        return CacheLookupResult(
+            hit=True,
+            generalized_answer="Cached Paris answer.",
+            entry_id="doc123",
+            distance=0.001,
+            matched_query="capital of france",
+            nearest_distance=0.001,
+            nearest_prompt="capital of france",
+        )
+
+    def check_cache(self, clean_query: str):
+        return ("Cached Paris answer.", "doc123", 0.001, "capital of france")
+
+    def increment_hit_count(self, doc_id: str):
+        return None
+
+
 class StubNonLatin1HitMemory:
     """Matched cache query contains a curly apostrophe (U+2019) - the sibling
     free-text header (x-dejaq-cache-matched-query) that carries the same risk
@@ -429,7 +452,7 @@ def test_cache_answer_registers_interaction_and_emits_tier_headers(monkeypatch):
 
 def test_adjust_skipped_for_close_single_turn_repeat(monkeypatch):
     """ADJUSTER_SKIP_DISTANCE: a single-turn near-duplicate of a cached
-    question (distance 0.04, no prior conversation) must serve the stored
+    question (distance 0.001, no prior conversation) must serve the stored
     answer verbatim - no adjust() call, no validator call. Uses an
     ExplodingValidator to prove the validator is never reached either (it
     already skips below VALIDATOR_SKIP_DISTANCE independent of this change);
@@ -442,7 +465,7 @@ def test_adjust_skipped_for_close_single_turn_repeat(monkeypatch):
     monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
     monkeypatch.setattr(openai_compat, "_adjuster", MarkerAdjuster())
     monkeypatch.setattr(openai_compat, "_validator", ExplodingValidator())
-    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubHitMemory())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubHitMemoryVeryClose())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
 
     client = TestClient(app, headers=_AUTH)
@@ -502,7 +525,7 @@ def test_adjust_runs_for_multiturn_hit_even_when_close(monkeypatch):
     monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
     monkeypatch.setattr(openai_compat, "_adjuster", MarkerAdjuster())
     monkeypatch.setattr(openai_compat, "_validator", ExplodingValidator())
-    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubHitMemory())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubHitMemoryVeryClose())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
 
     client = TestClient(app, headers=_AUTH)

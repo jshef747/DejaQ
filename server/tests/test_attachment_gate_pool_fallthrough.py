@@ -66,14 +66,14 @@ class TwoDocumentPoolMemory:
         candidates = [
             CacheLookupResult(
                 hit=True, generalized_answer=ANSWER_B, entry_id="doc-b",
-                distance=0.03, matched_query=QUESTION, file_sha=SHA_B, file_kind="pdf",
+                distance=0.001, matched_query=QUESTION, file_sha=SHA_B, file_kind="pdf",
             ),
             CacheLookupResult(
                 hit=True, generalized_answer=ANSWER_A, entry_id="doc-a",
-                distance=0.03, matched_query=QUESTION, file_sha=SHA_A, file_kind="pdf",
+                distance=0.001, matched_query=QUESTION, file_sha=SHA_A, file_kind="pdf",
             ),
         ]
-        return candidates, 0.03, QUESTION
+        return candidates, 0.001, QUESTION
 
     def lookup_cache(self, clean_query: str):
         return self.lookup_cache_pool(clean_query)[0][0]
@@ -166,16 +166,16 @@ class TwoImagePoolMemory:
         candidates = [
             CacheLookupResult(
                 hit=True, generalized_answer=ANSWER_B, entry_id="img-b",
-                distance=0.03, matched_query=QUESTION, image_kind="document",
+                distance=0.001, matched_query=QUESTION, image_kind="document",
                 image_text=" ".join(sorted(IMAGE_TOKENS_B)),
             ),
             CacheLookupResult(
                 hit=True, generalized_answer=ANSWER_A, entry_id="img-a",
-                distance=0.03, matched_query=QUESTION, image_kind="document",
+                distance=0.001, matched_query=QUESTION, image_kind="document",
                 image_text=" ".join(sorted(IMAGE_TOKENS_A)),
             ),
         ]
-        return candidates, 0.03, QUESTION
+        return candidates, 0.001, QUESTION
 
     def increment_hit_count(self, doc_id: str):
         return None

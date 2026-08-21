@@ -140,14 +140,30 @@ class CustomModel(nn.Module, PyTorchModelHubMixin):
         ):
             result[target] = self.compute_results(logits[i], target=target)
 
+        # Weights re-derived by a 12,000-vector joint weight+threshold search
+        # over a 122-item hand-labelled corpus (dejaq-routing-weights-hebrew),
+        # replacing NVIDIA's published weights (0.35/0.25/0.15/0.15/0.05/0.05).
+        # This point strictly dominates the old weights on that corpus - fewer
+        # false positives AND fewer false negatives, no trade required - and
+        # a 5-fold cross-validation held up: +5.7 points of accuracy over
+        # baseline in every fold but one tie. It is free, not a fix for
+        # everything: an independent 22-question proof-heavy check (firstmate,
+        # 2026-08-21) found it changes NOTHING on that set (13/22 correct
+        # either way, four proof questions score slightly LOWER) - the gain
+        # lives in the broad middle of the corpus, not the hard-proof tail.
+        # It also does not touch Hebrew: every Hebrew hard item still misses
+        # under these weights (see the Hebrew hybrid in openai_compat.py's
+        # routing step instead). Must ship together with
+        # DEJAQ_ROUTING_THRESHOLD's own move to 0.2986 - this weight vector
+        # was searched jointly with that threshold, not independently.
         result["prompt_complexity_score"] = [
             round(
-                0.35 * creativity
-                + 0.25 * reasoning
-                + 0.15 * constraint
-                + 0.15 * domain_knowledge
-                + 0.05 * contextual_knowledge
-                + 0.05 * few_shots,
+                0.155 * creativity
+                + 0.258 * reasoning
+                + 0.240 * constraint
+                + 0.095 * domain_knowledge
+                + 0.147 * contextual_knowledge
+                + 0.106 * few_shots,
                 5,
             )
             for creativity, reasoning, constraint, domain_knowledge, contextual_knowledge, few_shots in zip(
@@ -228,12 +244,13 @@ class ClassifierService:
 
         score = result["prompt_complexity_score"][0]
         task_type = result["task_type_1"][0]
-        # Descriptive label only, at the classifier's own fixed 0.3 cut - not
-        # used for real request routing, which recomputes "complexity" from
-        # the workspace's routing_threshold one line after this call returns
+        # Descriptive label only, at the classifier's own fixed cut (matching
+        # the re-derived weights' own threshold, 0.2986) - not used for real
+        # request routing, which recomputes "complexity" from the workspace's
+        # routing_threshold one line after this call returns
         # (app/routers/openai_compat.py). Kept for callers/tests that want a
         # quick label without a workspace config in hand.
-        complexity = "hard" if score >= 0.3 else "easy"
+        complexity = "hard" if score >= 0.2986 else "easy"
 
         logger.debug("Query classified as %s (score=%.4f, task=%s)", complexity, score, task_type)
 
