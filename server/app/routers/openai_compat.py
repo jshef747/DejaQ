@@ -95,7 +95,8 @@ from app.config import (
     ENRICHER_MODEL_NAME,
     EXTERNAL_MODEL_NAME,
     GENERALIZER_MODEL_NAME,
-    LABSE_SHADOW_ENABLED,
+    LOAD_LABSE_CLASSIFIER,
+    LOAD_LEGACY_CLASSIFIER,
     LOCAL_ATTACHMENT_MAX_TOKENS,
     LOCAL_LLM_MODEL_NAME,
     NORMALIZER_MODEL_NAME,
@@ -219,8 +220,8 @@ _llm_router = get_llm_router_service()
 _adjuster = get_context_adjuster_service()
 _enricher = get_context_enricher_service()
 _validator = get_validator_service()
-_classifier = ClassifierService()
-_labse_classifier = LabseClassifierService() if LABSE_SHADOW_ENABLED else None
+_classifier = ClassifierService() if LOAD_LEGACY_CLASSIFIER else None
+_labse_classifier = LabseClassifierService() if LOAD_LABSE_CLASSIFIER else None
 _external_llm = ExternalLLMService()
 # MemoryService is namespace-aware; use get_memory_service(namespace) per-request
 logger.info("OpenAI-compat services ready.")
@@ -1860,45 +1861,18 @@ async def run_chat_pipeline(
         elif routing_mode == ROUTING_MODE_HARD_EXTERNAL:
             classification = {"complexity": "hard", "score": 1.0, "task_type": "forced_external"}
         else:
-            # Hebrew used to skip this classifier entirely (it misses
-            # essentially all hard Hebrew - see classifier.py's routing
-            # weights comment) and route through a dedicated judge instead.
-            # That judge is gone: the LaBSE shadow classifier below was
-            # trained on labelled Hebrew directly, so Hebrew now falls
-            # through this same path like every other language, same as
-            # before the judge existed, until the captain reviews the shadow
-            # log and cuts over.
+            # LaBSE decides routing for every language, no per-language
+            # branching - it replaced both the old NVIDIA classifier (still
+            # in the tree, LOAD_LEGACY_CLASSIFIER, for staging) and the
+            # Hebrew-specific judge (removed entirely - see
+            # fm/dejaq-classifier-wire-in), since it was trained on labelled
+            # Hebrew directly and the judge it replaced was not.
             try:
                 with trace.step("classify"):
-                    classification = _classifier.predict_complexity(user_query)
+                    classification = _labse_classifier.predict_complexity(user_query)
             except Exception:
-                logger.exception("Classifier failed")
+                logger.exception("LaBSE classifier failed")
                 classification = {"complexity": "easy", "score": 0.0, "task_type": "Unknown"}
-            else:
-                score = float(classification.get("score", 0.0))
-                classification = {
-                    **classification,
-                    "complexity": "hard" if score >= llm_config.routing_threshold else "easy",
-                }
-
-            # Shadow mode (dejaq-classifier-probe-multilang/report.md): compute
-            # and log the LaBSE head's decision alongside today's classifier,
-            # but never let it affect `classification`/routing - the captain
-            # reviews this log before any cutover. Never allowed to affect
-            # serving: any failure here is caught and only logged.
-            if _labse_classifier is not None:
-                try:
-                    with trace.step("labse_shadow"):
-                        _shadow = _labse_classifier.predict_complexity(user_query)
-                    logger.info(
-                        "labse_shadow complexity=%s score=%.4f current_complexity=%s "
-                        "current_score=%.4f agree=%s",
-                        _shadow["complexity"], _shadow["score"],
-                        classification["complexity"], float(classification.get("score", 0.0)),
-                        _shadow["complexity"] == classification["complexity"],
-                    )
-                except Exception:
-                    logger.exception("LaBSE shadow classifier failed")
 
         complexity = classification["complexity"]
         route = "external" if complexity == "hard" else "local"

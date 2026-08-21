@@ -1,8 +1,8 @@
-"""Hebrew no longer gets a dedicated routing judge - it falls through to the
-same classify step (and shadow log) as every other language. The LaBSE
-shadow classifier computes and logs a decision on that same step but must
-never affect the served route, even when it disagrees with the production
-classifier, and a shadow failure must never break the request.
+"""Hebrew has no dedicated routing judge - it falls through the same classify
+step as every other language, and that step is now decided by the LaBSE
+classifier, not the old NVIDIA one. The legacy classifier, even if loaded
+(LOAD_LEGACY_CLASSIFIER), must never be consulted for the served route, and a
+LaBSE failure must fall back to easy rather than to the legacy classifier.
 """
 import pytest
 from fastapi.testclient import TestClient
@@ -31,29 +31,9 @@ def _stub_api_key(monkeypatch):
     )
 
 
-class ScoredClassifier:
-    def __init__(self, complexity: str, score: float):
-        self.complexity = complexity
-        self.score = score
-
+class ExplodingClassifier:
     def predict_complexity(self, query: str) -> dict:
-        return {"complexity": self.complexity, "score": self.score, "task_type": "qa"}
-
-
-class SpyShadowClassifier:
-    def __init__(self, complexity: str, score: float):
-        self.complexity = complexity
-        self.score = score
-        self.calls = 0
-
-    def predict_complexity(self, query: str) -> dict:
-        self.calls += 1
-        return {"complexity": self.complexity, "score": self.score, "task_type": "labse_shadow"}
-
-
-class ExplodingShadowClassifier:
-    def predict_complexity(self, query: str) -> dict:
-        raise RuntimeError("shadow backend unavailable")
+        raise RuntimeError("labse backend unavailable")
 
 
 def _wire_common(monkeypatch):
@@ -92,11 +72,11 @@ def _post(query: str):
 
 
 def test_hebrew_easy_query_routes_local_like_any_other_language(monkeypatch):
-    """No Hebrew-specific branch remains: a Hebrew query with an easy-scored
-    classifier routes local exactly like an English one would."""
+    """No Hebrew-specific branch remains: a Hebrew query the LaBSE classifier
+    scores easy routes local exactly like an English one would."""
     _wire_common(monkeypatch)
-    monkeypatch.setattr(openai_compat, "_classifier", StubClassifier())
-    monkeypatch.setattr(openai_compat, "_labse_classifier", None)
+    monkeypatch.setattr(openai_compat, "_classifier", None)
+    monkeypatch.setattr(openai_compat, "_labse_classifier", StubClassifier())
 
     response = _post("מה בירת צרפת?")
 
@@ -107,10 +87,11 @@ def test_hebrew_easy_query_routes_local_like_any_other_language(monkeypatch):
 
 def test_hebrew_hard_query_routes_external_like_any_other_language(monkeypatch):
     """Same classify path decides Hebrew's routing as every other language -
-    no dedicated judge intercepts it first."""
+    no dedicated judge intercepts it first. This is the regression the
+    cutover closes: the old classifier missed this exact query."""
     _wire_common(monkeypatch)
-    monkeypatch.setattr(openai_compat, "_classifier", HardClassifier())
-    monkeypatch.setattr(openai_compat, "_labse_classifier", None)
+    monkeypatch.setattr(openai_compat, "_classifier", None)
+    monkeypatch.setattr(openai_compat, "_labse_classifier", HardClassifier())
 
     from cryptography.fernet import Fernet
 
@@ -136,26 +117,30 @@ def test_hebrew_hard_query_routes_external_like_any_other_language(monkeypatch):
     assert response.headers["x-dejaq-prompt-difficulty"] == "hard"
 
 
-def test_shadow_classifier_runs_but_never_changes_the_route(monkeypatch):
-    """Shadow disagrees (says hard) with the production classifier (easy) -
-    the served route must still follow the production classifier."""
+def test_legacy_classifier_loaded_but_not_consulted_for_routing(monkeypatch):
+    """Even when the legacy classifier is loaded (LOAD_LEGACY_CLASSIFIER),
+    the served route follows LaBSE only - the legacy verdict is never
+    consulted, loaded or not."""
     _wire_common(monkeypatch)
-    monkeypatch.setattr(openai_compat, "_classifier", StubClassifier())
-    shadow = SpyShadowClassifier("hard", 0.99)
-    monkeypatch.setattr(openai_compat, "_labse_classifier", shadow)
+    monkeypatch.setattr(openai_compat, "_classifier", HardClassifier())
+    labse = StubClassifier()
+    monkeypatch.setattr(openai_compat, "_labse_classifier", labse)
 
     response = _post("What is the capital of France?")
 
     assert response.status_code == 200
     assert response.headers["x-dejaq-prompt-difficulty"] == "easy"
     assert response.headers["x-dejaq-model-used"] == openai_compat.LOCAL_LLM_MODEL_NAME
-    assert shadow.calls == 1
+    assert labse.calls == 1
 
 
-def test_shadow_classifier_failure_does_not_break_the_request(monkeypatch):
+def test_labse_classifier_failure_falls_back_to_easy_not_to_legacy(monkeypatch):
+    """A LaBSE failure must not break the request, and must not silently
+    fall back to consulting the legacy classifier - it defaults to easy,
+    same as the old classifier's own failure path did."""
     _wire_common(monkeypatch)
-    monkeypatch.setattr(openai_compat, "_classifier", StubClassifier())
-    monkeypatch.setattr(openai_compat, "_labse_classifier", ExplodingShadowClassifier())
+    monkeypatch.setattr(openai_compat, "_classifier", HardClassifier())
+    monkeypatch.setattr(openai_compat, "_labse_classifier", ExplodingClassifier())
 
     response = _post("What is the capital of France?")
 

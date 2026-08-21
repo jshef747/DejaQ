@@ -31,9 +31,9 @@ def _mean_pool(last_hidden_state: torch.Tensor, attention_mask: torch.Tensor) ->
 class LabseClassifierService:
     """Shadow-mode difficulty classifier: LaBSE embedding + a LogisticRegression
     head trained on 770 labelled items across seven languages
-    (dejaq-classifier-probe-multilang/report.md). Computes and logs a decision
-    on every text request but is never used to route one - see
-    config.LABSE_SHADOW_ENABLED and openai_compat.py's "classify" step.
+    (dejaq-classifier-probe-multilang/report.md). Decides routing for every
+    text request, all languages, no per-language branching - see
+    config.LOAD_LABSE_CLASSIFIER and openai_compat.py's "classify" step.
     """
 
     _model = None
@@ -47,14 +47,14 @@ class LabseClassifierService:
 
     @classmethod
     def _load_model(cls):
-        logger.info("Loading LaBSE shadow classifier...")
+        logger.info("Loading LaBSE classifier...")
         cls._device = _select_device()
-        logger.info("LaBSE shadow classifier device: %s", cls._device)
+        logger.info("LaBSE classifier device: %s", cls._device)
         cls._tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
         cls._model = AutoModel.from_pretrained(MODEL_ID).to(cls._device)
         cls._model.eval()
         cls._head = joblib.load(HEAD_PATH)
-        logger.info("LaBSE shadow classifier loaded successfully.")
+        logger.info("LaBSE classifier loaded successfully.")
 
     def _embed(self, query: str) -> np.ndarray:
         encoded = self._tokenizer(
@@ -81,5 +81,5 @@ class LabseClassifierService:
         return {
             "complexity": complexity,
             "score": score,
-            "task_type": "labse_shadow",
+            "task_type": "labse",
         }

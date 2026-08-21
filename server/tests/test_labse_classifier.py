@@ -41,7 +41,7 @@ class TestPredictComplexityThreshold:
             result = svc.predict_complexity("anything")
         assert result["complexity"] == "hard"
         assert result["score"] == pytest.approx(0.5)
-        assert result["task_type"] == "labse_shadow"
+        assert result["task_type"] == "labse"
 
     def test_score_below_threshold_is_easy(self):
         svc = self._service_with_stubbed_head(0.49)

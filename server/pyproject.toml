@@ -75,5 +75,5 @@ markers = [
     "gemma_e2b: requires Gemma 4 E2B",
     "llama: requires Gemma 4 26B A4B",
     "deberta: requires NVIDIA DeBERTa",
-    "labse: requires the LaBSE shadow classifier",
+    "labse: requires the LaBSE classifier",
 ]

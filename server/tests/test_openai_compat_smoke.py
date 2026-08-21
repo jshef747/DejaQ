@@ -82,11 +82,6 @@ class HardClassifier:
         return {"complexity": "hard", "score": 0.99, "task_type": "qa"}
 
 
-class EasyLabelHighScoreClassifier:
-    def predict_complexity(self, query: str) -> dict:
-        return {"complexity": "easy", "score": 0.42, "task_type": "qa"}
-
-
 class StubExternalLLM:
     async def generate_response(self, request, provider=None, api_key=None):
         raise AssertionError("External LLM should not be called for easy query smoke test")
@@ -559,7 +554,7 @@ def test_cache_miss_includes_difficulty_and_nearest_cache_headers(monkeypatch, c
     monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
     monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
     monkeypatch.setattr(openai_compat, "_llm_router", StubRouter())
-    monkeypatch.setattr(openai_compat, "_classifier", ScoredClassifier())
+    monkeypatch.setattr(openai_compat, "_labse_classifier", ScoredClassifier())
     monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubNearestMissMemory())
     monkeypatch.setattr(
@@ -772,7 +767,14 @@ def test_force_hard_external_header_skips_classifier(monkeypatch):
     assert response.json()["detail"].startswith("No google API key configured")
 
 
-def test_auto_routing_uses_org_threshold_zero_to_route_external(monkeypatch):
+def test_auto_routing_routes_external_when_labse_scores_hard(monkeypatch):
+    """The per-workspace routing_threshold override only ever applied to the
+    old classifier's continuous score - LaBSE returns an already-decided
+    complexity (global DEJAQ_LABSE_CLASSIFIER_THRESHOLD, no per-workspace
+    override), so a workspace can no longer force auto-routing via
+    threshold. routing_threshold=0.0 here is inert; the hard verdict comes
+    from the LaBSE mock alone."""
+
     async def _noop_log(*args, **kwargs):
         return None
 
@@ -795,7 +797,7 @@ def test_auto_routing_uses_org_threshold_zero_to_route_external(monkeypatch):
 
     monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
     monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
-    monkeypatch.setattr(openai_compat, "_classifier", EasyLabelHighScoreClassifier())
+    monkeypatch.setattr(openai_compat, "_labse_classifier", HardClassifier())
     monkeypatch.setattr(openai_compat, "_external_llm", external)
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)

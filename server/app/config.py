@@ -94,29 +94,32 @@ EXTERNAL_MODEL_NAME = os.getenv("DEJAQ_EXTERNAL_MODEL")
 # openai_compat.py's routing step.
 ROUTING_THRESHOLD = _get_float("DEJAQ_ROUTING_THRESHOLD", 0.2986)
 
-# Shadow-mode multilingual difficulty classifier (LaBSE embedding + a
-# LogisticRegression head trained on 770 items across seven languages,
-# dejaq-classifier-probe-multilang) - computed and logged on every text
-# request alongside today's routing decision, but never used to route one
-# itself, so a bad surprise here is cheap to observe and costs nothing in
-# production until the captain reviews the shadow log and says to cut over
-# (see LABSE_SHADOW_ENABLED below and openai_compat.py's "classify" step).
-# This head also replaces the old Hebrew-specific judge: it was trained on
-# labelled Hebrew directly (unlike the classifier it shadows, which misses
-# essentially all hard Hebrew - see classifier.py's routing weights comment),
-# so Hebrew no longer needs a separate routing path once the captain cuts
-# over. Threshold 0.5 is the LogisticRegression default decision boundary;
-# class_weight="balanced" during training already corrects for the 60/40
-# easy/hard class imbalance, so 0.5 is not naively biased toward the
-# majority class. Not swept against a captain-specified cost ratio between
-# the two routing-error directions - predict_proba exposes every point on
-# the ROC curve if one is ever specified.
+# Multilingual difficulty classifier (LaBSE embedding + a LogisticRegression
+# head trained on 770 items across seven languages,
+# dejaq-classifier-probe-multilang) - now the classifier that decides
+# easy/hard routing for every language, no per-language branching (see
+# openai_compat.py's "classify" step). It replaced the old Hebrew-specific
+# judge (removed - see fm/dejaq-classifier-wire-in) and, on this branch, the
+# NVIDIA classifier below it: the old classifier missed essentially all hard
+# Hebrew and only ~16.6% of hard questions overall
+# (dejaq-classifier-wire-in/report.md), while this head was trained on
+# labelled Hebrew directly. Threshold 0.5 is the LogisticRegression default
+# decision boundary; class_weight="balanced" during training already
+# corrects for the 60/40 easy/hard class imbalance, so 0.5 is not naively
+# biased toward the majority class. Not swept against a captain-specified
+# cost ratio between the two routing-error directions - predict_proba
+# exposes every point on the ROC curve if one is ever specified.
 LABSE_CLASSIFIER_THRESHOLD = _get_float("DEJAQ_LABSE_CLASSIFIER_THRESHOLD", 0.5)
-# Default ON: shadow-only, so there is no serving risk to gate behind a
-# captain decision the way HEBREW_ROUTING_ENABLED (removed - see above) was.
-# Set false to skip the extra embed+predict call entirely (e.g. a
-# resource-constrained deployment that doesn't want the shadow signal yet).
-LABSE_SHADOW_ENABLED = _get_bool("DEJAQ_LABSE_SHADOW_ENABLED", True)
+# Default ON: this is the classifier that serves routing decisions now.
+LOAD_LABSE_CLASSIFIER = _get_bool("DEJAQ_LOAD_LABSE_CLASSIFIER", True)
+# Default OFF on this branch: the old NVIDIA classifier (ClassifierService,
+# ~1.5GB) has no job left once routing moved to LaBSE, and not loading it is
+# the whole point of the cutover - it is what pays for the new head's memory
+# (dejaq-classifier-cutover/report.md). The code and model stay in the tree
+# unmodified for staging, which still routes off this classifier and must
+# not lose it when this branch merges; flip this on for local
+# fallback/comparison without reverting any code.
+LOAD_LEGACY_CLASSIFIER = _get_bool("DEJAQ_LOAD_LEGACY_CLASSIFIER", False)
 CREDENTIAL_ENCRYPTION_KEY = os.getenv("DEJAQ_CREDENTIAL_ENCRYPTION_KEY", "")
 
 # API key cache
