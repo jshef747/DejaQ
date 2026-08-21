@@ -238,8 +238,9 @@ class LiteLLMTransportClient:
             self._provider, request.model, len(request.history),
         )
         start = time.perf_counter()
+        extra_kwargs = {"reasoning_format": "hidden"} if self._provider == "groq" else {}
         with _mapped_errors(api_key, self._provider):
-            response = await _complete_with_temperature_retry(request, messages, model, api_key)
+            response = await _complete_with_temperature_retry(request, messages, model, api_key, **extra_kwargs)
 
         latency_ms = elapsed_ms(start)
         usage = response.usage
@@ -285,10 +286,11 @@ class LiteLLMTransportClient:
         text = ""
         prompt_tokens = completion_tokens = 0
         finish_reason = None
+        extra_kwargs = {"reasoning_format": "hidden"} if self._provider == "groq" else {}
         with _mapped_errors(api_key, self._provider):
             stream = await _complete_with_temperature_retry(
                 request, messages, model, api_key,
-                stream=True, stream_options={"include_usage": True},
+                stream=True, stream_options={"include_usage": True}, **extra_kwargs,
             )
         async with aclosing(stream):
             async for chunk in stream:
