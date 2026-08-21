@@ -56,7 +56,14 @@ CHROMA_PORT = int(os.getenv("DEJAQ_CHROMA_PORT", "8001"))
 # is configured server-wide, and every consumer must treat that as "ask the
 # workspace to configure a provider" rather than silently picking one.
 EXTERNAL_MODEL_NAME = os.getenv("DEJAQ_EXTERNAL_MODEL")
-ROUTING_THRESHOLD = _get_float("DEJAQ_ROUTING_THRESHOLD", 0.3)
+# 0.26 rather than 0.30: on a 77-question hand-labelled corpus this moved
+# accuracy 76.6% -> 85.7% and cut questions wrongly kept local from 16 to 8,
+# at the cost of one additional question wrongly sent to the paid provider
+# (2 to 3). It helps questions sitting near the line and does NOT rescue
+# hard proofs, which score 0.11-0.26 - well below either threshold (7 of 8
+# measured hard-proof questions are still missed at 0.26). Not a fix for
+# proof routing.
+ROUTING_THRESHOLD = _get_float("DEJAQ_ROUTING_THRESHOLD", 0.26)
 CREDENTIAL_ENCRYPTION_KEY = os.getenv("DEJAQ_CREDENTIAL_ENCRYPTION_KEY", "")
 
 # API key cache
@@ -77,6 +84,13 @@ USE_CELERY = os.getenv("DEJAQ_USE_CELERY", "true").lower() == "true"
 # Logging
 LOG_LEVEL = _get_text("DEJAQ_LOG_LEVEL", "INFO").upper()
 LOG_SHOW_CONTENT = _get_bool("DEJAQ_LOG_SHOW_CONTENT", False)
+
+# In-process torch device for the difficulty classifier.
+# "auto" probes the runtime (CUDA, then Apple Metal, then CPU); "cpu"/"cuda"/
+# "mps" force one, for a driver bug or to leave the GPU free for something
+# else. An unavailable or unrecognised value falls back to the probe rather
+# than crashing the server - see services/classifier.py::_select_device.
+TORCH_DEVICE = _get_text("DEJAQ_TORCH_DEVICE", "auto").lower()
 
 # Cache eviction
 EVICTION_FLOOR = _get_float("DEJAQ_EVICTION_FLOOR", -5.0)

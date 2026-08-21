@@ -6,10 +6,42 @@ import torch.nn as nn
 from huggingface_hub import PyTorchModelHubMixin, hf_hub_download
 from transformers import AutoModel, AutoTokenizer
 
+from app import config
+
 logger = logging.getLogger("dejaq.services.classifier")
 
 MODEL_ID = "nvidia/prompt-task-and-complexity-classifier"
-COMPLEXITY_THRESHOLD = 0.3
+
+
+def _probe_device() -> torch.device:
+    """Capability probe, not an OS/machine check: CUDA, then Apple Metal, then CPU."""
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    # torch.backends.mps may not exist on older torch builds at all, and even
+    # when present, "available" (macOS/device supports Metal) and "built"
+    # (this torch wheel was compiled with MPS support) are separate checks.
+    mps = getattr(torch.backends, "mps", None)
+    if mps is not None and mps.is_available() and mps.is_built():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
+def _select_device() -> torch.device:
+    override = config.TORCH_DEVICE
+    if override == "auto":
+        return _probe_device()
+    if override in ("cpu", "cuda", "mps"):
+        if override == "cuda" and not torch.cuda.is_available():
+            logger.warning("DEJAQ_TORCH_DEVICE=cuda but CUDA is unavailable; falling back to probe")
+            return _probe_device()
+        if override == "mps":
+            mps = getattr(torch.backends, "mps", None)
+            if mps is None or not mps.is_available() or not mps.is_built():
+                logger.warning("DEJAQ_TORCH_DEVICE=mps but Metal is unavailable; falling back to probe")
+                return _probe_device()
+        return torch.device(override)
+    logger.warning("Unrecognised DEJAQ_TORCH_DEVICE=%r; falling back to probe", override)
+    return _probe_device()
 
 
 # --- NVIDIA model architecture (required for loading) ---
@@ -156,7 +188,11 @@ class ClassifierService:
     @classmethod
     def _load_model(cls):
         logger.info("Loading NVIDIA prompt-task-and-complexity-classifier...")
-        cls._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        cls._device = _select_device()
+        # First few calls on a fresh "mps" device pay a one-time Metal
+        # compilation cost (~1.8s first call, a few hundred ms for the next
+        # several, then a stable ~48ms once warm). This is a singleton
+        # loaded once in a long-lived process, so it's a startup cost only.
         logger.info("Classifier device: %s", cls._device)
 
         config_path = hf_hub_download(MODEL_ID, "config.json")
@@ -192,7 +228,12 @@ class ClassifierService:
 
         score = result["prompt_complexity_score"][0]
         task_type = result["task_type_1"][0]
-        complexity = "hard" if score >= COMPLEXITY_THRESHOLD else "easy"
+        # Descriptive label only, at the classifier's own fixed 0.3 cut - not
+        # used for real request routing, which recomputes "complexity" from
+        # the workspace's routing_threshold one line after this call returns
+        # (app/routers/openai_compat.py). Kept for callers/tests that want a
+        # quick label without a workspace config in hand.
+        complexity = "hard" if score >= 0.3 else "easy"
 
         logger.debug("Query classified as %s (score=%.4f, task=%s)", complexity, score, task_type)
 
