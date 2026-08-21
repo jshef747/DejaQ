@@ -80,11 +80,25 @@ ROUTING_THRESHOLD = _get_float("DEJAQ_ROUTING_THRESHOLD", 0.2986)
 # leaves a mostly-English question with one stray Hebrew word on the
 # classifier path (a simple any-Hebrew-character test does not), while still
 # catching genuine Hebrew questions, including ones with an embedded English
-# acronym. Measured on the hybrid: 85.1% accuracy on Hebrew, zero missed hard
-# questions, at the cost of over-firing (routing an easy question through the
-# extra judge call) on ~27% of easy Hebrew questions - accepted as the honest
-# cost of catching every hard one.
+# acronym. Originally measured on the hybrid: 85.1% accuracy on Hebrew, zero
+# missed hard questions, at the cost of over-firing on ~27% of easy Hebrew
+# questions.
+#
+# Re-measured on this deployment (dejaq-refresh-corrections, after fixing the
+# judge's temperature=0.7 non-determinism - see HEBREW_ROUTING_ENABLED below):
+# still 0% missed-hard, but 95.3% over-fire (39/41 easy Hebrew items) on the
+# baseline prompt, and 39.5% over-fire on the ENGLISH translations of the same
+# items - confirming the predecessor's finding that this is a judge+prompt
+# property on this Ollama build, not something specific to Hebrew. An
+# EASY-biased prompt variant (see _HEBREW_HARD_JUDGE_SYSTEM_PROMPT) cut it to
+# 62.8% Hebrew / 7.0% English, a real but insufficient improvement - still far
+# above the original 27%. See dejaq-refresh-corrections/report.md.
 HEBREW_ROUTING_FRACTION = _get_float("DEJAQ_HEBREW_ROUTING_FRACTION", 0.15)
+# Default OFF: the re-measured over-fire rate (above) is materially worse than
+# the number this feature was approved on. The code stays in place - a
+# workspace can opt back in - but it must not fire by default until the
+# over-fire rate is brought down further. Captain's call to re-enable.
+HEBREW_ROUTING_ENABLED = _get_bool("DEJAQ_HEBREW_ROUTING_ENABLED", False)
 CREDENTIAL_ENCRYPTION_KEY = os.getenv("DEJAQ_CREDENTIAL_ENCRYPTION_KEY", "")
 
 # API key cache
