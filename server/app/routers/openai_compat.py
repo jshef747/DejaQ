@@ -113,7 +113,7 @@ from app.config import (
     VALIDATOR_SKIP_DISTANCE,
 )
 from app.db.session import get_session
-from app.utils.exceptions import ExternalLLMAuthError, ExternalLLMError
+from app.utils.exceptions import ExternalAttachmentUnsupportedError, ExternalLLMAuthError, ExternalLLMError
 from app.utils.logger import clear_request_id, content_snippet, hide_content, set_request_id
 from app.utils.pipeline_trace import PipelineTrace
 from app.schemas.chat import ExternalLLMRequest
@@ -1604,7 +1604,24 @@ async def run_chat_pipeline(
             # the question. Calling the validator here would only burn latency and risk
             # an over-rejection on a clearly correct hit. Band hits (requires_validation)
             # never skip: they are only trustworthy once the validator accepts them.
-            _skip_validation = (not _requires_validation) and _cache_distance <= VALIDATOR_SKIP_DISTANCE
+            #
+            # `lexically_exact` is also required — the distance floor alone was
+            # falsified live: "מה בירת אוסטריה?"/"מה בירת אוסטרליה?" (Austria/
+            # Australia) measured distance 0.0023, *below* the smallest
+            # non-match distance (~0.0036) the skip threshold was calibrated
+            # against, and skipped straight to a wrong answer. align()'s fuzzy
+            # matching calls the two words "aligned" (0.93 letter-similarity)
+            # despite them naming different countries, so `not mismatches`
+            # alone doesn't catch it either - `lexically_exact` only allows
+            # the skip when the two queries are the literal same words (see
+            # lexical_match.AlignResult.exact), never a fuzzy-resolved "close
+            # enough". A close-but-not-exact match still gets served - just
+            # through the validator below, same as any band hit.
+            _skip_validation = (
+                not _requires_validation
+                and _cache_distance <= VALIDATOR_SKIP_DISTANCE
+                and bool(getattr(cache_lookup, "lexically_exact", True))
+            )
             if not _skip_validation:
                 # Word-swap hint from the lexical gate ("'list' vs 'string'") —
                 # sharpens the validator on near-identical sibling questions.
@@ -2256,6 +2273,24 @@ async def run_chat_pipeline(
                 logger.exception("ExternalLLMService failed")
                 yield _GENERATION_FAILED_MESSAGE
                 gen.update(model_used="error", route="error")
+            except ExternalAttachmentUnsupportedError as exc:
+                # Proactive twin of the ExternalLLMError 400 branch above:
+                # caught before the request ever reaches the provider (see
+                # litellm_transport._confirmed_incapable), so the caller gets
+                # a specific, actionable reason instead of the provider's own
+                # generic rejection - e.g. Groq's `openai/gpt-oss-120b` on an
+                # attachment: "The model or its parameters may not be
+                # supported." with no hint that the model is simply text-only.
+                detail = (
+                    f"The workspace's external model ({exc.model_name}) does not support "
+                    f"{exc.kind} attachments. Configure an external model with {exc.kind} "
+                    "support for this workspace, or remove the attachment and ask as plain text."
+                )
+                if not stream:
+                    logger.warning("External model attachment capability check failed: %s", exc)
+                    raise PipelineError(422, detail) from exc
+                logger.warning("External model attachment capability check failed: %s", exc)
+                gen.update(model_used="error", route="error", failed=True, error_detail=detail)
             except LocalVisionUnsupportedError as exc:
                 # The safety net named in section 5 of the plan: the capability
                 # check above said this model could see, but Ollama disagrees at

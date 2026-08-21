@@ -9,7 +9,12 @@ import openai
 from app.schemas.chat import ExternalLLMRequest, ExternalLLMResponse, ExternalStreamChunk
 from app.services.llm_providers._litellm_config import DEFAULT_CALL_KWARGS
 from app.services.llm_providers.common import elapsed_ms, ensure_query, normalize_finish_reason, redact_api_key
-from app.utils.exceptions import ExternalLLMAuthError, ExternalLLMError, ExternalLLMTimeoutError
+from app.utils.exceptions import (
+    ExternalAttachmentUnsupportedError,
+    ExternalLLMAuthError,
+    ExternalLLMError,
+    ExternalLLMTimeoutError,
+)
 
 logger = logging.getLogger("dejaq.services.llm_providers.litellm_transport")
 
@@ -43,10 +48,30 @@ def _litellm_key(provider: str) -> str:
     return _LITELLM_PROVIDER_KEYS.get(provider, provider)
 
 
+def _confirmed_incapable(model: str, capability_field: str) -> bool:
+    """True only when LiteLLM's own catalog affirmatively lacks `capability_field`
+    for `model` (e.g. "supports_vision", "supports_pdf_input").
+
+    False both when the model has the capability AND when LiteLLM has no
+    catalog entry for it at all (`get_model_info` raises for an id it
+    doesn't recognise, which is a data gap, not proof of incapability) - a
+    model this returns False for is left to reach the provider exactly as
+    before this check existed, so an unmapped-but-real vision/document model
+    is never blocked.
+    """
+    try:
+        info = litellm.get_model_info(model)
+    except Exception:
+        return False
+    return not info.get(capability_field)
+
+
 def _build_messages(request: ExternalLLMRequest) -> list[dict]:
     messages = [{"role": "system", "content": request.system_prompt}]
     messages.extend(request.history)
     if request.image_b64:
+        if _confirmed_incapable(request.model, "supports_vision"):
+            raise ExternalAttachmentUnsupportedError(request.model, "image")
         user_content = [
             {"type": "text", "text": request.query},
             {"type": "image_url", "image_url": {
@@ -54,6 +79,8 @@ def _build_messages(request: ExternalLLMRequest) -> list[dict]:
             }},
         ]
     elif request.file_b64:
+        if _confirmed_incapable(request.model, "supports_pdf_input"):
+            raise ExternalAttachmentUnsupportedError(request.model, "document")
         user_content = [
             {"type": "text", "text": request.query},
             {"type": "file", "file": {

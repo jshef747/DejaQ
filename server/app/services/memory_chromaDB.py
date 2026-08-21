@@ -108,6 +108,14 @@ class CacheLookupResult:
     # semantically (e.g. (("list", "string"),)) — a hint for the validator.
     # None when the words aligned or alignment wasn't informative.
     mismatches: tuple[tuple[str, str], ...] | None = None
+    # True only when the query and matched stored query are the SAME words
+    # (align().exact — see lexical_match.py). False when any word only
+    # matched via fuzzy letter-similarity, even if align() still calls that
+    # "aligned" — a near-identical but genuinely different entity name
+    # ("אוסטריה"/"אוסטרליה", Austria/Australia, ratio 0.93) fuzzy-matches
+    # and would otherwise read as a confirmed typo. The trust-tier validator
+    # skip below requires this, not just `not mismatches`.
+    lexically_exact: bool = True
     # Image fingerprints of the matched entry (present only for image entries).
     # Carried here from the entry metadata read during lookup so the router's
     # image gate needs no extra Chroma round-trip.
@@ -232,10 +240,12 @@ class MemoryService:
                 # single-word-swap trap (list/string). Only informative when the
                 # words DIDN'T align; rescued hits aligned by construction.
                 mismatches: tuple[tuple[str, str], ...] | None = None
+                lexically_exact = True
                 if not rescued and matched_query:
                     align_result = align(normalized_query, matched_query)
                     if not align_result.aligned and align_result.mismatches:
                         mismatches = align_result.mismatches
+                    lexically_exact = align_result.exact
                 candidates.append(CacheLookupResult(
                     hit=True,
                     generalized_answer=generalized_answer,
@@ -247,6 +257,7 @@ class MemoryService:
                     requires_validation=requires_validation,
                     rescued=rescued,
                     mismatches=mismatches,
+                    lexically_exact=lexically_exact,
                     image_dhash=meta.get("image_dhash"),
                     image_clip=meta.get("image_clip"),
                     image_kind=meta.get("image_kind"),

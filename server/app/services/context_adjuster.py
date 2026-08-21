@@ -32,7 +32,8 @@ logger = logging.getLogger("dejaq.services.context_adjuster")
 
 DEFAULT_GENERALIZE_SYSTEM_PROMPT = (
     "Rewrite the ANSWER into a neutral, factual tone. Remove slang, humor, and "
-    "personality. Keep all facts. Output only the rewritten answer."
+    "personality. Keep all facts. Keep the ANSWER in the same language it is "
+    "written in - never translate it. Output only the rewritten answer."
 )
 
 DEFAULT_ADJUST_SYSTEM_PROMPT = (
@@ -47,7 +48,9 @@ DEFAULT_ADJUST_SYSTEM_PROMPT = (
     "information as the original, just reworded - never merge, drop, or "
     "summarize any of them unless asked to. Keep every named entity from the "
     "ANSWER - every place, event, organization, and date it mentions - in your "
-    "rewrite. Output only the rewritten answer."
+    "rewrite. Keep the ANSWER in the same language it is written in - never "
+    "translate it, even if the QUESTION is in a different language. Output "
+    "only the rewritten answer."
 )
 
 _TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
@@ -94,6 +97,58 @@ def is_topically_consistent(adjusted: str, cached_answer: str) -> bool:
     adjusted_words = _content_words(adjusted)
     overlap = len(cached_words & adjusted_words)
     return (overlap / len(cached_words)) >= ADJUSTER_MIN_TOPIC_OVERLAP
+
+
+# Non-Latin-script ratio threshold for "this text is written in a non-Latin
+# script" - measured on real Hebrew answers: even short ones (e.g. "The
+# chemical symbol for gold is **Au**." rewritten in Hebrew) stay well above
+# this because the scaffolding words (the/is/of) are Hebrew too, only the
+# odd embedded Latin abbreviation or number is ASCII. 0.3 comfortably clears
+# a Hebrew sentence that quotes one or two short Latin terms while staying
+# far below what a genuinely Latin-script sentence (which only crosses zero
+# on stray punctuation-adjacent characters) can reach.
+_NON_LATIN_SCRIPT_RATIO = 0.3
+# A rewrite counts as "dropped the script" only once its own non-Latin ratio
+# falls under this - not exactly zero, since a faithful Hebrew rewrite may
+# legitimately keep a Latin abbreviation or two (e.g. "Au", "¥") without that
+# meaning the rewrite itself switched language.
+_LATIN_DRIFT_RATIO = 0.05
+
+
+def _non_latin_letter_ratio(text: str) -> float:
+    letters = [c for c in text if c.isalpha()]
+    if not letters:
+        return 0.0
+    return sum(1 for c in letters if not c.isascii()) / len(letters)
+
+
+def _language_preserved(original: str, rewritten: str) -> bool:
+    """True unless `original` is written in a non-Latin script and
+    `rewritten` has silently switched to (near-)pure Latin script.
+
+    The content-word overlap check above (is_topically_consistent) was
+    supposed to catch a rewrite that changes language too - translated text
+    shares no literal words with its source - but measured against real
+    generalizer output it doesn't always: a Hebrew answer that itself quotes
+    an English proper noun or abbreviation parenthetically (e.g. "האוקיינוס
+    ... הוא שקט (Pacific Ocean)") shares that one token with a FULL English
+    mistranslation, which is enough to clear the overlap floor. Numbers
+    survive translation for the same reason ("15 כפול 12" / "15 multiplied
+    by 12" both contain "180"). Comparing script composition directly closes
+    that gap: measured 15/15 (100%) Hebrew-to-English drift on the shipped
+    prompt before this fix, 6/15 (40%) residual after the prompt fix and the
+    content-overlap guard alone - all 6 residual cases are exactly this
+    shared-token leak, and this check catches every one of them (see
+    dejaq-acceptance-fixes report).
+
+    Never flags a same-script rewrite, whatever it changes - only a script
+    CHANGE trips it, so ordinary English-to-English (or Hebrew-to-Hebrew)
+    tone/fidelity issues are unaffected and still governed by the checks
+    above.
+    """
+    if _non_latin_letter_ratio(original) < _NON_LATIN_SCRIPT_RATIO:
+        return True  # original wasn't meaningfully non-Latin; nothing to preserve
+    return _non_latin_letter_ratio(rewritten) >= _LATIN_DRIFT_RATIO
 
 
 # Empirically stops the runaway shape observed in the incident (the
@@ -186,9 +241,21 @@ def _inherits_baseline_repetition(baseline: str, output: str, absolute_max: floa
 def is_generalization_sane(raw_answer: str, generalized: str) -> bool:
     """Store-time safety net for generalize()'s own output.
 
-    Unlike is_topically_consistent() (which gates adjust() against drifting
-    from an already-trusted cached answer), this catches generalize() itself
-    finishing the real rewrite and then failing to stop: the model loops,
+    Reuses is_topically_consistent() (adjust()'s own drift guard) to catch
+    generalize() dropping or replacing the raw answer's content instead of
+    neutralizing its tone - e.g. a short Hebrew answer ("וינה היא בירת
+    אוסטריה.") generalized into an unrelated English fragment ("Vina.").
+    Neither the length nor the repetition check below can see this: the
+    output is short (no blown ratio) and not repetitive, so it passed both
+    and was persisted as the permanent cache entry. Content-word overlap
+    catches it regardless of which language either side is in, since it
+    compares literal surviving words rather than translated meaning - which
+    also means a generalize() call that legitimately TRANSLATES the answer
+    (something the system prompt above now explicitly forbids) fails this
+    check too and falls back to storing the raw, correct-language answer.
+
+    This also catches generalize() itself finishing the real rewrite and
+    then failing to stop: the model loops,
     paraphrasing its own few-shot examples as fake continuation turns, until
     it hits the token cap (incident: dejaq-generalizer-runaway - a 52-char
     real answer produced a 5,456-character loop with no stop). Two
@@ -235,6 +302,10 @@ def is_generalization_sane(raw_answer: str, generalized: str) -> bool:
             raw_answer, generalized, GENERALIZE_NGRAM_REPEAT_RATIO_MAX
         )
     ):
+        return False
+    if not is_topically_consistent(generalized, raw_answer):
+        return False
+    if not _language_preserved(raw_answer, generalized):
         return False
     return True
 
@@ -587,6 +658,13 @@ class ContextAdjusterService:
         if not is_topically_consistent(adjusted_text, general_answer):
             logger.warning(
                 "Context adjuster output failed topic-consistency check; "
+                "serving cached answer verbatim instead of the drifted rewrite"
+            )
+            return general_answer
+
+        if not _language_preserved(general_answer, adjusted_text):
+            logger.warning(
+                "Context adjuster output switched script/language; "
                 "serving cached answer verbatim instead of the drifted rewrite"
             )
             return general_answer

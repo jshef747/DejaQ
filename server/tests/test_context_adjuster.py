@@ -18,6 +18,7 @@ from app.services import context_adjuster
 from app.services.context_adjuster import (
     ContextAdjusterService,
     _GENERALIZE_STOP,
+    _language_preserved,
     _ngram_repetition_ratio,
     is_adjustment_sane,
     is_generalization_sane,
@@ -241,6 +242,20 @@ class TestAdjustSafetyNet:
         result = asyncio.run(service.adjust("explain that in detail", CANARY_ANSWER))
 
         assert result == on_topic
+
+    def test_falls_back_to_cached_answer_on_a_language_switch(self):
+        """dejaq-acceptance-fixes report, defect #4: a Hebrew cached answer
+        adjusted into English. The shared number ("180") is enough to clear
+        is_topically_consistent's overlap floor, so only the dedicated
+        script check catches the switch."""
+        cached_hebrew = "15 כפול 12 שווה ל-180."
+        translated = "15 multiplied by 12 equals 180."
+        backend = _FakeBackend(translated)
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        result = asyncio.run(service.adjust("give me the short version", cached_hebrew))
+
+        assert result == cached_hebrew
 
     def test_sends_temperature_zero(self):
         backend = _FakeBackend("A canary deployment ships to a small slice of traffic first.")
@@ -544,6 +559,28 @@ class TestNoContentBearingFewShot:
         self._assert_no_content(backend.requests[0].messages)
 
 
+class TestLanguagePreserved:
+    pytestmark = pytest.mark.no_model
+
+    def test_hebrew_to_hebrew_preserved(self):
+        assert _language_preserved("הבירה של צרפת היא פריז.", "בירת צרפת היא פריז.")
+
+    def test_hebrew_to_english_flagged(self):
+        assert not _language_preserved("הבירה של צרפת היא פריז.", "The capital of France is Paris.")
+
+    def test_hebrew_keeping_one_latin_abbreviation_preserved(self):
+        assert _language_preserved("הסמל הכימי של זהב הוא Au.", "הסמל הכימי עבור זהב הוא Au.")
+
+    def test_english_to_english_preserved_regardless_of_content(self):
+        # Only a script CHANGE trips this - an English source has nothing to
+        # "preserve" here, whatever the rewrite says.
+        assert _language_preserved("The capital of France is Paris.", "Totally different content here.")
+
+    def test_short_non_hebrew_source_is_not_penalized(self):
+        # Below the non-Latin-script ratio floor - nothing to preserve.
+        assert _language_preserved("Au.", "Gold's symbol is Au.")
+
+
 class TestIsGeneralizationSane:
     """Pure unit tests for the generalize() store-time safety net (incident:
     dejaq-generalizer-runaway), no Ollama required. RUNAWAY_GENERALIZED_ANSWER
@@ -644,6 +681,59 @@ class TestIsGeneralizationSane:
     def test_accepts_a_faithful_clean_rewrite(self):
         clean = "The largest country in Europe by area is Russia."
         assert is_generalization_sane(self.RAW_ANSWER, clean)
+
+    def test_rejects_the_real_captured_garbled_hebrew_answer(self):
+        """dejaq-acceptance-fixes report, defect #2: a genuine store-time
+        capture. Raw Hebrew answer (Vienna is the capital of Austria)
+        generalized into "Vina." - not Vienna, not Canberra, not a real
+        word in either language. Neither the length nor repetition signal
+        can see this (short output, no repetition); content-word overlap
+        (borrowed from is_topically_consistent) is what catches it."""
+        raw = "וינה היא בירת אוסטריה."
+        garbled = "Vina."
+        assert not is_generalization_sane(raw, garbled)
+
+    def test_rejects_a_hebrew_answer_translated_into_english(self):
+        """dejaq-acceptance-fixes report, defect #4: a live Hebrew answer
+        generalized into English instead of staying Hebrew. Zero literal
+        word overlap between the two scripts, so this is caught by the same
+        content-preservation check as the garbled case above - and it also
+        fails whenever the model changes the answer's language, not only
+        when it garbles it outright."""
+        raw = "הבירה של צרפת היא **פריז**."
+        translated = "The capital of France is Paris."
+        assert not is_generalization_sane(raw, translated)
+
+    def test_accepts_a_faithful_hebrew_rewrite_that_keeps_the_language(self):
+        raw = "הבירה של צרפת היא פריז."
+        neutral = "בירת צרפת היא פריז."
+        assert is_generalization_sane(raw, neutral)
+
+    def test_rejects_an_english_mistranslation_that_leaks_a_shared_proper_noun(self):
+        """dejaq-acceptance-fixes report, defect #4's measured residual gap:
+        the raw Hebrew answer itself parenthetically glosses an English
+        proper noun ("... הוא שקט (Pacific Ocean)"), so a FULL English
+        mistranslation still shares that one token with the raw answer and
+        clears is_topically_consistent's overlap floor (real sweep: 6/15
+        Hebrew answers still drifted after the content-overlap guard alone).
+        _language_preserved (script composition, not word overlap) is what
+        catches it - is_generalization_sane must call both."""
+        raw = "האוקיינוס הגדול בעולם הוא שקט (Pacific Ocean)."
+        mistranslated = "The largest ocean in the world is the Pacific Ocean."
+        assert not is_generalization_sane(raw, mistranslated)
+
+    def test_rejects_an_english_mistranslation_that_leaks_a_shared_number(self):
+        raw = "15 כפול 12 שווה ל-180."
+        mistranslated = "15 multiplied by 12 equals 180."
+        assert not is_generalization_sane(raw, mistranslated)
+
+    def test_accepts_a_hebrew_rewrite_that_keeps_one_latin_abbreviation(self):
+        """A faithful Hebrew rewrite legitimately keeps a short embedded
+        Latin term (a chemical symbol, a currency sign) - that alone must
+        not read as a language switch."""
+        raw = "הסמל הכימי של זהב הוא Au."
+        neutral = "הסמל הכימי עבור זהב הוא Au."
+        assert is_generalization_sane(raw, neutral)
 
     def test_accepts_the_highest_ratio_measured_on_a_clean_case(self):
         """8.0x - the highest length ratio seen on any of the 15 clean cases

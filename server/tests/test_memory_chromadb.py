@@ -217,6 +217,31 @@ class TestBand:
         assert result.hit is True
         assert result.requires_validation is False
 
+    def test_trusted_hit_on_identical_words_is_lexically_exact(self):
+        svc = _make_svc("band_trusted_exact")
+        svc.store_interaction("capital of france", "Paris is the capital.", "orig", "u1")
+        with _force_distances(svc, [0.01]):
+            result = svc.lookup_cache("capital of france")
+        assert result.lexically_exact is True
+
+    def test_near_duplicate_distance_entity_swap_is_not_lexically_exact(self):
+        """dejaq-acceptance-fixes report, defect #2: "מה בירת אוסטריה?"
+        (capital of Austria) vs "מה בירת אוסטרליה?" (capital of Australia)
+        measured distance 0.0023 in production - inside VALIDATOR_SKIP_DISTANCE,
+        where the trust tier used to skip the validator outright on distance
+        alone. align() calls the two country names "aligned" (they fuzzy-match
+        at 0.93 letter-similarity) so `mismatches` alone doesn't catch it either
+        - lexically_exact is the signal that does, and is what the caller
+        (openai_compat.py) now additionally requires before skipping
+        validation."""
+        svc = _make_svc("band_trusted_entity_swap")
+        svc.store_interaction("what is the capital of austria", "Vienna is the capital of Austria.", "orig", "u1")
+        with _force_distances(svc, [0.0023]):
+            result = svc.lookup_cache("what is the capital of australia")
+        assert result.hit is True
+        assert result.requires_validation is False  # still trust-tier by distance
+        assert result.lexically_exact is False  # but not safe to skip the validator
+
     def test_band_hit_requires_validation(self):
         svc = _make_svc("band_hit")
         svc.store_interaction("capital of france", "Paris is the capital.", "orig", "u1")

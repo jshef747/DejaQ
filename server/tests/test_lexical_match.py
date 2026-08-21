@@ -99,6 +99,71 @@ def test_identical_strings_align():
     assert align("what is gravity", "what is gravity").aligned
 
 
+def test_identical_strings_are_lexically_exact():
+    assert align("what is gravity", "what is gravity").exact is True
+
+
+def test_case_and_order_differences_stay_exact():
+    assert align("What Is Gravity", "gravity is what").exact is True
+
+
+def test_a_typo_aligns_but_is_not_exact():
+    assert align("what is the capital of france", "what is teh captial of frnace").exact is False
+
+
+def test_a_near_identical_entity_swap_aligns_but_is_not_exact():
+    """dejaq-acceptance-fixes report, defect #2: Austria/Australia fuzzy-match
+    on letter-similarity (0.93) despite naming different countries - `aligned`
+    alone cannot distinguish this from a genuine typo, `exact` can."""
+    result = align("what is the capital of austria", "what is the capital of australia")
+    assert result.aligned is True
+    assert result.exact is False
+
+
+def test_a_real_mismatch_is_not_exact():
+    assert align("what is the capital of germany", "what is the capital of france").exact is False
+
+
+def test_empty_inputs_are_not_exact():
+    assert align("", "what is x").exact is False
+
+
+# ---------------------------------------------------------------------------
+# Mismatch-hint suppression on broad rephrasings (dejaq-acceptance-fixes,
+# defect #1's root cause).
+# ---------------------------------------------------------------------------
+
+def test_single_word_swap_keeps_its_hint():
+    """The mechanism's own documented use case: exactly one leftover word on
+    each side is a trustworthy hint."""
+    result = align("how do i reverse a list in python?", "how do i reverse a string in python?")
+    assert result.mismatches == (("list", "string"),)
+
+
+def test_broadly_rephrased_paraphrase_suppresses_the_hint():
+    """A real live case, verified against the running validator: "how many
+    continents are there" vs "what's the total number of continents" shares
+    almost no function words, so every leftover gets force-paired with
+    whatever's closest on the other side - nonsense pairings like
+    ('what', 'how') and ('s', 'there') that carry no real semantic signal.
+    Feeding that to the validator as "these words differ" measurably flips a
+    correct VALID into an INVALID; suppressing it here is the fix. `aligned`
+    must still be False - the underlying rephrasing is real, just not a
+    single-word swap worth hinting about."""
+    result = align("how many continents are there", "what's the total number of continents")
+    assert result.aligned is False
+    assert result.mismatches == ()
+
+
+def test_a_leftover_reused_for_two_source_words_suppresses_the_hint():
+    """"how many days does a leap year have" vs "how many days are in a leap
+    year": two leftover source words ('does', 'have') both get force-paired
+    against the SAME single candidate leftover ('are') - a leftover being
+    reused is itself evidence the pairing isn't a genuine 1:1 word swap."""
+    result = align("how many days does a leap year have", "how many days are in a leap year")
+    assert result.mismatches == ()
+
+
 # ---------------------------------------------------------------------------
 # Generated 1500-pair suite (deterministic, seed=42)
 # ---------------------------------------------------------------------------
