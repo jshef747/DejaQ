@@ -32,7 +32,16 @@ _STOPWORDS = frozenset({
 # script's letters/digits survive tokenizing, not just ASCII - the old
 # a-z0-9 class stripped Hebrew (and every other non-Latin script) entirely,
 # so align() returned aligned=False for two byte-identical Hebrew strings.
-_NON_ALNUM = re.compile(r"[^\w ]", re.UNICODE)
+# Apostrophe (') and Hebrew geresh (׳) are kept as WORD-INTERNAL
+# characters, not stripped to a space: "ניז'ר" (Niger) used to split into
+# "ניז" + "ר", so its one leftover word paired against Nigeria's leftover
+# ("ניגריה") became TWO leftovers on the candidate side - which defeats the
+# single-word-swap hint gate below (it only fires when both sides leave
+# exactly one leftover), so the validator got no hint at all on a real
+# different-country pair and false-accepted it (dejaq-200-test-fixes,
+# defect #1). Same shape as English contractions ("what's" was splitting
+# into "what" + "s").
+_NON_ALNUM = re.compile(r"[^\w'׳ ]", re.UNICODE)
 
 # Question words are semantically loaded despite being short: "why" vs "who"
 # are 0.667 letter-similar but ask different things. A question word may only

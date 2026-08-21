@@ -140,6 +140,19 @@ def test_single_word_swap_keeps_its_hint():
     assert result.mismatches == (("list", "string"),)
 
 
+def test_hebrew_geresh_does_not_split_a_word_into_two_leftovers():
+    """dejaq-200-test-fixes defect #1: "ניז'ר" (Niger) used to tokenize as TWO
+    words ("ניז", "ר") because the geresh (') was stripped to a space, so its
+    one real leftover paired against Nigeria's leftover became two leftovers
+    on that side - which trips the "only hint on a clean 1:1 swap" suppression
+    below and silently dropped a genuine single-word-swap hint. The cached
+    Niger answer was then served, validator-approved, for a Nigeria question
+    (200-query realistic test, distance 0.1795, verdict VALID)."""
+    result = align("מה בירת ניגריה?", "מה בירת ניז'ר?")
+    assert result.aligned is False
+    assert result.mismatches == (("ניגריה", "ניז'ר"),)
+
+
 def test_broadly_rephrased_paraphrase_suppresses_the_hint():
     """A real live case, verified against the running validator: "how many
     continents are there" vs "what's the total number of continents" shares
