@@ -10,10 +10,11 @@ Use `CLAUDE.md` as the canonical project guide for architecture, commands, envir
 
 ## Running the test suite
 
-From `server/`, `uv run --group test pytest`. Two things bite on a fresh worktree and are not visible from the test files:
+From `server/`, `uv run --group test pytest`. Three things bite on a fresh worktree and are not visible from the test files:
 
 - Run `uv run alembic upgrade head` first. Without it ~39 tests fail with `no such table: workspaces`.
 - The suite reads the repo's real `server/dejaq.db`, so leftover local workspaces change results - a workspace with id 1 (`demo`) makes routing tests take the configured-LLM path instead of the defaults branch they assert. Start from a freshly migrated DB when tests fail in ways the diff cannot explain.
+- `uv run` without `--group test` re-syncs the venv to the *default* dependency groups and silently uninstalls pytest (and anything else test-only) - if a bare `uv run python ...` command run in between test runs leaves `pytest: command not found`, re-run `uv sync --group test` rather than debugging the venv.
 
 The repo-root `.no-mistakes.yaml` pins the no-mistakes pipeline's Test step to `-m no_model` (378 of 755 tests - the rest need an Ollama model or in-process torch model not available in the pipeline sandbox) plus `chat/`'s vitest suite; see that file's comments for the full reasoning, including that `commands:` there only takes effect once it reaches `master` (no-mistakes reads `commands` from the default-branch copy of the file, not the pushed branch).
 
@@ -62,6 +63,10 @@ Inside `op.batch_alter_table(..., recreate="always")` SQLite rebuilds the table,
 ## Ollama's /api/tags capabilities are wrong; /api/show is correct
 
 Both endpoints report a per-model `capabilities` array, but they disagree, and `/api/tags` is the one already cached (`ollama_catalog.list_available_models`, backing the Pipeline model pickers). Measured live: `/api/tags` omits `"vision"` for `gemma4:e4b` even though the model demonstrably reads images and `/api/show` reports it correctly. Any future capability check (routing, gating, display) must call `/api/show` per model - see `ollama_catalog.supports_vision` and its call-site comment. Do not "optimise" a capability check back onto the already-cached `/api/tags` data.
+
+## The HARD/EASY judge mechanism is non-deterministic
+
+`_judge_hard_content` (`openai_compat.py`, shared by the attachment hard-content judge and the Hebrew routing judge) calls `LLMRouterService.generate_local_response`, which hardcodes `temperature=0.7` with no override. Measured: the same question through the same judge/prompt can flip HARD/EASY across identical repeated calls (5 draws on one question: `['EASY','HARD','HARD','EASY','HARD']`). Any future caller of this mechanism for a routing decision (not just a quality check) should know the verdict is a coin flip near the model's decision boundary, not a stable property of the input - see `dejaq-model-refresh-implement/report.md`'s Hebrew-hybrid findings for a worked example.
 
 ## Maintaining this file
 
