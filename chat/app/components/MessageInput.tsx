@@ -2,8 +2,20 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import type { RagDocument } from "./chat-api";
+import { fetchRagSuggestion, type RagDocument, type RagSuggestion } from "./chat-api";
 import type { Attachment } from "./chat-store";
+
+// Boring debounce: fire only after the user pauses, never on every keystroke,
+// and never gate the composer on a search that hasn't returned yet. 500ms
+// comfortably clears the exhaustive whole-collection scan's measured worst
+// case (~900ms p95 at ~5k chunks, firstmate/data/dejaq-rag-suggest/report.md)
+// before the next plausible typing pause, and retrieve() itself falls back to
+// the fast approximate index long before a knowledge base gets that large.
+const SUGGEST_DEBOUNCE_MS = 500;
+// Below this, a partial word isn't worth an embedding call — mirrors the
+// server's own floor (rag_documents_public._SUGGEST_MIN_QUERY_CHARS) so a
+// request that would come back empty anyway is never sent.
+const SUGGEST_MIN_CHARS = 3;
 
 // Reject files larger than this before base64-encoding — keeps the request body
 // and localStorage sane. Mirrors DEJAQ_MAX_ATTACHMENT_BYTES on the server, which
@@ -94,6 +106,12 @@ export default function MessageInput({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [mention, setMention] = useState<Mention | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
+  // The guess-which-document suggestion. `suggestionDismissed` sticks for the
+  // rest of THIS message (reset only once the composer empties, on send or
+  // clear) — a dismiss must not reappear on the next keystroke.
+  const [suggestion, setSuggestion] = useState<RagSuggestion | null>(null);
+  const [suggestionDismissed, setSuggestionDismissed] = useState(false);
+  const suggestAbortRef = useRef<AbortController | null>(null);
 
   const mentionResults = mention
     ? ragDocuments
@@ -126,6 +144,61 @@ export default function MessageInput({
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }, [value]);
+
+  // Ask the backend for a document suggestion after the user pauses typing.
+  // Never fires with a document already referenced, mid-`@`-pick, once
+  // dismissed for this message, or with an empty knowledge base — all of
+  // those mean there is nothing useful (or nothing new) to show.
+  useEffect(() => {
+    // Cancel whatever suggestion fetch might already be in flight — every
+    // dependency change (new text, a dismiss, an accept, a reference
+    // cleared) supersedes it. Without this, a fetch already in flight when
+    // the user dismisses can still resolve afterward and flash the
+    // suggestion back before the dismissal has a chance to hide it again.
+    suggestAbortRef.current?.abort();
+
+    if (ragDocument || suggestionDismissed || mentionOpen || ragDocuments.length === 0) {
+      setSuggestion(null);
+      return;
+    }
+    const trimmed = value.trim();
+    if (trimmed.length < SUGGEST_MIN_CHARS) {
+      setSuggestion(null);
+      return;
+    }
+    const timer = setTimeout(() => {
+      const controller = new AbortController();
+      suggestAbortRef.current = controller;
+      fetchRagSuggestion(trimmed, controller.signal).then((result) => {
+        if (!controller.signal.aborted) setSuggestion(result);
+      });
+    }, SUGGEST_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [value, ragDocument, suggestionDismissed, mentionOpen, ragDocuments.length]);
+
+  // An emptied composer (sent, or cleared by hand) starts the next message
+  // fresh — a dismissal from the last message must not carry over.
+  useEffect(() => {
+    if (value.trim().length === 0) {
+      setSuggestionDismissed(false);
+      setSuggestion(null);
+    }
+  }, [value]);
+
+  // Accepting sets EXACTLY the state an `@`-pick sets — the accepted guess
+  // becomes an ordinary explicit reference, inheriting the exact-id fetch,
+  // cache key, and provenance display already shipped for that path. No
+  // second grounding mechanism exists for a suggestion.
+  function acceptSuggestion() {
+    if (!suggestion) return;
+    onRagDocumentChange({ id: suggestion.documentId, title: suggestion.title, kind: "" });
+    setSuggestion(null);
+  }
+
+  function dismissSuggestion() {
+    setSuggestion(null);
+    setSuggestionDismissed(true);
+  }
 
   // A drop that lands outside the dropzone below hits the browser default:
   // navigate the tab to the file, wiping unsent input and any unsaved
@@ -379,6 +452,87 @@ export default function MessageInput({
                 }}
               >
                 Clear
+              </button>
+            </div>
+          )}
+
+          {!ragDocument && suggestion && (
+            <div
+              style={{
+                alignItems: "center",
+                background: "var(--bg-2)",
+                border: "1px dashed var(--border-2)",
+                borderRadius: "10px",
+                display: "flex",
+                gap: "8px",
+                marginBottom: "10px",
+                padding: "7px 11px",
+              }}
+            >
+              <span style={{ color: "var(--fg-dim)", display: "flex", flexShrink: 0 }}>
+                <KnowledgeIcon />
+              </span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
+                  style={{
+                    color: "var(--fg)",
+                    fontSize: "12.5px",
+                    fontWeight: 500,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  Might be about <strong>{suggestion.title}</strong>
+                </div>
+                {suggestion.snippet && (
+                  <div
+                    style={{
+                      color: "var(--fg-dimmer)",
+                      fontSize: "11px",
+                      marginTop: "2px",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    &ldquo;{suggestion.snippet}&rdquo;
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={acceptSuggestion}
+                title="Reference this document"
+                style={{
+                  background: "transparent",
+                  border: "1px solid var(--accent-border)",
+                  borderRadius: "7px",
+                  color: "var(--accent)",
+                  cursor: "pointer",
+                  flexShrink: 0,
+                  fontSize: "12px",
+                  fontWeight: 600,
+                  padding: "4px 10px",
+                }}
+              >
+                Use
+              </button>
+              <button
+                onClick={dismissSuggestion}
+                title="Dismiss suggestion"
+                aria-label="Dismiss suggested document"
+                style={{
+                  background: "transparent",
+                  border: "1px solid var(--border-2)",
+                  borderRadius: "7px",
+                  color: "var(--fg-dim)",
+                  cursor: "pointer",
+                  flexShrink: 0,
+                  fontSize: "12px",
+                  padding: "4px 8px",
+                }}
+              >
+                ✕
               </button>
             </div>
           )}

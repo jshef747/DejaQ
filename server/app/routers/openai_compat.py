@@ -102,11 +102,8 @@ from app.config import (
     LOCAL_LLM_MODEL_NAME,
     NORMALIZER_MODEL_NAME,
     OLLAMA_NUM_CTX,
-    RAG_AUTO_RETRIEVE,
-    RAG_ENABLED,
     RAG_FORCE_EXTERNAL,
     RAG_MAX_CONTEXT_CHARS,
-    RAG_MAX_DISTANCE,
     RAG_TOP_K,
     REWRITE_MAX_TOKENS,
     ROUTING_THRESHOLD,
@@ -2001,21 +1998,21 @@ async def run_chat_pipeline(
         route = "external" if complexity == "hard" else "local"
 
         # RAG: on a genuine cache miss, ground the answer in the workspace's
-        # curated knowledge base. Retrieval sees the normalized query; retrieved
-        # chunks are injected into the generation prompt as fenced DATA and NEVER
-        # enter the cache key (same side-channel rule attachments follow). Skipped
-        # for attachment requests - not because they route external (they may
-        # well route local, per the hard-content judge above), but because they
-        # already carry their own content as context; injecting a second,
-        # unrelated context on top of an attached file or image would just
-        # dilute the prompt. See services/rag_service.py.
+        # curated knowledge base — but ONLY for a document the user actually
+        # chose. There is no guess-which-document path any more: the system
+        # never grounds an answer in a document nobody picked. What still
+        # exists is a VISIBLE, dismissible suggestion in the chat composer
+        # (POST /rag-suggest) that, if accepted, becomes exactly the explicit
+        # reference this branch handles — see docs/rag-layer.md.
         #
-        # An explicit `@`-reference takes a completely different path: it
-        # fetches THAT document's own chunks by id (retrieve_by_document), never
-        # the normal nearest-neighbour search — the whole point of the feature
-        # is that it cannot be crowded out by an unrelated document the way the
-        # automatic search can. It also runs regardless of an attachment, since
-        # the user asked for this specific document by name.
+        # Retrieval is `retrieve_by_document` (a Chroma metadata filter on the
+        # referenced document's own id, never the whole-collection nearest-
+        # neighbour search), so it cannot be crowded out by an unrelated
+        # document. It runs regardless of an attachment, since the user asked
+        # for this specific document by name. Retrieved chunks are injected
+        # into the generation prompt as fenced DATA and NEVER enter the cache
+        # key (same side-channel rule attachments follow). See
+        # services/rag_service.py.
         rag_context: list = []
         if _request_has_rag_ref:
             try:
@@ -2029,30 +2026,6 @@ async def run_chat_pipeline(
                     )
             except Exception:
                 logger.exception("RAG explicit-reference retrieval failed; answering without it")
-        elif (
-            RAG_ENABLED
-            and RAG_AUTO_RETRIEVE
-            and not _request_has_image
-            and not _request_has_file
-        ):
-            # Automatic, guess-which-document retrieval — gated behind its own
-            # flag (default OFF) on top of RAG_ENABLED, the layer's master
-            # switch. With it off, the knowledge base only ever grounds an
-            # answer through an explicit `@`-reference above: no automatic
-            # path means a question about an unreferenced document is answered
-            # like any ordinary question, with no injected chunks — not an
-            # error and not a silent no-op. See docs/rag-layer.md.
-            try:
-                with trace.step("rag"):
-                    rag_context = await run_in_threadpool(
-                        rag_service.retrieve,
-                        rag_service.rag_namespace(workspace_slug),
-                        clean_query,
-                        RAG_TOP_K,
-                        RAG_MAX_DISTANCE,
-                    )
-            except Exception:
-                logger.exception("RAG retrieval failed; answering without it")
         # Optionally send grounded requests to the long-context external provider
         # instead of the local model. Off by default — the local model still
         # receives the same injected knowledge, so routing stays stable.

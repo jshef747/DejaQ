@@ -342,18 +342,27 @@ MAX_ATTACHMENT_BYTES = int(_get_float("DEJAQ_MAX_ATTACHMENT_BYTES", 10 * 1024 * 
 # is refused in rag_admin_service, so a server that will never read knowledge
 # cannot accumulate it. Listing and deleting stay open so an operator can clean up.
 RAG_ENABLED = _get_bool("DEJAQ_RAG_ENABLED", True)
-# Whether a cache MISS with no explicit `@`-reference may still guess which
-# document is relevant via rag_service.retrieve()'s nearest-neighbour search.
-# Defaults OFF on this branch: the captain does not want the system guessing
-# which document a question is about — only an explicit `@`-reference
-# (openai_responses.py's rag_document_id, fetched by exact id via
-# rag_service.retrieve_by_document, never gated by this flag) grounds an
-# answer. RAG_ENABLED stays the master switch for the whole layer — this only
-# controls the automatic, guess-which-document path under it, and is
-# deliberately independent so the automatic path can be turned back on later
-# (e.g. once retrieval recall is fixed - see docs/rag-layer.md) without
-# touching RAG_ENABLED, credentials, or the explicit-reference path at all.
-RAG_AUTO_RETRIEVE = _get_bool("DEJAQ_RAG_AUTO_RETRIEVE", False)
+# The system no longer grounds an answer in a document nobody chose — that
+# silent, guess-which-document path (and its DEJAQ_RAG_AUTO_RETRIEVE flag) was
+# removed. What remains: a VISIBLE, dismissible suggestion in the chat
+# composer, which the retrieval below still powers (rag_service.retrieve(),
+# unchanged) — see POST /rag-suggest (routers/rag_documents_public.py) and
+# docs/rag-layer.md. Accepting a suggestion sets an ordinary explicit
+# `@`-reference (rag_document_id); it grounds nothing on its own.
+RAG_SUGGEST_ENABLED = _get_bool("DEJAQ_RAG_SUGGEST_ENABLED", True)
+# Cosine-distance ceiling to OFFER a suggestion — never to ground on it, which
+# only happens if the user accepts. Deliberately looser than RAG_MAX_DISTANCE
+# (0.35, tuned for silently injecting text): a wrong suggestion here costs one
+# glance and a dismiss, not a misleading answer, so eagerness is cheaper.
+# Swept 0.35/0.45/0.55/0.65 on the same synthetic corpus rag_recall used
+# (evals/rag_suggest/measure.py): 0.35 appears too rarely to be useful
+# (5/15 questions, though 5/5 correct when it did); 0.55+ starts offering a
+# suggestion for genuinely unanswerable questions (1/5, then 2/5 distractors
+# at 0.65). 0.45 is the last point before that: appears for 10/15 in-KB
+# questions (67%), correct 8/10 of those (80%), and 0/5 false positives on
+# the unanswerable set. Full numbers and per-question detail:
+# firstmate/data/dejaq-rag-suggest/report.md.
+RAG_SUGGEST_MAX_DISTANCE = _get_float("DEJAQ_RAG_SUGGEST_MAX_DISTANCE", 0.45)
 # How many chunks to pull per query, and the cosine-distance ceiling a chunk must
 # clear to count as relevant. 0.35 is deliberately looser than the cache trust
 # distance (0.15): we want related context to ground the model, not an exact

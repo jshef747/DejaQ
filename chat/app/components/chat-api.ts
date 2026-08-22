@@ -503,6 +503,45 @@ export async function fetchRagDocuments(
   }
 }
 
+// A visible, dismissible guess at which knowledge-base document a question is
+// about — POST /rag-suggest. Never grounds anything by itself; accepting one
+// in the composer sets the same RagDocument state the `@` picker sets.
+export interface RagSuggestion {
+  documentId: number;
+  title: string;
+  snippet: string | null;
+  distance: number | null;
+}
+
+// Failures (network, timeout, disabled) are indistinguishable from "no
+// suggestion" here on purpose — a missed suggestion degrades to silence, the
+// same as an unmatched question. Nothing about sending the message depends
+// on this call ever succeeding.
+export async function fetchRagSuggestion(
+  query: string,
+  signal?: AbortSignal,
+): Promise<RagSuggestion | null> {
+  try {
+    const response = await fetch("/api/rag-suggest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...dejaqHeaders() },
+      body: JSON.stringify({ query }),
+      signal,
+    });
+    if (!response.ok) return null;
+    const body = await response.json();
+    if (typeof body?.document_id !== "number") return null;
+    return {
+      documentId: body.document_id,
+      title: typeof body.title === "string" ? body.title : "",
+      snippet: typeof body.snippet === "string" ? body.snippet : null,
+      distance: typeof body.distance === "number" ? body.distance : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function checkServerHealth(
   overrides?: { server?: string; apiKey?: string },
 ): Promise<{ reachable: boolean; celery: string; message?: string }> {

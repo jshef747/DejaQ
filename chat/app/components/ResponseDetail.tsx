@@ -225,25 +225,15 @@ export default function ResponseDetail({
               <MonoValue>{deptSlug}</MonoValue>
             </Row>
           )}
-          {message?.ragDocumentTitle ? (
-            // Explicit `@`-reference: a deterministic reason to be grounded
-            // (the id gate on a cache hit, or the fetch-by-id on a miss)
-            // rather than a fuzzy distance match, so it's shown even on a
-            // cache hit — unlike the count-only row below, which a cache hit
-            // carries no header for anyway (grounding, if any, happened
-            // whenever that answer was first generated, not now).
+          {message?.ragDocumentTitle && (
+            // The only remaining grounding source: an explicit `@`-reference,
+            // or a suggestion the user accepted (which sets the exact same
+            // state) — never a silent distance guess, so this is shown even
+            // on a cache hit. `ragChunks` alone (no title) can no longer
+            // happen now that automatic, unreferenced grounding is gone.
             <Row label="Knowledge base">
               <MonoValue note="explicitly referenced">grounded in {message.ragDocumentTitle}</MonoValue>
             </Row>
-          ) : (
-            route !== "cache" &&
-            !!message?.ragChunks && (
-              <Row label="Knowledge base">
-                <MonoValue note="from your workspace's knowledge base">
-                  grounded in {message.ragChunks} passage{message.ragChunks === 1 ? "" : "s"}
-                </MonoValue>
-              </Row>
-            )
           )}
         </Section>
 
