@@ -48,25 +48,24 @@ def test_credential_service_fully_masks_short_keys(credential_key):
     assert CredentialService().mask("short123") == "********"
 
 
-def test_credential_provider_check_constraint_rejects_invalid_provider(isolated_org_db):
-    from sqlalchemy import text
-    from sqlalchemy.exc import IntegrityError
-
+def test_credential_service_upsert_rejects_unsupported_provider(
+    isolated_org_db,
+    credential_key,
+):
+    """The provider set moves, so it's validated in Python
+    (CredentialService.upsert) rather than frozen into a DB CHECK constraint
+    - see workspace_provider_credentials.py for why that constraint was
+    dropped (migration e5f6a7b8c9d0)."""
     from app.db.models.workspace import Workspace
     from app.db.session import get_session
+    from app.services.credential_service import CredentialService
 
+    service = CredentialService()
     with get_session() as session:
         ws = Workspace(name="Acme", slug="acme")
         session.add(ws)
         session.flush()
         workspace_id = ws.id
 
-    with pytest.raises(IntegrityError):
-        with get_session() as session:
-            session.execute(
-                text(
-                    "INSERT INTO workspace_provider_credentials "
-                    "(workspace_id, provider, encrypted_key) VALUES (:workspace_id, :provider, :encrypted_key)"
-                ),
-                {"workspace_id": workspace_id, "provider": "invalid_provider", "encrypted_key": "ciphertext"},
-            )
+        with pytest.raises(ValueError, match="Unsupported provider"):
+            service.upsert(session, workspace_id, "invalid_provider", "ciphertext")

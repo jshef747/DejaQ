@@ -8,6 +8,8 @@ from pydantic import BaseModel
 class _FeedbackResult(BaseModel):
     status: Literal["ok", "deleted"]
     new_score: float | None = None
+    edit_status: str | None = None
+    response_id: str | None = None
     escalation_status: str | None = None
     escalated_response: object | None = None
 
@@ -128,8 +130,11 @@ def test_public_feedback_route_uses_gateway_context_and_shared_service(
     assert call["response_id"] == "acme__eng:doc-1"
     assert call["rating"] == "positive"
     assert call["comment"] == "helpful"
-    assert call["org"] == "acme"
+    assert call["workspace"] == "acme"
+    assert call["workspace_id"] == 1
     assert call["department"] == "eng"
+    assert call["cache_namespace"] == "acme--default"
+    assert call["validate_namespace"] is True
 
 
 def _collect_routes(router):
