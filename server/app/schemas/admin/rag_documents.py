@@ -14,6 +14,7 @@ class RagDocumentItem(BaseModel):
     source: str
     source_ref: str | None
     char_count: int
+    byte_size: int
     chunk_count: int
     status: str
     progress_current: int

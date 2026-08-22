@@ -82,6 +82,7 @@ export type RagDocumentItem = {
   source: string;      // paste | upload | url | ocr
   source_ref: string | null;
   char_count: number;
+  byte_size: number;
   chunk_count: number;
   status: "processing" | "ready" | "failed";
   progress_current: number;

@@ -14,6 +14,7 @@ def start_processing_new(
     sha: str,
     char_count: int,
     progress_total: int,
+    byte_size: int = 0,
 ) -> RagDocument:
     """Catalog a brand-new document as ingestion begins.
 
@@ -28,6 +29,7 @@ def start_processing_new(
         source_ref=source_ref,
         sha=sha,
         char_count=char_count,
+        byte_size=byte_size,
         chunk_count=0,
         status="processing",
         progress_current=0,
@@ -49,6 +51,7 @@ def start_processing_existing(
     source_ref: str | None,
     char_count: int,
     progress_total: int,
+    byte_size: int = 0,
 ) -> RagDocument:
     """Re-ingest an existing document (same sha) in place, keeping its id.
 
@@ -60,6 +63,7 @@ def start_processing_existing(
     row.source = source
     row.source_ref = source_ref
     row.char_count = char_count
+    row.byte_size = byte_size
     row.status = "processing"
     row.progress_current = 0
     row.progress_total = progress_total

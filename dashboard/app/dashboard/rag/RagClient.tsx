@@ -16,6 +16,14 @@ import type { RagDocumentItem } from "@/lib/types";
 
 const fmt = new Intl.DateTimeFormat("en-US", { year: "numeric", month: "short", day: "numeric" });
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // mirrors server DEJAQ_MAX_ATTACHMENT_BYTES
+
+// Whichever unit reads naturally at the given magnitude - a 278-byte file
+// should say "278 B", not "0.0 MB".
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${Math.max(0, Math.round(bytes))} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 // Ingestion (chunk embedding) now runs as a background job — this polls the
 // catalog for real progress while anything is still "processing". Boring on
 // purpose: it's just the existing list endpoint, on a timer.
@@ -71,10 +79,9 @@ export default function RagClient({ workspaceSlug, docs, error }: Props) {
       const was = prev.get(doc.id);
       if (was === "processing" && doc.status === "ready") {
         const id = `${doc.id}-${doc.updated_at}`;
-        const count = doc.chunk_count.toLocaleString();
         setToasts((t) => [
           ...t,
-          { id, text: `"${doc.title}" is now searchable — ${count} chunk${doc.chunk_count === 1 ? "" : "s"} indexed.` },
+          { id, text: `"${doc.title}" is now searchable — ${formatBytes(doc.byte_size)} indexed.` },
         ]);
         setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 6000);
       }
@@ -227,8 +234,8 @@ export default function RagClient({ workspaceSlug, docs, error }: Props) {
               <tr>
                 <th>Title</th>
                 <th>Type</th>
-                <th>Chars</th>
-                <th>Chunks</th>
+                <th>Size</th>
+                <th>Status</th>
                 <th>Added</th>
                 <th style={{ width: 60 }} />
               </tr>
@@ -249,13 +256,13 @@ export default function RagClient({ workspaceSlug, docs, error }: Props) {
                     <td>
                       <Pill variant="neutral">{doc.kind}{doc.source === "ocr" ? " · ocr" : ""}</Pill>
                     </td>
-                    <td className="ds-dim" style={{ fontSize: 12 }}>{doc.char_count.toLocaleString()}</td>
+                    <td className="ds-dim" style={{ fontSize: 12 }}>{formatBytes(doc.byte_size)}</td>
                     <td style={{ fontSize: 12, minWidth: 150 }}>
                       {doc.status === "processing" ? (
                         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                           <span className="ds-dim">
                             {doc.progress_total
-                              ? `embedding ${doc.progress_current.toLocaleString()} / ${doc.progress_total.toLocaleString()} chunks`
+                              ? `embedding ${formatBytes((doc.byte_size * doc.progress_current) / doc.progress_total)} of ${formatBytes(doc.byte_size)}`
                               : "starting…"}
                           </span>
                           <div style={{ height: 4, borderRadius: 2, background: "var(--border)", overflow: "hidden" }}>
@@ -285,7 +292,7 @@ export default function RagClient({ workspaceSlug, docs, error }: Props) {
                           )}
                         </div>
                       ) : (
-                        <span className="ds-dim">{doc.chunk_count}</span>
+                        <Pill variant="neutral">ready</Pill>
                       )}
                     </td>
                     <td className="ds-dim" style={{ fontSize: 12 }}>{fmt.format(new Date(doc.created_at))}</td>
@@ -363,7 +370,7 @@ export default function RagClient({ workspaceSlug, docs, error }: Props) {
       <ConfirmDialog
         open={!!confirmDeleteId}
         title="Delete knowledge document"
-        message={`Delete "${confirmDeleteDoc?.title ?? ""}"? Its chunks are removed from the knowledge base and it will no longer ground answers. This cannot be undone.`}
+        message={`Delete "${confirmDeleteDoc?.title ?? ""}"? It is removed from the knowledge base and will no longer ground answers. This cannot be undone.`}
         confirmLabel="Delete"
         destructive
         busy={deleteBusy}

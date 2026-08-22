@@ -41,6 +41,11 @@ class RagDocument(Base):
     # sha256 of the normalised extracted text — the document's identity.
     sha: Mapped[str] = mapped_column(String, nullable=False)
     char_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Size in bytes of the raw input as the admin gave it to us: the pasted
+    # text's UTF-8 encoding, the uploaded file's bytes, or the fetched page's
+    # bytes. This is what the dashboard shows as "file size" - char_count is
+    # extracted-text length, which is not the same number for a PDF/DOCX.
+    byte_size: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     # Count of chunks actually indexed in Chroma right now - only updated when
     # ingestion FINISHES. While status="processing" this still reflects the
     # previous version (0 for a brand-new document), never the in-flight count.

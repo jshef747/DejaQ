@@ -126,6 +126,7 @@ def begin_ingest(
                 source=ingest.source,
                 source_ref=ingest.source_ref,
                 char_count=ingest.char_count,
+                byte_size=ingest.byte_size,
                 progress_total=len(chunks),
             )
         else:
@@ -138,6 +139,7 @@ def begin_ingest(
                 source_ref=ingest.source_ref,
                 sha=ingest.sha,
                 char_count=ingest.char_count,
+                byte_size=ingest.byte_size,
                 progress_total=len(chunks),
             )
         item = RagDocumentItem.model_validate(row)
