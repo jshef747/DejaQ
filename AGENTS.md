@@ -119,6 +119,10 @@ The cutover initially left `LabseClassifierService.predict_complexity()` decidin
 
 `dejaq-classifier-wire-in` removed `HEBREW_ROUTING_ENABLED`/`HEBREW_ROUTING_FRACTION`/`_judge_hebrew_hard` entirely (captain decision - the corpus-scale investigation in `dejaq-classifier-probe-multilang/report.md` showed a trained-on-labelled-Hebrew classifier beats a dedicated judge on every axis). Hebrew falls through the same `classify` step as every other language, with no Hebrew-specific interception, and since `dejaq-classifier-cutover` that step is LaBSE - see above.
 
+## generalize()'s tone-neutralization prompt can destroy fenced code blocks; only that content class was affected
+
+`dejaq-cached-code-loss`: the store-time generalizer (`context_adjuster.generalize()`, Gemma 4 E2B) deterministically (temp=0) rewrote a real multi-block Python answer into pure prose with zero code fences left, passing every existing sanity check (similar length, high content-word overlap from surviving identifier names, same script) - so the corrupted, code-free answer was what every future cache hit served. Not a block-count effect: a single fenced block is destroyed the same way. Measured against 10+ real answers spanning content classes: only fenced code blocks were ever altered in structure by this prompt - inline code, markdown tables, numbered/bulleted lists, and links all survived unchanged. `adjust()` (serve-time, Qwen 1.5B) does not share the defect - its prompt already forbids dropping/merging content, confirmed 8/8 across varied tone queries on code-bearing answers - so the fix (placeholder-swap fenced code blocks out before the generalize() call, splice back byte-for-byte after, fall back to storing the raw answer if a placeholder didn't round-trip) is scoped to `generalize()` only; see `_protect_code_blocks`/`_restore_code_blocks` in `context_adjuster.py` for the mechanism and why. See `dejaq-cached-code-loss/report.md`.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.

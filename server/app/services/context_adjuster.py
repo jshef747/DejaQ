@@ -174,6 +174,68 @@ _GENERALIZE_STOP = ["\n\n\n*****"]
 
 _NGRAM_SIZE = 4
 
+# generalize()'s own system prompt ("neutral, factual tone... remove
+# personality") reads a fenced code block as prose to describe rather than
+# content to keep verbatim - measured directly: a 3B model (Gemma 4 E2B)
+# deterministically (temperature=0) rewrote a real multi-block Python answer
+# into pure prose with zero code fences left, passing every existing sanity
+# check (similar length, high content-word overlap - identifier names survive
+# as words, same script). A single fenced block can be destroyed exactly the
+# same way (a one-block `is_prime` answer flattened identically), so this is
+# not a block-count heuristic - it is unconditional per fenced block. No other
+# content class measured this way (inline code, markdown tables, numbered/
+# bulleted lists, links) was ever altered in structure by the same prompt.
+# Fix: never let the rewrite see a fenced block's content at all - swap each
+# one for a placeholder token before the call, splice the original bytes back
+# after. If the placeholder set does not round-trip exactly, that is a hard
+# signal the rewrite corrupted structure, so generalize() falls back to
+# storing the raw answer un-generalized (see _restore_code_blocks below).
+_CODE_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
+
+
+def _code_block_placeholder(index: int) -> str:
+    # Unicode math brackets rather than plain punctuation: distinctive enough
+    # that a small instruct model treats the token as an opaque ID to leave
+    # alone instead of prose to translate or reword, unlike a bare number or
+    # a quoted string which look like content.
+    return f"⟦CODE_BLOCK_{index}⟧"
+
+
+def _protect_code_blocks(text: str) -> tuple[str, list[str]]:
+    """Replace every fenced code block with an indexed placeholder.
+
+    Returns the placeholder-substituted text plus the original block text (
+    including its own ``` fences) in order, so _restore_code_blocks can put
+    each one back byte-for-byte.
+    """
+    blocks: list[str] = []
+
+    def _replace(match: re.Match[str]) -> str:
+        blocks.append(match.group(0))
+        return _code_block_placeholder(len(blocks) - 1)
+
+    protected = _CODE_FENCE_RE.sub(_replace, text)
+    return protected, blocks
+
+
+def _restore_code_blocks(text: str, blocks: list[str]) -> str | None:
+    """Splice the original code blocks back into a rewritten placeholder text.
+
+    Returns None - the caller's cue to fall back to the raw answer - if any
+    placeholder was dropped, reworded, or duplicated by the rewrite, since
+    that means the model touched what should have been an opaque token and
+    the byte-for-byte guarantee no longer holds.
+    """
+    restored = text
+    for index, block in enumerate(blocks):
+        placeholder = _code_block_placeholder(index)
+        if placeholder not in restored:
+            return None
+        restored = restored.replace(placeholder, block, 1)
+    if "CODE_BLOCK_" in restored:
+        return None  # a duplicated placeholder survived the single replace above
+    return restored
+
 
 def _ngram_repetition_ratio(text: str, n: int = _NGRAM_SIZE) -> float:
     words = _TOKEN_RE.findall(text.lower())
@@ -408,6 +470,12 @@ class ContextAdjusterService:
 
         start = time.time()
 
+        # Swap fenced code blocks for opaque placeholders before the model
+        # ever sees them - see _CODE_FENCE_RE above for why. A no-code answer
+        # gets an empty `code_blocks` and `protected_answer == answer`, so this
+        # is a no-op for the common case.
+        protected_answer, code_blocks = _protect_code_blocks(answer)
+
         messages = [
             {"role": "system", "content": self.generalize_system_prompt},
             # Few-shot examples must stay inert (no real-world fact in
@@ -422,7 +490,7 @@ class ContextAdjusterService:
             {"role": "user", "content": "ANSWER: The little widget thingy is super handy, it just quietly does its own validation step before passing stuff along, no fuss!"},
             {"role": "assistant", "content": "The component performs an internal validation step before forwarding its input for further processing."},
             # Actual answer
-            {"role": "user", "content": f"ANSWER: {answer}"},
+            {"role": "user", "content": f"ANSWER: {protected_answer}"},
         ]
         # The rewrite budget, not the request's own (see
         # REWRITE_MAX_TOKENS in app/config.py, the same budget adjust()
@@ -504,6 +572,22 @@ class ContextAdjusterService:
             return answer
 
         generalized_text = generalized.text
+
+        # Splice the original code blocks back in byte-for-byte. A rewrite
+        # that dropped, reworded, or duplicated a placeholder failed to treat
+        # it as opaque - the same structural-loss failure the runaway/leak
+        # guards below exist for - so it gets the same fallback they use.
+        if code_blocks:
+            restored = _restore_code_blocks(generalized_text, code_blocks)
+            if restored is None:
+                logger.warning(
+                    "Generalizer output lost %d fenced code block(s) (raw_len=%d, "
+                    "generalized_len=%d); storing the raw answer un-generalized instead",
+                    len(code_blocks), len(answer), len(generalized_text),
+                )
+                return answer
+            generalized_text = restored
+
         if not is_generalization_sane(answer, generalized_text):
             logger.warning(
                 "Generalizer output failed sanity check (raw_len=%d, "

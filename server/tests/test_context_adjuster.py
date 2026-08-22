@@ -18,8 +18,11 @@ from app.services import context_adjuster
 from app.services.context_adjuster import (
     ContextAdjusterService,
     _GENERALIZE_STOP,
+    _code_block_placeholder,
     _language_preserved,
     _ngram_repetition_ratio,
+    _protect_code_blocks,
+    _restore_code_blocks,
     is_adjustment_sane,
     is_generalization_sane,
     is_topically_consistent,
@@ -989,6 +992,178 @@ class TestGeneralizeSafetyNet:
 
         assert result == raw
         assert backend.calls == 2
+
+
+class TestProtectCodeBlocks:
+    """Pure unit tests for the code-block placeholder round-trip, no Ollama
+    required. Incident: dejaq-cached-code-loss - generalize()'s 'neutral tone'
+    prompt deterministically rewrote a real multi-block Python answer (three
+    ways to increment a list) into pure prose with zero code fences left,
+    passing every existing sanity check (similar length, high content-word
+    overlap from surviving identifier names, same script). Reproduced live
+    against Gemma 4 E2B: a single fenced block is destroyed exactly the same
+    way, so this is not a block-count heuristic - every fenced block is always
+    protected."""
+
+    pytestmark = pytest.mark.no_model
+
+    CAPTAIN_CODE_ANSWER = (
+        "Here are three ways to increment each element of the `numbers` list by 2:\n\n"
+        "**1. Using a `for` loop, appending to a new list:**\n\n"
+        "```python\n"
+        "numbers = [1, 2, 3, 4, 5]\n"
+        "result = []\n"
+        "for n in numbers:\n"
+        "    result.append(n + 2)\n"
+        "print(result)  # [3, 4, 5, 6, 7]\n"
+        "```\n\n"
+        "**2. Using a `for` loop, modifying in place:**\n\n"
+        "```python\n"
+        "numbers = [1, 2, 3, 4, 5]\n"
+        "for i in range(len(numbers)):\n"
+        "    numbers[i] += 2\n"
+        "print(numbers)  # [3, 4, 5, 6, 7]\n"
+        "```\n\n"
+        "**3. Using a list comprehension:**\n\n"
+        "```python\n"
+        "numbers = [1, 2, 3, 4, 5]\n"
+        "result = [n + 2 for n in numbers]\n"
+        "print(result)  # [3, 4, 5, 6, 7]\n"
+        "```\n\n"
+        "The list comprehension is generally the most idiomatic and fastest approach in Python."
+    )
+
+    # The real, measured store-time corruption: a prose description with the
+    # placeholders dropped entirely, byte-for-byte what Gemma 4 E2B returned
+    # for the answer above.
+    CAPTAIN_PROSE_ONLY_REWRITE = (
+        "There are three methods to increment each element of a list named `numbers` by 2:\n\n"
+        "1. **Using a `for` loop and appending to a new list:** This method initializes an "
+        "empty list and iterates through the original list, adding the incremented value of "
+        "each element to the new list.\n"
+        "2. **Using a `for` loop to modify in place:** This method iterates through the indices "
+        "of the list and directly updates each element by adding 2 to its current value.\n"
+        "3. **Using a list comprehension:** This method creates a new list by applying the "
+        "operation $n + 2$ to every element $n$ in the original list.\n\n"
+        "The list comprehension method is generally considered the most idiomatic and efficient "
+        "approach in Python."
+    )
+
+    def test_no_code_blocks_is_a_no_op(self):
+        text = "The capital of France is Paris."
+        protected, blocks = _protect_code_blocks(text)
+        assert protected == text
+        assert blocks == []
+
+    def test_extracts_and_placeholders_each_block_in_order(self):
+        protected, blocks = _protect_code_blocks(self.CAPTAIN_CODE_ANSWER)
+
+        assert len(blocks) == 3
+        assert all(b.startswith("```python\n") and b.endswith("```") for b in blocks)
+        assert _code_block_placeholder(0) in protected
+        assert _code_block_placeholder(1) in protected
+        assert _code_block_placeholder(2) in protected
+        assert "```" not in protected
+        assert protected.index(_code_block_placeholder(0)) < protected.index(
+            _code_block_placeholder(1)
+        ) < protected.index(_code_block_placeholder(2))
+
+    def test_round_trip_reproduces_the_original_byte_for_byte(self):
+        protected, blocks = _protect_code_blocks(self.CAPTAIN_CODE_ANSWER)
+        restored = _restore_code_blocks(protected, blocks)
+        assert restored == self.CAPTAIN_CODE_ANSWER
+
+    def test_restore_fails_closed_when_a_placeholder_is_dropped(self):
+        """The real captured failure: the rewrite kept none of the
+        placeholders. Restoration must signal failure (None), not silently
+        return prose missing its code."""
+        _protected, blocks = _protect_code_blocks(self.CAPTAIN_CODE_ANSWER)
+        assert _restore_code_blocks(self.CAPTAIN_PROSE_ONLY_REWRITE, blocks) is None
+
+    def test_restore_fails_closed_when_a_placeholder_is_duplicated(self):
+        protected, blocks = _protect_code_blocks(self.CAPTAIN_CODE_ANSWER)
+        duplicated = protected.replace(
+            _code_block_placeholder(1),
+            f"{_code_block_placeholder(1)} {_code_block_placeholder(1)}",
+        )
+        assert _restore_code_blocks(duplicated, blocks) is None
+
+    def test_restore_succeeds_when_only_prose_between_blocks_changed(self):
+        """The intended path: the model rewords the surrounding prose but
+        leaves every placeholder alone, so restoration reproduces every code
+        block untouched while the tone-neutralized wording survives."""
+        protected, blocks = _protect_code_blocks(self.CAPTAIN_CODE_ANSWER)
+        reworded = protected.replace(
+            "Here are three ways to increment each element",
+            "There are three methods to increment each element",
+        )
+        restored = _restore_code_blocks(reworded, blocks)
+        assert restored is not None
+        assert "There are three methods" in restored
+        for block in blocks:
+            assert block in restored
+
+
+class TestGeneralizeCodeBlockProtection:
+    """Wiring tests: prove generalize() itself falls back to the raw answer
+    when the backend destroys a fenced code block, not just that
+    _restore_code_blocks() would reject it in isolation."""
+
+    pytestmark = pytest.mark.no_model
+
+    def test_falls_back_to_raw_answer_on_the_real_captured_code_loss(self):
+        backend = _FakeBackend(TestProtectCodeBlocks.CAPTAIN_PROSE_ONLY_REWRITE)
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        result = asyncio.run(service.generalize(TestProtectCodeBlocks.CAPTAIN_CODE_ANSWER))
+
+        assert result == TestProtectCodeBlocks.CAPTAIN_CODE_ANSWER
+        assert result.count("```") == 6
+
+    def test_sends_the_backend_a_placeholder_not_the_raw_code(self):
+        backend = _FakeBackend("some reply")
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        asyncio.run(service.generalize(TestProtectCodeBlocks.CAPTAIN_CODE_ANSWER))
+
+        sent = backend.requests[0].messages[-1]["content"]
+        assert "```" not in sent
+        assert _code_block_placeholder(0) in sent
+
+    def test_stores_the_tone_rewrite_with_code_spliced_back_in(self):
+        protected, _blocks = _protect_code_blocks(TestProtectCodeBlocks.CAPTAIN_CODE_ANSWER)
+        faithful_rewrite = protected.replace(
+            "Here are three ways to increment each element of the `numbers` list by 2:",
+            "There are three approaches to increment every element of the `numbers` list by 2:",
+        )
+        backend = _FakeBackend(faithful_rewrite)
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        result = asyncio.run(service.generalize(TestProtectCodeBlocks.CAPTAIN_CODE_ANSWER))
+
+        assert "There are three approaches" in result
+        assert result.count("```") == 6
+        assert "result.append(n + 2)" in result
+        assert "numbers[i] += 2" in result
+        assert "[n + 2 for n in numbers]" in result
+
+    def test_a_single_destroyed_block_falls_back_too(self):
+        """Not a block-count heuristic: one block lost is one block too many."""
+        raw = (
+            "Here is a function that checks if a number is prime:\n\n"
+            "```python\n"
+            "def is_prime(n):\n"
+            "    return n > 1 and all(n % i for i in range(2, n))\n"
+            "```\n\n"
+            "This runs in O(n) time."
+        )
+        prose_only = "The provided Python function determines whether a number is prime."
+        backend = _FakeBackend(prose_only)
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        result = asyncio.run(service.generalize(raw))
+
+        assert result == raw
 
 
 class TestIsAdjustmentSane:
