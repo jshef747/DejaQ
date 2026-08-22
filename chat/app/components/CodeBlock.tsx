@@ -13,7 +13,7 @@ export function codeChild(children: ReactNode): { lang: string | null; text: str
   return { lang: match ? match[1] : null, text: plainText(props.children) };
 }
 
-function plainText(node: ReactNode): string {
+export function plainText(node: ReactNode): string {
   if (node === null || node === undefined || typeof node === "boolean") return "";
   if (typeof node === "string" || typeof node === "number") return String(node);
   if (Array.isArray(node)) return node.map(plainText).join("");

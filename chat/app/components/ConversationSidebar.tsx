@@ -3,6 +3,7 @@
 import type { StoredConversation } from "./conversation-store";
 import { classifyRoute, ROUTE_STYLE } from "./provenance";
 import { useNewChatShortcutLabel } from "./shortcuts";
+import { textDirection } from "./text-direction";
 
 // Below this window width the sidebar gives up its width rather than the
 // reading column's measure — narrow windows lose margins, never measure.
@@ -230,6 +231,7 @@ function ConversationRow({
       )}
       <div style={{ flex: 1, minWidth: 0 }}>
         <p
+          dir={textDirection(conv.title)}
           style={{
             color: active ? "var(--fg)" : "var(--fg-dim)",
             fontSize: "13px",

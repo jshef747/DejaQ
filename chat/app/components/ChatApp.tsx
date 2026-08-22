@@ -36,6 +36,7 @@ import ToastStack, { type ToastAction, type ToastData, type ToastKind } from "./
 import { RailTrack } from "./ReadingColumn";
 import { classifyRoute, type Route } from "./provenance";
 import { matchesNewChatShortcut } from "./shortcuts";
+import { textDirection } from "./text-direction";
 
 const WELCOME_PROMPTS = [
   "What are the main benefits of semantic caching for LLM APIs?",
@@ -987,7 +988,7 @@ export default function ChatApp() {
           ) : (
             <>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ color: messages.length === 0 ? "var(--fg-dimmer)" : "var(--fg)", fontSize: "15px", fontWeight: 600, letterSpacing: "-0.015em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <div dir={messages.length === 0 ? "auto" : textDirection(titleFromMessages(messages))} style={{ color: messages.length === 0 ? "var(--fg-dimmer)" : "var(--fg)", fontSize: "15px", fontWeight: 600, letterSpacing: "-0.015em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {messages.length === 0 ? "New chat" : titleFromMessages(messages)}
                 </div>
               </div>

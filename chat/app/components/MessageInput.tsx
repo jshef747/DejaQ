@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { fetchRagSuggestion, type RagDocument, type RagSuggestion } from "./chat-api";
 import type { Attachment } from "./chat-store";
+import { textDirection } from "./text-direction";
 
 // Boring debounce: fire only after the user pauses, never on every keystroke,
 // and never gate the composer on a search that hasn't returned yet. 500ms
@@ -371,11 +372,11 @@ export default function MessageInput({
                         whiteSpace: "nowrap",
                       }}
                     >
-                      {attachment.kind === "image"
-                        ? pinned
-                          ? "Image pinned"
-                          : "Image attached"
-                        : attachment.name || "Document"}
+                      {attachment.kind === "image" ? (
+                        pinned ? "Image pinned" : "Image attached"
+                      ) : (
+                        <bdi>{attachment.name || "Document"}</bdi>
+                      )}
                     </span>
                   </div>
                   <div style={{ color: pinned ? "var(--fg-dim)" : "var(--fg-dimmer)", fontSize: "11px", marginTop: "2px" }}>
@@ -434,7 +435,7 @@ export default function MessageInput({
                   whiteSpace: "nowrap",
                 }}
               >
-                Referencing {ragDocument.title}
+                Referencing <bdi>{ragDocument.title}</bdi>
               </span>
               <button
                 onClick={() => onRagDocumentChange(null)}
@@ -483,10 +484,11 @@ export default function MessageInput({
                     whiteSpace: "nowrap",
                   }}
                 >
-                  Might be about <strong>{suggestion.title}</strong>
+                  Might be about <strong><bdi>{suggestion.title}</bdi></strong>
                 </div>
                 {suggestion.snippet && (
                   <div
+                    dir={textDirection(suggestion.snippet)}
                     style={{
                       color: "var(--fg-dimmer)",
                       fontSize: "11px",
@@ -602,7 +604,7 @@ export default function MessageInput({
                     <span style={{ display: "flex", flexShrink: 0 }}>
                       <KnowledgeIcon />
                     </span>
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <span dir={textDirection(doc.title)} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {doc.title}
                     </span>
                   </div>
@@ -654,6 +656,7 @@ export default function MessageInput({
               onBlur={() => setMention(null)}
               disabled={disabled}
               placeholder={disabled ? "Waiting for response…" : "Ask anything"}
+              dir={textDirection(value)}
               rows={1}
               style={{
                 background: "transparent",

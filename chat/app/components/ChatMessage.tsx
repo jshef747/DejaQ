@@ -1,12 +1,12 @@
 "use client";
 
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
-import CodeBlock from "./CodeBlock";
+import CodeBlock, { plainText } from "./CodeBlock";
 import TurnShell from "./ReadingColumn";
 import { RouteRing, WaitRing } from "./RouteMarker";
 import {
@@ -19,6 +19,7 @@ import {
   type Route,
 } from "./provenance";
 import { canSave, isSaveShortcut, normalizeDraft } from "./edit-draft";
+import { textDirection } from "./text-direction";
 import type { FeedbackRating } from "./chat-api";
 
 // The full feedback lifecycle for a single assistant message.
@@ -288,7 +289,7 @@ export default function ChatMessage({
                       <path d="M9.5 1.5V5H13" strokeLinejoin="round" />
                     </svg>
                   )}
-                  {message.fileName ?? "same image"}
+                  <bdi>{message.fileName ?? "same image"}</bdi>
                 </span>
               </div>
             )}
@@ -317,11 +318,11 @@ export default function ChatMessage({
                     <path d="M3.5 2.5h6L12 5.5v8a1 1 0 0 1-1 1h-7.5a1 1 0 0 1-1-1v-10a1 1 0 0 1 1-1z" strokeLinejoin="round" />
                     <path d="M5.5 7h5M5.5 9.5h5M5.5 12h3" strokeLinecap="round" />
                   </svg>
-                  @{message.ragDocumentTitle}
+                  @<bdi>{message.ragDocumentTitle}</bdi>
                 </span>
               </div>
             )}
-            {message.content}
+            {message.content && <div dir={textDirection(message.content)}>{message.content}</div>}
           </div>
           {message.failed && (
             <FailedRow
@@ -650,6 +651,7 @@ function AnswerEditor({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         disabled={saving}
+        dir={textDirection(value)}
         aria-label="Edit the answer"
         onKeyDown={(e) => {
           if (isSaveShortcut(e)) {
@@ -738,6 +740,17 @@ function AnswerEditor({
   );
 }
 
+// Direction per block, not for the whole message: a code sample's English
+// tokens (`import requests`, `response.json()`) would otherwise swamp the
+// character count for a mostly-Hebrew answer and flip the whole thing ltr.
+// Each paragraph/heading/list item/quote picks its own direction from its own
+// text instead, exactly like the reading order already treats them as blocks.
+function directional(Tag: "p" | "li" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "blockquote") {
+  return function DirectionalBlock({ children }: { children?: ReactNode }) {
+    return <Tag dir={textDirection(plainText(children))}>{children}</Tag>;
+  };
+}
+
 function MarkdownContent({ content }: { content: string }) {
   return (
     <div className="dq-markdown">
@@ -752,12 +765,22 @@ function MarkdownContent({ content }: { content: string }) {
           ),
           // A code block gets a language label and a copy control; a table
           // gets a scroller of its own so a wide one never widens the page.
+          // Code stays ltr regardless (globals.css), so it needs no direction.
           pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
           table: ({ children }) => (
             <div className="dq-table-scroll">
               <table>{children}</table>
             </div>
           ),
+          p: directional("p"),
+          li: directional("li"),
+          h1: directional("h1"),
+          h2: directional("h2"),
+          h3: directional("h3"),
+          h4: directional("h4"),
+          h5: directional("h5"),
+          h6: directional("h6"),
+          blockquote: directional("blockquote"),
         }}
       >
         {content}
