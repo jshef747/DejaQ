@@ -93,21 +93,13 @@ export async function POST(request: NextRequest) {
   const attachment = parseAttachment(body.attachment);
   const ragDocumentId = typeof body.ragDocumentId === "number" ? body.ragDocumentId : null;
 
-  // Attachment or `@`-reference requests must use the Responses API — it's the
-  // only endpoint that accepts images/files and rag_document_id, and the only
-  // one that runs the fingerprint/reference gates. Plain text-only requests
-  // stay on chat/completions. All three stream SSE; the client parser handles
-  // all of them the same way.
-  const useResponsesApi = Boolean(attachment) || ragDocumentId !== null;
-  const endpoint = useResponsesApi ? "/v1/responses" : "/v1/chat/completions";
-  const payload = useResponsesApi
-    ? {
-        model: "default",
-        input: buildResponsesInput(body.messages, attachment),
-        stream: true,
-        ...(ragDocumentId !== null ? { rag_document_id: ragDocumentId } : {}),
-      }
-    : { model: "default", messages: body.messages, stream: true };
+  const endpoint = "/v1/responses";
+  const payload = {
+    model: "default",
+    input: buildResponsesInput(body.messages, attachment),
+    stream: true,
+    ...(ragDocumentId !== null ? { rag_document_id: ragDocumentId } : {}),
+  };
 
   let response: Response;
   const fetchStart = Date.now();
