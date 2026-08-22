@@ -687,7 +687,12 @@ export default function ChatApp() {
     // (score adjustment / delete) is still recorded either way.
     const isAttachmentAnchored = turnHadAttachment(messages, msgIndex);
 
-    updateFeedbackPhase(convId, msgId, "submitting");
+    // Optimistic: the row shows pressed the instant the user clicks, not once
+    // the request resolves. sendFeedback below retries quietly on its own if
+    // the answer's background store hasn't landed yet (a timing race, not a
+    // real failure); only a genuine, retry-exhausted failure below reverts
+    // this to "error".
+    updateFeedbackPhase(convId, msgId, rating);
 
     const result = await sendFeedback(
       msg.responseId ?? null,

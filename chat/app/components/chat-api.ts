@@ -309,7 +309,7 @@ export interface EditSuccess {
 
 export type EditResult = EditSuccess | ApiError;
 
-export async function sendFeedback(
+async function postFeedback(
   responseId: string | null,
   interactionId: string | null,
   messages: ChatApiMessage[] | null,
@@ -341,6 +341,45 @@ export async function sendFeedback(
     escalatedResponse: data.escalatedResponse ?? null,
     escalationStatus: data.escalationStatus ?? null,
   };
+}
+
+// The answer is stored to the cache in the background (generalize_and_store_task),
+// after the response already reached the client - so a response_id the user is
+// looking at right now can 404 for a second or two with no row to attach
+// feedback to yet. The server's own /v1/feedback retries internally for ~1.7s
+// (feedback_service._FEEDBACK_RETRY_DELAYS_SECONDS) before giving up; measured
+// against a real running stack, the store itself can still land a few seconds
+// after that - so the client retries the whole call again on top, on the same
+// backoff shape, for a further ~10s before treating a 404 as real. A
+// response_id that will never exist just pays this same wait and then still
+// 404s - correctly, and with an honest message instead of the raw backend text.
+const FEEDBACK_NOT_FOUND_RETRY_DELAYS_MS = [1000, 2000, 3000, 4000];
+
+const FEEDBACK_STILL_NOT_FOUND_MESSAGE =
+  "Couldn't find this answer in the cache yet. It may still be saving - wait a moment and try again.";
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function sendFeedback(
+  responseId: string | null,
+  interactionId: string | null,
+  messages: ChatApiMessage[] | null,
+  rating: FeedbackRating,
+  comment: string,
+  deptSlug: string,
+): Promise<FeedbackResult> {
+  for (let attempt = 0; ; attempt++) {
+    const result = await postFeedback(responseId, interactionId, messages, rating, comment, deptSlug);
+    // Only a 404 is the not-yet-stored race; every other error (network, 422,
+    // 401, 5xx...) is real and must surface immediately, unretried.
+    if (!isApiError(result) || result.status !== 404) return result;
+    if (attempt >= FEEDBACK_NOT_FOUND_RETRY_DELAYS_MS.length) {
+      return { kind: "error", status: 404, message: FEEDBACK_STILL_NOT_FOUND_MESSAGE };
+    }
+    await sleep(FEEDBACK_NOT_FOUND_RETRY_DELAYS_MS[attempt]);
+  }
 }
 
 /** Save a human-edited answer. This IS the thumbs-up: one request carries the

@@ -22,8 +22,10 @@ import { canSave, isSaveShortcut, normalizeDraft } from "./edit-draft";
 import type { FeedbackRating } from "./chat-api";
 
 // The full feedback lifecycle for a single assistant message.
-// "idle"/"error" are re-enabled states; "submitting" is in-flight; the rest are terminal.
-export type FeedbackPhase = "idle" | "submitting" | "positive" | "negative" | "error";
+// "idle"/"error" are re-enabled states; "positive"/"negative" are terminal.
+// The click sets the terminal state optimistically, before the request even
+// lands — see ChatApp.handleFeedback — so there is no separate in-flight state.
+export type FeedbackPhase = "idle" | "positive" | "negative" | "error";
 
 export interface AppMessage {
   id: string;
@@ -480,22 +482,12 @@ export default function ChatMessage({
       {/* Feedback row — icon-only thumbs, no comment box, immediate submit on click */}
       {!editing && (message.responseId || message.interactionId) && (
         <div style={{ alignItems: "center", display: "flex", gap: "4px", marginTop: "8px" }}>
-          {(phase === "idle" || phase === "error" || phase === "submitting") && (
+          {(phase === "idle" || phase === "error") && (
             <>
-              <button
-                onClick={() => handleFeedbackClick("positive")}
-                disabled={phase === "submitting"}
-                title="Helpful"
-                style={thumbBtn(phase === "submitting")}
-              >
+              <button onClick={() => handleFeedbackClick("positive")} title="Helpful" style={thumbBtn()}>
                 <ThumbUpIcon />
               </button>
-              <button
-                onClick={() => handleFeedbackClick("negative")}
-                disabled={phase === "submitting"}
-                title="Not helpful"
-                style={thumbBtn(phase === "submitting")}
-              >
+              <button onClick={() => handleFeedbackClick("negative")} title="Not helpful" style={thumbBtn()}>
                 <ThumbDownIcon />
               </button>
             </>
@@ -740,16 +732,15 @@ function formatTs(ts: number): string {
   return new Date(ts).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
-function thumbBtn(disabled: boolean): React.CSSProperties {
+function thumbBtn(): React.CSSProperties {
   return {
     alignItems: "center",
     background: "var(--bg-3)",
     border: "1px solid var(--border)",
     borderRadius: "5px",
     color: "var(--fg-dimmer)",
-    cursor: disabled ? "not-allowed" : "pointer",
+    cursor: "pointer",
     display: "flex",
-    opacity: disabled ? 0.4 : 1,
     padding: "4px 6px",
   };
 }
