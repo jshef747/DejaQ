@@ -630,6 +630,7 @@ export default function ChatApp() {
                 cacheMatchedQuery: result.cacheMatchedQuery,
                 authoredByHuman: result.answerAuthored === "human",
                 cacheEnrichedQuery: result.cacheEnrichedQuery,
+                ragChunks: result.ragChunks,
               }
             : m
         ),

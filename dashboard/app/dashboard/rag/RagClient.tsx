@@ -85,12 +85,20 @@ export default function RagClient({ workspaceSlug, docs, error }: Props) {
       return;
     }
     setUploadBusy(true);
-    const form = new FormData();
-    form.append("file", file);
-    const res = await uploadRagFile(workspaceSlug, form);
-    setUploadBusy(false);
-    if (!res.ok) { setUploadErr(res.error); return; }
-    router.refresh();
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await uploadRagFile(workspaceSlug, form);
+      if (!res.ok) { setUploadErr(res.error); return; }
+      router.refresh();
+    } catch (e) {
+      // A Server Action can throw outright (e.g. a body-size-limit rejection)
+      // instead of returning {ok:false}; without this the button was left
+      // spinning forever with no error ever shown.
+      setUploadErr((e as Error).message || "Upload failed unexpectedly.");
+    } finally {
+      setUploadBusy(false);
+    }
   }
 
   function handleFilePick(e: React.ChangeEvent<HTMLInputElement>) {

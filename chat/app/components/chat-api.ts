@@ -49,6 +49,9 @@ export interface ChatSuccess {
   // before searching the cache. Null both when there was nothing to rewrite
   // (enrich() returned the message unchanged) and on any non-cache answer.
   cacheEnrichedQuery: string | null;
+  // Count of knowledge-base passages RAG injected on a miss it grounded.
+  // Null on a cache hit or when nothing was retrieved.
+  ragChunks: number | null;
   // Set when the SSE body broke part-way through the answer: `text` is
   // whatever arrived before the break, not a finished reply. The caller shows
   // it AND says so, because a silently truncated answer reads as a complete
@@ -164,6 +167,8 @@ export async function sendChatMessage(
   const cacheMatchedQuery = response.headers.get("x-dejaq-cache-matched-query") ?? null;
   const answerAuthored = response.headers.get("x-dejaq-answer-authored") ?? null;
   const cacheEnrichedQuery = response.headers.get("x-dejaq-enriched-query") ?? null;
+  const rawRagChunks = response.headers.get("x-dejaq-rag-chunks");
+  const ragChunks = rawRagChunks !== null ? Number(rawRagChunks) : null;
 
   onMeta?.({ modelUsed, tier });
 
@@ -264,6 +269,7 @@ export async function sendChatMessage(
     cacheMatchedQuery,
     answerAuthored,
     cacheEnrichedQuery,
+    ragChunks,
     streamError,
   };
 }

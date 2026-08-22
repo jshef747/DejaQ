@@ -228,11 +228,47 @@ free_port() {
   local port=$1
   # lsof is Unix-only; on Windows just let the service fail loudly if the port is taken
   [[ "$IS_WINDOWS" == "true" ]] && return 0
-  local pids
+  local pids pid pid_cwd root_dir_real
+  local -a own_pids=() foreign_pids=()
   pids=$(lsof -ti :"$port" 2>/dev/null) || true
-  if [[ -n "$pids" ]]; then
-    echo -e "  ${YELLOW}Port $port already in use — clearing...${NC}"
-    echo "$pids" | xargs kill -9 2>/dev/null || true
+  [[ -z "$pids" ]] && return 0
+
+  # Only ever kill a process whose working directory is inside THIS checkout
+  # ($ROOT_DIR) — every service this script starts is launched with its cwd
+  # under $ROOT_DIR (see the `cd "$SERVER_DIR"` / `(cd "$DASHBOARD_DIR" && ...)`
+  # calls below), so that's a reliable "did this script start it" signal. A
+  # port holder outside $ROOT_DIR is presumed to be someone else's process —
+  # a sibling worktree running its own start.sh on the same default port, most
+  # concretely — and must never be killed on their behalf. An unreadable cwd
+  # (process exited mid-check, or owned by another user) is treated the same
+  # way: unknown ownership refuses, it never defaults to killing.
+  #
+  # Compared through pwd -P on both sides: lsof reports a process's cwd fully
+  # resolved (symlinks included, e.g. macOS's /tmp -> /private/tmp), while
+  # $ROOT_DIR keeps whatever form it was invoked with — a straight string
+  # comparison against the unresolved form silently never matches on a
+  # symlinked path and would refuse to clear even this checkout's own stale
+  # processes.
+  root_dir_real=$(cd "$ROOT_DIR" && pwd -P)
+  for pid in $pids; do
+    pid_cwd=$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')
+    if [[ -n "$pid_cwd" && "$pid_cwd" == "$root_dir_real"* ]]; then
+      own_pids+=("$pid")
+    else
+      foreign_pids+=("$pid")
+    fi
+  done
+
+  if [[ ${#foreign_pids[@]} -gt 0 ]]; then
+    echo -e "  ${RED}Port $port is already in use by a process this script did not start"
+    echo -e "  (PID ${foreign_pids[*]}, working directory outside $ROOT_DIR) — refusing to kill it."
+    echo -e "  Stop that process yourself, or run this checkout on different ports.${NC}"
+    exit 1
+  fi
+
+  if [[ ${#own_pids[@]} -gt 0 ]]; then
+    echo -e "  ${YELLOW}Port $port already in use by a stale process from this checkout — clearing...${NC}"
+    kill -9 "${own_pids[@]}" 2>/dev/null || true
     sleep 1
   fi
 }

@@ -60,6 +60,12 @@ export interface AppMessage {
   cacheDistance?: number | null;
   cacheMatchedQuery?: string | null;
   cacheEnrichedQuery?: string | null;
+  // Count of knowledge-base passages injected on a miss that RAG grounded.
+  // Null when nothing was retrieved, or on a cache hit (grounding, if
+  // any, happened whenever that answer was first generated, not now). Count
+  // only — the header carries no document title, and this is not worth a new
+  // backend endpoint just to name it.
+  ragChunks?: number | null;
   // Set by Stop: this answer was cut off mid-generation. Whatever text had
   // already streamed in is kept, marked, and never mistaken for a complete
   // answer — it carries no responseId/interactionId, so the feedback row

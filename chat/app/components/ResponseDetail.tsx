@@ -225,6 +225,13 @@ export default function ResponseDetail({
               <MonoValue>{deptSlug}</MonoValue>
             </Row>
           )}
+          {route !== "cache" && !!message?.ragChunks && (
+            <Row label="Knowledge base">
+              <MonoValue note="from your workspace's knowledge base">
+                grounded in {message.ragChunks} passage{message.ragChunks === 1 ? "" : "s"}
+              </MonoValue>
+            </Row>
+          )}
         </Section>
 
         <Divider />

@@ -25,6 +25,7 @@ const SSE_HEADERS_TO_FORWARD = [
   "x-dejaq-cache-matched-query",
   "x-dejaq-answer-authored",
   "x-dejaq-enriched-query",
+  "x-dejaq-rag-chunks",
 ];
 
 interface ChatMsg {
