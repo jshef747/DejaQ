@@ -65,6 +65,17 @@ class FileText:
     char_count: int    # length of the normalised text
     ok: bool           # False -> never served, never stored
     reason: str        # why not ok, for the logs; "" when ok
+    # Set only for a PDF with NO text layer (a scanned page) whose first page
+    # carries at least one embedded raster image - PNG-encoded via Pillow so
+    # the caller never has to care what the PDF stored it as (JPEG, CCITT
+    # fax, JBIG2, ...). This is not part of the file gate's identity (never
+    # hashed, never cached - the gate stays exact-text-only, see module
+    # docstring) - it exists only so the router can hand a locally-answerable
+    # image to a vision-capable local model INSTEAD of forcing the request
+    # external with nothing to send, which used to 422 (dejaq-200-test-fixes
+    # defect #2). None for every other kind, and for a PDF pypdf could not
+    # even parse (genuinely corrupt) - there is no page to pull an image from.
+    image_bytes: bytes | None = None
 
     @property
     def cacheable(self) -> bool:
@@ -134,7 +145,7 @@ def _normalize(text: str) -> str:
     return _WHITESPACE_RE.sub(" ", text).strip()
 
 
-def _finalize(kind: str, text: str, *, apply_floor: bool) -> FileText:
+def _finalize(kind: str, text: str, *, apply_floor: bool, image_bytes: bytes | None = None) -> FileText:
     """Hash the normalised text, or explain why there is nothing to hash.
 
     `apply_floor` gates CACHE_FILE_MIN_CHARS. It exists at all because
@@ -161,6 +172,7 @@ def _finalize(kind: str, text: str, *, apply_floor: bool) -> FileText:
             char_count=len(normalized),
             ok=False,
             reason=reason,
+            image_bytes=image_bytes,
         )
     return FileText(
         kind=kind,
@@ -172,8 +184,29 @@ def _finalize(kind: str, text: str, *, apply_floor: bool) -> FileText:
     )
 
 
-def _extract_pdf(data: bytes) -> str:
-    """Every page's text, concatenated. Raises only what extract() catches."""
+def _rescue_page_image(reader) -> bytes | None:
+    """First embedded raster image on any page, re-encoded to PNG via Pillow.
+
+    A scanned PDF has no text layer, but each page is almost always ONE
+    embedded image (the actual scan) - pypdf's `page.images` reads it
+    straight out of the PDF's object stream, no rasterization engine
+    (poppler, mupdf) needed. Re-encoding through PIL rather than returning
+    `.data` as-is normalises whatever the PDF stored it as (JPEG, CCITT fax,
+    JBIG2, raw) into a format every vision model actually accepts.
+    """
+    for page in reader.pages:
+        for img in page.images:
+            if img.image is None:
+                continue
+            buf = io.BytesIO()
+            img.image.convert("RGB").save(buf, format="PNG")
+            return buf.getvalue()
+    return None
+
+
+def _extract_pdf(data: bytes) -> tuple[str, bytes | None]:
+    """Every page's text, concatenated, plus a rescued page image when there
+    is no text at all. Raises only what extract() catches."""
     from pypdf import PdfReader  # imported lazily so the import cost is paid once, on use
 
     reader = PdfReader(io.BytesIO(data))
@@ -183,12 +216,24 @@ def _extract_pdf(data: bytes) -> str:
         try:
             reader.decrypt("")
         except Exception:
-            return ""
+            return "", None
     # ponytail: reads every page. Bounded in practice by MAX_ATTACHMENT_BYTES,
     # and it runs on a threadpool. If very large PDFs ever become common, cap the
     # page count and hash a page-count-tagged prefix — do NOT hash a bare prefix,
     # or two documents sharing an opening chapter would merge.
-    return "\n".join(page.extract_text() or "" for page in reader.pages)
+    text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    if text.strip():
+        return text, None
+    try:
+        image_bytes = _rescue_page_image(reader)
+    except Exception:
+        # Image extraction is a best-effort bonus on top of the real text
+        # extraction above - a page.images failure (an exotic filter pypdf
+        # can't decode) must not turn a "no text" result into a raised
+        # exception, which extract() would otherwise report as "unreadable"
+        # instead of "no text, no rescue image either".
+        image_bytes = None
+    return text, image_bytes
 
 
 def _extract_docx(data: bytes) -> str:
@@ -241,7 +286,8 @@ def extract(data: bytes, mime: str | None = None, filename: str | None = None) -
             return FileText(kind, "", "", 0, ok=False, reason=f"unreadable ({type(exc).__name__})")
 
     try:
-        return _finalize(kind, _extract_pdf(data), apply_floor=True)
+        text, image_bytes = _extract_pdf(data)
+        return _finalize(kind, text, apply_floor=True, image_bytes=image_bytes)
     except ModuleNotFoundError:
         if not _pypdf_missing_warned:
             logger.warning(
@@ -320,6 +366,22 @@ def _self_test() -> None:
     broken = extract(b"%PDF-1.4 not really a pdf", "application/pdf", "x.pdf")
     assert not broken.ok and broken.kind == "pdf"
     assert not broken.readable, "a genuinely unreadable file must not be answerable either"
+    assert broken.image_bytes is None, "pypdf never even opened this — nothing to rescue"
+
+    # A scanned PDF (no text layer, one embedded page image) rescues that
+    # image so the router can still hand it to a local vision model instead
+    # of forcing this external with nothing to send (dejaq-200-test-fixes
+    # defect #2).
+    import io as _io
+    from PIL import Image as _Image
+
+    scan = _Image.new("RGB", (40, 20), color="white")
+    scan_buf = _io.BytesIO()
+    scan.save(scan_buf, format="PDF")
+    scanned = extract(scan_buf.getvalue(), "application/pdf", "scan.pdf")
+    assert not scanned.ok and not scanned.readable, "no text layer — still uncacheable, still unanswerable by text"
+    assert scanned.image_bytes is not None, "the scan's embedded page image must be rescued"
+    assert _Image.open(_io.BytesIO(scanned.image_bytes)).format == "PNG", "rescued image is normalised to PNG"
 
     # Unreadable DOCX bytes are a miss, not an exception, and never sniffed as text.
     broken_docx = extract(b"PK\x03\x04 not really a docx", DOCX_MIME, "x.docx")

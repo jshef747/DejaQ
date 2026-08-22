@@ -31,6 +31,7 @@ from app.services.credential_service import (
     get_workspace_provider_key,
 )
 from app.services.llm_providers import LIVE_PROVIDERS
+from app.services.llm_providers.litellm_transport import external_supports_pdf
 from app.services.memory_chromaDB import (
     CacheLookupResult,
     derive_doc_id,
@@ -1826,6 +1827,17 @@ async def run_chat_pipeline(
             _file_usable_locally = (
                 file_doc is not None and file_doc.readable and _file_fits_locally
             )
+            # Whether the workspace's configured external model can even take a
+            # PDF as input at all - checked once here (not inside
+            # litellm_transport, which only raises once a call is already
+            # committed to going external) so an unreadable-locally PDF can
+            # decide up front whether attempting external is worth it, or
+            # whether to fall back locally instead (see the two elif branches
+            # below). False with no external_model configured at all - no
+            # credential is no more "PDF capable" than an incapable one.
+            _external_pdf_capable = bool(
+                llm_config.external_model
+            ) and external_supports_pdf(llm_config.external_model)
             if _file_usable_locally and routing_mode != ROUTING_MODE_HARD_EXTERNAL:
                 # File fits the local context window - but "fits" isn't "easy".
                 # Judge on the same inlined text generation would see (reusing
@@ -1854,6 +1866,49 @@ async def run_chat_pipeline(
                     max(_file_ctx_budget, 0), llm_config.ollama_num_ctx, _max_tokens,
                     _LOCAL_FILE_PROMPT_RESERVE_TOKENS, llm_config.local_attachment_max_tokens,
                 )
+            elif (
+                file_doc is not None
+                and file_doc.kind == "pdf"
+                and not file_doc.readable
+                and file_doc.image_bytes is not None
+                and routing_mode != ROUTING_MODE_HARD_EXTERNAL
+                and ollama_catalog.supports_vision(llm_config.local_model)
+                and not _external_pdf_capable
+            ):
+                # No text layer (a scanned page), but file_text.py rescued the
+                # page's own embedded image without needing a rasterization
+                # engine - the local vision model can look at it directly
+                # instead of this being forced external with nothing to send.
+                # That used to hit the external model's PDF capability gate
+                # and 422 with no answer at all (dejaq-200-test-fixes defect
+                # #2 - caused by the external model swap to one with
+                # supports_pdf_input=None). Gated on `not _external_pdf_capable`:
+                # a workspace with a genuinely document-capable external model
+                # configured keeps routing there instead - its native document
+                # part can read the scan directly and, unlike pypdf, isn't
+                # limited to the first page's first embedded image. This is a
+                # fallback for when external is a guaranteed dead end for
+                # PDFs, not a general preference for local over external.
+                # Unconditionally "easy": there is no extracted text to run
+                # the hard-content judge on, and this is already the degraded
+                # path - the alternative is no answer whatsoever.
+                classification = {"complexity": "easy", "score": 0.0, "task_type": "file_local_vision_rescue"}
+            elif (
+                file_doc is not None
+                and file_doc.kind == "pdf"
+                and not file_doc.readable
+                and routing_mode != ROUTING_MODE_HARD_EXTERNAL
+                and not _external_pdf_capable
+            ):
+                # Nothing to show ANY model - not even pixels (pypdf could not
+                # even parse the file, or parsed it but found no page image to
+                # rescue either) - AND the workspace's external model cannot
+                # read PDFs anyway, so routing there would just trade the
+                # image-rescue dead end for the capability-gate one. Answered
+                # locally with an honest "I couldn't read this" instead
+                # (local_gen_query below), never a bare 422 - see
+                # dejaq-200-test-fixes defect #2.
+                classification = {"complexity": "easy", "score": 0.0, "task_type": "file_unreadable_no_rescue"}
             else:
                 classification = {"complexity": "hard", "score": 1.0, "task_type": "file_external"}
         elif routing_mode == ROUTING_MODE_EASY_LOCAL:
@@ -1908,18 +1963,38 @@ async def run_chat_pipeline(
             classification = {**classification, "complexity": "hard", "task_type": "rag_external"}
         # The prompt actually sent to whichever model runs, grounded if RAG hit.
         gen_query = _query_with_rag_context(user_query, rag_context)
-        # Local generation has no native document part, so it needs the file's
-        # text folded into the prompt the same way the external branch already
-        # does for non-PDF kinds. A no-op when there is no file (or no usable
-        # text), same helper the external branch uses - the untrusted-input
-        # fencing applies here too.
-        local_gen_query = _query_with_inlined_file(gen_query, file_doc)
+        _file_task_type = classification.get("task_type")
+        if _file_task_type == "file_unreadable_no_rescue":
+            # Nothing extracted, nothing to inline - tell the model plainly so
+            # it relays that honestly instead of silently answering as if no
+            # file were attached. Answered locally, never a bare 422 (see the
+            # classification branch above).
+            local_gen_query = (
+                f"{gen_query}\n\n"
+                "[The user attached a PDF that could not be read - it has no "
+                "extractable text and no page image could be recovered either, "
+                "which usually means it is corrupted, empty, or the upload was "
+                "incomplete. Tell the user plainly that you could not read the "
+                "file and ask them to try re-uploading it or converting it to a "
+                "different format. Do not guess at what the file might contain.]"
+            )
+        else:
+            # Local generation has no native document part, so it needs the file's
+            # text folded into the prompt the same way the external branch already
+            # does for non-PDF kinds. A no-op when there is no file (or no usable
+            # text), same helper the external branch uses - the untrusted-input
+            # fencing applies here too.
+            local_gen_query = _query_with_inlined_file(gen_query, file_doc)
         # Ollama's own images field, same base64 bytes the external branch sends
-        # as image_b64 below - only ever populated when the classification step
-        # above just decided the local model can see it.
-        local_images = (
-            [base64.b64encode(image_bytes).decode("ascii")] if _request_has_image else None
-        )
+        # as image_b64 below - populated when the classification step above
+        # decided the local model can see an image, whether that's a real
+        # attached image or a scanned PDF page rescued by file_text.py.
+        if _request_has_image:
+            local_images = [base64.b64encode(image_bytes).decode("ascii")]
+        elif _file_task_type == "file_local_vision_rescue" and file_doc is not None and file_doc.image_bytes:
+            local_images = [base64.b64encode(file_doc.image_bytes).decode("ascii")]
+        else:
+            local_images = None
 
         # Provider + credential resolution happens HERE, not inside the generation
         # step, and that placement is load-bearing: every failure below is an HTTP

@@ -88,14 +88,14 @@ class TrackingAdjuster(StubAdjuster):
         return "ADJUSTED — blind rewrite"
 
 
-def _patch_pipeline(monkeypatch, *, validator, adjuster, memory):
+def _patch_pipeline(monkeypatch, *, validator, adjuster, memory, llm_router=None):
     async def _noop_log(*a, **k):
         return None
 
     monkeypatch.setattr(
         openai_compat, "_services_for_model_profile",
         lambda profile, llm_config=None: openai_compat.ModelServices(
-            normalizer=StubNormalizer(), llm_router=None,
+            normalizer=StubNormalizer(), llm_router=llm_router,
             adjuster=adjuster, enricher=StubEnricher(), validator=validator,
         ),
     )
@@ -479,8 +479,30 @@ def _patch_external_provider(monkeypatch, answer: str):
 PROVIDER_ANSWER = "Either party may terminate this agreement with thirty days written notice."
 
 
+class HardContentJudgeRouter:
+    """Stands in for the local model on the hard-content judge call only.
+
+    PDF_A is small enough to fit the local context window, so a file-attached
+    miss now runs the hard-content judge before deciding local vs. external
+    (see openai_compat.py's file routing) — a real local model this old
+    `llm_router=None` fixture never anticipated. These tests are about the
+    CELERY FALLBACK on an external-routed miss, not about routing itself, so
+    this always answers HARD to send the request external, matching what
+    every one of these tests set up (a provider stub, an external model
+    config) and asserted on before that judge call existed. Any other call
+    (real local generation) is not expected in a celery-fallback test and
+    fails loudly rather than silently answering something wrong.
+    """
+
+    async def generate_local_response(self, *args, **kwargs):
+        return "HARD", None, "stop"
+
+
 def _post_pdf_miss_with_broken_celery(monkeypatch, memory, adjuster):
-    _patch_pipeline(monkeypatch, validator=RecordingValidator(True), adjuster=adjuster, memory=memory)
+    _patch_pipeline(
+        monkeypatch, validator=RecordingValidator(True), adjuster=adjuster, memory=memory,
+        llm_router=HardContentJudgeRouter(),
+    )
     monkeypatch.setattr(openai_compat, "USE_CELERY", True)
     monkeypatch.setattr(openai_compat, "generalize_and_store_task", BrokenCeleryTask())
     _patch_external_provider(monkeypatch, PROVIDER_ANSWER)

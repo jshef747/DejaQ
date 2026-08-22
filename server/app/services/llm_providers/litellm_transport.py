@@ -73,6 +73,21 @@ def _confirmed_incapable(model: str, capability_field: str) -> bool:
     return not info.get(capability_field)
 
 
+def external_supports_pdf(model: str) -> bool:
+    """True unless LiteLLM's catalog affirmatively says `model` lacks PDF support.
+
+    Same conservative bias as `_confirmed_incapable`: an uncatalogued model
+    reads as "can't rule it out, let it try" rather than "assume no". Exposed
+    publicly (unlike `_confirmed_incapable` itself) so the router can decide
+    file ROUTING before a request ever reaches this module - whether to even
+    attempt the external native-document-part path for an unreadable-locally
+    PDF, or fall back to a local vision attempt when this workspace's
+    external model has no PDF capability at all (see openai_compat.py's file
+    classification branch, dejaq-200-test-fixes defect #2).
+    """
+    return not _confirmed_incapable(model, "supports_pdf_input")
+
+
 def _confirmed_context_budget(model: str) -> int | None:
     """The model's own max input-token budget, per LiteLLM's catalog, or
     None when the catalog has no entry for it.
