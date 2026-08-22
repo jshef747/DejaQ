@@ -51,16 +51,28 @@ def test_chunk_long_text_splits_with_overlap(monkeypatch):
     assert "sentence number 59" in chunks[-1]
 
 
+# --- embedding progress --------------------------------------------------------
+
+def test_embed_chunks_reports_progress_after_every_chunk(monkeypatch):
+    monkeypatch.setattr(rag_service, "embed_text", lambda text: [len(text)])
+    seen = []
+    embeddings = rag_service.embed_chunks(["a", "bb", "ccc"], on_progress=seen.append)
+    assert embeddings == [[1], [2], [3]]
+    assert seen == [1, 2, 3]  # count embedded so far, not a chunk index
+
+
 # --- index / retrieve ---------------------------------------------------------
 
 class _FakeCollection:
     def __init__(self):
         self.upserted = None
+        self.upsert_calls = []
         self._count = 0
 
     def upsert(self, ids, embeddings, documents, metadatas):
         self.upserted = {"ids": ids, "documents": documents, "metadatas": metadatas}
-        self._count = len(ids)
+        self.upsert_calls.append(self.upserted)
+        self._count += len(ids)
 
     def count(self):
         return self._count
@@ -112,6 +124,24 @@ def test_index_document_uses_deterministic_ids(fake_collection):
     assert n == 3
     assert fake_collection.upserted["ids"] == ["7:0", "7:1", "7:2"]
     assert fake_collection.upserted["metadatas"][0]["rag_document_id"] == 7
+
+
+def test_index_document_batches_upserts_under_the_server_limit(fake_collection, monkeypatch):
+    # Chroma rejects a single upsert over its own batch-size ceiling outright
+    # (measured live: 5,722 chunks against a server reporting 5,461) - a
+    # document with more chunks than the batch size must be sliced into
+    # multiple upserts, never sent in one request.
+    monkeypatch.setattr(rag_service, "_MAX_UPSERT_BATCH", 2)
+    chunks = ["a", "b", "c", "d", "e"]
+    n = rag_service.index_document(
+        "acme__rag", 7, chunks,
+        workspace_slug="acme", title="Doc", kind="text", source_ref=None,
+    )
+    assert n == 5
+    assert [len(call["ids"]) for call in fake_collection.upsert_calls] == [2, 2, 1]
+    assert [i for call in fake_collection.upsert_calls for i in call["ids"]] == [
+        "7:0", "7:1", "7:2", "7:3", "7:4",
+    ]
 
 
 def test_index_empty_chunks_stores_nothing(fake_collection):

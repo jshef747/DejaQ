@@ -15,6 +15,10 @@ class RagDocumentItem(BaseModel):
     source_ref: str | None
     char_count: int
     chunk_count: int
+    status: str
+    progress_current: int
+    progress_total: int | None
+    error_message: str | None
     created_at: datetime
     updated_at: datetime
 

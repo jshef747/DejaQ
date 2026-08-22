@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { BookOpen, FileText, Globe, Image as ImageIcon, Trash2, Upload } from "lucide-react";
 import Modal from "@/components/Modal";
@@ -16,6 +16,10 @@ import type { RagDocumentItem } from "@/lib/types";
 
 const fmt = new Intl.DateTimeFormat("en-US", { year: "numeric", month: "short", day: "numeric" });
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // mirrors server DEJAQ_MAX_ATTACHMENT_BYTES
+// Ingestion (chunk embedding) now runs as a background job — this polls the
+// catalog for real progress while anything is still "processing". Boring on
+// purpose: it's just the existing list endpoint, on a timer.
+const POLL_INTERVAL_MS = 1200;
 
 const KIND_ICON: Record<string, typeof FileText> = {
   url: Globe,
@@ -52,7 +56,39 @@ export default function RagClient({ workspaceSlug, docs, error }: Props) {
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteErr, setDeleteErr] = useState<string | null>(null);
 
+  const [toasts, setToasts] = useState<{ id: string; text: string }[]>([]);
+  const prevStatusRef = useRef<Map<number, string>>(new Map());
+
   const banner = error || uploadErr || deleteErr;
+
+  // A document still ingesting must not look done, and a document that just
+  // finished must say so — this is the whole point of this page's redesign.
+  // Detected by diffing each poll's statuses against the last one seen.
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    const next = new Map<number, string>();
+    for (const doc of docs) {
+      const was = prev.get(doc.id);
+      if (was === "processing" && doc.status === "ready") {
+        const id = `${doc.id}-${doc.updated_at}`;
+        const count = doc.chunk_count.toLocaleString();
+        setToasts((t) => [
+          ...t,
+          { id, text: `"${doc.title}" is now searchable — ${count} chunk${doc.chunk_count === 1 ? "" : "s"} indexed.` },
+        ]);
+        setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 6000);
+      }
+      next.set(doc.id, doc.status);
+    }
+    prevStatusRef.current = next;
+  }, [docs]);
+
+  const anyProcessing = docs.some((d) => d.status === "processing");
+  useEffect(() => {
+    if (!anyProcessing) return;
+    const id = setInterval(() => router.refresh(), POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [anyProcessing, router]);
 
   async function handleAddText() {
     setTextBusy(true);
@@ -161,6 +197,16 @@ export default function RagClient({ workspaceSlug, docs, error }: Props) {
         </div>
       )}
 
+      {toasts.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
+          {toasts.map((t) => (
+            <div key={t.id} className="ds-pill ds-pill-green" style={{ padding: "8px 12px", borderRadius: 5, fontSize: 12 }}>
+              {t.text}
+            </div>
+          ))}
+        </div>
+      )}
+
       {docs.length === 0 && !error ? (
         <div className="ds-table-wrap">
           <EmptyState
@@ -204,7 +250,44 @@ export default function RagClient({ workspaceSlug, docs, error }: Props) {
                       <Pill variant="neutral">{doc.kind}{doc.source === "ocr" ? " · ocr" : ""}</Pill>
                     </td>
                     <td className="ds-dim" style={{ fontSize: 12 }}>{doc.char_count.toLocaleString()}</td>
-                    <td className="ds-dim" style={{ fontSize: 12 }}>{doc.chunk_count}</td>
+                    <td style={{ fontSize: 12, minWidth: 150 }}>
+                      {doc.status === "processing" ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                          <span className="ds-dim">
+                            {doc.progress_total
+                              ? `embedding ${doc.progress_current.toLocaleString()} / ${doc.progress_total.toLocaleString()} chunks`
+                              : "starting…"}
+                          </span>
+                          <div style={{ height: 4, borderRadius: 2, background: "var(--border)", overflow: "hidden" }}>
+                            <div
+                              style={{
+                                height: "100%",
+                                width: doc.progress_total
+                                  ? `${Math.min(100, (doc.progress_current / doc.progress_total) * 100)}%`
+                                  : "3%",
+                                background: "var(--accent)",
+                                transition: "width 0.3s ease",
+                              }}
+                            />
+                          </div>
+                        </div>
+                      ) : doc.status === "failed" ? (
+                        <div>
+                          <Pill variant="err">failed</Pill>
+                          {doc.error_message && (
+                            <div
+                              className="ds-dim"
+                              style={{ fontSize: 11, marginTop: 3, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                              title={doc.error_message}
+                            >
+                              {doc.error_message}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="ds-dim">{doc.chunk_count}</span>
+                      )}
+                    </td>
                     <td className="ds-dim" style={{ fontSize: 12 }}>{fmt.format(new Date(doc.created_at))}</td>
                     <td style={{ textAlign: "right" }}>
                       <Button

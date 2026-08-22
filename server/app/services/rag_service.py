@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
+from typing import Callable
 
 import chromadb
 import numpy as np
@@ -50,6 +51,17 @@ logger = logging.getLogger("dejaq.rag")
 # (slug "rag" → namespace "{ws}__rag"), which would merge that department's Q→A
 # cache into the knowledge base and make the eviction guard skip it.
 RAG_NAMESPACE_SUFFIX = "__rag_kb"
+
+# Chroma rejects an upsert whose row count exceeds a server-side ceiling
+# derived from SQLite's bound-parameter limit (measured 5,461 on a local
+# install) - one request over it fails outright, not partially. A 4,100-chunk
+# document stayed under that by luck; a 5,722-chunk one (measured live,
+# fm/dejaq-kb-upload-progress) did not, and the whole upsert was rejected with
+# "Batch size N exceeds maximum batch size 5461" after minutes of embedding.
+# This constant is deliberately far below any observed minimum so ingestion
+# never has to probe the server's actual limit - it just slices the upsert
+# into requests that always fit.
+_MAX_UPSERT_BATCH = 1000
 
 
 def rag_namespace(workspace_slug: str) -> str:
@@ -136,13 +148,23 @@ def chunk_text(text: str) -> list[str]:
 
 # --- Indexing / retrieval / deletion ------------------------------------------
 
-def embed_chunks(chunks: list[str]) -> list[list[float]]:
-    """Embed chunks with the shared BGE model.
+def embed_chunks(
+    chunks: list[str], on_progress: Callable[[int], None] | None = None
+) -> list[list[float]]:
+    """Embed chunks with the shared BGE model, one at a time.
 
     Split out from index_document so a caller can pay this cost outside a DB
     transaction — it is the slow part of ingestion and holds no locks of its own.
+    `on_progress`, when given, is called with the count embedded so far after
+    every chunk. This is the only phase of ingestion whose cost scales with the
+    document's size, so it is the only honest unit of progress to report.
     """
-    return [embed_text(c) for c in chunks]
+    out: list[list[float]] = []
+    for i, chunk in enumerate(chunks, start=1):
+        out.append(embed_text(chunk))
+        if on_progress is not None:
+            on_progress(i)
+    return out
 
 
 def index_document(
@@ -185,12 +207,14 @@ def index_document(
         }
         for i in range(len(chunks))
     ]
-    collection.upsert(
-        ids=ids,
-        embeddings=embeddings,
-        documents=chunks,
-        metadatas=metadatas,
-    )
+    for start in range(0, len(ids), _MAX_UPSERT_BATCH):
+        end = start + _MAX_UPSERT_BATCH
+        collection.upsert(
+            ids=ids[start:end],
+            embeddings=embeddings[start:end],
+            documents=chunks[start:end],
+            metadatas=metadatas[start:end],
+        )
     logger.info(
         "rag_index namespace=%s doc_id=%s chunks=%d title=%r",
         namespace, rag_document_id, len(chunks), title[:60],

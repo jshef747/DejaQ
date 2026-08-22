@@ -9,6 +9,16 @@ then coordinate three things per document:
 Deleting a document must undo (3) and (2) together; adding a document that already
 exists (same normalised text → same sha) REPLACES it rather than erroring on the
 (workspace_id, sha) unique constraint.
+
+Adding is split into two phases because (3) is slow (BGE embeds one chunk at a
+time) and used to run synchronously inside the HTTP request - a large upload
+held the request open for minutes with no way to tell it apart from a hang.
+`begin_ingest` (and the `begin_text`/`begin_upload`/`begin_url` convenience
+wrappers) does the fast part - extract, chunk, write a "processing" catalog
+row with a known chunk total - and returns immediately. `_embed_and_index`
+does the slow part and can be run inline (the `add_text`/`add_upload`/`add_url`
+synchronous wrappers below, used by the CLI) or handed to a background job
+(`run_ingest`, used by the HTTP router - see routers/admin/rag_documents.py).
 """
 from __future__ import annotations
 
@@ -79,28 +89,26 @@ def list_documents(workspace_slug: str) -> list[RagDocumentItem]:
         return [RagDocumentItem.model_validate(row) for row in rows]
 
 
-def _store(
+def begin_ingest(
     workspace_slug: str,
     ingest: rag_ingest.IngestResult,
-) -> RagDocumentItem:
-    """Common tail for every add_*: validate, dedupe-by-sha, catalog + index."""
+) -> tuple[RagDocumentItem, list[str]]:
+    """Fast phase, common to every add_*: validate, dedupe-by-sha, chunk, write
+    a "processing" catalog row. Chunking is pure Python (no model call) so it
+    costs nothing to do up front - it is what lets the row report a real
+    `progress_total` from the moment it exists, instead of an unknown one.
+
+    Returns the row plus its chunks; the caller runs `_embed_and_index` (now,
+    inline, or later via `run_ingest`) to do the slow part.
+    """
     if not ingest.ok:
         raise RagIngestError(ingest.reason or "could not extract text")
-
-    namespace = rag_service.rag_namespace(workspace_slug)
     chunks = rag_service.chunk_text(ingest.text)
     if not chunks:
         raise RagIngestError("document produced no chunks")
-    # Embedding is the slow part (BGE, in-process, one pass per chunk) and needs
-    # no DB row, so it runs BEFORE the session opens. SQLite serialises writers,
-    # and a large document embedded inside the transaction would hold the write
-    # lock for seconds and fail every concurrent admin write with "database is
-    # locked".
-    embeddings = rag_service.embed_chunks(chunks)
 
     with get_session() as session:
         workspace = _resolve_workspace(session, workspace_slug)
-
         # Re-adding the same content (same sha) is a replace, not a duplicate,
         # and it updates the existing row IN PLACE. Deleting the row and
         # inserting a new one would satisfy the unique (workspace_id, sha) just
@@ -109,9 +117,8 @@ def _store(
         # chunks are about to be cleaned up — and the cleanup would take the
         # chunks it had just written. One id per sha removes that whole class.
         existing = rag_document_repo.get_by_sha(session, workspace.id, ingest.sha)
-        previous_chunk_count = existing.chunk_count if existing is not None else 0
         if existing is not None:
-            row = rag_document_repo.update_content(
+            row = rag_document_repo.start_processing_existing(
                 session,
                 existing,
                 title=ingest.title,
@@ -119,10 +126,10 @@ def _store(
                 source=ingest.source,
                 source_ref=ingest.source_ref,
                 char_count=ingest.char_count,
-                chunk_count=len(chunks),
+                progress_total=len(chunks),
             )
         else:
-            row = rag_document_repo.create(
+            row = rag_document_repo.start_processing_new(
                 session,
                 workspace.id,
                 title=ingest.title,
@@ -131,40 +138,141 @@ def _store(
                 source_ref=ingest.source_ref,
                 sha=ingest.sha,
                 char_count=ingest.char_count,
-                chunk_count=len(chunks),
+                progress_total=len(chunks),
             )
-        # Index into Chroma while still inside the session, so a Chroma failure
-        # rolls back the catalog row (get_session rolls back on exception).
-        rag_service.index_document(
-            namespace,
-            row.id,
-            chunks,
-            embeddings=embeddings,
-            workspace_slug=workspace_slug,
-            title=ingest.title,
-            kind=ingest.kind,
-            source_ref=ingest.source_ref,
-        )
-        # Deterministic chunk ids mean the upsert above already replaced indices
-        # 0..len(chunks)-1; only a tail left over from a longer previous version
-        # needs removing, and only after the new chunks are safely written.
-        if previous_chunk_count > len(chunks):
-            rag_service.delete_chunk_tail(namespace, row.id, len(chunks))
         item = RagDocumentItem.model_validate(row)
-    logger.info(
-        "rag_add workspace=%s doc_id=%s kind=%s source=%s chunks=%d",
-        workspace_slug, item.id, item.kind, item.source, item.chunk_count,
-    )
-    return item
+    return item, chunks
 
 
-def add_text(
+def _embed_and_index(
     workspace_slug: str,
-    title: str,
-    content: str,
-) -> RagDocumentItem:
+    doc_id: int,
+    chunks: list[str],
+) -> RagDocumentItem | None:
+    """Slow phase: embed chunks (reporting progress as it goes) and index them.
+
+    On any failure the row is marked "failed" with the reason and the
+    exception is RE-RAISED - a synchronous caller (the CLI, or `add_text` and
+    friends below) sees it exactly as it always has. `run_ingest` is the
+    fire-and-forget wrapper for a background job; it does not re-raise.
+
+    Returns None if the row was deleted mid-flight (nothing left to finish).
+    """
+    namespace = rag_service.rag_namespace(workspace_slug)
+    total = len(chunks)
+    step = max(1, total // 50)  # ~50 progress writes over the run, not one per chunk
+
+    def on_progress(done: int) -> None:
+        if done != total and done % step:
+            return
+        with get_session() as session:
+            workspace = _resolve_workspace(session, workspace_slug)
+            row = rag_document_repo.get(session, workspace.id, doc_id)
+            if row is not None and row.status == "processing":
+                rag_document_repo.update_progress(session, row, current=done)
+
+    try:
+        # Embedding is the slow part (BGE, in-process, one pass per chunk) and
+        # needs no DB row held open, so it runs BEFORE the session below opens.
+        # SQLite serialises writers, and a large document embedded inside the
+        # transaction would hold the write lock for seconds and fail every
+        # concurrent admin write with "database is locked".
+        embeddings = rag_service.embed_chunks(chunks, on_progress=on_progress)
+
+        with get_session() as session:
+            workspace = _resolve_workspace(session, workspace_slug)
+            row = rag_document_repo.get(session, workspace.id, doc_id)
+            if row is None:
+                logger.info(
+                    "rag_ingest_abandoned workspace=%s doc_id=%s reason=deleted",
+                    workspace_slug, doc_id,
+                )
+                return None
+            previous_chunk_count = row.chunk_count
+            # Index into Chroma while still inside the session, so a Chroma
+            # failure rolls back the catalog row (get_session rolls back on
+            # exception) - the except block below then records it separately.
+            rag_service.index_document(
+                namespace,
+                row.id,
+                chunks,
+                embeddings=embeddings,
+                workspace_slug=workspace_slug,
+                title=row.title,
+                kind=row.kind,
+                source_ref=row.source_ref,
+            )
+            # Deterministic chunk ids mean the upsert above already replaced
+            # indices 0..len(chunks)-1; only a tail left over from a longer
+            # previous version needs removing, and only after the new chunks
+            # are safely written.
+            if previous_chunk_count > len(chunks):
+                rag_service.delete_chunk_tail(namespace, row.id, len(chunks))
+            row = rag_document_repo.finish_ready(session, row, chunk_count=len(chunks))
+            item = RagDocumentItem.model_validate(row)
+        logger.info(
+            "rag_add workspace=%s doc_id=%s kind=%s source=%s chunks=%d",
+            workspace_slug, item.id, item.kind, item.source, item.chunk_count,
+        )
+        return item
+    except Exception as exc:
+        reason = str(exc) or type(exc).__name__
+        try:
+            with get_session() as session:
+                workspace = _resolve_workspace(session, workspace_slug)
+                row = rag_document_repo.get(session, workspace.id, doc_id)
+                if row is not None:
+                    rag_document_repo.finish_failed(session, row, reason=reason[:500])
+        except Exception:
+            logger.error(
+                "rag_ingest could not record failure workspace=%s doc_id=%s",
+                workspace_slug, doc_id, exc_info=True,
+            )
+        raise
+
+
+def run_ingest(workspace_slug: str, doc_id: int, chunks: list[str]) -> RagDocumentItem | None:
+    """Background-job entry point for the slow phase - never raises.
+
+    This is what the Celery task and the no-Celery BackgroundTasks fallback
+    both call (see routers/admin/rag_documents.py): a background job has
+    nothing to propagate a raised exception TO, so the failure is recorded on
+    the row (inside `_embed_and_index`) and swallowed here instead.
+    """
+    try:
+        return _embed_and_index(workspace_slug, doc_id, chunks)
+    except Exception:
+        logger.exception("rag_ingest_failed workspace=%s doc_id=%s", workspace_slug, doc_id)
+        return None
+
+
+def begin_text(workspace_slug: str, title: str, content: str) -> tuple[RagDocumentItem, list[str]]:
     _assert_can_add(workspace_slug)
-    return _store(workspace_slug, rag_ingest.from_text(title, content))
+    return begin_ingest(workspace_slug, rag_ingest.from_text(title, content))
+
+
+def begin_upload(
+    workspace_slug: str,
+    filename: str | None,
+    data: bytes,
+    mime: str | None,
+    title: str | None = None,
+) -> tuple[RagDocumentItem, list[str]]:
+    _assert_can_add(workspace_slug)
+    return begin_ingest(workspace_slug, rag_ingest.from_upload(filename, data, mime, title))
+
+
+def begin_url(workspace_slug: str, url: str, title: str | None = None) -> tuple[RagDocumentItem, list[str]]:
+    _assert_can_add(workspace_slug)
+    return begin_ingest(workspace_slug, rag_ingest.from_url(url, title))
+
+
+def add_text(workspace_slug: str, title: str, content: str) -> RagDocumentItem:
+    """Synchronous full path (extract → chunk → embed → index), blocking until
+    done. Used by the CLI, which has no polling loop of its own.
+    """
+    item, chunks = begin_text(workspace_slug, title, content)
+    return _embed_and_index(workspace_slug, item.id, chunks)
 
 
 def add_upload(
@@ -174,17 +282,15 @@ def add_upload(
     mime: str | None,
     title: str | None = None,
 ) -> RagDocumentItem:
-    _assert_can_add(workspace_slug)
-    return _store(workspace_slug, rag_ingest.from_upload(filename, data, mime, title))
+    """Synchronous full path - see `add_text`."""
+    item, chunks = begin_upload(workspace_slug, filename, data, mime, title)
+    return _embed_and_index(workspace_slug, item.id, chunks)
 
 
-def add_url(
-    workspace_slug: str,
-    url: str,
-    title: str | None = None,
-) -> RagDocumentItem:
-    _assert_can_add(workspace_slug)
-    return _store(workspace_slug, rag_ingest.from_url(url, title))
+def add_url(workspace_slug: str, url: str, title: str | None = None) -> RagDocumentItem:
+    """Synchronous full path - see `add_text`."""
+    item, chunks = begin_url(workspace_slug, url, title)
+    return _embed_and_index(workspace_slug, item.id, chunks)
 
 
 def _purge_grounded_cache_entries(workspace_slug: str, doc_id: int) -> int:

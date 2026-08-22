@@ -41,7 +41,19 @@ class RagDocument(Base):
     # sha256 of the normalised extracted text — the document's identity.
     sha: Mapped[str] = mapped_column(String, nullable=False)
     char_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Count of chunks actually indexed in Chroma right now - only updated when
+    # ingestion FINISHES. While status="processing" this still reflects the
+    # previous version (0 for a brand-new document), never the in-flight count.
     chunk_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    # processing | ready | failed. A document is safe to ground answers with
+    # only once "ready" - see rag_admin_service.run_ingest.
+    status: Mapped[str] = mapped_column(String, nullable=False, default="ready", server_default="ready")
+    # Chunks embedded so far / total chunks to embed, for the in-flight job.
+    # Embedding is the only ingestion phase whose cost scales with chunk count,
+    # so it is the one honest unit of progress - see docs/... note in rag_service.
+    progress_current: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    progress_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

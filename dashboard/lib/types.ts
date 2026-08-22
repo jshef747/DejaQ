@@ -83,6 +83,10 @@ export type RagDocumentItem = {
   source_ref: string | null;
   char_count: number;
   chunk_count: number;
+  status: "processing" | "ready" | "failed";
+  progress_current: number;
+  progress_total: number | null;
+  error_message: string | null;
   created_at: string;
   updated_at: string;
 };

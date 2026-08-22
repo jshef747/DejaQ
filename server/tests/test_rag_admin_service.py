@@ -35,7 +35,10 @@ def mock_vectors(monkeypatch):
     calls = {"indexed": [], "deleted": [], "order": [], "embeddings": [], "store": {}}
     store = calls["store"]
     monkeypatch.setattr(rag_service, "chunk_text", lambda text: ["chunk-a", "chunk-b"])
-    monkeypatch.setattr(rag_service, "embed_chunks", lambda chunks: [[0.5]] * len(chunks))
+    monkeypatch.setattr(
+        rag_service, "embed_chunks",
+        lambda chunks, on_progress=None: [[0.5]] * len(chunks),
+    )
 
     def _index(namespace, doc_id, chunks, **kw):
         for i, chunk in enumerate(chunks):
@@ -68,12 +71,41 @@ def mock_vectors(monkeypatch):
 def test_add_text_writes_catalog_row_and_indexes(workspace, mock_vectors):
     item = rag_admin_service.add_text(workspace, "Policy", "Refunds within 30 days.")
     assert item.kind == "text" and item.chunk_count == 2
+    assert item.status == "ready"
     # A catalog row exists.
     docs = rag_admin_service.list_documents(workspace)
     assert [d.id for d in docs] == [item.id]
     # Chunks were indexed under this document id, in the workspace RAG namespace.
     ns = rag_service.rag_namespace(workspace)
     assert mock_vectors["indexed"] == [(ns, item.id, 2)]
+
+
+def test_begin_text_writes_a_processing_row_with_a_known_total_before_embedding(workspace, mock_vectors):
+    """The fast phase alone: a row must appear immediately with a real chunk
+    total (chunking is free) and no chunks indexed yet - the honest-progress
+    contract depends on the total being known from the moment the row exists.
+    """
+    item, chunks = rag_admin_service.begin_text(workspace, "Policy", "Refunds within 30 days.")
+    assert item.status == "processing"
+    assert item.chunk_count == 0
+    assert item.progress_current == 0
+    assert item.progress_total == 2
+    assert chunks == ["chunk-a", "chunk-b"]
+    assert mock_vectors["indexed"] == []
+
+
+def test_run_ingest_abandons_cleanly_when_the_row_is_deleted_mid_flight(workspace, mock_vectors):
+    """An admin deleting a still-processing document must not resurrect it as
+    a Chroma entry once the background job catches up.
+    """
+    item, chunks = rag_admin_service.begin_text(workspace, "Policy", "Refunds within 30 days.")
+    assert rag_admin_service.delete_document(workspace, item.id) is True
+
+    result = rag_admin_service.run_ingest(workspace, item.id, chunks)
+
+    assert result is None
+    assert mock_vectors["indexed"] == []
+    assert rag_admin_service.list_documents(workspace) == []
 
 
 def test_add_text_embeds_once_and_passes_the_vectors_to_the_index(workspace, mock_vectors):
@@ -123,7 +155,7 @@ def test_a_shorter_rewrite_drops_only_the_stale_tail(workspace, mock_vectors, mo
     assert ("delete_tail", second.id, 1) in mock_vectors["order"]
 
 
-def test_failed_reindex_leaves_the_previous_document_intact(workspace, mock_vectors, monkeypatch):
+def test_failed_reindex_marks_the_row_failed_but_keeps_the_old_chunks(workspace, mock_vectors, monkeypatch):
     first = rag_admin_service.add_text(workspace, "Policy", "Same body.")
     chunks_before = dict(mock_vectors["store"])
 
@@ -134,10 +166,16 @@ def test_failed_reindex_leaves_the_previous_document_intact(workspace, mock_vect
     with pytest.raises(RuntimeError):
         rag_admin_service.add_text(workspace, "Policy renamed", "Same body.")
 
-    # The catalog row survived the rollback with its original title, and its
-    # chunks were never deleted — the document grounds answers as it did before.
+    # The catalog row is honest about the failed attempt (new title, status
+    # "failed", the reason recorded) rather than silently reverting to the old
+    # document as if nothing happened. Its chunks were never touched, so the
+    # previously-indexed content is still exactly what it was.
     docs = rag_admin_service.list_documents(workspace)
-    assert [(d.id, d.title) for d in docs] == [(first.id, "Policy")]
+    assert len(docs) == 1
+    assert docs[0].id == first.id
+    assert docs[0].title == "Policy renamed"
+    assert docs[0].status == "failed"
+    assert "chroma down" in docs[0].error_message
     assert mock_vectors["deleted"] == []
     assert mock_vectors["store"] == chunks_before
 
@@ -222,13 +260,13 @@ def test_repo_dedupe_by_sha_is_enforced(workspace):
 
     with get_session() as session:
         ws_id = session.query(Workspace).filter_by(slug=workspace).first().id
-        rag_document_repo.create(
+        rag_document_repo.start_processing_new(
             session, ws_id, title="A", kind="text", source="paste",
-            source_ref=None, sha="deadbeef", char_count=10, chunk_count=1,
+            source_ref=None, sha="deadbeef", char_count=10, progress_total=1,
         )
     with pytest.raises(IntegrityError):
         with get_session() as session:
-            rag_document_repo.create(
+            rag_document_repo.start_processing_new(
                 session, ws_id, title="B", kind="text", source="paste",
-                source_ref=None, sha="deadbeef", char_count=10, chunk_count=1,
+                source_ref=None, sha="deadbeef", char_count=10, progress_total=1,
             )
