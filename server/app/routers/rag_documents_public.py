@@ -29,8 +29,13 @@ def list_rag_documents(
 
     Only what a picker needs — id, title, kind — never document content.
     """
+    # Built INSIDE the session block: get_session() commits on exit, which
+    # expires every loaded attribute (SQLAlchemy's expire_on_commit default),
+    # and the session is closed by the time the `with` exits — reading a
+    # column off `d` afterwards is a detached-instance error, not a cache hit.
     with get_session() as session:
         docs = rag_document_repo.list_for_workspace(session, workspace.workspace_id)
+        items = [RagDocumentPickerItem(id=d.id, title=d.title, kind=d.kind) for d in docs]
 
-    logger.info("GET /rag-documents workspace=%s count=%d", workspace.workspace_slug, len(docs))
-    return [RagDocumentPickerItem(id=d.id, title=d.title, kind=d.kind) for d in docs]
+    logger.info("GET /rag-documents workspace=%s count=%d", workspace.workspace_slug, len(items))
+    return items
