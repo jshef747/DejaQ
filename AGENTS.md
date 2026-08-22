@@ -135,6 +135,10 @@ Measured (`evals/rag_recall/`, `dejaq-rag-recall/report.md`): `collection.query(
 
 `server/dejaq.db`, `dejaq_stats.db`, `chroma_data/`, `dump.rdb`, and `celerybeat-schedule` are gitignored, so `git status` shows a treehouse worktree as clean even when a previous, unrelated task left real data in them (observed twice: an orphaned `dejaq.db` stamped with an alembic revision absent from this checkout's history, workspaces named for unrelated features). Before trusting local DB/vector state in a treehouse worktree, check for this rather than assuming a fresh checkout - move the stale files aside with a timestamp suffix (never delete) and let migrations/services recreate fresh ones, same as `dejaq-knowledge-base-review/report.md` section 1 already did once.
 
+## Chat app dev server silently fails to hydrate when hit via `127.0.0.1`, not `localhost`
+
+Next 16 blocks `/_next/*` dev-asset requests (HMR, RSC payload chunks, fonts) from an origin outside `allowedDevOrigins`, and its default allowlist does not treat `"127.0.0.1"` as equivalent to `"localhost"`. Hitting the chat dev server at `http://127.0.0.1:<port>` renders the static shell fine but every client effect silently never runs (no console error, no React warning) - the only clue is a "Blocked cross-origin request to Next.js dev resource" line in the dev server's own terminal log, not the browser. Confirmed reproducible on unmodified code (not specific to any one branch's changes): the exact same page hydrates fine at `http://localhost:<port>`. Fixed in `chat/next.config.mjs` - `127.0.0.1` is now always in `allowedDevOrigins` alongside the existing `DEJAQ_LAN_IP` conditional entry - so this should no longer bite, but if a from-scratch chat dev server ever looks "connected: false, nothing renders" again with a clean console, check that config and the server's own terminal log before suspecting the app code. Found while browser-testing `fm/dejaq-rag-at-reference` against an isolated stack addressed by IP.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.
