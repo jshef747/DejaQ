@@ -358,6 +358,7 @@ class MemoryService:
         file_sha: str | None = None,
         file_kind: str | None = None,
         authored: str | None = None,
+        rag_document_ids: str | None = None,
     ) -> str:
         doc_id = derive_doc_id(
             normalized_query,
@@ -395,6 +396,15 @@ class MemoryService:
         # serve-path adjuster skip.
         if authored:
             metadata["authored"] = authored
+        # Grounding provenance: which RAG knowledge-base document(s) this
+        # answer was generated from, comma-joined ("3" or "3,7") since Chroma
+        # metadata values are scalar and one answer can draw on several
+        # chunks from different documents. Absent for ungrounded answers.
+        # Read by grounded_entry_ids() so an edited/deleted document can purge
+        # exactly the cache entries it actually grounded, not the whole
+        # namespace — see rag_admin_service.delete_document.
+        if rag_document_ids:
+            metadata["rag_document_ids"] = rag_document_ids
         self._collection.upsert(
             ids=[doc_id],
             embeddings=[embedding],
@@ -637,6 +647,45 @@ class MemoryService:
         ids = self.image_entry_ids()
         deleted = sum(1 for entry_id in ids if self.delete_entry(entry_id))
         logger.info("Purged %d image entries from %s", deleted, self._collection.name)
+        return deleted
+
+    def grounded_entry_ids(self, rag_document_id: int) -> list[str]:
+        """IDs of entries whose cached answer was grounded in this RAG document.
+
+        Matched in Python against the comma-joined `rag_document_ids`
+        metadata field, mirroring `image_entry_ids` above — Chroma metadata
+        values are scalar, so an entry grounded in several documents at once
+        cannot be matched with a `where` filter.
+        """
+        try:
+            results = self._collection.get(include=["metadatas"])
+        except Exception:
+            logger.error("Failed to list entries for RAG-grounded purge", exc_info=True)
+            return []
+        target = str(rag_document_id)
+        ids = []
+        for entry_id, meta in zip(results["ids"], results["metadatas"] or []):
+            raw = (meta or {}).get("rag_document_ids") or ""
+            if target in raw.split(","):
+                ids.append(entry_id)
+        return ids
+
+    def purge_grounded_entries(self, rag_document_id: int) -> int:
+        """Delete every entry grounded in this RAG document. Returns the count removed.
+
+        Called when the document is deleted (rag_admin_service.delete_document)
+        — the only way this codebase corrects a document's content is delete
+        the wrong version, then add the corrected text as a new document (see
+        rag_admin_service's module docstring) — so a stale grounded answer
+        never outlives the document it was built from. delete_entry cascades
+        to any aliases of a purged entry, same as every other purge path.
+        """
+        ids = self.grounded_entry_ids(rag_document_id)
+        deleted = sum(1 for entry_id in ids if self.delete_entry(entry_id))
+        logger.info(
+            "Purged %d RAG-grounded entries (doc_id=%s) from %s",
+            deleted, rag_document_id, self._collection.name,
+        )
         return deleted
 
     def count_file_entries(self, file_sha: str) -> int:

@@ -25,12 +25,14 @@ import time
 from dataclasses import dataclass
 
 import chromadb
+import numpy as np
 
 from app.config import (
     CHROMA_HOST,
     CHROMA_PORT,
     RAG_CHUNK_CHARS,
     RAG_CHUNK_OVERLAP,
+    RAG_EXHAUSTIVE_MAX_CHUNKS,
 )
 from app.services.memory_chromaDB import embed_text
 
@@ -196,6 +198,50 @@ def index_document(
     return len(chunks)
 
 
+def _ann_query(collection, query_embedding: list[float], n: int) -> tuple[list, list, list]:
+    """ChromaDB's own HNSW (approximate) search."""
+    results = collection.query(
+        query_embeddings=[query_embedding],
+        n_results=n,
+        include=["documents", "metadatas", "distances"],
+    )
+    if not (results["ids"] and results["ids"][0]):
+        return [], [], []
+    docs = results["documents"][0] if results["documents"] else []
+    metas = results["metadatas"][0] if results["metadatas"] else []
+    dists = results["distances"][0] if results["distances"] else []
+    return docs, metas, dists
+
+
+def _exhaustive_query(collection, query_embedding: list[float], n: int) -> tuple[list, list, list]:
+    """Brute-force linear scan over every chunk in the collection.
+
+    ChromaDB's HNSW index can miss a chunk that is objectively the best
+    match: measured on a real knowledge base where one large document's
+    chunks dominated the approximate graph, a chunk at cosine distance 0.044
+    (a near-perfect match) was never returned even at n_results=2000 of
+    5,136 total chunks — see evals/rag_recall/ and docs/rag-layer.md. A
+    curated knowledge base is small enough (gated by
+    RAG_EXHAUSTIVE_MAX_CHUNKS) that an exact scan is cheap and removes the
+    failure mode outright instead of tuning around it.
+
+    `embed_text` L2-normalizes its output, so cosine distance is `1 - dot
+    product` — the same metric the collection is created with
+    (`"hnsw:space": "cosine"`), just computed exactly instead of approximately.
+    """
+    got = collection.get(include=["embeddings", "documents", "metadatas"])
+    if not got["ids"]:
+        return [], [], []
+    embeddings = np.asarray(got["embeddings"], dtype=np.float32)
+    q = np.asarray(query_embedding, dtype=np.float32)
+    distances = 1.0 - (embeddings @ q)
+    order = np.argsort(distances)[:n]
+    docs = [got["documents"][i] for i in order]
+    metas = [got["metadatas"][i] for i in order]
+    dists = [float(distances[i]) for i in order]
+    return docs, metas, dists
+
+
 def retrieve(
     namespace: str,
     query: str,
@@ -205,26 +251,25 @@ def retrieve(
     """Return the closest RAG chunks to `query`, filtered by cosine distance.
 
     Returns [] when the collection is empty or nothing clears max_distance — the
-    caller then answers exactly as it does today, without grounding.
+    caller then answers exactly as it does today, without grounding. Below
+    RAG_EXHAUSTIVE_MAX_CHUNKS total chunks, searches exhaustively rather than
+    through Chroma's approximate index — see `_exhaustive_query`.
     """
     collection = get_rag_collection(namespace)
     count = collection.count()
     if count == 0:
         return []
     n = min(max(1, top_k), count)
-    results = collection.query(
-        query_embeddings=[embed_text(query)],
-        n_results=n,
-        include=["documents", "metadatas", "distances"],
-    )
-    if not (results["ids"] and results["ids"][0]):
+    query_embedding = embed_text(query)
+    if count <= RAG_EXHAUSTIVE_MAX_CHUNKS:
+        docs, metas, dists = _exhaustive_query(collection, query_embedding, n)
+    else:
+        docs, metas, dists = _ann_query(collection, query_embedding, n)
+    if not docs:
         return []
 
     out: list[RagChunk] = []
-    docs = results["documents"][0] if results["documents"] else []
-    metas = results["metadatas"][0] if results["metadatas"] else []
-    dists = results["distances"][0] if results["distances"] else []
-    for i in range(len(results["ids"][0])):
+    for i in range(len(docs)):
         dist = float(dists[i]) if i < len(dists) else 1.0
         if dist > max_distance:
             continue
@@ -242,6 +287,36 @@ def retrieve(
             )
         )
     return out
+
+
+def retrieve_multi(
+    namespace: str,
+    queries: list[str],
+    top_k: int,
+    max_distance: float,
+) -> list[RagChunk]:
+    """Retrieve against several query texts and merge by best distance.
+
+    Used because the context enricher's standalone rewrite of a follow-up can
+    drift far enough from the user's original wording to lose a chunk
+    retrieval would have found on the raw text (measured in
+    evals/rag_recall/measure_enrichment.py). Duplicate/blank query texts are
+    only searched once, so this costs nothing extra on a single-turn request
+    (enrich() is a no-op without history — same text twice, one search).
+    Each (document, chunk) keeps its best distance across every query it
+    matched under; the merged results are re-sorted and capped at top_k.
+    """
+    seen_queries = list(dict.fromkeys(q for q in queries if q))
+    if not seen_queries:
+        return []
+    best: dict[tuple[int, int], RagChunk] = {}
+    for query in seen_queries:
+        for chunk in retrieve(namespace, query, top_k, max_distance):
+            key = (chunk.rag_document_id, chunk.chunk_index)
+            existing = best.get(key)
+            if existing is None or chunk.distance < existing.distance:
+                best[key] = chunk
+    return sorted(best.values(), key=lambda c: c.distance)[:top_k]
 
 
 def delete_document_chunks(namespace: str, rag_document_id: int) -> None:

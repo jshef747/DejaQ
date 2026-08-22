@@ -994,6 +994,7 @@ def _bg_generalize_and_store(
     image_text: str | None = None,
     file_sha: str | None = None,
     file_kind: str | None = None,
+    rag_document_ids: str | None = None,
 ) -> None:
     start = time.perf_counter()
     doc_id = _doc_id(clean_query, file_sha, image_text=image_text, image_dhash=image_dhash)
@@ -1035,6 +1036,7 @@ def _bg_generalize_and_store(
             image_dhash=image_dhash, image_clip=image_clip,
             image_kind=image_kind, image_text=image_text,
             file_sha=file_sha, file_kind=file_kind,
+            rag_document_ids=rag_document_ids,
         )
         latency_ms = int((time.perf_counter() - start) * 1000)
         query = content_snippet(clean_query)
@@ -1971,6 +1973,14 @@ async def run_chat_pipeline(
             classification = {**classification, "complexity": "hard", "task_type": "rag_external"}
         # The prompt actually sent to whichever model runs, grounded if RAG hit.
         gen_query = _query_with_rag_context(user_query, rag_context)
+        # Grounding provenance for the cache entry this answer may become —
+        # see store_interaction's rag_document_ids param. None when there was
+        # no RAG hit (also true for every image/file request, since retrieval
+        # above is skipped for those).
+        _rag_document_ids = (
+            ",".join(str(i) for i in sorted({c.rag_document_id for c in rag_context}))
+            if rag_context else None
+        )
         _file_task_type = classification.get("task_type")
         if _file_task_type == "file_unreadable_no_rescue":
             # Nothing extracted, nothing to inline - tell the model plainly so
@@ -2441,7 +2451,10 @@ async def run_chat_pipeline(
                             _apply_kwargs: dict = {
                                 "headers": {"dejaq_model_profile": model_profile},
                                 "ignore_result": True,
-                                "kwargs": {"workspace_slug": workspace_slug},
+                                "kwargs": {
+                                    "workspace_slug": workspace_slug,
+                                    "rag_document_ids": _rag_document_ids,
+                                },
                             }
                             if _request_has_image:
                                 _apply_kwargs["kwargs"].update({
@@ -2481,6 +2494,7 @@ async def run_chat_pipeline(
                                 image_text=_img_text,
                                 file_sha=_file_sha,
                                 file_kind=_file_kind,
+                                rag_document_ids=_rag_document_ids,
                             )
                             store_status = "background-fallback"
                     else:
@@ -2498,6 +2512,7 @@ async def run_chat_pipeline(
                             image_text=_img_text,
                             file_sha=_file_sha,
                             file_kind=_file_kind,
+                            rag_document_ids=_rag_document_ids,
                         )
                         store_status = "background"
 

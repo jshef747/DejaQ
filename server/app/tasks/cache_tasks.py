@@ -103,6 +103,7 @@ def generalize_and_store_task(
     image_text: str | None = None,
     file_sha: str | None = None,
     file_kind: str | None = None,
+    rag_document_ids: str | None = None,
 ) -> dict:
     """Generalize an LLM answer (via Gemma 4 E2B) and store in ChromaDB cache.
 
@@ -180,6 +181,7 @@ def generalize_and_store_task(
             image_dhash=image_dhash, image_clip=image_clip,
             image_kind=image_kind, image_text=image_text,
             file_sha=file_sha, file_kind=file_kind,
+            rag_document_ids=rag_document_ids,
         )
         latency_ms = int((time.perf_counter() - start) * 1000)
         logger.info(

@@ -1133,7 +1133,8 @@ def test_celery_store_keeps_legacy_args_and_sends_profile_header(monkeypatch):
     # workspace_slug rides as a kwarg (plain string) so the Celery worker can
     # resolve its own fresh generalizer config instead of trusting a value
     # that may be minutes stale by the time the task actually runs.
-    assert captured["kwargs"] == {"workspace_slug": "demo"}
+    # rag_document_ids is None — this question isn't RAG-grounded.
+    assert captured["kwargs"] == {"workspace_slug": "demo", "rag_document_ids": None}
 
 
 def test_chat_completions_logs_compact_miss_summary(monkeypatch, caplog):

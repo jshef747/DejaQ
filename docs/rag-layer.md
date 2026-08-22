@@ -227,6 +227,7 @@ All settings live in `server/app/config.py` (env-overridable):
 | `DEJAQ_RAG_ENABLED` | `true` | Master switch. Off means no retrieval **and** no ingestion: every add path (dashboard, API, CLI) is refused at `rag_admin_service`, so knowledge cannot accumulate that nothing will ever read. Listing and deleting stay available so existing documents can be cleaned up |
 | `DEJAQ_RAG_TOP_K` | `4` | How many chunks to retrieve per query |
 | `DEJAQ_RAG_MAX_DISTANCE` | `0.35` | Cosine-distance ceiling a chunk must clear to be injected (looser than the 0.15 cache-trust distance — we want *related* context, not an exact match; **tune against real data** — see below) |
+| `DEJAQ_RAG_EXHAUSTIVE_MAX_CHUNKS` | `20,000` | Below this many total chunks in a workspace's collection, `retrieve()` scans exhaustively (exact cosine, via a NumPy matmul) instead of Chroma's approximate HNSW index — see below |
 | `DEJAQ_RAG_CHUNK_CHARS` | `1000` | Chunk window size when splitting a document |
 | `DEJAQ_RAG_CHUNK_OVERLAP` | `150` | Overlap between adjacent chunks |
 | `DEJAQ_RAG_MAX_CONTEXT_CHARS` | `6000` | Cap on total injected context per prompt (protects the local model's context budget) |
@@ -255,6 +256,32 @@ example above). Raise it toward `0.45–0.50` for higher recall on paraphrased
 questions, accepting more risk of injecting a loosely-related chunk; keep it low
 if wrong groundings are unacceptable. There is no swept, corpus-derived value here
 (unlike the image gate) — it is a per-deployment recall/precision dial.
+
+### `DEJAQ_RAG_EXHAUSTIVE_MAX_CHUNKS` and why retrieval isn't purely approximate
+
+Chroma's HNSW index can fail to return a chunk that is *objectively* the best
+match — not a threshold problem, a search-recall problem. Measured on a
+5-document, ~4,943-chunk synthetic knowledge base (one document ~80% of all
+chunks, matching how a curated KB accumulates over time): the approximate
+search found the correct document for only 2/15 realistic questions, even
+though an exhaustive query proved 5 of those misses had a true match well
+inside the distance gate (crowded out by the large document's chunks
+dominating the graph — even `n_results=2000` of 5,136 chunks in a very similar
+case did not recover it). Switching to an exact scan below
+`RAG_EXHAUSTIVE_MAX_CHUNKS` chunks fixed every crowd-out miss (recall@1 2/15 →
+5/15, all remaining misses genuinely outside the distance gate) with 0/5 false
+positives before and after, at 635ms p50 / 908ms p95 — well under a second at
+this scale. The `20,000` default is a conservative, deliberately *untuned*
+ceiling — real latency scaling past ~5k chunks hasn't been measured; re-measure
+(`evals/rag_recall/measure_latency.py` has a starting point) before trusting it
+at real production scale, the same way `DEJAQ_RAG_MAX_DISTANCE` needs tuning
+against real data.
+
+A single-document, `where`-filtered query (what explicit document reference
+uses) does **not** have this problem — measured 14/14 (100%) recall finding
+the true best chunk within a 4,030-chunk document embedded in the same
+collection, at ~11ms. Crowd-out is a whole-collection phenomenon; do not add
+exhaustive-scan machinery to the filtered path, it isn't needed there.
 
 ---
 

@@ -420,3 +420,66 @@ class TestStoreAliasRace:
         assert svc.get_entry_metadata(parent_id) is None
         expected_alias_id = hashlib.sha256(alias_query.encode()).hexdigest()[:16]
         assert svc.get_entry_metadata(expected_alias_id) is None
+
+
+@chroma_required
+class TestGroundedEntries:
+    def test_grounded_entry_ids_matches_on_rag_document_id(self):
+        svc = _make_svc("grounded_ids_test")
+        grounded_id = svc.store_interaction(
+            "how many vacation days", "27 days.", "orig", "u1",
+            rag_document_ids="3",
+        )
+        other_doc_id = svc.store_interaction(
+            "what is the badge policy", "Rotates every 90 days.", "orig", "u1",
+            rag_document_ids="7",
+        )
+        ungrounded_id = svc.store_interaction(
+            "what is 2+2", "4.", "orig", "u1",
+        )
+
+        assert svc.grounded_entry_ids(3) == [grounded_id]
+        assert other_doc_id not in svc.grounded_entry_ids(3)
+        assert ungrounded_id not in svc.grounded_entry_ids(3)
+
+    def test_grounded_entry_ids_handles_multiple_documents_per_entry(self):
+        svc = _make_svc("grounded_ids_multi_test")
+        entry_id = svc.store_interaction(
+            "combined question", "answer drawing on two docs.", "orig", "u1",
+            rag_document_ids="3,7",
+        )
+        assert svc.grounded_entry_ids(3) == [entry_id]
+        assert svc.grounded_entry_ids(7) == [entry_id]
+        assert svc.grounded_entry_ids(9) == []
+
+    def test_purge_grounded_entries_deletes_only_the_matching_document(self):
+        svc = _make_svc("purge_grounded_test")
+        stale_id = svc.store_interaction(
+            "how many vacation days", "27 days (stale).", "orig", "u1",
+            rag_document_ids="3",
+        )
+        other_id = svc.store_interaction(
+            "what is the badge policy", "Rotates every 90 days.", "orig", "u1",
+            rag_document_ids="7",
+        )
+
+        deleted = svc.purge_grounded_entries(3)
+
+        assert deleted == 1
+        assert svc.get_entry_metadata(stale_id) is None
+        assert svc.get_entry_metadata(other_id) is not None
+
+    def test_purge_grounded_entries_cascades_to_aliases(self):
+        svc = _make_svc("purge_grounded_alias_test")
+        parent_id = svc.store_interaction(
+            "how many vacation days do i get", "27 days.", "orig", "u1",
+            rag_document_ids="3",
+        )
+        alias_id = svc.store_alias("how many vacation days do i recieve", parent_id)
+        assert alias_id is not None
+
+        deleted = svc.purge_grounded_entries(3)
+
+        assert deleted == 1  # cascade-removed aliases aren't counted, matching evict_below_floor
+        assert svc.get_entry_metadata(parent_id) is None
+        assert svc.get_entry_metadata(alias_id) is None

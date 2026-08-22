@@ -187,6 +187,49 @@ def add_url(
     return _store(workspace_slug, rag_ingest.from_url(url, title))
 
 
+def _purge_grounded_cache_entries(workspace_slug: str, doc_id: int) -> int:
+    """Delete cache entries grounded in this document, across every department.
+
+    This codebase has no in-place document edit (see the module docstring):
+    correcting a document means deleting the wrong version and adding the
+    corrected text as a new document (a new id). So a delete is the one place
+    that reliably marks a document's content as no longer current, and the
+    place a stale grounded cache answer must stop being served from. Only
+    entries carrying THIS doc's id in their `rag_document_ids` provenance are
+    removed - every other cache entry, including ones from other documents or
+    the ordinary Q&A cache, is untouched. Entries stored before this fix
+    shipped carry no provenance and cannot be identified this way; they age
+    out through the existing score-eviction floor instead.
+
+    RAG knowledge is shared across a workspace's departments (one
+    "{workspace}__rag_kb" collection, not per-department), but each
+    department has its OWN Q&A cache namespace, so every one of them needs
+    sweeping - same fan-out `dejaq-admin cache purge-images` uses.
+    """
+    from app.services import admin_service
+    from app.services.memory_chromaDB import get_memory_service
+
+    try:
+        departments = admin_service.list_departments(workspace_slug=workspace_slug)
+    except WorkspaceNotFound:
+        return 0
+    namespaces = {d.cache_namespace for d in departments}
+    # Requests with no X-DejaQ-Department header land here regardless of
+    # whether any department exists (app/middleware/api_key.py).
+    namespaces.add(f"{workspace_slug}--default")
+
+    deleted = 0
+    for namespace in namespaces:
+        try:
+            deleted += get_memory_service(namespace).purge_grounded_entries(doc_id)
+        except Exception:
+            logger.warning(
+                "RAG-grounded cache purge failed for namespace=%s doc_id=%s",
+                namespace, doc_id, exc_info=True,
+            )
+    return deleted
+
+
 def delete_document(
     workspace_slug: str,
     doc_id: int,
@@ -199,5 +242,9 @@ def delete_document(
             raise RagDocumentNotFound(doc_id)
         rag_service.delete_document_chunks(namespace, doc_id)
         rag_document_repo.delete(session, workspace.id, doc_id)
-    logger.info("rag_delete workspace=%s doc_id=%s", workspace_slug, doc_id)
+    purged = _purge_grounded_cache_entries(workspace_slug, doc_id)
+    logger.info(
+        "rag_delete workspace=%s doc_id=%s purged_cache_entries=%d",
+        workspace_slug, doc_id, purged,
+    )
     return True

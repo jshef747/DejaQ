@@ -349,6 +349,13 @@ RAG_ENABLED = _get_bool("DEJAQ_RAG_ENABLED", True)
 # it in production; too loose injects noise, too tight injects nothing.
 RAG_TOP_K = _get_int("DEJAQ_RAG_TOP_K", 4)
 RAG_MAX_DISTANCE = _get_float("DEJAQ_RAG_MAX_DISTANCE", 0.35)
+# Below this many total chunks in a workspace's knowledge base, retrieve()
+# searches EXHAUSTIVELY (a linear scan) instead of through Chroma's HNSW
+# approximate index. Measured: HNSW can miss a chunk that is objectively the
+# best match when one large document's chunks dominate the graph. Rationale,
+# before/after recall numbers, and the (deliberately conservative, untuned
+# past ~5k chunks) reasoning behind this default: docs/rag-layer.md.
+RAG_EXHAUSTIVE_MAX_CHUNKS = _get_int("DEJAQ_RAG_EXHAUSTIVE_MAX_CHUNKS", 20_000)
 # Chunking: window size and overlap in characters when splitting a document.
 RAG_CHUNK_CHARS = _get_int("DEJAQ_RAG_CHUNK_CHARS", 1000)
 RAG_CHUNK_OVERLAP = _get_int("DEJAQ_RAG_CHUNK_OVERLAP", 150)

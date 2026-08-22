@@ -77,6 +77,21 @@ class _FakeCollection:
             "distances": [[0.10, 0.90]],
         }
 
+    def get(self, include):
+        # Same two candidates as query(), but as stored vectors for the
+        # exhaustive path: query() is mocked to [0.0, 1.0, 0.0], so a 0.9
+        # component gives dot=0.9 -> distance 0.10, and 0.1 -> distance 0.90 -
+        # matching query()'s hardcoded distances above.
+        return {
+            "ids": ["7:0", "7:1"],
+            "embeddings": [[0.0, 0.9, 0.0], [0.0, 0.1, 0.0]],
+            "documents": ["close chunk", "far chunk"],
+            "metadatas": [
+                {"rag_document_id": 7, "title": "Doc", "chunk_index": 0},
+                {"rag_document_id": 7, "title": "Doc", "chunk_index": 1},
+            ],
+        }
+
     def delete(self, where):
         self.deleted_where = where
 
@@ -107,13 +122,44 @@ def test_index_empty_chunks_stores_nothing(fake_collection):
 
 
 def test_retrieve_filters_by_max_distance(fake_collection):
-    fake_collection._count = 2  # non-empty so retrieve issues the query
+    # count <= RAG_EXHAUSTIVE_MAX_CHUNKS by default, so this exercises the
+    # exhaustive path (collection.get + brute-force distance).
+    fake_collection._count = 2  # non-empty so retrieve issues a search
     chunks = rag_service.retrieve("acme__rag", "query", top_k=4, max_distance=0.35)
     # Only the 0.10 candidate clears the 0.35 ceiling; the 0.90 one is dropped.
     assert len(chunks) == 1
     assert chunks[0].text == "close chunk"
     assert chunks[0].distance == pytest.approx(0.10)
     assert chunks[0].rag_document_id == 7
+
+
+def test_retrieve_above_exhaustive_threshold_uses_ann(fake_collection, monkeypatch):
+    # Same fixture, same expected result, but forced over the threshold so
+    # retrieve() must take the collection.query() (ANN) path instead.
+    monkeypatch.setattr(rag_service, "RAG_EXHAUSTIVE_MAX_CHUNKS", 0)
+    fake_collection._count = 2
+    chunks = rag_service.retrieve("acme__rag", "query", top_k=4, max_distance=0.35)
+    assert len(chunks) == 1
+    assert chunks[0].text == "close chunk"
+    assert chunks[0].distance == pytest.approx(0.10)
+
+
+def test_exhaustive_query_ranks_by_true_distance():
+    class _Col:
+        def get(self, include):
+            return {
+                "ids": ["a", "b", "c"],
+                "embeddings": [[0.0, 0.5, 0.0], [0.0, 0.9, 0.0], [0.0, 0.1, 0.0]],
+                "documents": ["mid", "close", "far"],
+                "metadatas": [{}, {}, {}],
+            }
+
+    docs, metas, dists = rag_service._exhaustive_query(_Col(), [0.0, 1.0, 0.0], n=2)
+    # Sorted by TRUE distance ascending, not insertion order: "close" (0.9
+    # dot -> 0.10 distance) first, "mid" second, "far" excluded by n=2.
+    assert docs == ["close", "mid"]
+    assert dists[0] == pytest.approx(0.10)
+    assert dists[1] == pytest.approx(0.50)
 
 
 def test_retrieve_empty_collection_returns_nothing(monkeypatch):
@@ -124,6 +170,54 @@ def test_retrieve_empty_collection_returns_nothing(monkeypatch):
     monkeypatch.setattr(rag_service, "get_rag_collection", lambda ns: _Empty())
     monkeypatch.setattr(rag_service, "embed_text", lambda text: [0.0])
     assert rag_service.retrieve("acme__rag", "q", top_k=4, max_distance=0.35) == []
+
+
+# --- retrieve_multi (query several texts, merge by best distance) -------------
+
+def test_retrieve_multi_merges_and_dedupes_by_best_distance(monkeypatch):
+    per_query = {
+        "enriched": [
+            rag_service.RagChunk(text="a", title="A", distance=0.30, rag_document_id=1, chunk_index=0),
+        ],
+        "original": [
+            rag_service.RagChunk(text="a", title="A", distance=0.05, rag_document_id=1, chunk_index=0),
+            rag_service.RagChunk(text="b", title="B", distance=0.20, rag_document_id=2, chunk_index=0),
+        ],
+    }
+    monkeypatch.setattr(rag_service, "retrieve", lambda ns, q, top_k, max_distance: per_query[q])
+
+    out = rag_service.retrieve_multi("acme__rag", ["enriched", "original"], top_k=4, max_distance=0.35)
+
+    # doc 1's chunk appears under both queries; the better (lower) distance wins,
+    # and doc 2 (found only via "original") is still included, sorted first-by-distance.
+    assert [(c.rag_document_id, round(c.distance, 2)) for c in out] == [(1, 0.05), (2, 0.20)]
+
+
+def test_retrieve_multi_dedupes_identical_query_text(monkeypatch):
+    calls = []
+
+    def fake_retrieve(ns, q, top_k, max_distance):
+        calls.append(q)
+        return []
+
+    monkeypatch.setattr(rag_service, "retrieve", fake_retrieve)
+    rag_service.retrieve_multi("acme__rag", ["same", "same"], top_k=4, max_distance=0.35)
+    assert calls == ["same"]  # single-turn requests (enriched == original) cost one search
+
+
+def test_retrieve_multi_caps_at_top_k(monkeypatch):
+    chunks = [
+        rag_service.RagChunk(text=str(i), title="T", distance=i / 10, rag_document_id=i, chunk_index=0)
+        for i in range(5)
+    ]
+    monkeypatch.setattr(rag_service, "retrieve", lambda ns, q, top_k, max_distance: chunks)
+    out = rag_service.retrieve_multi("acme__rag", ["q"], top_k=2, max_distance=0.35)
+    assert len(out) == 2
+    assert [c.rag_document_id for c in out] == [0, 1]
+
+
+def test_retrieve_multi_empty_queries_returns_nothing():
+    assert rag_service.retrieve_multi("acme__rag", ["", None], top_k=4, max_distance=0.35) == []
 
 
 def test_delete_document_chunks_targets_the_document(fake_collection):
