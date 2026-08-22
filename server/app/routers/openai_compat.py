@@ -1916,18 +1916,26 @@ async def run_chat_pipeline(
         elif routing_mode == ROUTING_MODE_HARD_EXTERNAL:
             classification = {"complexity": "hard", "score": 1.0, "task_type": "forced_external"}
         else:
-            # LaBSE decides routing for every language, no per-language
+            # LaBSE decides the score for every language, no per-language
             # branching - it replaced both the old NVIDIA classifier (still
             # in the tree, LOAD_LEGACY_CLASSIFIER, for staging) and the
             # Hebrew-specific judge (removed entirely - see
             # fm/dejaq-classifier-wire-in), since it was trained on labelled
-            # Hebrew directly and the judge it replaced was not.
+            # Hebrew directly and the judge it replaced was not. The
+            # easy/hard cut is the workspace's own routing_threshold (falls
+            # back to DEJAQ_ROUTING_THRESHOLD when unset), not the
+            # classifier's internal default - see llm_config.routing_threshold.
             try:
                 with trace.step("classify"):
                     classification = _labse_classifier.predict_complexity(user_query)
             except Exception:
                 logger.exception("LaBSE classifier failed")
                 classification = {"complexity": "easy", "score": 0.0, "task_type": "Unknown"}
+            else:
+                classification = {
+                    **classification,
+                    "complexity": "hard" if classification["score"] >= llm_config.routing_threshold else "easy",
+                }
 
         complexity = classification["complexity"]
         route = "external" if complexity == "hard" else "local"

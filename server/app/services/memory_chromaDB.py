@@ -178,11 +178,26 @@ class MemoryService:
         start = time.time()
         query_embedding = _embed(normalized_query)
         n = min(_LOOKUP_N_RESULTS, self._collection.count() or 1)
-        results = self._collection.query(
-            query_embeddings=[query_embedding],
-            n_results=n,
-            include=["documents", "metadatas", "distances"],
-        )
+        try:
+            results = self._collection.query(
+                query_embeddings=[query_embedding],
+                n_results=n,
+                include=["documents", "metadatas", "distances"],
+            )
+        except chromadb.errors.InvalidArgumentError as exc:
+            if "dimension" in str(exc):
+                # The collection was built against a different embedding model
+                # (different vector width) than TEXT_EMBEDDING_MODEL is
+                # currently producing. There is no automatic rebuild - wipe
+                # the collection (or `dejaq-admin cache purge-images`'s
+                # sibling for text, once it exists) and let it refill.
+                logger.error(
+                    "Cache collection '%s' was built with a different embedding model "
+                    "and needs rebuilding (%s)", self._collection.name, exc,
+                )
+            else:
+                logger.exception("Cache lookup failed")
+            return [], None, None
 
         latency_ms = (time.time() - start) * 1000
         band_ceiling = max(CACHE_TRUST_DISTANCE, CACHE_BAND_MAX_DISTANCE)

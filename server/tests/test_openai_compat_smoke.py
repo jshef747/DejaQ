@@ -864,7 +864,7 @@ def test_external_route_reports_real_provider_usage_not_heuristic(monkeypatch):
 
     monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
     monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
-    monkeypatch.setattr(openai_compat, "_classifier", HardClassifier())
+    monkeypatch.setattr(openai_compat, "_labse_classifier", HardClassifier())
     monkeypatch.setattr(openai_compat, "_external_llm", CapturingExternalLLM())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMemory())
     monkeypatch.setattr(
