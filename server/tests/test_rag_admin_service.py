@@ -1,4 +1,4 @@
-"""RAG (Rug) admin orchestration: catalog + vector coordination.
+"""RAG admin orchestration: catalog + vector coordination.
 
 Uses the isolated SQLite DB fixture. rag_service (the Chroma/embedder side) is
 mocked so the tests stay offline; what is asserted is the orchestration: a catalog

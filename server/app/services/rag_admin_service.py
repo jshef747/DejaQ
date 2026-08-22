@@ -1,4 +1,4 @@
-"""Rug (RAG) admin orchestration — the auth + catalog + vector glue.
+"""RAG admin orchestration — the auth + catalog + vector glue.
 
 Mirrors `admin_service`: functions open a `get_session()`, resolve the workspace,
 then coordinate three things per document:

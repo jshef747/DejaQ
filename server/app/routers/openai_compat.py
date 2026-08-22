@@ -813,7 +813,7 @@ async def _judge_hard_content_over_text(llm_router, user_query: str, text: str) 
 
 
 def _query_with_rag_context(user_query: str, chunks: list) -> str:
-    """Prepend retrieved workspace knowledge (Rug) to the query, fenced + labelled.
+    """Prepend retrieved workspace knowledge (RAG) to the query, fenced + labelled.
 
     Mirrors _query_with_inlined_file: the knowledge is untrusted DATA to answer
     FROM, never instructions to follow. Total injected text is capped at
@@ -1940,7 +1940,7 @@ async def run_chat_pipeline(
         complexity = classification["complexity"]
         route = "external" if complexity == "hard" else "local"
 
-        # RAG (Rug): on a genuine cache miss, ground the answer in the workspace's
+        # RAG: on a genuine cache miss, ground the answer in the workspace's
         # curated knowledge base. Retrieval sees the normalized query; retrieved
         # chunks are injected into the generation prompt as fenced DATA and NEVER
         # enter the cache key (same side-channel rule attachments follow). Skipped

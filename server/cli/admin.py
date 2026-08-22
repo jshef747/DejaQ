@@ -406,12 +406,12 @@ def stats_cmd() -> None:
 
 
 # ---------------------------------------------------------------------------
-# rag (Rug) commands — per-workspace knowledge base
+# rag (RAG) commands — per-workspace knowledge base
 # ---------------------------------------------------------------------------
 
 @cli.group()
 def rag() -> None:
-    """Manage a workspace's RAG (Rug) knowledge base."""
+    """Manage a workspace's RAG knowledge base."""
 
 
 def _rag_service():

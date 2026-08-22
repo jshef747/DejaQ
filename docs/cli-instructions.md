@@ -46,7 +46,7 @@ uv run dejaq-admin key revoke --id 3
 
 Keys authenticate `/v1/chat/completions` and `/v1/feedback`. Revoked keys may remain accepted until `DEJAQ_KEY_CACHE_TTL` expires.
 
-## Knowledge Base (Rug / RAG)
+## Knowledge Base (RAG)
 
 Curate a workspace's knowledge base — documents that ground answers on a cache miss.
 Full design: [rag-layer.md](rag-layer.md).

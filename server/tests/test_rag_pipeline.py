@@ -1,4 +1,4 @@
-"""RAG (Rug) pipeline integration: retrieval grounds generation on a cache miss.
+"""RAG pipeline integration: retrieval grounds generation on a cache miss.
 
 Reuses the same stubbing style as test_openai_compat_smoke. The retrieval call is
 mocked to return (or not return) chunks; a capturing local router records the query

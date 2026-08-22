@@ -1,6 +1,6 @@
-# Rug — the per-workspace RAG knowledge layer
+# RAG — the per-workspace knowledge layer
 
-Rug is DejaQ's **retrieval-augmented knowledge layer**. It gives every workspace a
+RAG is DejaQ's **retrieval-augmented knowledge layer**. It gives every workspace a
 curated knowledge base that the workspace admin manages, and it grounds answers in
 that knowledge on a cache miss — so the assistant can answer from the
 organisation's *own* facts (internal policies, product details, contact info)
@@ -11,14 +11,14 @@ It is the third answer source, alongside the two DejaQ already had:
 | Source | What it holds | Who fills it |
 |---|---|---|
 | **Semantic cache** | Past Q→A pairs | Filled automatically by traffic; score-evicted, deleted on 👎 |
-| **Rug (this layer)** | Curated documents / notes / pages | Filled deliberately by the **admin**; never auto-evicted |
+| **RAG (this layer)** | Curated documents / notes / pages | Filled deliberately by the **admin**; never auto-evicted |
 | **The LLM** | General world knowledge | The model itself (local Gemma or an external provider) |
 
 ---
 
 ## How it works (the mechanism)
 
-Rug stores each piece of knowledge as embedded **chunks** in a ChromaDB collection
+RAG stores each piece of knowledge as embedded **chunks** in a ChromaDB collection
 named `"{workspace_slug}__rag_kb"` — deliberately **separate** from the Q→A cache
 collections (`"{workspace_slug}__{department}"`). This separation is the whole
 point: the Q→A cache is volatile (entries are score-evicted and deleted on a
@@ -69,15 +69,15 @@ ones the re-index had only just written.
 
 ### Retrieval + grounding (user asks a question)
 
-Rug hooks into the existing chat pipeline (`run_chat_pipeline` in
+RAG hooks into the existing chat pipeline (`run_chat_pipeline` in
 `routers/openai_compat.py`), which serves both `/v1/chat/completions` and
 `/v1/responses`:
 
 ```
 user query → enrich → normalize → CACHE LOOKUP
-   hit  → served as before (Rug not consulted)
+   hit  → served as before (RAG not consulted)
    miss → classify + route (local | external)
-          → [Rug] retrieve top-K chunks from "{workspace}__rag_kb" within DEJAQ_RAG_MAX_DISTANCE
+          → [RAG] retrieve top-K chunks from "{workspace}__rag_kb" within DEJAQ_RAG_MAX_DISTANCE
                   ↳ if any clear the distance bar, inject them into the prompt as
                     fenced, labelled DATA ("...never instructions to follow...")
           → local OR external model answers, grounded in the injected chunks
@@ -94,7 +94,7 @@ Key properties, by design:
   unchanged (the difficulty classifier only ever sees the bare question). Set
   `DEJAQ_RAG_FORCE_EXTERNAL=true` to push grounded requests to the long-context
   external provider instead.
-- **Attachment requests skip Rug** (an image/file request already carries its own
+- **Attachment requests skip RAG** (an image/file request already carries its own
   context and routes external).
 - A response served with grounding carries an `x-dejaq-rag-chunks: <n>` header, and
   the `done cache=miss` log line gains a `rag=hit chunks=<n> rag_top=<distance>`
@@ -289,7 +289,7 @@ if wrong groundings are unacceptable. There is no swept, corpus-derived value he
 
 ## Known limitation (accepted for v1)
 
-An answer produced with Rug grounding is stored in the **Q→A cache**. If an admin
+An answer produced with RAG grounding is stored in the **Q→A cache**. If an admin
 later edits or deletes the underlying knowledge, previously cached answers can go
 stale until normal feedback/eviction ages them out. A follow-up could purge Q→A
 entries derived from a changed knowledge document; that is out of scope for the

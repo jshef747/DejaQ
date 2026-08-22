@@ -20,7 +20,7 @@ OpenAI-compatible request
      -> miss: difficulty classifier
         -> easy: local model (Gemma 4 E4B)
         -> hard: the workspace's own external provider credential
-        -> either way: relevant chunks from the workspace knowledge base (Rug)
+        -> either way: relevant chunks from the workspace knowledge base (RAG)
            are injected into the prompt as grounding, when any are close enough
   -> response
   -> background generalize + store when cacheable
@@ -152,7 +152,7 @@ difficulty classifier and route straight to the workspace's external provider.
 Thresholds and their measured derivations: [docs/image-gate.md](docs/image-gate.md) and
 [docs/file-gate.md](docs/file-gate.md). Every setting is listed in `.env.example`.
 
-## Knowledge base (Rug)
+## Knowledge base (RAG)
 
 Each workspace has an admin-curated knowledge base — a third answer source alongside the
 semantic cache and the model. Admins add pasted text, uploaded files (PDF / DOCX / text /

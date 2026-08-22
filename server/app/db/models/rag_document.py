@@ -7,7 +7,7 @@ from app.db.base import Base
 
 
 class RagDocument(Base):
-    """A catalog row for one piece of workspace knowledge ("Rug" / RAG).
+    """A catalog row for one piece of workspace knowledge (RAG).
 
     This is only the CATALOG: the row records what was ingested (title, kind,
     identity hash, how many chunks it produced) so an admin can list and delete

@@ -1,4 +1,4 @@
-"""Rug (RAG) — the vector side of the per-workspace knowledge layer.
+"""RAG — the vector side of the per-workspace knowledge layer.
 
 This module owns everything that touches ChromaDB for RAG: turning a document's
 text into chunks, embedding + storing those chunks, retrieving them for a query,

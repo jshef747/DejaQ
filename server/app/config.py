@@ -331,7 +331,7 @@ CACHE_FILE_MIN_CHARS = int(_get_float("DEJAQ_CACHE_FILE_MIN_CHARS", 200))
 # speaking the API directly bypasses it.
 MAX_ATTACHMENT_BYTES = int(_get_float("DEJAQ_MAX_ATTACHMENT_BYTES", 10 * 1024 * 1024))
 
-# --- Rug (RAG) — per-workspace knowledge layer ---
+# --- RAG — per-workspace knowledge layer ---
 # A third answer source alongside the Q→A cache and the LLM: admins curate
 # documents into a workspace's own knowledge base ("{workspace_slug}__rag_kb"
 # Chroma collection). On a cache MISS, the closest chunks are retrieved and

@@ -1,4 +1,4 @@
-"""RAG (Rug) domain service: chunking, namespace helpers, index/retrieve.
+"""RAG domain service: chunking, namespace helpers, index/retrieve.
 
 The embedder and the Chroma collection are mocked — these tests exercise the
 logic (chunk boundaries, deterministic ids, distance filtering), not the model or
