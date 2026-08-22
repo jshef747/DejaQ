@@ -225,31 +225,27 @@ export default function ResponseDetail({
               <MonoValue>{deptSlug}</MonoValue>
             </Row>
           )}
-          {route !== "cache" && !!message?.ragChunks && (
+          {message?.ragDocumentTitle ? (
+            // Explicit `@`-reference: a deterministic reason to be grounded
+            // (the id gate on a cache hit, or the fetch-by-id on a miss)
+            // rather than a fuzzy distance match, so it's shown even on a
+            // cache hit — unlike the count-only row below, which a cache hit
+            // carries no header for anyway (grounding, if any, happened
+            // whenever that answer was first generated, not now).
             <Row label="Knowledge base">
-              <MonoValue note="from your workspace's knowledge base">
-                grounded in {message.ragChunks} passage{message.ragChunks === 1 ? "" : "s"}
-              </MonoValue>
+              <MonoValue note="explicitly referenced">grounded in {message.ragDocumentTitle}</MonoValue>
             </Row>
+          ) : (
+            route !== "cache" &&
+            !!message?.ragChunks && (
+              <Row label="Knowledge base">
+                <MonoValue note="from your workspace's knowledge base">
+                  grounded in {message.ragChunks} passage{message.ragChunks === 1 ? "" : "s"}
+                </MonoValue>
+              </Row>
+            )
           )}
         </Section>
-
-        {message.ragDocumentTitle && (
-          <>
-            <Divider />
-            {/* Explicit `@`-reference only, deliberately minimal and separate
-                from automatic RAG grounding: a referenced answer has a
-                deterministic reason to be grounded (the id gate above, or the
-                fetch-by-id on a miss) rather than a fuzzy distance match, so it
-                earns its own small, self-contained line here rather than
-                waiting on a general "grounded" concept in the route model. */}
-            <Section title="Knowledge base">
-              <Row label="Grounded in">
-                <MonoValue>{message.ragDocumentTitle}</MonoValue>
-              </Row>
-            </Section>
-          </>
-        )}
 
         <Divider />
 
