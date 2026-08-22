@@ -42,6 +42,11 @@ export interface AppMessage {
   // picked for this one. The transcript shows both, but reuse is drawn smaller
   // so the turn that actually uploaded stays identifiable at a glance.
   attachmentSticky?: boolean;
+  // Title of the knowledge-base document this turn explicitly referenced with
+  // `@` — set on the user message from the picker selection, and on the
+  // assistant message from the server's own confirmation header, so the mark
+  // never claims a grounding the server didn't actually apply.
+  ragDocumentTitle?: string | null;
   // Assistant-only fields:
   modelUsed?: string | null;
   interactionId?: string | null;
@@ -284,6 +289,35 @@ export default function ChatMessage({
                     </svg>
                   )}
                   {message.fileName ?? "same image"}
+                </span>
+              </div>
+            )}
+            {message.ragDocumentTitle && (
+              // Same chip language as the attachment one above, but its own
+              // line and glyph: a knowledge-base reference isn't an upload.
+              <div style={{ marginBottom: message.content ? "8px" : 0 }}>
+                <span
+                  style={{
+                    alignItems: "center",
+                    background: "var(--bg-2)",
+                    border: "1px solid var(--border-2)",
+                    borderRadius: "7px",
+                    color: "var(--fg-dim)",
+                    display: "inline-flex",
+                    fontSize: "11.5px",
+                    gap: "6px",
+                    maxWidth: "100%",
+                    overflow: "hidden",
+                    padding: "4px 9px",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
+                    <path d="M3.5 2.5h6L12 5.5v8a1 1 0 0 1-1 1h-7.5a1 1 0 0 1-1-1v-10a1 1 0 0 1 1-1z" strokeLinejoin="round" />
+                    <path d="M5.5 7h5M5.5 9.5h5M5.5 12h3" strokeLinecap="round" />
+                  </svg>
+                  @{message.ragDocumentTitle}
                 </span>
               </div>
             )}

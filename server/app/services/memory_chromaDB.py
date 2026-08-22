@@ -61,6 +61,7 @@ def derive_doc_id(
     *,
     image_text: str | None = None,
     image_dhash: str | None = None,
+    rag_document_id: int | None = None,
 ) -> str:
     """The one place an entry id is computed. Import it, don't reimplement it.
 
@@ -76,9 +77,16 @@ def derive_doc_id(
     compares them that way — a re-crop or a re-shoot of one page must land on
     one entry (see docs/image-gate.md).
 
-    Text entries keep their existing ids: the suffix is only added when an
-    attachment is present. Existing image entries are not migrated — at worst
-    one duplicate entry per query+image pair until the old one is evicted.
+    `rag_document_id` is a fourth, independent identity element: an explicit
+    `@`-reference to a knowledge-base document. It is appended rather than
+    made another `elif` branch because it can coexist with a file/image
+    attachment in principle, and — same reasoning as file/image — two
+    different referenced documents asking the same question must not collide.
+
+    Text entries keep their existing ids: a suffix is only added when the
+    corresponding identity element is present. Existing image entries are not
+    migrated — at worst one duplicate entry per query+image pair until the old
+    one is evicted.
     """
     if file_sha:
         source = f"{normalized_query}|file:{file_sha}"
@@ -88,6 +96,8 @@ def derive_doc_id(
         source = f"{normalized_query}|image-dhash:{image_dhash}"
     else:
         source = normalized_query
+    if rag_document_id is not None:
+        source = f"{source}|rag:{rag_document_id}"
     return hashlib.sha256(source.encode()).hexdigest()[:16]
 
 
@@ -132,6 +142,10 @@ class CacheLookupResult:
     # deterministic, so the gate is equality. See services/file_text.py.
     file_sha: str | None = None
     file_kind: str | None = None
+    # Explicit `@`-reference identity of the matched entry (present only when
+    # the answer was grounded in one specific knowledge-base document by id,
+    # never by search). Exact-equality gate, same shape as file_sha.
+    rag_document_id: int | None = None
     # "human" when a person wrote this answer through Edit & Save, absent
     # otherwise. The serve path reads it to skip the context adjuster: a human
     # answer had no tone stripped from it, so there is nothing to put back, and
@@ -281,6 +295,7 @@ class MemoryService:
                     image_text=meta.get("image_text"),
                     file_sha=meta.get("file_sha"),
                     file_kind=meta.get("file_kind"),
+                    rag_document_id=meta.get("rag_document_id"),
                     authored=meta.get("authored"),
                 ))
 
@@ -357,6 +372,7 @@ class MemoryService:
         image_text: str | None = None,
         file_sha: str | None = None,
         file_kind: str | None = None,
+        rag_document_id: int | None = None,
         authored: str | None = None,
         rag_document_ids: str | None = None,
     ) -> str:
@@ -365,6 +381,7 @@ class MemoryService:
             file_sha,
             image_text=image_text,
             image_dhash=image_dhash,
+            rag_document_id=rag_document_id,
         )
         embedding = _embed(normalized_query)
         metadata = {
@@ -390,6 +407,11 @@ class MemoryService:
         if file_sha and file_kind:
             metadata["file_sha"] = file_sha
             metadata["file_kind"] = file_kind
+        # Explicit `@`-reference identity: written only when the answer was
+        # grounded in one specific knowledge-base document by id. Exact
+        # equality gate on the serve path, same as file_sha above.
+        if rag_document_id is not None:
+            metadata["rag_document_id"] = rag_document_id
         # Provenance, written only when a person authored the answer. Absent on
         # every model-generated entry, so this is additive — nothing reads it
         # except the protections in overwrite_answer, the store guards and the

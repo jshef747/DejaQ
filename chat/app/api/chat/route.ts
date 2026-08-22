@@ -26,6 +26,8 @@ const SSE_HEADERS_TO_FORWARD = [
   "x-dejaq-answer-authored",
   "x-dejaq-enriched-query",
   "x-dejaq-rag-chunks",
+  "x-dejaq-rag-document-id",
+  "x-dejaq-rag-document-title",
 ];
 
 interface ChatMsg {
@@ -45,12 +47,14 @@ interface Attachment {
 // file (a data: URL) to the most recent user message. Images go as an
 // input_image part; every other kind (PDF, DOCX, Markdown/text/code) goes as
 // an input_file part — the server tells them apart by content, this route
-// doesn't need to.
-function buildResponsesInput(messages: ChatMsg[], attachment: Attachment) {
+// doesn't need to. `attachment` is null for a plain `@`-reference request with
+// no file/image — the items carry text parts only.
+function buildResponsesInput(messages: ChatMsg[], attachment: Attachment | null) {
   const items = messages.map((m) => ({
     role: m.role,
     content: [{ type: "input_text", text: m.content }] as Array<Record<string, string>>,
   }));
+  if (!attachment) return items;
   const part: Record<string, string> =
     attachment.kind === "image"
       ? { type: "input_image", image_url: attachment.dataUrl }
@@ -87,14 +91,22 @@ export async function POST(request: NextRequest) {
 
   const body = await request.json();
   const attachment = parseAttachment(body.attachment);
+  const ragDocumentId = typeof body.ragDocumentId === "number" ? body.ragDocumentId : null;
 
-  // Attachment requests must use the Responses API — it's the only endpoint that
-  // accepts images and files, and the only one that runs the fingerprint gates.
-  // Text-only requests stay on chat/completions. Both stream SSE; the client
-  // parser handles both.
-  const endpoint = attachment ? "/v1/responses" : "/v1/chat/completions";
-  const payload = attachment
-    ? { model: "default", input: buildResponsesInput(body.messages, attachment), stream: true }
+  // Attachment or `@`-reference requests must use the Responses API — it's the
+  // only endpoint that accepts images/files and rag_document_id, and the only
+  // one that runs the fingerprint/reference gates. Plain text-only requests
+  // stay on chat/completions. All three stream SSE; the client parser handles
+  // all of them the same way.
+  const useResponsesApi = Boolean(attachment) || ragDocumentId !== null;
+  const endpoint = useResponsesApi ? "/v1/responses" : "/v1/chat/completions";
+  const payload = useResponsesApi
+    ? {
+        model: "default",
+        input: buildResponsesInput(body.messages, attachment),
+        stream: true,
+        ...(ragDocumentId !== null ? { rag_document_id: ragDocumentId } : {}),
+      }
     : { model: "default", messages: body.messages, stream: true };
 
   let response: Response;

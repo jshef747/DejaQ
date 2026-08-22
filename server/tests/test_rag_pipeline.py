@@ -27,6 +27,17 @@ def _stub_api_key(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _enable_automatic_retrieval(monkeypatch):
+    """This whole file exercises the AUTOMATIC (guess-which-document) path,
+    which now defaults off (DEJAQ_RAG_AUTO_RETRIEVE) so the knowledge base only
+    grounds an answer via an explicit `@`-reference — see docs/rag-layer.md.
+    The automatic path is switched off by default, not removed, and stays
+    covered by turning it back on for these tests specifically.
+    """
+    monkeypatch.setattr(openai_compat, "RAG_AUTO_RETRIEVE", True)
+
+
 class StubEnricher:
     async def enrich(self, message, history):
         return message
@@ -174,6 +185,35 @@ def test_rag_disabled_skips_retrieval(monkeypatch):
 
     def _boom(*a, **k):
         raise AssertionError("retrieve must not be called when RAG is disabled")
+
+    monkeypatch.setattr(openai_compat.rag_service, "retrieve", _boom)
+
+    client = TestClient(app, headers=_AUTH)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": False,
+        },
+    )
+    assert response.status_code == 200
+    assert router.query == "hello"
+
+
+def test_auto_retrieve_off_by_default_skips_automatic_retrieval(monkeypatch):
+    """DEJAQ_RAG_AUTO_RETRIEVE defaults off: RAG_ENABLED alone is not enough to
+    run the automatic, guess-which-document search. An unreferenced question
+    about content that IS in the knowledge base must still be answered
+    normally — no injected chunks, no error — not silently withheld.
+    """
+    router = CapturingRouter()
+    _common_stubs(monkeypatch, router)
+    monkeypatch.setattr(openai_compat, "RAG_ENABLED", True)
+    monkeypatch.setattr(openai_compat, "RAG_AUTO_RETRIEVE", False)
+
+    def _boom(*a, **k):
+        raise AssertionError("automatic retrieve() must not run when RAG_AUTO_RETRIEVE is off")
 
     monkeypatch.setattr(openai_compat.rag_service, "retrieve", _boom)
 

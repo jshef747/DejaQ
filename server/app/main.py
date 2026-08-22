@@ -3,7 +3,7 @@ load_dotenv()
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import openai_compat, openai_responses, departments, feedback
+from app.routers import openai_compat, openai_responses, departments, feedback, rag_documents_public
 from app.routers.admin import router as admin_router
 from app.middleware.admin_loopback import AdminLoopbackMiddleware
 from app.middleware.api_key import ApiKeyMiddleware
@@ -103,6 +103,7 @@ app.include_router(openai_compat.router, prefix="/v1")
 app.include_router(openai_responses.router, prefix="/v1")
 app.include_router(feedback.router, prefix="/v1")
 app.include_router(departments.router)
+app.include_router(rag_documents_public.router)
 app.include_router(admin_router)
 
 # Replaced by lifespan context manager

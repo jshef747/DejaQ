@@ -342,6 +342,18 @@ MAX_ATTACHMENT_BYTES = int(_get_float("DEJAQ_MAX_ATTACHMENT_BYTES", 10 * 1024 * 
 # is refused in rag_admin_service, so a server that will never read knowledge
 # cannot accumulate it. Listing and deleting stay open so an operator can clean up.
 RAG_ENABLED = _get_bool("DEJAQ_RAG_ENABLED", True)
+# Whether a cache MISS with no explicit `@`-reference may still guess which
+# document is relevant via rag_service.retrieve()'s nearest-neighbour search.
+# Defaults OFF on this branch: the captain does not want the system guessing
+# which document a question is about — only an explicit `@`-reference
+# (openai_responses.py's rag_document_id, fetched by exact id via
+# rag_service.retrieve_by_document, never gated by this flag) grounds an
+# answer. RAG_ENABLED stays the master switch for the whole layer — this only
+# controls the automatic, guess-which-document path under it, and is
+# deliberately independent so the automatic path can be turned back on later
+# (e.g. once retrieval recall is fixed - see docs/rag-layer.md) without
+# touching RAG_ENABLED, credentials, or the explicit-reference path at all.
+RAG_AUTO_RETRIEVE = _get_bool("DEJAQ_RAG_AUTO_RETRIEVE", False)
 # How many chunks to pull per query, and the cosine-distance ceiling a chunk must
 # clear to count as relevant. 0.35 is deliberately looser than the cache trust
 # distance (0.15): we want related context to ground the model, not an exact

@@ -319,6 +319,61 @@ def retrieve_multi(
     return sorted(best.values(), key=lambda c: c.distance)[:top_k]
 
 
+def retrieve_by_document(
+    namespace: str,
+    rag_document_id: int,
+    query: str,
+    top_k: int,
+) -> list[RagChunk]:
+    """Return the closest chunks to `query` FROM ONE DOCUMENT ONLY.
+
+    For an explicit `@`-reference: the caller already knows which document it
+    wants, so this is a `where={"rag_document_id": ...}` metadata filter, not a
+    nearest-neighbour search over the whole collection. It ranks only among
+    that document's own chunks and therefore cannot be crowded out by an
+    unrelated document the way `retrieve()` can (see docs — the measured
+    approximate-search recall bug this feature exists to sidestep). No
+    max_distance gate: the document is already pinned by id, not by distance,
+    so returning its top_k closest chunks regardless of distance is correct —
+    unlike `retrieve()`, there is no "wrong document" outcome to gate against.
+
+    Returns [] when the collection is empty or the document has no chunks
+    (deleted, or never indexed) — the caller then answers ungrounded, exactly
+    as `retrieve()`'s callers do on an empty result.
+    """
+    collection = get_rag_collection(namespace)
+    if collection.count() == 0:
+        return []
+    results = collection.query(
+        query_embeddings=[embed_text(query)],
+        n_results=max(1, top_k),
+        where={"rag_document_id": rag_document_id},
+        include=["documents", "metadatas", "distances"],
+    )
+    if not (results["ids"] and results["ids"][0]):
+        return []
+
+    out: list[RagChunk] = []
+    docs = results["documents"][0] if results["documents"] else []
+    metas = results["metadatas"][0] if results["metadatas"] else []
+    dists = results["distances"][0] if results["distances"] else []
+    for i in range(len(results["ids"][0])):
+        meta = metas[i] if i < len(metas) else {}
+        text = (docs[i] if i < len(docs) else "") or ""
+        if not text.strip():
+            continue
+        out.append(
+            RagChunk(
+                text=text,
+                title=str(meta.get("title", "")),
+                distance=float(dists[i]) if i < len(dists) else 1.0,
+                rag_document_id=int(meta.get("rag_document_id", rag_document_id)),
+                chunk_index=int(meta.get("chunk_index", i)),
+            )
+        )
+    return out
+
+
 def delete_document_chunks(namespace: str, rag_document_id: int) -> None:
     """Remove every chunk belonging to one document.
 

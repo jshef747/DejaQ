@@ -102,6 +102,7 @@ from app.config import (
     LOCAL_LLM_MODEL_NAME,
     NORMALIZER_MODEL_NAME,
     OLLAMA_NUM_CTX,
+    RAG_AUTO_RETRIEVE,
     RAG_ENABLED,
     RAG_FORCE_EXTERNAL,
     RAG_MAX_CONTEXT_CHARS,
@@ -995,9 +996,13 @@ def _bg_generalize_and_store(
     file_sha: str | None = None,
     file_kind: str | None = None,
     rag_document_ids: str | None = None,
+    rag_document_id: int | None = None,
 ) -> None:
     start = time.perf_counter()
-    doc_id = _doc_id(clean_query, file_sha, image_text=image_text, image_dhash=image_dhash)
+    doc_id = _doc_id(
+        clean_query, file_sha, image_text=image_text, image_dhash=image_dhash,
+        rag_document_id=rag_document_id,
+    )
     try:
         # Same guard the Celery task carries: a person wrote this answer through
         # Edit & Save while this store was still pending, and their text must
@@ -1010,11 +1015,11 @@ def _bg_generalize_and_store(
                 doc_id,
             )
             return
-        # Attachment-anchored answers are stored verbatim — see the note in
-        # tasks/cache_tasks.py: generalization cannot see the image or the file
-        # and invents specifics, and the gate already pins the answer to one
-        # attachment.
-        if image_kind or file_kind:
+        # Attachment/reference-anchored answers are stored verbatim — see the
+        # note in tasks/cache_tasks.py: generalization cannot see the image,
+        # file, or referenced document and invents specifics, and the gate
+        # already pins the answer to one attachment/document.
+        if image_kind or file_kind or rag_document_id is not None:
             generalized = answer
         else:
             llm_config = _llm_config_for_workspace_slug(tenant_id)
@@ -1037,6 +1042,7 @@ def _bg_generalize_and_store(
             image_kind=image_kind, image_text=image_text,
             file_sha=file_sha, file_kind=file_kind,
             rag_document_ids=rag_document_ids,
+            rag_document_id=rag_document_id,
         )
         latency_ms = int((time.perf_counter() - start) * 1000)
         query = content_snippet(clean_query)
@@ -1195,6 +1201,8 @@ async def run_chat_pipeline(
     background_tasks: BackgroundTasks,
     image: tuple[bytes, str] | None = None,
     file: tuple[bytes, str, str] | None = None,
+    rag_document_id: int | None = None,
+    rag_document_title: str | None = None,
     stream: bool = False,
 ) -> ChatPipelineResult:
     """Core DejaQ pipeline: enrich → normalize → cache → validate → adjust/generate → store.
@@ -1214,6 +1222,17 @@ async def run_chat_pipeline(
     channel that gates the hit. Running a 40-page document through the normalizer
     would produce a useless key and an enormous embedding.
 
+    `rag_document_id` is an explicit `@`-reference to one knowledge-base
+    document (already validated to exist in this workspace by the caller);
+    `rag_document_title` is that document's title, resolved by the caller at
+    the same time so this function never has to re-query for it. Retrieval
+    fetches that document's own chunks by id (rag_service.retrieve_by_document)
+    instead of running the normal nearest-neighbour search, and gates cache
+    hits on an EXACT id match — same shape as the file gate, for the same
+    reason: two different referenced documents asking the same question must
+    not collide, and an answer grounded in one must never be served to a
+    request that did not reference it.
+
     Raises PipelineError for HTTP-level failures (400, 402, 422, 429, 500, 502).
     """
     image_bytes, image_mime = image if image else (None, None)
@@ -1223,6 +1242,9 @@ async def run_chat_pipeline(
     file_bytes, file_mime, file_name = file if file else (None, None, None)
     _request_has_file = file_bytes is not None and CACHE_FILE_ENABLED
     file_doc: FileText | None = None
+    # An explicit `@`-reference to one knowledge-base document. The caller
+    # (openai_responses.py) has already validated it exists in this workspace.
+    _request_has_rag_ref = rag_document_id is not None
     _t0 = time.monotonic()
     trace = PipelineTrace()
     cache_namespace: str = getattr(raw_request.state, "cache_namespace", "dejaq_default")
@@ -1318,6 +1340,7 @@ async def run_chat_pipeline(
         _image_anchored = False  # the gate accepted: this hit is pinned to one image
         _file_gate_logged = False
         _file_anchored = False   # the gate accepted: this hit is pinned to one file
+        _rag_anchored = False    # the gate accepted: this hit is pinned to one referenced document
         if _request_has_image:
             if CACHE_IMAGE_OCR_ENABLED:
                 try:
@@ -1402,6 +1425,7 @@ async def run_chat_pipeline(
             _cand_passed = True
             _cand_image_anchored = False
             _cand_file_anchored = False
+            _cand_rag_anchored = False
 
             # Image gate. Kinds must agree (a photo never matches a document
             # entry, and a text request never matches either), then the
@@ -1473,10 +1497,34 @@ async def run_chat_pipeline(
                 else:
                     _cand_file_anchored = True
 
+            # Explicit `@`-reference gate. Exact id equality, same shape as the
+            # file gate above and for the same reason: it runs whenever EITHER
+            # side carries a reference, so an answer grounded in one document
+            # is never served to a request that didn't reference it (and a
+            # request that DID reference one never gets an unreferenced,
+            # possibly-wrong-document answer either).
+            if _cand_passed and (_request_has_rag_ref or _candidate.rag_document_id):
+                verdict = rag_document_id == _candidate.rag_document_id
+                logger.info(
+                    "rag_ref_gate %s — this=%s cached=%s | text_distance=%.4f "
+                    "matched_prompt=%s entry=%s",
+                    "ACCEPT" if verdict else "REJECT",
+                    rag_document_id if _request_has_rag_ref else "none",
+                    _candidate.rag_document_id or "none",
+                    float(_candidate.distance or 0.0),
+                    _diagnostic_prompt(_candidate.matched_query) or "",
+                    _candidate.entry_id or "?",
+                )
+                if not verdict:
+                    _cand_passed = False
+                else:
+                    _cand_rag_anchored = True
+
             if _cand_passed:
                 cache_lookup = _candidate
                 _image_anchored = _cand_image_anchored
                 _file_anchored = _cand_file_anchored
+                _rag_anchored = _cand_rag_anchored
                 break
         else:
             # No pool candidate passed both gates (or the pool was empty) —
@@ -1530,11 +1578,12 @@ async def run_chat_pipeline(
                 _file_side(file_doc), _detail, _note, hide_content(user_query),
             )
 
-        # Both gates lead to the same serving rules: the validator compares the two
-        # QUESTIONS rather than the answer, and the context adjuster is skipped.
-        # Every model downstream is blind to the attachment, so an answer about one
-        # is only reusable once the attachment itself has been proven identical.
-        _attachment_anchored = _image_anchored or _file_anchored
+        # All three gates lead to the same serving rules: the validator compares
+        # the two QUESTIONS rather than the answer, and the context adjuster is
+        # skipped. Every model downstream is blind to the attachment/reference,
+        # so an answer about one is only reusable once it has been proven
+        # identical (image/file: fingerprint or hash; RAG: the same doc id).
+        _attachment_anchored = _image_anchored or _file_anchored or _rag_anchored
         # Set on an entry a person wrote through Edit & Save. Read here for the
         # adjuster skip below and reported on the response so a client can mark
         # the answer as human-verified.
@@ -1728,6 +1777,15 @@ async def run_chat_pipeline(
                     # Only ever set on a hit: a miss is by definition an answer
                     # no person has written yet.
                     hit_headers["x-dejaq-answer-authored"] = "human"
+                if _rag_anchored:
+                    # A deterministic reason to be grounded: the gate above
+                    # proved this entry was pinned to the SAME referenced
+                    # document, not matched by distance. Minimal and
+                    # self-contained — see the miss-path header below for why
+                    # this doesn't reuse x-dejaq-rag-chunks.
+                    hit_headers["x-dejaq-rag-document-id"] = str(rag_document_id)
+                    if rag_document_title:
+                        hit_headers["x-dejaq-rag-document-title"] = rag_document_title
                 hit_headers.update(_nearest_headers(cache_lookup))
                 hit_headers.update(_enriched_headers(user_query, enriched, enrich_succeeded))
                 return ChatPipelineResult(
@@ -1951,8 +2009,39 @@ async def run_chat_pipeline(
         # already carry their own content as context; injecting a second,
         # unrelated context on top of an attached file or image would just
         # dilute the prompt. See services/rag_service.py.
+        #
+        # An explicit `@`-reference takes a completely different path: it
+        # fetches THAT document's own chunks by id (retrieve_by_document), never
+        # the normal nearest-neighbour search — the whole point of the feature
+        # is that it cannot be crowded out by an unrelated document the way the
+        # automatic search can. It also runs regardless of an attachment, since
+        # the user asked for this specific document by name.
         rag_context: list = []
-        if RAG_ENABLED and not _request_has_image and not _request_has_file:
+        if _request_has_rag_ref:
+            try:
+                with trace.step("rag"):
+                    rag_context = await run_in_threadpool(
+                        rag_service.retrieve_by_document,
+                        rag_service.rag_namespace(workspace_slug),
+                        rag_document_id,
+                        clean_query,
+                        RAG_TOP_K,
+                    )
+            except Exception:
+                logger.exception("RAG explicit-reference retrieval failed; answering without it")
+        elif (
+            RAG_ENABLED
+            and RAG_AUTO_RETRIEVE
+            and not _request_has_image
+            and not _request_has_file
+        ):
+            # Automatic, guess-which-document retrieval — gated behind its own
+            # flag (default OFF) on top of RAG_ENABLED, the layer's master
+            # switch. With it off, the knowledge base only ever grounds an
+            # answer through an explicit `@`-reference above: no automatic
+            # path means a question about an unreferenced document is answered
+            # like any ordinary question, with no injected chunks — not an
+            # error and not a silent no-op. See docs/rag-layer.md.
             try:
                 with trace.step("rag"):
                     rag_context = await run_in_threadpool(
@@ -2084,7 +2173,7 @@ async def run_chat_pipeline(
             with trace.step("filter"):
                 will_cache, _ = cache_filter.should_cache(
                     enriched, clean_query,
-                    has_attachment=_request_has_image or _request_has_file,
+                    has_attachment=_request_has_image or _request_has_file or _request_has_rag_ref,
                 )
         except Exception:
             logger.exception("Cache filter failed")
@@ -2132,7 +2221,8 @@ async def run_chat_pipeline(
         _planned_response_id: str | None = None
         if will_cache:
             _planned_response_id = f"{cache_namespace}:" + _doc_id(
-                clean_query, _file_sha, image_text=_img_text, image_dhash=_img_dhash
+                clean_query, _file_sha, image_text=_img_text, image_dhash=_img_dhash,
+                rag_document_id=rag_document_id,
             )
 
         # Mutated by the generation step below, which runs inside an async
@@ -2465,6 +2555,14 @@ async def run_chat_pipeline(
                                 _apply_kwargs["kwargs"].update({
                                     "file_sha": _file_sha, "file_kind": _file_kind,
                                 })
+                            if _request_has_rag_ref:
+                                # Independent of image/file above (not elif) - a
+                                # referenced document can in principle accompany
+                                # either. Without this the entry loses its
+                                # identity the same way a dropped file_sha would.
+                                _apply_kwargs["kwargs"].update({
+                                    "rag_document_id": rag_document_id,
+                                })
                             generalize_and_store_task.apply_async(
                                 args=(clean_query, answer, user_query, workspace_slug, cache_namespace),
                                 **_apply_kwargs,
@@ -2495,6 +2593,7 @@ async def run_chat_pipeline(
                                 file_sha=_file_sha,
                                 file_kind=_file_kind,
                                 rag_document_ids=_rag_document_ids,
+                                rag_document_id=rag_document_id,
                             )
                             store_status = "background-fallback"
                     else:
@@ -2513,6 +2612,7 @@ async def run_chat_pipeline(
                             file_sha=_file_sha,
                             file_kind=_file_kind,
                             rag_document_ids=_rag_document_ids,
+                            rag_document_id=rag_document_id,
                         )
                         store_status = "background"
 
@@ -2574,6 +2674,15 @@ async def run_chat_pipeline(
             headers.update(_enriched_headers(user_query, enriched, enrich_succeeded))
             if rag_context:
                 headers["x-dejaq-rag-chunks"] = str(len(rag_context))
+            if _request_has_rag_ref:
+                # A deterministic reason to be grounded: this document was
+                # fetched by id, not matched by distance. Separate from
+                # x-dejaq-rag-chunks (which also fires for automatic
+                # grounding) so the client can tell the two apart without
+                # depending on how that chunk count is wired through.
+                headers["x-dejaq-rag-document-id"] = str(rag_document_id)
+                if rag_document_title:
+                    headers["x-dejaq-rag-document-title"] = rag_document_title
             if response_id:
                 headers["x-dejaq-response-id"] = response_id
             if _validator_verdict is not None:

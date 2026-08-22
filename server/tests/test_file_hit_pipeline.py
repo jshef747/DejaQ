@@ -417,10 +417,11 @@ class RecordingStoreMemory:
     def store_interaction(
         self, normalized_query, generalized_answer, original_query, user_id,
         image_dhash=None, image_clip=None, image_kind=None, image_text=None,
-        file_sha=None, file_kind=None, rag_document_ids=None,
+        file_sha=None, file_kind=None, rag_document_ids=None, rag_document_id=None,
     ) -> str:
         doc_id = derive_doc_id(
-            normalized_query, file_sha, image_text=image_text, image_dhash=image_dhash
+            normalized_query, file_sha, image_text=image_text, image_dhash=image_dhash,
+            rag_document_id=rag_document_id,
         )
         self.stored.append({
             "doc_id": doc_id,

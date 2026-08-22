@@ -75,30 +75,90 @@ RAG hooks into the existing chat pipeline (`run_chat_pipeline` in
 
 ```
 user query → enrich → normalize → CACHE LOOKUP
-   hit  → served as before (RAG not consulted)
+   hit  → served as before (RAG not consulted, unless it's an @-reference hit — see below)
    miss → classify + route (local | external)
-          → [RAG] retrieve top-K chunks from "{workspace}__rag_kb" within DEJAQ_RAG_MAX_DISTANCE
-                  ↳ if any clear the distance bar, inject them into the prompt as
+          → [RAG] retrieve grounding chunks from "{workspace}__rag_kb", one of two ways:
+             explicit @-reference (rag_document_id set) → fetch THAT document's own
+               chunks by id (`retrieve_by_document`, a Chroma metadata filter) —
+               always runs, regardless of DEJAQ_RAG_AUTO_RETRIEVE
+             no reference → automatic top-K nearest-neighbour search within
+               DEJAQ_RAG_MAX_DISTANCE (`retrieve`) — only runs when
+               DEJAQ_RAG_AUTO_RETRIEVE is on
+                  ↳ if any chunks come back, inject them into the prompt as
                     fenced, labelled DATA ("...never instructions to follow...")
           → local OR external model answers, grounded in the injected chunks
           → answer stored in the Q→A cache (next identical question is an instant hit)
 ```
 
+> **On this configuration, `DEJAQ_RAG_AUTO_RETRIEVE` defaults to `false`: the
+> knowledge base grounds an answer only when the user explicitly references a
+> document with `@` in the chat app.** The automatic, guess-which-document path
+> above still exists in the code and is exercised by its own tests — it is
+> switched off, not removed, because the captain may want it back once
+> retrieval recall is fixed (a known gap: an approximate nearest-neighbour
+> search can be crowded out by an unrelated, larger document — see the
+> knowledge-base-review investigation). `staging` still runs with it on. With
+> the flag off, a question about an uploaded document that the user never
+> referenced is simply answered like any ordinary question — no injected
+> chunks, no error, nothing silently withheld.
+
 Key properties, by design:
-- **Retrieval only runs on a cache miss**, right before generation — never when the
-  question is already answered from cache.
+- **Retrieval only runs on a cache miss** (for automatic grounding — right before
+  generation) **or when an entry gated on a matching `@`-reference is served from
+  cache** (see the reference-gate note below) — never when an ordinary,
+  unreferenced question is already answered from cache.
 - **The retrieved text never enters the cache key.** Like image/file attachments,
   it is a side channel that grounds generation; the cache key stays the bare
-  normalised question. (Otherwise the Q→A cache would degrade.)
+  normalised question **plus the referenced document's id** for an explicit
+  reference (`"|rag:" + doc_id`, exactly the file gate's `"|file:" + sha`
+  pattern) — see the reference-gate note below. (Otherwise the Q→A cache would
+  degrade, or a referenced and an unreferenced answer to the same question
+  could collide.)
 - **Both the local and the external model** receive the same grounding — routing is
   unchanged (the difficulty classifier only ever sees the bare question). Set
   `DEJAQ_RAG_FORCE_EXTERNAL=true` to push grounded requests to the long-context
   external provider instead.
-- **Attachment requests skip RAG** (an image/file request already carries its own
-  context and routes external).
+- **Attachment requests skip automatic RAG** (an image/file request already carries
+  its own context and routes external) — an explicit `@`-reference is independent
+  of that and still runs.
 - A response served with grounding carries an `x-dejaq-rag-chunks: <n>` header, and
   the `done cache=miss` log line gains a `rag=hit chunks=<n> rag_top=<distance>`
-  suffix.
+  suffix. An explicit `@`-reference additionally carries
+  `x-dejaq-rag-document-id`/`x-dejaq-rag-document-title`, on both a miss and a
+  cache hit gated on that reference — a deterministic "grounded in {title}" the
+  chat app's provenance panel shows the user, since the reason is the reference
+  itself rather than a distance guess.
+
+### Explicit `@`-reference (exact id, not search)
+
+The chat app's `@` picker lets a user name one knowledge-base document
+directly (`MessageInput.tsx`; `GET /rag-documents` is the data-plane catalog
+read, mirroring `GET /departments`). The request carries `rag_document_id` on
+`/v1/responses`. This path is deliberately **not** the automatic search above:
+
+- Retrieval is `rag_service.retrieve_by_document(namespace, rag_document_id, query, top_k)`
+  — a Chroma `where={"rag_document_id": id}` metadata filter, ranking only
+  among that document's own chunks. It cannot be crowded out by an unrelated,
+  larger document the way the approximate nearest-neighbour search can (the
+  measured "crowded out" recall failure in the knowledge-base-review
+  investigation never applies here, because this path never looks at any
+  other document).
+- The cache entry is gated on the reference, mirroring the file gate exactly:
+  `derive_doc_id` appends `"|rag:" + doc_id"` to the id (so two different
+  referenced documents asked the same question get two entries, never one
+  overwriting the other), while the TEXT that gets embedded for similarity
+  search stays the bare question — the id never enters the vector, so a
+  paraphrase of an already-answered, same-document question still lands in
+  the trust/band tier and can hit. A per-candidate gate then checks
+  `rag_document_id` equality whenever either side carries a reference: an
+  unreferenced request is never served a reference-anchored answer, and a
+  request referencing document A is never served an answer anchored to
+  document B — same shape as the file gate at `openai_compat.py`'s candidate
+  loop, same reasoning.
+- Serving mirrors the file/image gate: the validator compares question-to-
+  question (never trusting distance alone), the context adjuster is skipped,
+  and the answer is stored verbatim (generalization cannot see the referenced
+  document and would invent specifics).
 
 ---
 
@@ -224,8 +284,9 @@ All settings live in `server/app/config.py` (env-overridable):
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `DEJAQ_RAG_ENABLED` | `true` | Master switch. Off means no retrieval **and** no ingestion: every add path (dashboard, API, CLI) is refused at `rag_admin_service`, so knowledge cannot accumulate that nothing will ever read. Listing and deleting stay available so existing documents can be cleaned up |
-| `DEJAQ_RAG_TOP_K` | `4` | How many chunks to retrieve per query |
+| `DEJAQ_RAG_ENABLED` | `true` | Master switch for the whole layer. Off means no retrieval of ANY kind (automatic or explicit `@`-reference) **and** no ingestion: every add path (dashboard, API, CLI) is refused at `rag_admin_service`, so knowledge cannot accumulate that nothing will ever read. Listing and deleting stay available so existing documents can be cleaned up |
+| `DEJAQ_RAG_AUTO_RETRIEVE` | `false` | Whether a cache miss with **no** `@`-reference may still guess which document is relevant via the automatic nearest-neighbour search. Independent of `DEJAQ_RAG_ENABLED`: an explicit `@`-reference always retrieves by exact id regardless of this flag. Defaults off on this configuration — see the callout above |
+| `DEJAQ_RAG_TOP_K` | `4` | How many chunks to retrieve per query (both the automatic search and an explicit `@`-reference use this) |
 | `DEJAQ_RAG_MAX_DISTANCE` | `0.35` | Cosine-distance ceiling a chunk must clear to be injected (looser than the 0.15 cache-trust distance — we want *related* context, not an exact match; **tune against real data** — see below) |
 | `DEJAQ_RAG_EXHAUSTIVE_MAX_CHUNKS` | `20,000` | Below this many total chunks in a workspace's collection, `retrieve()` scans exhaustively (exact cosine, via a NumPy matmul) instead of Chroma's approximate HNSW index — see below |
 | `DEJAQ_RAG_CHUNK_CHARS` | `1000` | Chunk window size when splitting a document |

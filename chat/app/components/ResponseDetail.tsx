@@ -234,6 +234,23 @@ export default function ResponseDetail({
           )}
         </Section>
 
+        {message.ragDocumentTitle && (
+          <>
+            <Divider />
+            {/* Explicit `@`-reference only, deliberately minimal and separate
+                from automatic RAG grounding: a referenced answer has a
+                deterministic reason to be grounded (the id gate above, or the
+                fetch-by-id on a miss) rather than a fuzzy distance match, so it
+                earns its own small, self-contained line here rather than
+                waiting on a general "grounded" concept in the route model. */}
+            <Section title="Knowledge base">
+              <Row label="Grounded in">
+                <MonoValue>{message.ragDocumentTitle}</MonoValue>
+              </Row>
+            </Section>
+          </>
+        )}
+
         <Divider />
 
         {/* Identity */}

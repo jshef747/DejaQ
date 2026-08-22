@@ -235,3 +235,65 @@ def test_delete_chunk_tail_spares_the_chunks_that_were_just_reindexed(fake_colle
             {"chunk_index": {"$gte": 3}},
         ]
     }
+
+
+# --- retrieve_by_document: the explicit `@`-reference path --------------------
+
+class _FakeFilteredCollection:
+    """Mirrors _FakeCollection, but records the `where` filter and returns
+    chunks from only ONE document — standing in for a real Chroma metadata
+    filter, which `_FakeCollection.query` above doesn't accept at all."""
+
+    def __init__(self):
+        self.last_where = None
+        self._count = 5136  # a large mixed collection — the crowd-out population
+
+    def count(self):
+        return self._count
+
+    def query(self, query_embeddings, n_results, where, include):
+        self.last_where = where
+        doc_id = where["rag_document_id"]
+        # A document far outside the automatic search's max_distance would
+        # still come back here — there is no distance gate on this path.
+        return {
+            "ids": [[f"{doc_id}:0", f"{doc_id}:1"]],
+            "documents": [["own chunk one", "own chunk two"]],
+            "metadatas": [[
+                {"rag_document_id": doc_id, "title": "Referenced Doc", "chunk_index": 0},
+                {"rag_document_id": doc_id, "title": "Referenced Doc", "chunk_index": 1},
+            ]],
+            "distances": [[0.62, 0.71]],  # both well past DEJAQ_RAG_MAX_DISTANCE
+        }
+
+
+@pytest.fixture
+def fake_filtered_collection(monkeypatch):
+    col = _FakeFilteredCollection()
+    monkeypatch.setattr(rag_service, "get_rag_collection", lambda ns: col)
+    monkeypatch.setattr(rag_service, "embed_text", lambda text: [0.0, 1.0, 0.0])
+    return col
+
+
+def test_retrieve_by_document_filters_on_the_document_id(fake_filtered_collection):
+    chunks = rag_service.retrieve_by_document("acme__rag", 7, "some question", top_k=4)
+    assert fake_filtered_collection.last_where == {"rag_document_id": 7}
+    assert [c.rag_document_id for c in chunks] == [7, 7]
+
+
+def test_retrieve_by_document_has_no_distance_gate(fake_filtered_collection):
+    # Unlike retrieve(), a chunk is returned regardless of distance: the
+    # document is already pinned by id, not by how close the embedding is.
+    chunks = rag_service.retrieve_by_document("acme__rag", 7, "some question", top_k=4)
+    assert len(chunks) == 2
+    assert chunks[0].distance == pytest.approx(0.62)
+
+
+def test_retrieve_by_document_empty_collection_returns_nothing(monkeypatch):
+    class _Empty(_FakeFilteredCollection):
+        def count(self):
+            return 0
+
+    monkeypatch.setattr(rag_service, "get_rag_collection", lambda ns: _Empty())
+    monkeypatch.setattr(rag_service, "embed_text", lambda text: [0.0])
+    assert rag_service.retrieve_by_document("acme__rag", 7, "q", top_k=4) == []

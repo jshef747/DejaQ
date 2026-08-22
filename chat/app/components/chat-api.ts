@@ -52,6 +52,10 @@ export interface ChatSuccess {
   // Count of knowledge-base passages RAG injected on a miss it grounded.
   // Null on a cache hit or when nothing was retrieved.
   ragChunks: number | null;
+  // Title of the knowledge-base document this answer was explicitly grounded
+  // in, when the message referenced one with `@`. Null otherwise — including
+  // when a reference was sent but the server has no title to report.
+  ragDocumentTitle: string | null;
   // Set when the SSE body broke part-way through the answer: `text` is
   // whatever arrived before the break, not a finished reply. The caller shows
   // it AND says so, because a silently truncated answer reads as a complete
@@ -119,6 +123,10 @@ export async function sendChatMessage(
   modelProfile: ModelProfile = "default",
   routingMode: RoutingMode = "auto",
   attachment: Attachment | null = null,
+  // Catalog id of a knowledge-base document explicitly picked with `@`. Fetched
+  // by exact id server-side — see CLAUDE.md's file-gate note for why exact
+  // identity, not search, is the point.
+  ragDocumentId: number | null = null,
   onDelta?: (chunk: string) => void,
   onMeta?: (meta: ChatMeta) => void,
   // Stop's client-side abort path. Aborting mid-fetch rejects the fetch()
@@ -139,7 +147,7 @@ export async function sendChatMessage(
     response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...dejaqHeaders() },
-      body: JSON.stringify({ messages, deptSlug, modelProfile, routingMode, attachment }),
+      body: JSON.stringify({ messages, deptSlug, modelProfile, routingMode, attachment, ragDocumentId }),
       signal,
     });
   } catch (err) {
@@ -169,6 +177,7 @@ export async function sendChatMessage(
   const cacheEnrichedQuery = response.headers.get("x-dejaq-enriched-query") ?? null;
   const rawRagChunks = response.headers.get("x-dejaq-rag-chunks");
   const ragChunks = rawRagChunks !== null ? Number(rawRagChunks) : null;
+  const ragDocumentTitle = response.headers.get("x-dejaq-rag-document-title") ?? null;
 
   onMeta?.({ modelUsed, tier });
 
@@ -270,6 +279,7 @@ export async function sendChatMessage(
     answerAuthored,
     cacheEnrichedQuery,
     ragChunks,
+    ragDocumentTitle,
     streamError,
   };
 }
@@ -460,6 +470,36 @@ export async function fetchDepartments(
     return (await response.json()) as Department[];
   } catch {
     return { kind: "error", status: 0, message: "Network error. Could not load departments." };
+  }
+}
+
+// One knowledge-base document, as much as the `@` picker needs — never
+// content. Mirrors Department above; GET /rag-documents is the same shape as
+// GET /departments, same auth, same reason (the admin catalog is
+// loopback-only and the chat app needs its own read of it).
+export interface RagDocument {
+  id: number;
+  title: string;
+  kind: string;
+}
+
+export type RagDocumentsResult = RagDocument[] | ApiError;
+
+export async function fetchRagDocuments(
+  overrides?: { server?: string; apiKey?: string },
+): Promise<RagDocumentsResult> {
+  try {
+    const response = await fetch("/api/rag-documents", {
+      headers: dejaqHeaders(overrides),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      const detail = await parseErrorDetail(response);
+      return { kind: "error", status: response.status, message: userFacingError(response.status, detail) };
+    }
+    return (await response.json()) as RagDocument[];
+  } catch {
+    return { kind: "error", status: 0, message: "Network error. Could not load knowledge-base documents." };
   }
 }
 
