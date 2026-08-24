@@ -150,7 +150,12 @@ function onActivateKey(handler: () => void) {
   };
 }
 
-export default function PipelineClient({ workspaceSlug, initialConfig, initialAvailableModels, loadError }: Props) {
+export default function PipelineClient({
+  workspaceSlug,
+  initialConfig,
+  initialAvailableModels,
+  loadError,
+}: Props) {
   const router = useRouter();
 
   const [config, setConfig] = useState(initialConfig);
@@ -325,6 +330,8 @@ export default function PipelineClient({ workspaceSlug, initialConfig, initialAv
         </Button>
       </div>
 
+      <SharedModelWarning config={config} />
+
       <div className="ds-flow-split">
         {/* FLOW */}
         <div className="ds-flow">
@@ -486,6 +493,48 @@ function StatusText({ status, style }: { status: StatusState; style?: React.CSSP
     >
       {status.text}
     </span>
+  );
+}
+
+// Every pipeline role backed by an Ollama model, grouped by the model they
+// resolve to. A group with more than one role is the thing that can queue
+// behind itself on Ollama - see SharedModelWarning. Config-derived only, no
+// runtime call: Ollama's own parallel slot count isn't knowable from here.
+function groupRolesByModel(config: LlmConfigResponse): { model: string; roles: PipelineRole[] }[] {
+  const byModel = new Map<string, PipelineRole[]>();
+  for (const stage of STAGES) {
+    const model = config[stage.key];
+    if (!model) continue;
+    byModel.set(model, [...(byModel.get(model) ?? []), stage.key]);
+  }
+  return [...byModel.entries()]
+    .map(([model, roles]) => ({ model, roles }))
+    .sort((a, b) => b.roles.length - a.roles.length);
+}
+
+function SharedModelWarning({ config }: { config: LlmConfigResponse }) {
+  const groups = groupRolesByModel(config);
+  const sharedGroups = groups.filter((g) => g.roles.length > 1);
+  if (sharedGroups.length === 0) return null;
+
+  return (
+    <div className="ds-flow-warnrow" style={{ marginBottom: 20 }}>
+      <span>&#9650;</span>
+      <div>
+        {sharedGroups.map((g) => (
+          <div key={g.model} style={{ marginBottom: 4 }}>
+            <span style={{ fontFamily: "var(--font-mono)" }}>{g.model}</span>:{" "}
+            {g.roles.map((r) => STAGE_BY_KEY[r].label).join(", ")}
+          </div>
+        ))}
+        <div style={{ marginTop: 6 }}>
+          Each line above is stages that share one model - calls to it can queue behind each other, adding seconds
+          to what should be a fast cache hit. Raising Ollama's parallel slot count may fix this, if the machine has
+          memory to spare: set <code>OLLAMA_NUM_PARALLEL</code> where the Ollama server starts, then restart it.
+          Putting a group's stages on different models also removes that collision, without touching the server.
+        </div>
+      </div>
+    </div>
   );
 }
 
