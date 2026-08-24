@@ -1014,6 +1014,35 @@ function ClassifierEditor({
           </span>
         </div>
 
+        <div style={{ marginBottom: 14 }}>
+          <p style={{ fontSize: 12.5, color: "var(--fg-dim)", lineHeight: 1.6, margin: "0 0 8px" }}>
+            Which examples each classifier was trained on is not a dashboard setting - it is a code change with
+            a test behind it. Editing the examples file retrains the whole classifier and shifts every
+            question&rsquo;s score, not just the one that was edited.
+          </p>
+          <Field label="Training examples">
+            <div
+              className="ds-input"
+              style={{ fontFamily: "var(--font-mono)", fontSize: 12, height: "auto", overflowWrap: "anywhere" }}
+            >
+              server/app/services/model_artifacts/classifier_corpus.jsonl
+            </div>
+          </Field>
+          <Field label="Rebuild command" hint="Re-embeds the whole file and refits the head deterministically.">
+            <div
+              className="ds-input"
+              style={{ fontFamily: "var(--font-mono)", fontSize: 12, height: "auto", overflowWrap: "anywhere" }}
+            >
+              cd server &amp;&amp; uv run python scripts/rebuild_classifier_head.py
+            </div>
+          </Field>
+          <p style={{ fontSize: 12.5, color: "var(--fg-dim)", lineHeight: 1.6, margin: "8px 0 0", overflowWrap: "anywhere" }}>
+            A held-out regression test (
+            <code style={{ fontFamily: "var(--font-mono)" }}>server/tests/data/classifier_eval_set.jsonl</code>
+            ) fails the rebuild if a known-hard question stops routing external.
+          </p>
+        </div>
+
         <Field label="Active classifier">
           <div style={{ display: "flex", gap: 8 }}>
             {(["labse", "legacy"] as const).map((choice) => (
