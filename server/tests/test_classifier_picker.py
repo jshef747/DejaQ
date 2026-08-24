@@ -150,6 +150,42 @@ def test_legacy_classifier_lazy_loads_only_when_selected(monkeypatch):
     assert len(calls) == 1, "a second request must reuse the already-loaded instance"
 
 
+def test_labse_classifier_lazy_loads_when_load_flag_is_false(monkeypatch):
+    """Regression for the missing lazy-load guard: DEJAQ_LOAD_LABSE_CLASSIFIER=false
+    left the module-level _labse_classifier at None, and with classifier_choice
+    at its default ("labse"), _classifier_for_choice used to return that None
+    directly instead of lazy-loading (unlike legacy's _get_legacy_classifier).
+    None.predict_complexity(...) raised AttributeError, was swallowed by the
+    bare `except Exception` in the classify step, and silently fell back to
+    {"complexity": "easy"} - every hard question routed local, forever, with
+    only a log line. Asserting the getter is non-None is not enough to catch
+    this: the defect is that a hard question silently became easy, so this
+    asserts the actual classification and route."""
+    monkeypatch.setattr(openai_compat, "_labse_classifier", None)
+    calls = []
+
+    class FakeLabseClassifierService:
+        def __init__(self):
+            calls.append(1)
+
+        def predict_complexity(self, query):
+            return {"complexity": "hard", "score": 0.99, "task_type": "qa"}
+
+    monkeypatch.setattr(openai_compat, "LabseClassifierService", FakeLabseClassifierService)
+    _patch_pipeline(monkeypatch, classifier_choice="labse", external_llm=PermissiveExternalLLM())
+
+    assert openai_compat._labse_classifier is None
+    resp = _ask()
+
+    assert resp.status_code == 200
+    assert len(calls) == 1, "labse classifier must lazy-load exactly once on first use"
+    assert resp.headers["x-dejaq-prompt-difficulty"] == "hard"
+    assert openai_compat._labse_classifier is not None
+
+    _ask()
+    assert len(calls) == 1, "a second request must reuse the already-loaded instance"
+
+
 def test_active_routing_threshold_picks_the_matching_field():
     labse_cfg = openai_compat.EffectiveLlmConfig(
         external_model=None, routing_threshold=0.5, classifier_choice="labse", legacy_routing_threshold=0.9,

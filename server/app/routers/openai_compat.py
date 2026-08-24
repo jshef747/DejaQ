@@ -277,10 +277,18 @@ def _get_legacy_classifier() -> ClassifierService:
     return _classifier
 
 
+def _get_labse_classifier() -> LabseClassifierService:
+    global _labse_classifier
+    if _labse_classifier is None:
+        logger.info("Lazy-loading LaBSE classifier - first request selecting it since DEJAQ_LOAD_LABSE_CLASSIFIER=false")
+        _labse_classifier = LabseClassifierService()
+    return _labse_classifier
+
+
 def _classifier_for_choice(choice: str):
     if choice == "legacy":
         return _get_legacy_classifier()
-    return _labse_classifier
+    return _get_labse_classifier()
 
 
 class PipelineError(Exception):
