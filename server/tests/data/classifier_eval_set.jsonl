@@ -1,0 +1,38 @@
+{"id": "eval-hard-en-01", "lang": "en", "text": "Prove that the square root of 2 is irrational.", "label": "hard"}
+{"id": "eval-hard-en-02", "lang": "en", "text": "A train leaves station A at 60 km/h and another leaves station B, 300 km away, at 90 km/h toward each other at the same time. How many minutes until they meet?", "label": "hard"}
+{"id": "eval-hard-en-03", "lang": "en", "text": "Derive the time complexity of merge sort and prove it is O(n log n).", "label": "hard"}
+{"id": "eval-hard-en-04", "lang": "en", "text": "A tank is being filled by pipe A in 6 hours and drained by pipe B in 10 hours. If both are open, how long until the tank is full?", "label": "hard"}
+{"id": "eval-hard-en-05", "lang": "en", "text": "Explain why a four-stroke engine needs a flywheel and derive the minimum flywheel moment of inertia for less than 2% speed fluctuation.", "label": "hard"}
+{"id": "eval-hard-en-06", "lang": "en", "text": "Prove by induction that the sum of the first n odd numbers equals n squared.", "label": "hard"}
+{"id": "eval-hard-en-07", "lang": "en", "text": "A ladder 10 meters long leans against a wall. The bottom slides away from the wall at 1 m/s. How fast is the top sliding down when the bottom is 6 meters from the wall?", "label": "hard"}
+{"id": "eval-hard-en-08", "lang": "en", "text": "Design a lock-free single-producer single-consumer ring buffer in C and explain the memory ordering guarantees it needs.", "label": "hard"}
+{"id": "eval-hard-en-09", "lang": "en", "text": "Two trains 400 km apart travel toward each other, one 20 km/h faster than the other, and meet after 2.5 hours. Find both speeds.", "label": "hard"}
+{"id": "eval-hard-en-10", "lang": "en", "text": "A chemist mixes 200 mL of a 30% acid solution with 300 mL of a 50% acid solution. What is the concentration of the resulting mixture?", "label": "hard"}
+{"id": "eval-hard-en-11", "lang": "en", "text": "Prove that there is no largest prime number using Euclid's argument, and explain why the constructed number need not itself be prime.", "label": "hard"}
+{"id": "eval-hard-he-01", "lang": "he", "text": "הוכח שהשורש הריבועי של 3 הוא מספר אי-רציונלי.", "label": "hard"}
+{"id": "eval-hard-he-02", "lang": "he", "text": "רכבת יוצאת מתחנה א' במהירות 70 קמ\"ש ורכבת שנייה יוצאת מתחנה ב', במרחק 350 ק\"מ, במהירות 80 קמ\"ש לקראתה. כעבור כמה דקות הן ייפגשו?", "label": "hard"}
+{"id": "eval-hard-he-03", "lang": "he", "text": "גזור את סיבוכיות הזמן של מיון מהיר (quicksort) במקרה הממוצע והוכח שהיא O(n log n).", "label": "hard"}
+{"id": "eval-hard-he-04", "lang": "he", "text": "צינור א' ממלא בריכה תוך 5 שעות וצינור ב' מרוקן אותה תוך 8 שעות. אם שניהם פתוחים בו-זמנית, כעבור כמה זמן תתמלא הבריכה?", "label": "hard"}
+{"id": "eval-hard-he-05", "lang": "he", "text": "הסבר מדוע מנוע דיזל זקוק לגלגל תנופה כבד יותר ממנוע בנזין, וגזור את תנאי היציבות המינימלי.", "label": "hard"}
+{"id": "eval-hard-he-06", "lang": "he", "text": "הוכח באינדוקציה שסכום n המספרים הזוגיים הראשונים שווה ל-n(n+1).", "label": "hard"}
+{"id": "eval-hard-he-07", "lang": "he", "text": "סולם באורך 8 מטרים נשען על קיר. תחתית הסולם מחליקה החוצה במהירות 0.5 מטר לשנייה. באיזו מהירות יורדת ראש הסולם כאשר התחתית נמצאת במרחק 4 מטרים מהקיר?", "label": "hard"}
+{"id": "eval-hard-he-08", "lang": "he", "text": "תכנן מבנה נתונים ללא נעילות לתור עגול עם יצרן וצרכן יחיד, והסבר אילו ערבויות סדר זיכרון נדרשות.", "label": "hard"}
+{"id": "eval-hard-he-09", "lang": "he", "text": "שתי רכבות במרחק 400 ק\"מ זו מזו נוסעות זו לקראת זו, אחת מהירה מהשנייה ב-20 קמ\"ש, ונפגשות כעבור 2.5 שעות. מצא את שתי המהירויות.", "label": "hard"}
+{"id": "eval-hard-he-10", "lang": "he", "text": "כימאי מערבב 250 מ\"ל תמיסת חומצה בריכוז 25% עם 150 מ\"ל תמיסת חומצה בריכוז 60%. מה ריכוז התערובת המתקבלת?", "label": "hard"}
+{"id": "eval-hard-he-11", "lang": "he", "text": "הוכח שאין מספר ראשוני גדול ביותר, בעזרת נימוקו של אוקלידס, והסבר מדוע המספר הנבנה בהוכחה לא חייב להיות ראשוני בעצמו.", "label": "hard"}
+{"id": "eval-easy-en-01", "lang": "en", "text": "What's the boiling point of water at sea level?", "label": "easy"}
+{"id": "eval-easy-en-02", "lang": "en", "text": "How many days are in a leap year?", "label": "easy"}
+{"id": "eval-easy-en-03", "lang": "en", "text": "Thanks, that makes sense.", "label": "easy"}
+{"id": "eval-easy-en-04", "lang": "en", "text": "What is photosynthesis?", "label": "easy"}
+{"id": "eval-easy-en-05", "lang": "en", "text": "Can you give me a synonym for 'happy'?", "label": "easy"}
+{"id": "eval-easy-en-06", "lang": "en", "text": "What's the capital of Canada?", "label": "easy"}
+{"id": "eval-easy-en-07", "lang": "en", "text": "Explain what a database index is, in one sentence.", "label": "easy"}
+{"id": "eval-easy-en-08", "lang": "en", "text": "Sounds good, let's go with that.", "label": "easy"}
+{"id": "eval-easy-he-01", "lang": "he", "text": "מהי נקודת הרתיחה של מים בגובה פני הים?", "label": "easy"}
+{"id": "eval-easy-he-02", "lang": "he", "text": "כמה ימים יש בשנה מעוברת?", "label": "easy"}
+{"id": "eval-easy-he-03", "lang": "he", "text": "תודה, זה ברור.", "label": "easy"}
+{"id": "eval-easy-he-04", "lang": "he", "text": "מהי פוטוסינתזה?", "label": "easy"}
+{"id": "eval-easy-he-05", "lang": "he", "text": "תן לי מילה נרדפת ל'שמח'.", "label": "easy"}
+{"id": "eval-easy-he-06", "lang": "he", "text": "מהי בירת קנדה?", "label": "easy"}
+{"id": "eval-easy-he-07", "lang": "he", "text": "הסבר מה זה אינדקס במסד נתונים, במשפט אחד.", "label": "easy"}
+{"id": "eval-easy-he-08", "lang": "he", "text": "נשמע טוב, נלך על זה.", "label": "easy"}
