@@ -13,7 +13,7 @@ OpenAI-compatible request
   -> context enrichment
   -> normalization
   -> ChromaDB semantic cache lookup
-     -> hit: cache validator (Gemma E2B) checks coverage
+     -> hit: cache validator (granite4.1:3b) checks coverage
         -> VALID: context adjuster re-tones cached answer
                   (skipped when there is no tone gap to close)
         -> INVALID: treat as miss
@@ -46,7 +46,7 @@ Generation runs through **Ollama** (local or remote). Start it and pull the mode
 
 ```bash
 ollama serve
-ollama pull qwen2.5:0.5b qwen2.5:1.5b gemma4:e2b gemma4:e4b
+ollama pull qwen2.5:0.5b qwen2.5:1.5b gemma4:e2b gemma4:e4b granite4.1:3b
 ```
 
 ```bash
