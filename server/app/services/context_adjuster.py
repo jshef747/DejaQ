@@ -70,10 +70,10 @@ _STOPWORDS = frozenset({
 })
 
 
-def _content_words(text: str) -> frozenset[str]:
+def _content_words(text: str, min_len: int = 3) -> frozenset[str]:
     return frozenset(
         w for w in _TOKEN_RE.findall(text.lower())
-        if len(w) >= 3 and w not in _STOPWORDS
+        if len(w) >= min_len and w not in _STOPWORDS
     )
 
 
@@ -93,7 +93,21 @@ def is_topically_consistent(adjusted: str, cached_answer: str) -> bool:
     """
     cached_words = _content_words(cached_answer)
     if not cached_words:
-        return True  # nothing meaningful to compare against; don't block on it
+        # The reference text has no word >=3 chars - a bare chemical symbol
+        # ("Ag"), a number, a one-word "OK". That used to mean "nothing
+        # meaningful to compare against" and skip the check entirely, which
+        # let a generalizer/adjuster hallucination on a short answer (e.g.
+        # "Ag" rewritten into an unrelated sentence about "an interjection
+        # with no factual information") through unchecked - observed live,
+        # see the silver-symbol wrong-cache-hit regression test. Fall back to
+        # every non-stopword token, however short, so a short factual answer
+        # still has something to check the rewrite against.
+        cached_words = _content_words(cached_answer, min_len=1)
+        if not cached_words:
+            return True  # genuinely nothing to compare (pure stopwords/punctuation)
+        adjusted_words = _content_words(adjusted, min_len=1)
+        overlap = len(cached_words & adjusted_words)
+        return (overlap / len(cached_words)) >= ADJUSTER_MIN_TOPIC_OVERLAP
     adjusted_words = _content_words(adjusted)
     overlap = len(cached_words & adjusted_words)
     return (overlap / len(cached_words)) >= ADJUSTER_MIN_TOPIC_OVERLAP

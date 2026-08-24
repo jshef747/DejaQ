@@ -443,6 +443,23 @@ class TestIsTopicallyConsistent:
         drifted = "The French Revolution began in 1789 amid widespread economic inequality and famine."
         assert not is_topically_consistent(drifted, cached)
 
+    def test_short_reference_with_no_3char_word_still_catches_drift(self):
+        """Regression for the silver-symbol wrong-cache-hit bug: a bare
+        chemical symbol like 'Ag' has no word >=3 chars, so the old code's
+        `if not cached_words: return True` let ANY rewrite through
+        unchecked - including the real captured hallucination that got
+        stored and later served back to every repeat of the question."""
+        assert not is_topically_consistent(
+            "The provided input is an interjection and contains no factual information.",
+            "Ag",
+        )
+
+    def test_short_reference_accepts_a_faithful_elaboration(self):
+        assert is_topically_consistent("The chemical symbol for silver is Ag.", "Ag")
+
+    def test_purely_numeric_short_reference_still_catches_drift(self):
+        assert not is_topically_consistent("I'm sorry, I didn't understand your question.", "42")
+
 
 class TestOverlapThresholdCalibration:
     """Regression guard for the ADJUSTER_MIN_TOPIC_OVERLAP retune, expressed as
@@ -884,6 +901,25 @@ class TestGeneralizeSafetyNet:
     from generalize(), using the real captured corruption as the input."""
 
     pytestmark = pytest.mark.no_model
+
+    def test_falls_back_to_raw_answer_on_the_silver_symbol_wrong_cache_hit(self):
+        """Regression for the reproduced bug: "What is the chemical symbol
+        for silver?" answered correctly ("Ag"), generalized into an unrelated
+        interjection-refusal sentence (the exact text captured in the
+        three-way comparison, `s0140` in the frozen 196-item corpus), stored
+        under the silver query's own doc id, then served back verbatim to
+        every later repeat of the same question. Neither the length ratio
+        (76 chars, under the 200-char absolute floor) nor the n-gram
+        repetition check catches this - only topic-consistency does, and only
+        once it stops trusting a short reference answer unconditionally."""
+        backend = _FakeBackend(
+            "The provided input is an interjection and contains no factual information."
+        )
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        result = asyncio.run(service.generalize("Ag"))
+
+        assert result == "Ag"
 
     def test_falls_back_to_raw_answer_on_the_real_captured_runaway(self):
         backend = _FakeBackend(TestIsGeneralizationSane.RUNAWAY_GENERALIZED_ANSWER)
