@@ -126,7 +126,7 @@ def test_score_at_or_above_default_threshold_routes_external(monkeypatch):
         "/v1/chat/completions",
         json={
             "model": "gpt-4o-mini",
-            "messages": [{"role": "user", "content": "Explain something hard."}],
+            "messages": [{"role": "user", "content": "Prove that there are infinitely many prime numbers."}],
             "stream": False,
         },
     )

@@ -758,7 +758,7 @@ def test_force_hard_external_header_skips_classifier(monkeypatch):
         headers={"X-DejaQ-Routing-Mode": "hard_external"},
         json={
             "model": "gpt-4o-mini",
-            "messages": [{"role": "user", "content": "Explain a hard thing."}],
+            "messages": [{"role": "user", "content": "Prove that there are infinitely many prime numbers."}],
             "stream": False,
         },
     )
@@ -890,7 +890,7 @@ def test_external_route_reports_real_provider_usage_not_heuristic(monkeypatch):
         "/v1/chat/completions",
         json={
             "model": "gpt-4o-mini",
-            "messages": [{"role": "user", "content": "Explain a hard thing."}],
+            "messages": [{"role": "user", "content": "Prove that there are infinitely many prime numbers."}],
             "stream": False,
         },
     )
@@ -965,7 +965,7 @@ def test_force_hard_external_uses_org_external_model_provider(monkeypatch):
         },
         json={
             "model": "gpt-4o-mini",
-            "messages": [{"role": "user", "content": "Explain a hard thing."}],
+            "messages": [{"role": "user", "content": "Prove that there are infinitely many prime numbers."}],
             "stream": False,
         },
     )
@@ -1273,7 +1273,7 @@ def test_hard_query_without_org_credential_returns_402_without_env_fallback(monk
         "/v1/chat/completions",
         json={
             "model": "gpt-4o-mini",
-            "messages": [{"role": "user", "content": "Explain a hard thing."}],
+            "messages": [{"role": "user", "content": "Prove that there are infinitely many prime numbers."}],
             "stream": False,
         },
     )
@@ -1736,7 +1736,7 @@ def test_hard_query_unmapped_external_model_returns_422(monkeypatch):
         "/v1/chat/completions",
         json={
             "model": "gpt-4o-mini",
-            "messages": [{"role": "user", "content": "Explain a hard thing."}],
+            "messages": [{"role": "user", "content": "Prove that there are infinitely many prime numbers."}],
             "stream": False,
         },
     )
