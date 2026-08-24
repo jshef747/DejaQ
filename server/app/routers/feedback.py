@@ -33,6 +33,8 @@ async def submit_feedback(
             interaction_id=body.interaction_id,
             messages=body.messages,
             edited_answer=body.edited_answer,
+            chosen_draft_response_id=body.chosen_draft_response_id,
+            rejected_draft_response_ids=body.rejected_draft_response_ids,
             rating=body.rating,
             comment=body.comment,
             workspace=workspace,
@@ -57,7 +59,11 @@ async def submit_feedback(
     has_escalation_fields = result.escalation_status is not None or result.escalated_response is not None
     # An edit carries its own fields back, so it must not take either of the
     # two legacy shortcuts below - both drop everything except status/new_score.
-    has_extra_fields = has_escalation_fields or result.edit_status is not None
+    has_extra_fields = (
+        has_escalation_fields
+        or result.edit_status is not None
+        or result.draft_choice is not None
+    )
     if result.status == "deleted" and not has_extra_fields:
         logger.info("First negative feedback — deleted entry %s", body.response_id)
         return {"status": "deleted"}

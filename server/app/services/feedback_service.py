@@ -43,6 +43,9 @@ class FeedbackResult(BaseModel):
     # Edit & Save. Mirrors schemas/feedback.FeedbackResponse - edit both together.
     edit_status: Literal["saved", "created", "not_cached", "message_mismatch"] | None = None
     response_id: str | None = None
+    # Alternative drafts. Mirrors schemas/feedback.FeedbackResponse - edit both
+    # together.
+    draft_choice: Literal["recorded", "not_found"] | None = None
     escalated_response: EscalatedResponse | None = None
     escalation_status: (
         Literal[
@@ -237,6 +240,8 @@ async def submit_feedback(
     interaction_id: str | None = None,
     messages: list[dict] | None = None,
     edited_answer: str | None = None,
+    chosen_draft_response_id: str | None = None,
+    rejected_draft_response_ids: list[str] | None = None,
     rating: Literal["positive", "negative"],
     comment: str | None,
     workspace: str,
@@ -268,6 +273,39 @@ async def submit_feedback(
         if interaction is None:
             raise FeedbackNotFound(interaction_id)
         cache_response_id = cache_response_id or interaction.response_id
+
+    # Alternative drafts: the user kept one of two tied cache entries, so the
+    # +1.0 below has to land on the one they kept rather than on whichever was
+    # served first. Redirecting cache_response_id is all that takes - the
+    # existing scoring path then runs unchanged, including its own namespace
+    # check on the id we just adopted.
+    draft_choice: Literal["recorded", "not_found"] | None = None
+    if chosen_draft_response_id is not None:
+        # Re-checked here rather than trusted: FeedbackRequest enforces both,
+        # but this service is also reachable from the admin surface, whose
+        # schema does not.
+        if rating != "positive":
+            raise ValueError("chosen_draft_response_id requires rating='positive'")
+        if interaction is None:
+            raise ValueError("chosen_draft_response_id requires a valid interaction_id")
+        if edited_answer is not None:
+            raise ValueError(
+                "chosen_draft_response_id and edited_answer cannot be combined"
+            )
+        # Every draft id is client-supplied and names a ChromaDB collection, so
+        # each one is proved to belong to this caller BEFORE it is scored or
+        # written to the feedback log - the rejected ids included, even though
+        # nothing scores them.
+        for draft_id in [chosen_draft_response_id, *(rejected_draft_response_ids or [])]:
+            _checked_namespace(
+                response_id=draft_id,
+                workspace=workspace,
+                department=department,
+                validate_namespace=validate_namespace,
+                cache_namespace=cache_namespace,
+            )
+        cache_response_id = chosen_draft_response_id
+        draft_choice = "recorded"
 
     edit_outcome = None
     if edited_answer is not None:
@@ -325,24 +363,73 @@ async def submit_feedback(
                 cache_namespace=cache_namespace,
             )
         except FeedbackNotFound:
-            # Only reachable when an edit already succeeded and the entry
-            # vanished before it could be scored - a concurrent thumbs-down
-            # delete. Raising here would answer 404, and the client would tell
-            # the user the save failed while their text sits in the cache (or,
-            # in the delete case, correctly does not). The write is what the
-            # user asked for; the lost +1.0 is not worth a false failure.
-            if edit_outcome is None:
+            # Two ways the target can vanish between being named and being
+            # scored, and neither is worth failing the whole request over. They
+            # are mutually exclusive by schema (a pick cannot carry an edit), so
+            # one handler covers both without either masking the other.
+            if edit_outcome is not None:
+                # An edit already succeeded and the entry went - a concurrent
+                # thumbs-down delete. Raising here would answer 404, and the
+                # client would tell the user the save failed while their text
+                # sits in the cache (or, in the delete case, correctly does
+                # not). The write is what the user asked for; the lost +1.0 is
+                # not worth a false failure.
+                logger.warning(
+                    "Edit landed but its entry vanished before scoring: %s", cache_response_id
+                )
+                result = FeedbackResult(status="ok")
+            elif draft_choice is not None:
+                # A kept draft whose entry has since gone (evicted, or deleted
+                # by somebody else's thumbs-down). The pick is simply lost -
+                # 404 would tell the user their choice failed when the only
+                # thing that failed is a point landing on an unreachable entry,
+                # and the answer they kept is already on their screen.
+                logger.info(
+                    "Draft choice landed on a missing entry: %s", cache_response_id
+                )
+                result = FeedbackResult(status="ok")
+                draft_choice = "not_found"
+            else:
                 raise
-            logger.warning(
-                "Edit landed but its entry vanished before scoring: %s", cache_response_id
-            )
-            result = FeedbackResult(status="ok")
     else:
         result = FeedbackResult(status="ok")
 
     if edit_outcome is not None:
         result.edit_status = edit_outcome.edit_status
         result.response_id = edit_outcome.response_id
+
+    if draft_choice is not None:
+        result.draft_choice = draft_choice
+        # The entry the point actually landed on, so the client adopts it for
+        # any later feedback or edit - the same contract Edit & Save set.
+        result.response_id = cache_response_id
+        # And re-point the interaction itself, which is the part a client
+        # CANNOT fix for us. The record was written naming the draft that was
+        # served; every later call that sends only an interaction_id resolves
+        # through it. Left pointing at the discarded draft, a thumbs-down on
+        # the kept answer would delete the OTHER entry - a perfectly good one,
+        # and on a first negative, immediately - and a thumbs-up would score it
+        # and hand the now-settled pair its score gap back, re-arming the
+        # chooser this pick just closed.
+        if draft_choice == "recorded" and interaction is not None and cache_response_id:
+            try:
+                await response_registry.set_response_id(
+                    interaction.interaction_id, cache_response_id
+                )
+            except Exception:
+                logger.warning(
+                    "Draft choice recorded but the interaction could not be re-pointed: %s",
+                    interaction.interaction_id,
+                    exc_info=True,
+                )
+        logger.info(
+            "draft_choice=%s kept=%s rejected=%s workspace=%s dept=%s",
+            draft_choice,
+            cache_response_id,
+            rejected_draft_response_ids or [],
+            workspace,
+            department,
+        )
 
     if interaction_id:
         await request_logger.log_feedback(

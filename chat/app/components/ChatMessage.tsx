@@ -19,7 +19,9 @@ import {
   type Route,
 } from "./provenance";
 import { canSave, isSaveShortcut, normalizeDraft } from "./edit-draft";
-import type { FeedbackRating } from "./chat-api";
+import { hasPendingDrafts } from "./draft-choice";
+import DraftChooser from "./DraftChooser";
+import type { Draft, FeedbackRating } from "./chat-api";
 
 // The full feedback lifecycle for a single assistant message.
 // "idle"/"error" are re-enabled states; "submitting" is in-flight; the rest are terminal.
@@ -85,6 +87,12 @@ export interface AppMessage {
   // cached answer. Persisted, so a reloaded conversation still shows the mark —
   // the transcript would otherwise claim a model wrote text a person did.
   editedByUser?: boolean;
+  // Two cached answers the embedding could not separate, offered as a choice.
+  // Present only until the user picks one; `chosenDraftLabel` records which,
+  // and both are persisted so a reloaded conversation shows the resolved
+  // answer rather than asking the same question again.
+  drafts?: Draft[] | null;
+  chosenDraftLabel?: "A" | "B" | null;
   // This answer came back from a cache entry somebody ELSE corrected
   // (x-dejaq-answer-authored). Same claim as editedByUser — a person wrote
   // this — from the other side of the exchange, so it earns the same mark
@@ -114,6 +122,10 @@ interface Props {
   onSaveEdit?: (messageId: string, text: string) => Promise<boolean>;
   onInspect?: (messageId: string) => void;
   inspected?: boolean;
+  // Records which of two tied cached answers the user kept. Absent while the
+  // conversation is read-only (a reloaded transcript whose choice is already
+  // made needs no handler).
+  onChooseDraft?: (messageId: string, draft: Draft) => Promise<void>;
   // This session's rolling average non-cache latency, and how many answers
   // it averages. Null/0 means the session has generated nothing yet, so the
   // cache line states the fact without a speed claim rather than defaulting
@@ -161,6 +173,7 @@ export default function ChatMessage({
   onSaveEdit,
   onInspect,
   inspected,
+  onChooseDraft,
   baselineMs,
   baselineSampleCount,
 }: Props) {
@@ -174,6 +187,21 @@ export default function ChatMessage({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
+  const [choosing, setChoosing] = useState(false);
+
+  // Unresolved drafts take over the body: there is no single answer to read,
+  // rate or edit yet, so the whole turn waits on the choice.
+  const pendingDrafts = hasPendingDrafts(message) ? message.drafts! : null;
+
+  async function commitDraftChoice(picked: Draft) {
+    if (!onChooseDraft || choosing) return;
+    setChoosing(true);
+    try {
+      await onChooseDraft(message.id, picked);
+    } finally {
+      setChoosing(false);
+    }
+  }
 
   function startEditing() {
     setDraft(message.content);
@@ -385,6 +413,8 @@ export default function ChatMessage({
           saving={saving}
           canCommit={canSave(message.content, draft)}
         />
+      ) : pendingDrafts ? (
+        <DraftChooser drafts={pendingDrafts} busy={choosing} onChoose={commitDraftChoice} />
       ) : (
         <MarkdownContent content={message.content} />
       )}
@@ -409,12 +439,21 @@ export default function ChatMessage({
           above already carries the route, so this row is pure metadata. The
           whole row and the feedback row below are replaced by the editor's own
           controls while editing, so the turn never shows two action bars. */}
-      {!editing && (
+      {!editing && !pendingDrafts && (
       <div className="dq-hover-meta" style={{ alignItems: "center", display: "flex", gap: "8px", marginTop: "16px" }}>
         {message.sourceLabel && (
           <span style={{ color: "var(--fg-dimmer)", fontSize: "10.5px" }}>{message.sourceLabel}</span>
         )}
         <span style={{ color: "var(--fg-dimmer)", fontSize: "10.5px" }}>{formatTs(message.ts)}</span>
+        {message.chosenDraftLabel && (
+          // Same quiet register as the Edited/Human-verified marks: the
+          // transcript should say that this answer was chosen from two, not
+          // silently present it as the only one there ever was.
+          <span style={{ alignItems: "center", color: "var(--fg-dimmer)", display: "flex", fontSize: "10.5px", gap: "4px" }}>
+            <ChoiceIcon />
+            You picked Draft {message.chosenDraftLabel}
+          </span>
+        )}
         {(message.editedByUser || message.authoredByHuman) && (
           // Same quiet register as the Stopped mark: the transcript must not
           // let a person's words read as the model's — whether that person was
@@ -477,8 +516,10 @@ export default function ChatMessage({
       </div>
       )}
 
-      {/* Feedback row — icon-only thumbs, no comment box, immediate submit on click */}
-      {!editing && (message.responseId || message.interactionId) && (
+      {/* Feedback row — icon-only thumbs, no comment box, immediate submit on click.
+          Hidden while two drafts are unresolved: there is no single answer to
+          rate yet, and keeping a draft already carries the thumbs-up. */}
+      {!editing && !pendingDrafts && (message.responseId || message.interactionId) && (
         <div style={{ alignItems: "center", display: "flex", gap: "4px", marginTop: "8px" }}>
           {(phase === "idle" || phase === "error" || phase === "submitting") && (
             <>
@@ -706,7 +747,11 @@ function AnswerEditor({
   );
 }
 
-function MarkdownContent({ content }: { content: string }) {
+// Exported for DraftChooser, which renders the same prose in the same reading
+// column. Duplicating the plugin/component wiring would let the two drift -
+// a code block or a KaTeX formula would render differently depending on
+// whether the answer happened to arrive as a draft.
+export function MarkdownContent({ content }: { content: string }) {
   return (
     <div className="dq-markdown">
       <ReactMarkdown
@@ -798,6 +843,14 @@ function PencilIcon() {
     <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <path d="M11.2 2.3a1.6 1.6 0 0 1 2.3 2.3l-7.6 7.6-3 .7.7-3 7.6-7.6z" />
       <path d="M10.1 3.4l2.3 2.3" />
+    </svg>
+  );
+}
+
+function ChoiceIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2.5 8.6 6 12l7.5-8" />
     </svg>
   );
 }

@@ -7,8 +7,11 @@ import {
   saveEditedAnswer,
   isApiError,
   type FeedbackRating,
+  chooseDraft,
+  type Draft,
 } from "./chat-api";
 import { editLanded, editStatusNotice } from "./edit-draft";
+import { adoptedResponseId, draftChoiceNotice, rejectedDraftIds } from "./draft-choice";
 import {
   DEFAULT_CHAT_SETTINGS,
   loadSettings,
@@ -629,6 +632,10 @@ export default function ChatApp() {
                 cacheDistance: result.cacheDistance,
                 cacheMatchedQuery: result.cacheMatchedQuery,
                 authoredByHuman: result.answerAuthored === "human",
+                // Two cached answers the embedding could not separate. Null on
+                // every ordinary turn, so the bubble renders exactly as before.
+                drafts: result.drafts,
+                chosenDraftLabel: null,
                 cacheEnrichedQuery: result.cacheEnrichedQuery,
               }
             : m
@@ -748,6 +755,61 @@ export default function ChatApp() {
 
     const toast = escalationToast(result.escalationStatus);
     if (toast) addToast("info", "Notice", toast);
+  }
+
+  // Keeping one of two tied cached answers.
+  //
+  // The pick IS the thumbs-up - one request, so the point lands on the answer
+  // the person actually chose rather than on whichever happened to be served.
+  // The transcript collapses to the kept text either way: the user made a
+  // choice about the answer in front of them, and that is true even if the
+  // cache could not record it. The toast says when it could not.
+  async function handleChooseDraft(msgId: string, picked: Draft): Promise<void> {
+    const convId = activeConvIdRef.current;
+    if (!convId) return;
+    const currentMessages = transcriptsRef.current[convId] ?? NO_MESSAGES;
+    const msg = currentMessages.find((m) => m.id === msgId);
+    if (!msg?.drafts) return;
+
+    const rejected = rejectedDraftIds(msg.drafts, picked);
+
+    const result = await chooseDraft(
+      msg.interactionId ?? null,
+      picked.responseId,
+      rejected,
+      settings.deptSlug,
+    );
+
+    if (isApiError(result)) {
+      addToast("error", "Could not record your choice", result.message);
+      return;
+    }
+
+    updateTranscript(convId, (prev) =>
+      prev.map((m) =>
+        m.id === msgId
+          ? {
+              ...m,
+              content: picked.content,
+              // Adopt the id the server scored. An alias-served id redirects to
+              // its root, so later feedback or an edit on this turn would
+              // otherwise address an entry that no longer holds this text.
+              responseId: adoptedResponseId(result.responseId, picked),
+              chosenDraftLabel: picked.label,
+              // Cleared, not kept: the question has been answered, and a
+              // reloaded conversation must not ask it again.
+              drafts: null,
+              // The pick carried the +1.0, so the thumbs row opens already
+              // resolved rather than inviting a second, contradictory vote.
+              feedbackPhase: "positive" as const,
+              feedbackScore: result.newScore ?? null,
+            }
+          : m,
+      ),
+    );
+
+    const notice = draftChoiceNotice(result.draftChoice);
+    if (notice) addToast(notice.kind, notice.title, notice.body);
   }
 
   // Edit & Save. Returns false when nothing was committed, which keeps the
@@ -1013,6 +1075,7 @@ export default function ChatApp() {
                         onRetry={msg.id === retryableMsgId ? handleRetry : undefined}
                         onSaveEdit={msg.role === "assistant" ? handleSaveEdit : undefined}
                         onInspect={msg.role === "assistant" ? handleInspect : undefined}
+                        onChooseDraft={msg.role === "assistant" ? handleChooseDraft : undefined}
                         inspected={msg.id === inspectedMsgId && inspectorOpen}
                         baselineMs={baselineMs}
                         baselineSampleCount={baselineLatencies.length}

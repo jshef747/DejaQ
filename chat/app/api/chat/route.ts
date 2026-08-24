@@ -25,6 +25,10 @@ const SSE_HEADERS_TO_FORWARD = [
   "x-dejaq-cache-matched-query",
   "x-dejaq-answer-authored",
   "x-dejaq-enriched-query",
+  // "2" when the semantic tie-breaker fired. The drafts themselves ride the
+  // terminal SSE chunk; this lets the client know a choice is coming before
+  // it has read a byte of the body.
+  "x-dejaq-drafts",
 ];
 
 interface ChatMsg {

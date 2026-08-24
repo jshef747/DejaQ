@@ -265,6 +265,100 @@ answer - see [`finish_reason` / `status`](#finish_reason--status-truncation-is-r
 Withholding the id until the store decision would mean withholding the whole response head
 until the answer was complete, which is the delay streaming exists to remove.
 
+## Alternative drafts (the semantic tie-breaker)
+
+Off by default; enabled per workspace with `drafts_enabled` on
+`PUT /admin/v1/workspaces/{slug}/llm-config`.
+
+The cache hit path serves one winner: `_lookup_candidates` ranks candidates and the router takes
+the first that clears the attachment gates. When the two closest candidates sit within
+`DEJAQ_CACHE_DRAFTS_MAX_DELTA` (0.02) of each other and both are inside
+`DEJAQ_CACHE_DRAFTS_MAX_DISTANCE` (0.05), that ranking is a coin flip nobody is told about. With
+this on, both are returned and the user picks.
+
+### Wire format
+
+A response carries `X-DejaQ-Drafts: 2` and a `dejaq_drafts` array:
+
+```json
+{
+  "choices": [{"message": {"role": "assistant", "content": "The refund window is 30 days."}}],
+  "dejaq_drafts": [
+    {"label": "A", "response_id": "acme__eng:doc-a", "content": "The refund window is 30 days.", "distance": 0.021},
+    {"label": "B", "response_id": "acme__eng:doc-b", "content": "You have a month after it arrives.", "distance": 0.023}
+  ]
+}
+```
+
+**Draft A is always the answer that was actually served**, and `x-dejaq-response-id` names it, so a
+client that ignores the field entirely behaves exactly as it did before this existed.
+
+On a **streaming** request the drafts ride the **terminal chunk** — the one carrying
+`finish_reason` — as an extra top-level key on an otherwise ordinary
+`chat.completion.chunk`. That placement is deliberate, not incidental: an OpenAI SDK parses every
+`data:` line into a chunk, so a custom SSE event carrying a foreign shape (no `choices`) fails its
+validation and breaks the client. An unknown key on a legal chunk is ignored by all of them. The
+key is omitted entirely, on every frame, when no tie fired. `/v1/responses` carries the same array
+on its body and on the `response.completed` payload.
+
+### When it fires
+
+All of these, or the response is an ordinary single answer:
+
+| Condition | Why |
+| --- | --- |
+| Both candidates within `drafts_max_distance` | A tie between two poor matches is still two poor matches |
+| Distances within `drafts_max_delta` | This is the tie itself |
+| Score gap under `1.0` | **Convergence.** One pick applies the ordinary `+1.0`, the gap reaches exactly 1.0, and the pair is settled — otherwise a distance-based trigger asks every user the same answered question forever |
+| Both trusted-tier | A band/rescue candidate is only servable once the validator accepts it |
+| Neither is `authored="human"` | A person vouched for that text through Edit & Save |
+| No attachment | Two entries for one image or file are two different documents' answers, or the same one twice |
+| Single-turn request | A follow-up turn needs the context adjuster, and drafts are served verbatim |
+| Answers genuinely differ | Not an alias of one root (an alias holds a byte-copy), not a near-duplicate |
+
+`drafts_max_distance` is capped at `DEJAQ_VALIDATOR_SKIP_DISTANCE`, **not** at the trusted-zone
+ceiling. The served answer goes through the validator on merit like any other hit; the *alternate*
+never does, because a second `validate()` call would land on the synchronous serve path. That is
+only defensible inside the distance where the embedding alone already guarantees a cached answer
+covers the question. Above it the validator is what separates a paraphrase from a sibling question
+— `solve part a` / `part b` measures 0.0898, comfortably inside the trusted zone. The cost is
+recall, knowingly.
+
+Both drafts are served **verbatim**: the context adjuster is skipped, because the text a person
+picks has to be the text that gets the point.
+
+### Keeping one
+
+The pick rides `/v1/feedback`, like Edit & Save:
+
+```json
+{
+  "interaction_id": "<x-dejaq-interaction-id>",
+  "rating": "positive",
+  "chosen_draft_response_id": "acme__eng:doc-b",
+  "rejected_draft_response_ids": ["acme__eng:doc-a"]
+}
+```
+
+`chosen_draft_response_id` requires `rating: "positive"` and an `interaction_id`, and cannot be
+combined with `edited_answer` (both `422`) — those are two writes to one entry with no defined
+order between them. Every id is namespace-checked against the caller's own workspace before
+anything is scored or logged, rejected ids included.
+
+| Field | Meaning |
+| --- | --- |
+| `draft_choice` | `recorded`, or `not_found` when the entry was evicted before the pick landed — not an error; the answer is already on the user's screen |
+| `response_id` | The entry the `+1.0` landed on. Adopt it |
+
+The rejected draft is **not penalised**. By the tie-breaker's own definition it was a high-quality
+match, and another user may well prefer it; the `+1.0` on the winner is what settles the pair.
+
+The interaction record is re-pointed at the kept entry server-side. This is the part a client
+cannot fix for itself: the record was written naming the draft that was *served*, and every later
+call sending only an `interaction_id` resolves through it. Left alone, a thumbs-down on the kept
+answer would delete the *discarded* entry — immediately, on a first negative — and a thumbs-up
+would score it and hand the settled pair its score gap back.
+
 ## Edit & Save
 
 A client can correct a served answer and have the correction become the cached answer. It is the

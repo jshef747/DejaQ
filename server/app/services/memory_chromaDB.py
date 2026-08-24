@@ -122,6 +122,14 @@ class CacheLookupResult:
     # deterministic, so the gate is equality. See services/file_text.py.
     file_sha: str | None = None
     file_kind: str | None = None
+    # This entry's accumulated feedback score, and the root it points at when it
+    # is an alias. Both are read off the same metadata the lookup already
+    # fetches, and both are needed by the alternative-drafts tie-breaker: the
+    # score is what settles a tie once somebody picks (see
+    # services/draft_selector.py), and alias_of is what stops an alias being
+    # offered as a "second" draft when it holds a byte-copy of its root's answer.
+    score: float = 0.0
+    alias_of: str | None = None
     # "human" when a person wrote this answer through Edit & Save, absent
     # otherwise. The serve path reads it to skip the context adjuster: a human
     # answer had no tone stripped from it, so there is nothing to put back, and
@@ -254,6 +262,8 @@ class MemoryService:
                     file_sha=meta.get("file_sha"),
                     file_kind=meta.get("file_kind"),
                     authored=meta.get("authored"),
+                    score=score,
+                    alias_of=meta.get("alias_of"),
                 ))
 
         if not candidates:

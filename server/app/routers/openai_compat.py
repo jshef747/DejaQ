@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from app.schemas.openai_compat import (
+    DejaQDraft,
     OAIChatChunk,
     OAIChatRequest,
     OAIChatResponse,
@@ -23,6 +24,7 @@ from app.schemas.openai_compat import (
     OAIStreamDelta,
     OAIUsage,
 )
+from app.services.draft_selector import DraftPair, select_draft_pair
 from app.services.external_llm import ExternalLLMService
 from app.services.credential_service import (
     ENCRYPTION_KEY_MISMATCH_DETAIL,
@@ -83,6 +85,10 @@ from app.config import (
     ADJUSTER_SKIP_DISTANCE,
     CACHE_ALIAS_ENABLED,
     CACHE_BAND_MAX_DISTANCE,
+    CACHE_DRAFTS_ENABLED,
+    CACHE_DRAFTS_MAX_DELTA,
+    CACHE_DRAFTS_MAX_DISTANCE,
+    CACHE_DRAFTS_MAX_SCORE_GAP,
     CACHE_FILE_ENABLED,
     CONTEXT_ADJUSTER_MODEL_NAME,
     DEFAULT_MAX_TOKENS,
@@ -183,6 +189,13 @@ class EffectiveLlmConfig:
     # gates service-pool selection (no *_overridden flag needed): it is a
     # plain comparison value read only by the file-routing size gate below.
     local_attachment_max_tokens: int = LOCAL_ATTACHMENT_MAX_TOKENS
+    # Alternative drafts (the semantic tie-breaker) - resolved EFFECTIVE values
+    # like the budgets above. Defaulted so a test constructing this with only
+    # external_model/routing_threshold gets the shipped behaviour, which is the
+    # feature switched off.
+    drafts_enabled: bool = CACHE_DRAFTS_ENABLED
+    drafts_max_distance: float = CACHE_DRAFTS_MAX_DISTANCE
+    drafts_max_delta: float = CACHE_DRAFTS_MAX_DELTA
     # Which of the fields above are workspace overrides rather than shipped
     # defaults - used to decide whether the request path needs a freshly
     # resolved service instance or can reuse the default-model singleton
@@ -263,6 +276,12 @@ class ChatPipelineResult:
     # change. See app/routers/openai_responses.py's response.failed event.
     failed: bool = False
     error_detail: str = ""
+    # Set only when the semantic tie-breaker fired on a cache hit: two entries
+    # the embedding could not separate, offered together instead of coin-flipped.
+    # Element 0 is `answer` itself, so a caller that ignores this behaves exactly
+    # as it did before the feature existed. Always None on a miss - the pipeline
+    # generates one answer, never two (see services/draft_selector.py).
+    drafts: list[DejaQDraft] | None = None
 
 
 def _request_model_profile(raw_request: Request) -> str:
@@ -307,6 +326,9 @@ def _effective_from_config(config) -> EffectiveLlmConfig:
         rewrite_max_tokens=config.rewrite_max_tokens,
         ollama_num_ctx=config.ollama_num_ctx,
         local_attachment_max_tokens=config.local_attachment_max_tokens,
+        drafts_enabled=config.drafts_enabled,
+        drafts_max_distance=config.drafts_max_distance,
+        drafts_max_delta=config.drafts_max_delta,
         local_model_overridden="local_model" in config.overrides,
         generalizer_model_overridden="generalizer_model" in config.overrides,
         adjuster_model_overridden="adjuster_model" in config.overrides,
@@ -898,6 +920,21 @@ def _image_log_suffix(
     return f" image={kind or 'unknown'}"
 
 
+def _drafts_log_suffix(pair: "DraftPair | None", namespace: str) -> str:
+    """Trailing tie-breaker summary for the per-request `done` line.
+
+    Empty for the overwhelmingly common case (no tie), on the same principle as
+    _image_log_suffix above: a field that says "not applicable" on every line
+    buries the ones that say something.
+    """
+    if pair is None:
+        return ""
+    return (
+        f" drafts=2 draft_delta={pair.distance_delta:.4f}"
+        f" draft_alt={namespace}:{pair.alternate.entry_id or '?'}"
+    )
+
+
 def _legacy_cache_lookup(cache_result: tuple[str, ...] | None) -> CacheLookupResult:
     if cache_result is None:
         return CacheLookupResult(hit=False)
@@ -1090,6 +1127,13 @@ async def _register_answer_interaction(
         )
 
 
+# How far down the gate-passing candidates the tie-breaker looks for the closest
+# runner-up. Only reached when drafts are wanted, and only for text requests, so
+# the extra iterations cost a comparison each. 4 rather than 2 because the pool
+# is score-ordered within a tier: the entry nearest the query can sit behind two
+# or three more popular ones. Bounded well under _LOOKUP_N_RESULTS (10).
+_DRAFT_CANDIDATE_SCAN = 4
+
 _GENERATION_FAILED_MESSAGE = (
     "I'm sorry, I couldn't process your request right now. Please try again later."
 )
@@ -1141,7 +1185,11 @@ async def _stream_generator(
         model=model,
         choices=[OAIStreamChoice(delta=OAIStreamDelta(role="assistant", content=""))],
     )
-    yield f"data: {first.model_dump_json()}\n\n"
+    # `dejaq_drafts` only ever belongs on the TERMINAL chunk, so it is excluded
+    # here and on every delta below. Without this, adding the field to the model
+    # made every ordinary chunk grow a `"dejaq_drafts":null`.
+    _NO_DRAFTS = {"dejaq_drafts"}
+    yield f"data: {first.model_dump_json(exclude=_NO_DRAFTS)}\n\n"
 
     async for piece in answer_pieces(result):
         chunk = OAIChatChunk(
@@ -1150,17 +1198,28 @@ async def _stream_generator(
             model=model,
             choices=[OAIStreamChoice(delta=OAIStreamDelta(content=piece))],
         )
-        yield f"data: {chunk.model_dump_json()}\n\n"
+        yield f"data: {chunk.model_dump_json(exclude=_NO_DRAFTS)}\n\n"
 
     # Final chunk with finish_reason — only settled once the stream above is
-    # drained, which is why it is read here and not captured up top.
+    # drained, which is why it is read here and not captured up top. It also
+    # carries the alternative drafts when the tie-breaker fired: a foreign SSE
+    # event would fail an OpenAI SDK's chunk validation, while an extra
+    # top-level key on an otherwise legal chunk is ignored by all of them.
     final = OAIChatChunk(
         id=result.completion_id,
         created=_now_ts(),
         model=model,
         choices=[OAIStreamChoice(delta=OAIStreamDelta(), finish_reason=result.finish_reason)],
+        dejaq_drafts=result.drafts,
     )
-    yield f"data: {final.model_dump_json()}\n\n"
+    # The key is dropped entirely when no tie fired, so the ordinary terminal
+    # chunk stays byte-identical to what it was before this feature existed.
+    _final_json = (
+        final.model_dump_json()
+        if result.drafts
+        else final.model_dump_json(exclude=_NO_DRAFTS)
+    )
+    yield f"data: {_final_json}\n\n"
     yield "data: [DONE]\n\n"
 
 
@@ -1370,6 +1429,32 @@ async def run_chat_pipeline(
                 hide_content(user_query),
             )
 
+        # Alternative drafts are never offered for an attachment request, so an
+        # attachment request stops scanning the pool at its first passer exactly
+        # as it always has — the gate logging below stays byte-identical for it.
+        # Two entries for one image or file are either two different documents'
+        # answers or the same one twice, and the validator below runs
+        # question-to-question against the SERVED candidate only; offering a
+        # choice here would invite picking an answer about a document the asker
+        # never attached. Same laundering the alias rule already refuses.
+        #
+        # Never on a follow-up turn either. A multi-turn request is a
+        # conversation ("now put that in bullet points"), and serving drafts
+        # means serving the stored answers verbatim - which would silently
+        # discard the context adjuster on exactly the turns that exist to
+        # change how an answer reads. It is the same `not history` rule
+        # ADJUSTER_SKIP_DISTANCE is gated on, for the same reason.
+        _want_drafts = bool(
+            llm_config.drafts_enabled
+            and not history
+            and not _request_has_image
+            and not _request_has_file
+        )
+        # Every candidate that cleared both gates, best first. Element 0 is the
+        # served answer (the prior single-winner contract); a second element, when
+        # drafts are wanted, is the runner-up the tie-breaker may reveal.
+        _gate_passed: list[CacheLookupResult] = []
+
         # Image + file gates, evaluated per pool candidate in score order. A
         # REJECT (kind mismatch, different attachment, ...) tries the next
         # candidate instead of becoming a full miss — a validly cached sibling
@@ -1395,7 +1480,11 @@ async def run_chat_pipeline(
                     ocr=image_ocr,
                     lookup=_candidate,
                 )
-                if detail:
+                if detail and not _gate_passed:
+                    # Only until a candidate has been accepted. Past that point
+                    # the loop is looking at the runner-up, and overwriting
+                    # these would make the hit report the gate numbers of an
+                    # entry it did not serve.
                     _image_clip_distance = detail.get("clip_distance")
                     _image_hamming = detail.get("hamming")
                     _image_token_jaccard = detail.get("token_jaccard")
@@ -1453,11 +1542,31 @@ async def run_chat_pipeline(
                     _cand_file_anchored = True
 
             if _cand_passed:
-                cache_lookup = _candidate
-                _image_anchored = _cand_image_anchored
-                _file_anchored = _cand_file_anchored
-                break
-        else:
+                if not _gate_passed:
+                    # The first passer is the served answer, and everything
+                    # downstream (validation, adjustment, the response id) reads
+                    # these — so they are fixed here and never touched again,
+                    # however far the scan below continues.
+                    cache_lookup = _candidate
+                    _image_anchored = _cand_image_anchored
+                    _file_anchored = _cand_file_anchored
+                _gate_passed.append(_candidate)
+                # One passer is enough unless the tie-breaker might want a
+                # runner-up. When it might, keep going a little: the pool is
+                # ranked by feedback SCORE within each tier, not by distance, so
+                # the closest runner-up is not necessarily the next element -
+                # the selector picks it out of whatever is collected here. The
+                # extra iterations are near-free for a text request, which is
+                # the only kind that reaches this branch (both gates no-op when
+                # neither side carries an attachment).
+                if not _want_drafts or len(_gate_passed) >= _DRAFT_CANDIDATE_SCAN:
+                    break
+
+        # Deliberately not a `for ... else`: the loop now also falls through
+        # naturally after finding exactly one passer while looking for a second,
+        # and an `else` clause would fire on that path and turn a perfectly good
+        # hit into a miss.
+        if not _gate_passed:
             # No pool candidate passed both gates (or the pool was empty) —
             # a full miss, with the nearest text match preserved for diagnostics.
             cache_lookup = CacheLookupResult(
@@ -1605,7 +1714,53 @@ async def run_chat_pipeline(
                 # a near-duplicate of the original question (measured distance
                 # as low as 0.0000) — see ADJUSTER_SKIP_DISTANCE in config.py.
                 _skip_adjust = (not history) and _cache_distance <= ADJUSTER_SKIP_DISTANCE
-                if _attachment_anchored or _human_authored:
+
+                # Alternative drafts (the semantic tie-breaker). The runner-up
+                # is revealed only when the embedding genuinely could not
+                # separate the two — see services/draft_selector.py for the four
+                # conditions. The exclusions below are the ones that depend on
+                # THIS request rather than on the pair, which is why they live
+                # here and not in the selector:
+                #
+                # - trusted tier on both sides. A band or rescue alternate is
+                #   only servable once the validator accepts it, and that is a
+                #   second validator call (~600ms measured) on the synchronous
+                #   serve path. The admin ceiling in llm_config_service caps the
+                #   configured window at CACHE_TRUST_DISTANCE so this cannot be
+                #   configured around, but the tier flag is the real authority.
+                # - never an attachment hit (already excluded by _want_drafts,
+                #   restated here so the rule survives a change to that flag).
+                # - never a human-authored entry on either side. A person
+                #   vouched for that text through Edit & Save; putting it to a
+                #   vote against a model's answer is precisely what that feature
+                #   exists to prevent.
+                _draft_pair = None
+                if (
+                    _want_drafts
+                    and not _attachment_anchored
+                    and not _human_authored
+                    and not _requires_validation
+                ):
+                    _eligible = [
+                        candidate for candidate in _gate_passed
+                        if not candidate.requires_validation
+                        and candidate.authored != "human"
+                    ]
+                    _draft_pair = select_draft_pair(
+                        _eligible,
+                        max_distance=llm_config.drafts_max_distance,
+                        max_delta=llm_config.drafts_max_delta,
+                        max_score_gap=CACHE_DRAFTS_MAX_SCORE_GAP,
+                    )
+
+                if _draft_pair is not None:
+                    # Both drafts are served verbatim. Running adjust() twice
+                    # would double the slowest step on the hit path, and the
+                    # user is choosing between two STORED answers — rewriting
+                    # them to match the question's tone would mean the text they
+                    # picked is not the text that gets the point.
+                    answer = cached_answer
+                elif _attachment_anchored or _human_authored:
                     # Attachment answers are stored verbatim (the generalizer
                     # invents specifics it cannot see — docs/image-gate.md), so no
                     # tone was ever stripped and there is nothing to put back.
@@ -1663,7 +1818,7 @@ async def run_chat_pipeline(
                 if _requires_validation and CACHE_ALIAS_ENABLED and not _attachment_anchored:
                     asyncio.create_task(_store_alias_bg(cache_namespace, clean_query, _entry_id))
                 logger.info(
-                    "done cache=hit route=cache model=%s response_id=%s latency=%dms band=%s rescued=%s steps=%s%s%s%s",
+                    "done cache=hit route=cache model=%s response_id=%s latency=%dms band=%s rescued=%s steps=%s%s%s%s%s",
                     model_used, response_id, _latency,
                     _requires_validation, bool(getattr(cache_lookup, "rescued", False)),
                     trace.summary(),
@@ -1671,6 +1826,7 @@ async def run_chat_pipeline(
                     _nearest_log_suffix(cache_lookup),
                     _image_log_suffix(_request_has_image, _image_kind(image_ocr) if _request_has_image else None,
                               _image_clip_distance, _image_hamming, _image_token_jaccard),
+                    _drafts_log_suffix(_draft_pair, cache_namespace),
                 )
 
                 prompt_tokens = int(len(clean_query.split()) * 1.3)
@@ -1690,6 +1846,31 @@ async def run_chat_pipeline(
                     # Only ever set on a hit: a miss is by definition an answer
                     # no person has written yet.
                     hit_headers["x-dejaq-answer-authored"] = "human"
+
+                # Draft A is always the answer that was actually served and
+                # streamed, so a client that ignores this list entirely still
+                # shows the same text it would have shown before the feature
+                # existed. The header lets a client know a choice is coming
+                # before it has read a single byte of the body.
+                _drafts: list[DejaQDraft] | None = None
+                if _draft_pair is not None:
+                    _alt = _draft_pair.alternate
+                    _drafts = [
+                        DejaQDraft(
+                            label="A",
+                            response_id=response_id,
+                            content=answer,
+                            distance=_cache_distance,
+                        ),
+                        DejaQDraft(
+                            label="B",
+                            response_id=f"{cache_namespace}:{_alt.entry_id or ''}",
+                            content=_alt.generalized_answer or "",
+                            distance=float(_alt.distance or 0.0),
+                        ),
+                    ]
+                    hit_headers["x-dejaq-drafts"] = str(len(_drafts))
+
                 hit_headers.update(_nearest_headers(cache_lookup))
                 hit_headers.update(_enriched_headers(user_query, enriched, enrich_succeeded))
                 return ChatPipelineResult(
@@ -1701,6 +1882,7 @@ async def run_chat_pipeline(
                     headers=hit_headers,
                     prompt_tokens=prompt_tokens,
                     completion_tokens=0,
+                    drafts=_drafts,
                 )
 
         # 4. Cache miss — classify then route
@@ -2547,5 +2729,11 @@ async def chat_completions(
             completion_tokens=result.completion_tokens,
             total_tokens=result.prompt_tokens + result.completion_tokens,
         ),
+        dejaq_drafts=result.drafts,
     )
-    return JSONResponse(content=response.model_dump(), headers=result.headers)
+    # Same rule as the streaming terminal chunk: `choices` already carries the
+    # served answer, so the key is dropped entirely when no tie fired.
+    _body = response.model_dump(
+        exclude=None if result.drafts else {"dejaq_drafts"}
+    )
+    return JSONResponse(content=_body, headers=result.headers)
