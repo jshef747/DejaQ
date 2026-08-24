@@ -51,12 +51,71 @@ REDIS_URL = os.getenv("DEJAQ_REDIS_URL", "redis://localhost:6379/0")
 CHROMA_HOST = os.getenv("DEJAQ_CHROMA_HOST", "127.0.0.1")
 CHROMA_PORT = int(os.getenv("DEJAQ_CHROMA_PORT", "8001"))
 
+# Text-matching embedder, shared by the Q->A cache and RAG (memory_chromaDB.py,
+# rag_service.py both call embed_text). Qwen3-Embedding-0.6B replaces
+# BAAI/bge-small-en-v1.5 (384-dim) - measured on a 172-pair EN/HE corpus
+# (dejaq-hebrew-model-swap report): Hebrew sibling-trap false merges 27/37 ->
+# 11/37, English 19/37 -> 6/37, at the unchanged 0.15/0.20 trust/band
+# thresholds. Cost: ~5x single-item encode latency (20ms -> 95ms on this
+# machine) and 1024 vs 384 dims, so every existing ChromaDB collection needs
+# rebuilding (Chroma fixes a collection's dimension on first insert - a
+# dimension change is a hard error on the old collection, not a degraded
+# result). Revert to "BAAI/bge-small-en-v1.5" with TEXT_EMBEDDING_QUERY_PREFIX
+# set to "" to roll back; the collections must be rebuilt again either way.
+TEXT_EMBEDDING_MODEL = _get_text("DEJAQ_TEXT_EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
+# Qwen3-Embedding's instructed variant - measured best of 5 candidates in the
+# same report. Applied uniformly to every embed_text call (cache queries, RAG
+# chunks, RAG queries): the shared function has no query/document distinction
+# today, and the evaluation that picked this prefix measured it the same way -
+# symmetric question-to-question comparison, matching how the cache actually
+# uses embed_text. Set to "" for a model with no instruction format (e.g. the
+# original bge-small).
+TEXT_EMBEDDING_QUERY_PREFIX = _get_text(
+    "DEJAQ_TEXT_EMBEDDING_QUERY_PREFIX",
+    "Instruct: Given a question, retrieve a question that asks the same thing\nQuery: ",
+)
+
 # External LLM
 # No baked-in default: an unset DEJAQ_EXTERNAL_MODEL means no external model
 # is configured server-wide, and every consumer must treat that as "ask the
 # workspace to configure a provider" rather than silently picking one.
 EXTERNAL_MODEL_NAME = os.getenv("DEJAQ_EXTERNAL_MODEL")
-ROUTING_THRESHOLD = _get_float("DEJAQ_ROUTING_THRESHOLD", 0.3)
+# 0.50 is the LaBSE classifier's own LogisticRegression decision boundary -
+# not a swept number. class_weight="balanced" during training already
+# corrects for the 60/40 easy/hard class imbalance, so 0.5 is not naively
+# biased toward the majority class. The old 0.2986 belonged to the retired
+# NVIDIA classifier (an effort-index score topping out near 0.36, r=0.21
+# against the LaBSE score on the same 770-item corpus) - carrying it across
+# was measuring one instrument's number on the other's scale
+# (dejaq-difficulty-definition/report.md section 6). This is the single
+# threshold the routing path reads; there used to be a second one
+# (LABSE_CLASSIFIER_THRESHOLD) that predict_complexity applied to its own
+# internal "complexity" label, but openai_compat.py's routing step always
+# overwrote that label using this constant (or its per-workspace override)
+# before making the actual local/external decision - the second constant
+# never affected routing and has been folded into this one.
+ROUTING_THRESHOLD = _get_float("DEJAQ_ROUTING_THRESHOLD", 0.50)
+# Default ON: this is the classifier that serves routing decisions now.
+LOAD_LABSE_CLASSIFIER = _get_bool("DEJAQ_LOAD_LABSE_CLASSIFIER", True)
+# Default OFF on this branch: the old NVIDIA classifier (ClassifierService,
+# ~1.5GB) has no job left once routing moved to LaBSE, and not loading it is
+# the whole point of the cutover - it is what pays for the new head's memory
+# (dejaq-classifier-cutover/report.md). The code and model stay in the tree
+# unmodified for staging, which still routes off this classifier and must
+# not lose it when this branch merges; flip this on for local
+# fallback/comparison without reverting any code.
+LOAD_LEGACY_CLASSIFIER = _get_bool("DEJAQ_LOAD_LEGACY_CLASSIFIER", False)
+# Which classifier a workspace routes on by default when it has no
+# classifier_choice override - "labse", matching LOAD_LABSE_CLASSIFIER's own
+# default, so an existing install's routing behaviour is unchanged on upgrade.
+DEFAULT_CLASSIFIER_CHOICE = "labse"
+# The legacy NVIDIA classifier's own natural cut (its weight vector was
+# jointly searched with this exact value - see classifier.py's
+# prompt_complexity_score comment). ROUTING_THRESHOLD above (0.50) is LaBSE's
+# threshold; the two classifiers score on different scales and must never
+# share one - see llm_config_service.py and docs/image-gate.md's sibling
+# warning about hand-tuning swept thresholds.
+LEGACY_ROUTING_THRESHOLD = _get_float("DEJAQ_LEGACY_ROUTING_THRESHOLD", 0.2986)
 CREDENTIAL_ENCRYPTION_KEY = os.getenv("DEJAQ_CREDENTIAL_ENCRYPTION_KEY", "")
 
 # API key cache
@@ -77,6 +136,13 @@ USE_CELERY = os.getenv("DEJAQ_USE_CELERY", "true").lower() == "true"
 # Logging
 LOG_LEVEL = _get_text("DEJAQ_LOG_LEVEL", "INFO").upper()
 LOG_SHOW_CONTENT = _get_bool("DEJAQ_LOG_SHOW_CONTENT", False)
+
+# In-process torch device for the difficulty classifier.
+# "auto" probes the runtime (CUDA, then Apple Metal, then CPU); "cpu"/"cuda"/
+# "mps" force one, for a driver bug or to leave the GPU free for something
+# else. An unavailable or unrecognised value falls back to the probe rather
+# than crashing the server - see services/classifier.py::_select_device.
+TORCH_DEVICE = _get_text("DEJAQ_TORCH_DEVICE", "auto").lower()
 
 # Cache eviction
 EVICTION_FLOOR = _get_float("DEJAQ_EVICTION_FLOOR", -5.0)
@@ -261,7 +327,7 @@ CACHE_FILE_MIN_CHARS = int(_get_float("DEJAQ_CACHE_FILE_MIN_CHARS", 200))
 # speaking the API directly bypasses it.
 MAX_ATTACHMENT_BYTES = int(_get_float("DEJAQ_MAX_ATTACHMENT_BYTES", 10 * 1024 * 1024))
 
-# --- Rug (RAG) — per-workspace knowledge layer ---
+# --- RAG — per-workspace knowledge layer ---
 # A third answer source alongside the Q→A cache and the LLM: admins curate
 # documents into a workspace's own knowledge base ("{workspace_slug}__rag_kb"
 # Chroma collection). On a cache MISS, the closest chunks are retrieved and
@@ -272,6 +338,27 @@ MAX_ATTACHMENT_BYTES = int(_get_float("DEJAQ_MAX_ATTACHMENT_BYTES", 10 * 1024 * 
 # is refused in rag_admin_service, so a server that will never read knowledge
 # cannot accumulate it. Listing and deleting stay open so an operator can clean up.
 RAG_ENABLED = _get_bool("DEJAQ_RAG_ENABLED", True)
+# The system no longer grounds an answer in a document nobody chose — that
+# silent, guess-which-document path (and its DEJAQ_RAG_AUTO_RETRIEVE flag) was
+# removed. What remains: a VISIBLE, dismissible suggestion in the chat
+# composer, which the retrieval below still powers (rag_service.retrieve(),
+# unchanged) — see POST /rag-suggest (routers/rag_documents_public.py) and
+# docs/rag-layer.md. Accepting a suggestion sets an ordinary explicit
+# `@`-reference (rag_document_id); it grounds nothing on its own.
+RAG_SUGGEST_ENABLED = _get_bool("DEJAQ_RAG_SUGGEST_ENABLED", True)
+# Cosine-distance ceiling to OFFER a suggestion — never to ground on it, which
+# only happens if the user accepts. Deliberately looser than RAG_MAX_DISTANCE
+# (0.35, tuned for silently injecting text): a wrong suggestion here costs one
+# glance and a dismiss, not a misleading answer, so eagerness is cheaper.
+# Swept 0.35/0.45/0.55/0.65 on the same synthetic corpus rag_recall used
+# (evals/rag_suggest/measure.py): 0.35 appears too rarely to be useful
+# (5/15 questions, though 5/5 correct when it did); 0.55+ starts offering a
+# suggestion for genuinely unanswerable questions (1/5, then 2/5 distractors
+# at 0.65). 0.45 is the last point before that: appears for 10/15 in-KB
+# questions (67%), correct 8/10 of those (80%), and 0/5 false positives on
+# the unanswerable set. Full numbers and per-question detail:
+# firstmate/data/dejaq-rag-suggest/report.md.
+RAG_SUGGEST_MAX_DISTANCE = _get_float("DEJAQ_RAG_SUGGEST_MAX_DISTANCE", 0.45)
 # How many chunks to pull per query, and the cosine-distance ceiling a chunk must
 # clear to count as relevant. 0.35 is deliberately looser than the cache trust
 # distance (0.15): we want related context to ground the model, not an exact
@@ -279,6 +366,13 @@ RAG_ENABLED = _get_bool("DEJAQ_RAG_ENABLED", True)
 # it in production; too loose injects noise, too tight injects nothing.
 RAG_TOP_K = _get_int("DEJAQ_RAG_TOP_K", 4)
 RAG_MAX_DISTANCE = _get_float("DEJAQ_RAG_MAX_DISTANCE", 0.35)
+# Below this many total chunks in a workspace's knowledge base, retrieve()
+# searches EXHAUSTIVELY (a linear scan) instead of through Chroma's HNSW
+# approximate index. Measured: HNSW can miss a chunk that is objectively the
+# best match when one large document's chunks dominate the graph. Rationale,
+# before/after recall numbers, and the (deliberately conservative, untuned
+# past ~5k chunks) reasoning behind this default: docs/rag-layer.md.
+RAG_EXHAUSTIVE_MAX_CHUNKS = _get_int("DEJAQ_RAG_EXHAUSTIVE_MAX_CHUNKS", 20_000)
 # Chunking: window size and overlap in characters when splitting a document.
 RAG_CHUNK_CHARS = _get_int("DEJAQ_RAG_CHUNK_CHARS", 1000)
 RAG_CHUNK_OVERLAP = _get_int("DEJAQ_RAG_CHUNK_OVERLAP", 150)
@@ -393,8 +487,28 @@ ADJUST_TIMEOUT_SECONDS = _get_float("DEJAQ_ADJUST_TIMEOUT_SECONDS", 30.0)
 ADMIN_LOOPBACK_ONLY = _get_bool("DEJAQ_ADMIN_LOOPBACK_ONLY", True)
 BIND_HOST = _get_text("DEJAQ_BIND_HOST", "127.0.0.1")
 
+# Enricher stays on qwen_1_5b (qwen2.5:1.5b), NOT switched to qwen3:0.6b as
+# dejaq-model-roles-refresh proposed: that switch was conditional on the
+# target deployment holding a 4th distinct resident Ollama tag alongside the
+# other three, and this machine measured (see fm-dejaq-model-refresh-implement
+# report) that it does not reliably keep even today's 3 tags resident under
+# rapid sequential load - it evicts down to one. A 4th tag that evicts the
+# adjuster's qwen_1_5b tag (which the enricher shares today, by design, so a
+# single cache-hit request never triggers a same-tag reload between the two)
+# would replace the contention penalty this switch targets with a strictly
+# worse cross-tag cold-load penalty. Left unchanged; see the implementation
+# report for the measurement.
 ENRICHER_MODEL_NAME = _get_text("DEJAQ_ENRICHER_MODEL_NAME", "qwen_1_5b")
-NORMALIZER_MODEL_NAME = _get_text("DEJAQ_NORMALIZER_MODEL_NAME", "gemma_e2b")
+# granite4.1:3b: same accuracy as gemma_e2b on the measured cases (5/5,
+# cluster-consistent, deterministic), ~2x faster (~170ms vs ~390ms median).
+NORMALIZER_MODEL_NAME = _get_text("DEJAQ_NORMALIZER_MODEL_NAME", "granite4_1_3b")
+# Reverted from phi4_mini_3_8b (correction #2, dejaq-refresh-corrections):
+# phi4-mini:3.8b reports only `completion, tools` on Ollama's own /api/show -
+# no vision - so every image request silently routed external unconditionally,
+# undoing the local-image feature. gemma4:e4b reports `completion, vision,
+# audio, tools, thinking`. phi4-mini's speed/size win was real but not worth
+# losing local image answering for; a vision-capable local model is required
+# on this role.
 LOCAL_LLM_MODEL_NAME = _get_text("DEJAQ_LOCAL_LLM_MODEL_NAME", "gemma_local")
 
 # Swapped from phi_generalizer (phi3.5:latest) to gemma_e2b (gemma4:e2b):
@@ -410,13 +524,62 @@ LOCAL_LLM_MODEL_NAME = _get_text("DEJAQ_LOCAL_LLM_MODEL_NAME", "gemma_local")
 # but it is a real content-fidelity gap worth watching, not a clean bill of
 # health. See the incident report (dejaq-generalizer-runaway) for the full
 # comparison.
-GENERALIZER_MODEL_NAME = _get_text("DEJAQ_GENERALIZER_MODEL_NAME", "gemma_e2b")
+# Rejoined onto granite4_1_3b (back off its own gemma_e2b tag - see git
+# history for that split): four distinct resident Ollama tags (this role's
+# gemma_e2b, normalizer/validator's granite4_1_3b, local's gemma_local,
+# enricher/adjuster's qwen_1_5b) don't reliably stay loaded together on this
+# machine - a three-way branch comparison (dejaq-three-way-comparison)
+# measured 44/59 ollama-ps polls (75%) with NOTHING resident and local-answer
+# median latency at 9,572ms, against ~1,150-1,257ms on two other branches that
+# both stayed at 3 tags. That is an ~8x regression dominating every latency
+# number the app produces, and it hits every request, not a subset - strictly
+# worse than the queuing risk this rejoin reaccepts. Three arrangements that
+# get back to 3 tags were measured end to end (fm-dejaq-refresh-preflight-
+# fixes report): this one (generalizer -> granite4_1_3b, rejoining
+# normalizer/validator), moving normalizer+validator onto gemma_e2b instead
+# (same shared-tag shape, but gives up the ~2x normalizer/validator speed
+# edge granite4_1_3b measured over gemma_e2b for no offsetting benefit), and
+# moving the generalizer onto qwen_1_5b (measured fastest in isolation, but
+# qwen_1_5b has never been evaluated for this role the way granite4_1_3b and
+# gemma_e2b were above - only phi3.5 and gemma_e2b were, and phi3.5 ran away
+# 5/20 - and it would make the background rewrite compete with adjust(),
+# which sits on the live cache-hit path). This option keeps every role on an
+# already-quality-validated model (granite4_1_3b measured "no fabrication
+# regression... comparable-or-faster than gemma_e2b" for generalize() before
+# the split, and equal-accuracy/~2x-faster for normalizer/validate() below)
+# and reaccepts only the bounded, already-measured queuing cost: a live
+# validate() call going from 199ms to 2,975ms when a background generalize()
+# on the same tag is in flight. Raising Ollama's slot count was measured and
+# rejected - no memory headroom on this machine.
+GENERALIZER_MODEL_NAME = _get_text("DEJAQ_GENERALIZER_MODEL_NAME", "granite4_1_3b")
+# Every other candidate tested (qwen3:0.6b/1.7b, granite4.1:3b, phi4-mini:3.8b)
+# failed the "give me the short version" case - output was a near-verbatim
+# copy of the input instead of a genuine condensation. qwen_1_5b is the only
+# model that reliably shortens on request, and this role sits on the hot
+# cache-hit path, so it stays.
 CONTEXT_ADJUSTER_MODEL_NAME = _get_text("DEJAQ_CONTEXT_ADJUSTER_MODEL_NAME", "qwen_1_5b")
-VALIDATOR_MODEL_NAME = _get_text("DEJAQ_VALIDATOR_MODEL_NAME", "gemma_e2b")
+# granite4.1:3b: ties gemma_e2b on the broad accuracy set, ~2x faster, never
+# produced an unparseable verdict (unlike two rejected candidates). NOT
+# adopted because it "fixes a named defect" - an independent reconstruction
+# of that defect (dejaq-thread-followup-form-mismatch) found the current
+# model already answers it correctly, so the original claim doesn't hold; the
+# swap rests on speed and equal accuracy alone.
+VALIDATOR_MODEL_NAME = _get_text("DEJAQ_VALIDATOR_MODEL_NAME", "granite4_1_3b")
 # Cache hits at or below this cosine distance are near-identical to the stored
 # query; skip the validator and serve them directly (the embedding already
 # guarantees the cached answer covers the question).
-VALIDATOR_SKIP_DISTANCE = _get_float("DEJAQ_VALIDATOR_SKIP_DISTANCE", 0.05)
+# Lowered from 0.05: a 172-pair labelled corpus (bge-small-en-v1.5, the
+# shipped embedder) measured the smallest observed non-match distance at
+# ~0.0036 overall / ~0.0103 Hebrew-only - so 0.05 left a real population of
+# genuinely-different sibling questions fully unchecked (no validator, no
+# inspection at all). 0.003 sits below that measured floor with margin, the
+# same half-the-zero-false-merge-ceiling logic the image gate uses for its
+# own thresholds. This is a mitigation, not a fix: the sibling-merge bug
+# (dejaq-cache-sibling-merge) reproduces at distances as high as 0.0476, well
+# above even the old 0.05 skip line, because the failure lives partly in the
+# validator's own judgment on "same template, swapped differentiator"
+# questions, not only in what skips it entirely.
+VALIDATOR_SKIP_DISTANCE = _get_float("DEJAQ_VALIDATOR_SKIP_DISTANCE", 0.003)
 
 # Below this cosine distance, on a single-turn request only (no prior
 # conversation history - see openai_compat.py's use of `history`), skip

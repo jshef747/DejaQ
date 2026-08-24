@@ -100,3 +100,24 @@ def test_groq_vision_model_attachment_reaches_the_wire_through_litellm(monkeypat
     image_parts = [part for part in user_content if part.get("type") == "image_url"]
     assert len(image_parts) == 1
     assert image_parts[0]["image_url"]["url"] == "data:image/png;base64,aGVsbG8="
+
+
+def test_groq_requests_hidden_reasoning_format_so_think_tags_dont_leak(monkeypatch):
+    """Groq's qwen3.6-27b emits <think> tags unless reasoning_format is set.
+    LiteLLM has no first-class param for it, so it must reach the wire via
+    extra_body - confirmed here rather than assumed."""
+    request = ExternalLLMRequest(query="hi", model="groq/qwen/qwen3.6-27b", max_tokens=64)
+    with FakeLLMServer([(200, _ok_groq_response())]) as server:
+        monkeypatch.setenv("GROQ_API_BASE", server.base_url)
+        asyncio.run(external_llm.ExternalLLMService().generate_response(request, "groq", "sk-groq-test"))
+
+    assert server.requests[0]["reasoning_format"] == "hidden"
+
+
+def test_non_groq_provider_does_not_get_reasoning_format(monkeypatch):
+    request = ExternalLLMRequest(query="hi", model="openai/fake-model", max_tokens=64)
+    with FakeLLMServer([(200, _ok_groq_response())]) as server:
+        monkeypatch.setenv("OPENAI_API_BASE", f"{server.base_url}/v1")
+        asyncio.run(external_llm.ExternalLLMService().generate_response(request, "openai", "sk-test"))
+
+    assert "reasoning_format" not in server.requests[0]

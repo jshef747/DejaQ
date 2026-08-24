@@ -82,7 +82,12 @@ export type RagDocumentItem = {
   source: string;      // paste | upload | url | ocr
   source_ref: string | null;
   char_count: number;
+  byte_size: number;
   chunk_count: number;
+  status: "processing" | "ready" | "failed";
+  progress_current: number;
+  progress_total: number | null;
+  error_message: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -107,6 +112,13 @@ export type LlmConfigResponse = {
   generalizer_system_prompt: string | null;
   local_model_system_prompt: string | null;
   routing_threshold: number | null;
+  // Which difficulty classifier is active: "legacy" (NVIDIA DeBERTa) or
+  // "labse" (LaBSE, the shipped default). routing_threshold above is
+  // LaBSE's own threshold; legacy_routing_threshold below is the legacy
+  // classifier's own - the two score on completely different scales and
+  // are never interchangeable.
+  classifier_choice: "legacy" | "labse";
+  legacy_routing_threshold: number | null;
   default_max_tokens: number;
   rewrite_max_tokens: number;
   ollama_num_ctx: number;
@@ -137,6 +149,8 @@ export type LlmConfigUpdate = Partial<{
   generalizer_system_prompt: string | null;
   local_model_system_prompt: string | null;
   routing_threshold: number | null;
+  classifier_choice: "legacy" | "labse" | null;
+  legacy_routing_threshold: number | null;
   default_max_tokens: number | null;
   rewrite_max_tokens: number | null;
   ollama_num_ctx: number | null;

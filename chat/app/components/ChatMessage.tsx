@@ -1,12 +1,12 @@
 "use client";
 
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
-import CodeBlock from "./CodeBlock";
+import CodeBlock, { plainText } from "./CodeBlock";
 import TurnShell from "./ReadingColumn";
 import { RouteRing, WaitRing } from "./RouteMarker";
 import {
@@ -19,11 +19,14 @@ import {
   type Route,
 } from "./provenance";
 import { canSave, isSaveShortcut, normalizeDraft } from "./edit-draft";
+import { textDirection } from "./text-direction";
 import type { FeedbackRating } from "./chat-api";
 
 // The full feedback lifecycle for a single assistant message.
-// "idle"/"error" are re-enabled states; "submitting" is in-flight; the rest are terminal.
-export type FeedbackPhase = "idle" | "submitting" | "positive" | "negative" | "error";
+// "idle"/"error" are re-enabled states; "positive"/"negative" are terminal.
+// The click sets the terminal state optimistically, before the request even
+// lands — see ChatApp.handleFeedback — so there is no separate in-flight state.
+export type FeedbackPhase = "idle" | "positive" | "negative" | "error";
 
 export interface AppMessage {
   id: string;
@@ -40,6 +43,11 @@ export interface AppMessage {
   // picked for this one. The transcript shows both, but reuse is drawn smaller
   // so the turn that actually uploaded stays identifiable at a glance.
   attachmentSticky?: boolean;
+  // Title of the knowledge-base document this turn explicitly referenced with
+  // `@` — set on the user message from the picker selection, and on the
+  // assistant message from the server's own confirmation header, so the mark
+  // never claims a grounding the server didn't actually apply.
+  ragDocumentTitle?: string | null;
   // Assistant-only fields:
   modelUsed?: string | null;
   interactionId?: string | null;
@@ -58,6 +66,12 @@ export interface AppMessage {
   cacheDistance?: number | null;
   cacheMatchedQuery?: string | null;
   cacheEnrichedQuery?: string | null;
+  // Count of knowledge-base passages injected on a miss that RAG grounded.
+  // Null when nothing was retrieved, or on a cache hit (grounding, if
+  // any, happened whenever that answer was first generated, not now). Count
+  // only — the header carries no document title, and this is not worth a new
+  // backend endpoint just to name it.
+  ragChunks?: number | null;
   // Set by Stop: this answer was cut off mid-generation. Whatever text had
   // already streamed in is kept, marked, and never mistaken for a complete
   // answer — it carries no responseId/interactionId, so the feedback row
@@ -275,11 +289,40 @@ export default function ChatMessage({
                       <path d="M9.5 1.5V5H13" strokeLinejoin="round" />
                     </svg>
                   )}
-                  {message.fileName ?? "same image"}
+                  <bdi>{message.fileName ?? "same image"}</bdi>
                 </span>
               </div>
             )}
-            {message.content}
+            {message.ragDocumentTitle && (
+              // Same chip language as the attachment one above, but its own
+              // line and glyph: a knowledge-base reference isn't an upload.
+              <div style={{ marginBottom: message.content ? "8px" : 0 }}>
+                <span
+                  style={{
+                    alignItems: "center",
+                    background: "var(--bg-2)",
+                    border: "1px solid var(--border-2)",
+                    borderRadius: "7px",
+                    color: "var(--fg-dim)",
+                    display: "inline-flex",
+                    fontSize: "11.5px",
+                    gap: "6px",
+                    maxWidth: "100%",
+                    overflow: "hidden",
+                    padding: "4px 9px",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
+                    <path d="M3.5 2.5h6L12 5.5v8a1 1 0 0 1-1 1h-7.5a1 1 0 0 1-1-1v-10a1 1 0 0 1 1-1z" strokeLinejoin="round" />
+                    <path d="M5.5 7h5M5.5 9.5h5M5.5 12h3" strokeLinecap="round" />
+                  </svg>
+                  @<bdi>{message.ragDocumentTitle}</bdi>
+                </span>
+              </div>
+            )}
+            {message.content && <div dir={textDirection(message.content)}>{message.content}</div>}
           </div>
           {message.failed && (
             <FailedRow
@@ -480,22 +523,12 @@ export default function ChatMessage({
       {/* Feedback row — icon-only thumbs, no comment box, immediate submit on click */}
       {!editing && (message.responseId || message.interactionId) && (
         <div style={{ alignItems: "center", display: "flex", gap: "4px", marginTop: "8px" }}>
-          {(phase === "idle" || phase === "error" || phase === "submitting") && (
+          {(phase === "idle" || phase === "error") && (
             <>
-              <button
-                onClick={() => handleFeedbackClick("positive")}
-                disabled={phase === "submitting"}
-                title="Helpful"
-                style={thumbBtn(phase === "submitting")}
-              >
+              <button onClick={() => handleFeedbackClick("positive")} title="Helpful" style={thumbBtn()}>
                 <ThumbUpIcon />
               </button>
-              <button
-                onClick={() => handleFeedbackClick("negative")}
-                disabled={phase === "submitting"}
-                title="Not helpful"
-                style={thumbBtn(phase === "submitting")}
-              >
+              <button onClick={() => handleFeedbackClick("negative")} title="Not helpful" style={thumbBtn()}>
                 <ThumbDownIcon />
               </button>
             </>
@@ -618,6 +651,7 @@ function AnswerEditor({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         disabled={saving}
+        dir={textDirection(value)}
         aria-label="Edit the answer"
         onKeyDown={(e) => {
           if (isSaveShortcut(e)) {
@@ -706,6 +740,17 @@ function AnswerEditor({
   );
 }
 
+// Direction per block, not for the whole message: a code sample's English
+// tokens (`import requests`, `response.json()`) would otherwise swamp the
+// character count for a mostly-Hebrew answer and flip the whole thing ltr.
+// Each paragraph/heading/list item/quote picks its own direction from its own
+// text instead, exactly like the reading order already treats them as blocks.
+function directional(Tag: "p" | "li" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "blockquote") {
+  return function DirectionalBlock({ children }: { children?: ReactNode }) {
+    return <Tag dir={textDirection(plainText(children))}>{children}</Tag>;
+  };
+}
+
 function MarkdownContent({ content }: { content: string }) {
   return (
     <div className="dq-markdown">
@@ -720,12 +765,22 @@ function MarkdownContent({ content }: { content: string }) {
           ),
           // A code block gets a language label and a copy control; a table
           // gets a scroller of its own so a wide one never widens the page.
+          // Code stays ltr regardless (globals.css), so it needs no direction.
           pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
           table: ({ children }) => (
             <div className="dq-table-scroll">
               <table>{children}</table>
             </div>
           ),
+          p: directional("p"),
+          li: directional("li"),
+          h1: directional("h1"),
+          h2: directional("h2"),
+          h3: directional("h3"),
+          h4: directional("h4"),
+          h5: directional("h5"),
+          h6: directional("h6"),
+          blockquote: directional("blockquote"),
         }}
       >
         {content}
@@ -740,16 +795,15 @@ function formatTs(ts: number): string {
   return new Date(ts).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
-function thumbBtn(disabled: boolean): React.CSSProperties {
+function thumbBtn(): React.CSSProperties {
   return {
     alignItems: "center",
     background: "var(--bg-3)",
     border: "1px solid var(--border)",
     borderRadius: "5px",
     color: "var(--fg-dimmer)",
-    cursor: disabled ? "not-allowed" : "pointer",
+    cursor: "pointer",
     display: "flex",
-    opacity: disabled ? 0.4 : 1,
     padding: "4px 6px",
   };
 }

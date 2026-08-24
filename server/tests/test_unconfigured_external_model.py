@@ -95,7 +95,7 @@ def test_unconfigured_workspace_hard_query_gets_actionable_error(monkeypatch):
         "/v1/chat/completions",
         json={
             "model": "gpt-4o-mini",
-            "messages": [{"role": "user", "content": "Explain a hard thing."}],
+            "messages": [{"role": "user", "content": "Prove that there are infinitely many prime numbers."}],
             "stream": False,
         },
     )
@@ -139,7 +139,7 @@ def test_configured_workspace_hard_query_unaffected(monkeypatch):
         "/v1/chat/completions",
         json={
             "model": "gpt-4o-mini",
-            "messages": [{"role": "user", "content": "Explain a hard thing."}],
+            "messages": [{"role": "user", "content": "Prove that there are infinitely many prime numbers."}],
             "stream": False,
         },
     )

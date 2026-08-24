@@ -181,6 +181,12 @@ def classifier_service():
     return ClassifierService()
 
 
+@pytest.fixture(scope="session")
+def labse_classifier_service():
+    from app.services.labse_classifier import LabseClassifierService
+    return LabseClassifierService()
+
+
 @pytest.fixture
 def deterministic_utc_ts() -> datetime:
     return datetime(2026, 4, 1, 12, 0, tzinfo=timezone.utc)

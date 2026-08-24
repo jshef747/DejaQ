@@ -217,6 +217,31 @@ class TestBand:
         assert result.hit is True
         assert result.requires_validation is False
 
+    def test_trusted_hit_on_identical_words_is_lexically_exact(self):
+        svc = _make_svc("band_trusted_exact")
+        svc.store_interaction("capital of france", "Paris is the capital.", "orig", "u1")
+        with _force_distances(svc, [0.01]):
+            result = svc.lookup_cache("capital of france")
+        assert result.lexically_exact is True
+
+    def test_near_duplicate_distance_entity_swap_is_not_lexically_exact(self):
+        """dejaq-acceptance-fixes report, defect #2: "מה בירת אוסטריה?"
+        (capital of Austria) vs "מה בירת אוסטרליה?" (capital of Australia)
+        measured distance 0.0023 in production - inside VALIDATOR_SKIP_DISTANCE,
+        where the trust tier used to skip the validator outright on distance
+        alone. align() calls the two country names "aligned" (they fuzzy-match
+        at 0.93 letter-similarity) so `mismatches` alone doesn't catch it either
+        - lexically_exact is the signal that does, and is what the caller
+        (openai_compat.py) now additionally requires before skipping
+        validation."""
+        svc = _make_svc("band_trusted_entity_swap")
+        svc.store_interaction("what is the capital of austria", "Vienna is the capital of Austria.", "orig", "u1")
+        with _force_distances(svc, [0.0023]):
+            result = svc.lookup_cache("what is the capital of australia")
+        assert result.hit is True
+        assert result.requires_validation is False  # still trust-tier by distance
+        assert result.lexically_exact is False  # but not safe to skip the validator
+
     def test_band_hit_requires_validation(self):
         svc = _make_svc("band_hit")
         svc.store_interaction("capital of france", "Paris is the capital.", "orig", "u1")
@@ -395,3 +420,66 @@ class TestStoreAliasRace:
         assert svc.get_entry_metadata(parent_id) is None
         expected_alias_id = hashlib.sha256(alias_query.encode()).hexdigest()[:16]
         assert svc.get_entry_metadata(expected_alias_id) is None
+
+
+@chroma_required
+class TestGroundedEntries:
+    def test_grounded_entry_ids_matches_on_rag_document_id(self):
+        svc = _make_svc("grounded_ids_test")
+        grounded_id = svc.store_interaction(
+            "how many vacation days", "27 days.", "orig", "u1",
+            rag_document_ids="3",
+        )
+        other_doc_id = svc.store_interaction(
+            "what is the badge policy", "Rotates every 90 days.", "orig", "u1",
+            rag_document_ids="7",
+        )
+        ungrounded_id = svc.store_interaction(
+            "what is 2+2", "4.", "orig", "u1",
+        )
+
+        assert svc.grounded_entry_ids(3) == [grounded_id]
+        assert other_doc_id not in svc.grounded_entry_ids(3)
+        assert ungrounded_id not in svc.grounded_entry_ids(3)
+
+    def test_grounded_entry_ids_handles_multiple_documents_per_entry(self):
+        svc = _make_svc("grounded_ids_multi_test")
+        entry_id = svc.store_interaction(
+            "combined question", "answer drawing on two docs.", "orig", "u1",
+            rag_document_ids="3,7",
+        )
+        assert svc.grounded_entry_ids(3) == [entry_id]
+        assert svc.grounded_entry_ids(7) == [entry_id]
+        assert svc.grounded_entry_ids(9) == []
+
+    def test_purge_grounded_entries_deletes_only_the_matching_document(self):
+        svc = _make_svc("purge_grounded_test")
+        stale_id = svc.store_interaction(
+            "how many vacation days", "27 days (stale).", "orig", "u1",
+            rag_document_ids="3",
+        )
+        other_id = svc.store_interaction(
+            "what is the badge policy", "Rotates every 90 days.", "orig", "u1",
+            rag_document_ids="7",
+        )
+
+        deleted = svc.purge_grounded_entries(3)
+
+        assert deleted == 1
+        assert svc.get_entry_metadata(stale_id) is None
+        assert svc.get_entry_metadata(other_id) is not None
+
+    def test_purge_grounded_entries_cascades_to_aliases(self):
+        svc = _make_svc("purge_grounded_alias_test")
+        parent_id = svc.store_interaction(
+            "how many vacation days do i get", "27 days.", "orig", "u1",
+            rag_document_ids="3",
+        )
+        alias_id = svc.store_alias("how many vacation days do i recieve", parent_id)
+        assert alias_id is not None
+
+        deleted = svc.purge_grounded_entries(3)
+
+        assert deleted == 1  # cascade-removed aliases aren't counted, matching evict_below_floor
+        assert svc.get_entry_metadata(parent_id) is None
+        assert svc.get_entry_metadata(alias_id) is None

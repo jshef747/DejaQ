@@ -144,19 +144,25 @@
   border: 1px solid var(--border);
   border-radius: 5px;
   color: var(--fg);
+  direction: ltr;
   font-family: var(--font-mono);
   font-size: 13px;
   padding: 1px 5px;
+  unicode-bidi: isolate;
 }
 
 /* Block code is rendered by <CodeBlock>: a titled card with its language
-   and a copy control, not the bare unlabelled slab it used to be. */
+   and a copy control, not the bare unlabelled slab it used to be. Code is
+   never Hebrew even inside an RTL answer, so direction is pinned regardless
+   of what the surrounding message resolved to. */
 .dq-code {
   background: var(--bg-sink);
   border: 1px solid var(--border);
   border-radius: 11px;
+  direction: ltr;
   margin: 18px 0 20px;
   overflow: hidden;
+  unicode-bidi: isolate;
 }
 
 .dq-code-head {

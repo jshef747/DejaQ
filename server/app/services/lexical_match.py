@@ -28,7 +28,20 @@ _STOPWORDS = frozenset({
     "can", "be",
 })
 
-_NON_ALNUM = re.compile(r"[^a-z0-9 ]")
+# Unicode \w (Python 3 str patterns default to Unicode matching) so any
+# script's letters/digits survive tokenizing, not just ASCII - the old
+# a-z0-9 class stripped Hebrew (and every other non-Latin script) entirely,
+# so align() returned aligned=False for two byte-identical Hebrew strings.
+# Apostrophe (') and Hebrew geresh (׳) are kept as WORD-INTERNAL
+# characters, not stripped to a space: "ניז'ר" (Niger) used to split into
+# "ניז" + "ר", so its one leftover word paired against Nigeria's leftover
+# ("ניגריה") became TWO leftovers on the candidate side - which defeats the
+# single-word-swap hint gate below (it only fires when both sides leave
+# exactly one leftover), so the validator got no hint at all on a real
+# different-country pair and false-accepted it (dejaq-200-test-fixes,
+# defect #1). Same shape as English contractions ("what's" was splitting
+# into "what" + "s").
+_NON_ALNUM = re.compile(r"[^\w'׳ ]", re.UNICODE)
 
 # Question words are semantically loaded despite being short: "why" vs "who"
 # are 0.667 letter-similar but ask different things. A question word may only
@@ -47,10 +60,22 @@ class AlignResult:
     mismatches: the (word, closest_word_on_other_side) pairs that failed —
         empty when aligned. These identify the semantic difference (e.g.
         ("list", "string")) and can be fed to the cache validator as a hint.
+    exact: True only when every token cancelled by an EXACT copy on the other
+        side (no fuzzy matching was needed at all) - i.e. the two strings are
+        the same words, modulo order/case/stopwords. False both when a real
+        mismatch was found AND when the two sides only matched via fuzzy
+        letter-similarity - a real distinction the entity-name case needs:
+        "אוסטריה"/"אוסטרליה" (Austria/Australia) fuzzy-match at ratio 0.93
+        (aligned=True) despite being two different countries, so `aligned`
+        alone cannot tell "definitely a typo" from "close enough that it
+        might not be". `exact` can: a caller deciding whether to trust a
+        near-duplicate distance WITHOUT a validator call should require
+        `exact`, not just `aligned`.
     """
 
     aligned: bool
     mismatches: tuple[tuple[str, str], ...] = ()
+    exact: bool = True
 
 
 def _tokens(text: str) -> list[str]:
@@ -137,12 +162,12 @@ def align(query: str, candidate: str) -> AlignResult:
     q_tokens = _tokens(query)
     c_tokens = _tokens(candidate)
     if not q_tokens or not c_tokens:
-        return AlignResult(aligned=False)
+        return AlignResult(aligned=False, exact=False)
 
     q_left = _leftovers(q_tokens, c_tokens)
     c_left = _leftovers(c_tokens, q_tokens)
     if not q_left and not c_left:
-        return AlignResult(aligned=True)
+        return AlignResult(aligned=True, exact=True)
 
     misses = _side_mismatches(q_left, c_left)
     # Reverse direction: candidate leftovers unmatched by query leftovers.
@@ -153,4 +178,24 @@ def align(query: str, candidate: str) -> AlignResult:
             misses.append(pair)
             seen.add(frozenset(pair))
 
-    return AlignResult(aligned=not misses, mismatches=tuple(misses))
+    # `mismatches` is a HINT fed to the cache validator ("the new question
+    # differs at these words") - only trustworthy for the single-word-swap
+    # trap this was built for (docstring's own example: "list" vs "string"),
+    # where exactly one leftover word sits on each side. When phrasing
+    # differs more broadly - a real paraphrase restructured into a different
+    # sentence shape, not a word swap - EVERY leftover word gets forced onto
+    # whatever's closest on the other side, however unrelated: measured live,
+    # "how many continents are there" vs "what's the total number of
+    # continents" produces mismatches=[('what','how'), ('s','there'),
+    # ('total','how'), ('number','there'), ('how','of'), ('many','what')] -
+    # nonsense pairings between function words, not a real semantic diff.
+    # Fed to the validator as "these words differ, reply INVALID if that
+    # changes the ask," this measurably flips a correct VALID into a false
+    # INVALID (dejaq-acceptance-fixes report, defect #1's root cause) even
+    # though the validator judges the same pair VALID with no hint at all.
+    # `aligned` below is unaffected - it still reads the FULL `misses`, so
+    # rescue-tier gating and sibling rejection (swept over ~1500 pairs) keep
+    # exactly their existing behaviour; only the exposed HINT is narrowed.
+    hint_mismatches = tuple(misses) if len(q_left) <= 1 and len(c_left) <= 1 else ()
+
+    return AlignResult(aligned=not misses, mismatches=hint_mismatches, exact=False)

@@ -50,9 +50,16 @@ class LLMRouterService:
         max_tokens: int = 1024,
         system_prompt: str | None = None,
         images: list[str] | None = None,
+        temperature: float = 0.7,
     ) -> tuple[str, float, str | None]:
-        """Generate a response using the local model. Returns (text, latency_ms, done_reason)."""
-        request = self._completion_request(query, history, max_tokens, system_prompt, images)
+        """Generate a response using the local model. Returns (text, latency_ms, done_reason).
+
+        `temperature` defaults to 0.7 (ordinary answer generation legitimately
+        wants sampling). Judge callers (see openai_compat.py's
+        _judge_hard_content) pass temperature=0.0 - a routing verdict must be
+        the same on every run, not sampled.
+        """
+        request = self._completion_request(query, history, max_tokens, system_prompt, images, temperature)
         start = time.time()
         # A workspace override may name a model since uninstalled from Ollama -
         # write-time validation can't catch this day-2 drift, so fall back to
@@ -71,6 +78,7 @@ class LLMRouterService:
         max_tokens: int,
         system_prompt: str | None,
         images: list[str] | None = None,
+        temperature: float = 0.7,
     ) -> CompletionRequest:
         if system_prompt is None:
             system_prompt = self.default_system_prompt
@@ -82,7 +90,7 @@ class LLMRouterService:
             model_name=self.model_name,
             messages=messages,
             max_tokens=max_tokens,
-            temperature=0.7,
+            temperature=temperature,
             images=images,
             num_ctx=self.num_ctx,
         )

@@ -48,29 +48,27 @@ def test_credential_service_fully_masks_short_keys(credential_key):
     assert CredentialService().mask("short123") == "********"
 
 
-def test_credential_provider_is_validated_in_python_not_by_the_database(credential_key, isolated_org_db):
-    """There is deliberately no CHECK constraint on `provider`.
-
-    Migration e5f6a7b8c9d0 dropped it: the supported-provider set is owned by
-    `credential_service.SUPPORTED_PROVIDERS`, and duplicating it in the schema
-    cost a full SQLite table rebuild for every provider added. This replaces a
-    test that asserted the dropped constraint still fired - it pinned behaviour
-    the codebase had intentionally removed, so it failed everywhere. The
-    invariant is real, it just lives one layer up.
-    """
+def test_credential_service_upsert_rejects_unsupported_provider(
+    isolated_org_db,
+    credential_key,
+):
+    """The provider set moves, so it's validated in Python
+    (CredentialService.upsert) rather than frozen into a DB CHECK constraint
+    - see workspace_provider_credentials.py for why that constraint was
+    dropped (migration e5f6a7b8c9d0)."""
     from app.db.models.workspace import Workspace
     from app.db.session import get_session
     from app.services.credential_service import CredentialService
 
+    service = CredentialService()
     with get_session() as session:
         ws = Workspace(name="Acme", slug="acme")
         session.add(ws)
         session.flush()
         workspace_id = ws.id
 
-    with get_session() as session:
         with pytest.raises(ValueError, match="Unsupported provider"):
-            CredentialService().upsert(session, workspace_id, "invalid_provider", "sk-whatever")
+            service.upsert(session, workspace_id, "invalid_provider", "ciphertext")
 
 
 def test_credential_unique_constraint_rejects_a_duplicate_provider(isolated_org_db):

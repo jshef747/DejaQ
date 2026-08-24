@@ -20,19 +20,18 @@ describe("diffQueries", () => {
 
 describe("isLossyHeaderText", () => {
   it("accepts ordinary questions, question marks and all", () => {
-    expect(isLossyHeaderText("What are the main benefits of semantic caching?", null)).toBe(false);
-    expect(isLossyHeaderText("what does foo?.bar do", "what does foo?.bar do")).toBe(false);
-    expect(isLossyHeaderText("why does /search?q=1 return 404", "why does /search?q=1 return 404")).toBe(false);
+    expect(isLossyHeaderText("What are the main benefits of semantic caching?")).toBe(false);
+    expect(isLossyHeaderText("what does foo?.bar do")).toBe(false);
+    expect(isLossyHeaderText("why does /search?q=1 return 404")).toBe(false);
+  });
+
+  it("accepts non-Latin-1 text unchanged - headers are percent-encoded, not replaced", () => {
+    expect(isLossyHeaderText("מה זה מטמון סמנטי")).toBe(false);
+    expect(isLossyHeaderText("什么是语义缓存")).toBe(false);
   });
 
   it("rejects a value the server truncated at its 200-character limit", () => {
-    expect(isLossyHeaderText("a".repeat(199), null)).toBe(false);
-    expect(isLossyHeaderText("a".repeat(200), null)).toBe(true);
-  });
-
-  it("rejects a replacement mark only when the typed question explains it", () => {
-    expect(isLossyHeaderText("?????? ?????", "מה זה מטמון סמנטי")).toBe(true);
-    expect(isLossyHeaderText("what doesn?t the cache store", "what doesn\u2019t the cache store")).toBe(true);
-    expect(isLossyHeaderText("?????? ?????", "what is a semantic cache")).toBe(false);
+    expect(isLossyHeaderText("a".repeat(199))).toBe(false);
+    expect(isLossyHeaderText("a".repeat(200))).toBe(true);
   });
 });

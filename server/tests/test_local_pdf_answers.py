@@ -10,10 +10,18 @@ plain-text extraction cannot.
 
 The known, named trade-off: a PDF answered locally loses tables, layout and
 any images inside the document, because it is answered from extracted text
-alone. A PDF with no usable text layer (a scan) must keep behaving exactly as
-it does today - answered via the external route's native document part if a
-credential exists, never answered from a silently-blank local extraction, and
-never cached (file_text.py's existing CACHE_FILE_MIN_CHARS floor).
+alone. A PDF with no usable text layer (a scan) still prefers the external
+route's native document part when the workspace's external model can
+actually read one - never answered from a silently-blank local extraction,
+and never cached (file_text.py's existing CACHE_FILE_MIN_CHARS floor).
+
+Stage 3 (dejaq-200-test-fixes defect #2): when external is NOT an option for
+a PDF - no external model configured, or one configured that LiteLLM's own
+catalog confirms has no PDF support - a scanned page (no text layer, but
+file_text.py rescued its embedded page image) is instead handed to the local
+VISION model, and a page pypdf couldn't even parse gets an honest local
+explanation instead of the capability-gate's bare 422. See
+tests/test_local_pdf_vision_fallback.py.
 """
 import base64
 

@@ -2,11 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  fetchRagDocuments,
   sendChatMessage,
   sendFeedback,
   saveEditedAnswer,
   isApiError,
   type FeedbackRating,
+  type RagDocument,
 } from "./chat-api";
 import { editLanded, editStatusNotice } from "./edit-draft";
 import {
@@ -34,6 +36,7 @@ import ToastStack, { type ToastAction, type ToastData, type ToastKind } from "./
 import { RailTrack } from "./ReadingColumn";
 import { classifyRoute, type Route } from "./provenance";
 import { matchesNewChatShortcut } from "./shortcuts";
+import { textDirection } from "./text-direction";
 
 const WELCOME_PROMPTS = [
   "What are the main benefits of semantic caching for LLM APIs?",
@@ -132,6 +135,14 @@ export default function ChatApp() {
   const [generating, setGenerating] = useState<Record<string, GenerationState>>({});
   const [input, setInput] = useState("");
   const [attachment, setAttachment] = useState<Attachment | null>(null);
+  // The `@`-picker's document list (loaded once per connection) and the
+  // currently-selected reference. Unlike attachment, a reference is NOT
+  // sticky — it applies to the message it was picked for and clears after
+  // send; re-typing `@` for a follow-up is cheap, and an id silently
+  // outliving the turn it was picked for would be a confusing way to keep
+  // grounding answers in a document nobody mentioned again.
+  const [ragDocuments, setRagDocuments] = useState<RagDocument[]>([]);
+  const [ragDocument, setRagDocument] = useState<RagDocument | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<ChatSettings>(DEFAULT_CHAT_SETTINGS);
   // Settings load from localStorage after mount. Until then, deptSlug is
@@ -201,6 +212,21 @@ export default function ChatApp() {
     setConversations(loadConversations());
     setHydrated(true);
   }, []);
+
+  // The `@` picker's document list — loaded once per connection (not
+  // per-keystroke) so opening the picker is instant. Re-fetched whenever the
+  // server/key/department changes, since a different workspace has a
+  // different knowledge base.
+  useEffect(() => {
+    if (!settings.deptSlug) return;
+    let cancelled = false;
+    fetchRagDocuments({ server: settings.serverBaseUrl, apiKey: settings.apiKey }).then((result) => {
+      if (!cancelled && !isApiError(result)) setRagDocuments(result);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [settings.deptSlug, settings.serverBaseUrl, settings.apiKey]);
 
   // Scroll to the newest message whenever the list changes.
   useEffect(() => {
@@ -413,7 +439,11 @@ export default function ChatApp() {
     const convId = activeConvId ?? `conv_${Date.now()}`;
     if (!activeConvId) setActiveConvId(convId);
     setInput("");
-    await runSend(convId, messages, text, attachment);
+    // Unlike the attachment, the reference is NOT pinned — it applies to this
+    // one message and clears immediately, before the send even resolves.
+    const sentRagDocument = ragDocument;
+    setRagDocument(null);
+    await runSend(convId, messages, text, attachment, sentRagDocument);
   }
 
   // Re-run a turn that failed. The question is already in the transcript, so
@@ -442,6 +472,7 @@ export default function ChatApp() {
     priorMessages: AppMessage[],
     text: string,
     sentAttachment: Attachment | null,
+    sentRagDocument: RagDocument | null = null,
   ) {
     const queryText =
       text ||
@@ -462,6 +493,7 @@ export default function ChatApp() {
       // re-sent it, so the transcript shows which is which.
       attachmentSticky: sentAttachment?.sticky ?? false,
       hadAttachment: sentAttachment !== null,
+      ragDocumentTitle: sentRagDocument?.title ?? null,
     };
 
     // The transcript this send writes into: the history in front of the
@@ -512,6 +544,7 @@ export default function ChatApp() {
       settings.modelProfile,
       settings.routingMode,
       sentAttachment,
+      sentRagDocument?.id ?? null,
       (delta) => {
         if (send.cancelled) return;
         if (firstDelta) {
@@ -630,6 +663,11 @@ export default function ChatApp() {
                 cacheMatchedQuery: result.cacheMatchedQuery,
                 authoredByHuman: result.answerAuthored === "human",
                 cacheEnrichedQuery: result.cacheEnrichedQuery,
+                ragChunks: result.ragChunks,
+                // Server-confirmed, not the client's own optimistic guess: only
+                // set when the pipeline actually grounded this answer in the
+                // referenced document (miss or a reference-gated cache hit).
+                ragDocumentTitle: result.ragDocumentTitle,
               }
             : m
         ),
@@ -687,7 +725,12 @@ export default function ChatApp() {
     // (score adjustment / delete) is still recorded either way.
     const isAttachmentAnchored = turnHadAttachment(messages, msgIndex);
 
-    updateFeedbackPhase(convId, msgId, "submitting");
+    // Optimistic: the row shows pressed the instant the user clicks, not once
+    // the request resolves. sendFeedback below retries quietly on its own if
+    // the answer's background store hasn't landed yet (a timing race, not a
+    // real failure); only a genuine, retry-exhausted failure below reverts
+    // this to "error".
+    updateFeedbackPhase(convId, msgId, rating);
 
     const result = await sendFeedback(
       msg.responseId ?? null,
@@ -945,7 +988,7 @@ export default function ChatApp() {
           ) : (
             <>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ color: messages.length === 0 ? "var(--fg-dimmer)" : "var(--fg)", fontSize: "15px", fontWeight: 600, letterSpacing: "-0.015em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <div dir={messages.length === 0 ? "auto" : textDirection(titleFromMessages(messages))} style={{ color: messages.length === 0 ? "var(--fg-dimmer)" : "var(--fg)", fontSize: "15px", fontWeight: 600, letterSpacing: "-0.015em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {messages.length === 0 ? "New chat" : titleFromMessages(messages)}
                 </div>
               </div>
@@ -1057,6 +1100,9 @@ export default function ChatApp() {
               onAttachmentError={(msg) => addToast("error", "Couldn't attach that file", msg)}
               isGenerating={isGenerating}
               onStop={handleStop}
+              ragDocuments={ragDocuments}
+              ragDocument={ragDocument}
+              onRagDocumentChange={setRagDocument}
             />
           </div>
         )}

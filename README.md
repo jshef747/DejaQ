@@ -13,14 +13,14 @@ OpenAI-compatible request
   -> context enrichment
   -> normalization
   -> ChromaDB semantic cache lookup
-     -> hit: cache validator (Gemma E2B) checks coverage
+     -> hit: cache validator (granite4.1:3b) checks coverage
         -> VALID: context adjuster re-tones cached answer
                   (skipped when there is no tone gap to close)
         -> INVALID: treat as miss
      -> miss: difficulty classifier
         -> easy: local model (Gemma 4 E4B)
         -> hard: the workspace's own external provider credential
-        -> either way: relevant chunks from the workspace knowledge base (Rug)
+        -> either way: relevant chunks from the workspace knowledge base (RAG)
            are injected into the prompt as grounding, when any are close enough
   -> response
   -> background generalize + store when cacheable
@@ -46,7 +46,7 @@ Generation runs through **Ollama** (local or remote). Start it and pull the mode
 
 ```bash
 ollama serve
-ollama pull qwen2.5:0.5b qwen2.5:1.5b gemma4:e2b gemma4:e4b
+ollama pull qwen2.5:0.5b qwen2.5:1.5b gemma4:e2b gemma4:e4b granite4.1:3b
 ```
 
 ```bash
@@ -152,7 +152,7 @@ difficulty classifier and route straight to the workspace's external provider.
 Thresholds and their measured derivations: [docs/image-gate.md](docs/image-gate.md) and
 [docs/file-gate.md](docs/file-gate.md). Every setting is listed in `.env.example`.
 
-## Knowledge base (Rug)
+## Knowledge base (RAG)
 
 Each workspace has an admin-curated knowledge base — a third answer source alongside the
 semantic cache and the model. Admins add pasted text, uploaded files (PDF / DOCX / text /

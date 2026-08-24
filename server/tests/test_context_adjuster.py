@@ -18,7 +18,11 @@ from app.services import context_adjuster
 from app.services.context_adjuster import (
     ContextAdjusterService,
     _GENERALIZE_STOP,
+    _code_block_placeholder,
+    _language_preserved,
     _ngram_repetition_ratio,
+    _protect_code_blocks,
+    _restore_code_blocks,
     is_adjustment_sane,
     is_generalization_sane,
     is_topically_consistent,
@@ -242,6 +246,20 @@ class TestAdjustSafetyNet:
 
         assert result == on_topic
 
+    def test_falls_back_to_cached_answer_on_a_language_switch(self):
+        """dejaq-acceptance-fixes report, defect #4: a Hebrew cached answer
+        adjusted into English. The shared number ("180") is enough to clear
+        is_topically_consistent's overlap floor, so only the dedicated
+        script check catches the switch."""
+        cached_hebrew = "15 כפול 12 שווה ל-180."
+        translated = "15 multiplied by 12 equals 180."
+        backend = _FakeBackend(translated)
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        result = asyncio.run(service.adjust("give me the short version", cached_hebrew))
+
+        assert result == cached_hebrew
+
     def test_sends_temperature_zero(self):
         backend = _FakeBackend("A canary deployment ships to a small slice of traffic first.")
         service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
@@ -425,6 +443,23 @@ class TestIsTopicallyConsistent:
         drifted = "The French Revolution began in 1789 amid widespread economic inequality and famine."
         assert not is_topically_consistent(drifted, cached)
 
+    def test_short_reference_with_no_3char_word_still_catches_drift(self):
+        """Regression for the silver-symbol wrong-cache-hit bug: a bare
+        chemical symbol like 'Ag' has no word >=3 chars, so the old code's
+        `if not cached_words: return True` let ANY rewrite through
+        unchecked - including the real captured hallucination that got
+        stored and later served back to every repeat of the question."""
+        assert not is_topically_consistent(
+            "The provided input is an interjection and contains no factual information.",
+            "Ag",
+        )
+
+    def test_short_reference_accepts_a_faithful_elaboration(self):
+        assert is_topically_consistent("The chemical symbol for silver is Ag.", "Ag")
+
+    def test_purely_numeric_short_reference_still_catches_drift(self):
+        assert not is_topically_consistent("I'm sorry, I didn't understand your question.", "42")
+
 
 class TestOverlapThresholdCalibration:
     """Regression guard for the ADJUSTER_MIN_TOPIC_OVERLAP retune, expressed as
@@ -544,6 +579,28 @@ class TestNoContentBearingFewShot:
         self._assert_no_content(backend.requests[0].messages)
 
 
+class TestLanguagePreserved:
+    pytestmark = pytest.mark.no_model
+
+    def test_hebrew_to_hebrew_preserved(self):
+        assert _language_preserved("הבירה של צרפת היא פריז.", "בירת צרפת היא פריז.")
+
+    def test_hebrew_to_english_flagged(self):
+        assert not _language_preserved("הבירה של צרפת היא פריז.", "The capital of France is Paris.")
+
+    def test_hebrew_keeping_one_latin_abbreviation_preserved(self):
+        assert _language_preserved("הסמל הכימי של זהב הוא Au.", "הסמל הכימי עבור זהב הוא Au.")
+
+    def test_english_to_english_preserved_regardless_of_content(self):
+        # Only a script CHANGE trips this - an English source has nothing to
+        # "preserve" here, whatever the rewrite says.
+        assert _language_preserved("The capital of France is Paris.", "Totally different content here.")
+
+    def test_short_non_hebrew_source_is_not_penalized(self):
+        # Below the non-Latin-script ratio floor - nothing to preserve.
+        assert _language_preserved("Au.", "Gold's symbol is Au.")
+
+
 class TestIsGeneralizationSane:
     """Pure unit tests for the generalize() store-time safety net (incident:
     dejaq-generalizer-runaway), no Ollama required. RUNAWAY_GENERALIZED_ANSWER
@@ -644,6 +701,59 @@ class TestIsGeneralizationSane:
     def test_accepts_a_faithful_clean_rewrite(self):
         clean = "The largest country in Europe by area is Russia."
         assert is_generalization_sane(self.RAW_ANSWER, clean)
+
+    def test_rejects_the_real_captured_garbled_hebrew_answer(self):
+        """dejaq-acceptance-fixes report, defect #2: a genuine store-time
+        capture. Raw Hebrew answer (Vienna is the capital of Austria)
+        generalized into "Vina." - not Vienna, not Canberra, not a real
+        word in either language. Neither the length nor repetition signal
+        can see this (short output, no repetition); content-word overlap
+        (borrowed from is_topically_consistent) is what catches it."""
+        raw = "וינה היא בירת אוסטריה."
+        garbled = "Vina."
+        assert not is_generalization_sane(raw, garbled)
+
+    def test_rejects_a_hebrew_answer_translated_into_english(self):
+        """dejaq-acceptance-fixes report, defect #4: a live Hebrew answer
+        generalized into English instead of staying Hebrew. Zero literal
+        word overlap between the two scripts, so this is caught by the same
+        content-preservation check as the garbled case above - and it also
+        fails whenever the model changes the answer's language, not only
+        when it garbles it outright."""
+        raw = "הבירה של צרפת היא **פריז**."
+        translated = "The capital of France is Paris."
+        assert not is_generalization_sane(raw, translated)
+
+    def test_accepts_a_faithful_hebrew_rewrite_that_keeps_the_language(self):
+        raw = "הבירה של צרפת היא פריז."
+        neutral = "בירת צרפת היא פריז."
+        assert is_generalization_sane(raw, neutral)
+
+    def test_rejects_an_english_mistranslation_that_leaks_a_shared_proper_noun(self):
+        """dejaq-acceptance-fixes report, defect #4's measured residual gap:
+        the raw Hebrew answer itself parenthetically glosses an English
+        proper noun ("... הוא שקט (Pacific Ocean)"), so a FULL English
+        mistranslation still shares that one token with the raw answer and
+        clears is_topically_consistent's overlap floor (real sweep: 6/15
+        Hebrew answers still drifted after the content-overlap guard alone).
+        _language_preserved (script composition, not word overlap) is what
+        catches it - is_generalization_sane must call both."""
+        raw = "האוקיינוס הגדול בעולם הוא שקט (Pacific Ocean)."
+        mistranslated = "The largest ocean in the world is the Pacific Ocean."
+        assert not is_generalization_sane(raw, mistranslated)
+
+    def test_rejects_an_english_mistranslation_that_leaks_a_shared_number(self):
+        raw = "15 כפול 12 שווה ל-180."
+        mistranslated = "15 multiplied by 12 equals 180."
+        assert not is_generalization_sane(raw, mistranslated)
+
+    def test_accepts_a_hebrew_rewrite_that_keeps_one_latin_abbreviation(self):
+        """A faithful Hebrew rewrite legitimately keeps a short embedded
+        Latin term (a chemical symbol, a currency sign) - that alone must
+        not read as a language switch."""
+        raw = "הסמל הכימי של זהב הוא Au."
+        neutral = "הסמל הכימי עבור זהב הוא Au."
+        assert is_generalization_sane(raw, neutral)
 
     def test_accepts_the_highest_ratio_measured_on_a_clean_case(self):
         """8.0x - the highest length ratio seen on any of the 15 clean cases
@@ -792,6 +902,25 @@ class TestGeneralizeSafetyNet:
 
     pytestmark = pytest.mark.no_model
 
+    def test_falls_back_to_raw_answer_on_the_silver_symbol_wrong_cache_hit(self):
+        """Regression for the reproduced bug: "What is the chemical symbol
+        for silver?" answered correctly ("Ag"), generalized into an unrelated
+        interjection-refusal sentence (the exact text captured in the
+        three-way comparison, `s0140` in the frozen 196-item corpus), stored
+        under the silver query's own doc id, then served back verbatim to
+        every later repeat of the same question. Neither the length ratio
+        (76 chars, under the 200-char absolute floor) nor the n-gram
+        repetition check catches this - only topic-consistency does, and only
+        once it stops trusting a short reference answer unconditionally."""
+        backend = _FakeBackend(
+            "The provided input is an interjection and contains no factual information."
+        )
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        result = asyncio.run(service.generalize("Ag"))
+
+        assert result == "Ag"
+
     def test_falls_back_to_raw_answer_on_the_real_captured_runaway(self):
         backend = _FakeBackend(TestIsGeneralizationSane.RUNAWAY_GENERALIZED_ANSWER)
         service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
@@ -899,6 +1028,178 @@ class TestGeneralizeSafetyNet:
 
         assert result == raw
         assert backend.calls == 2
+
+
+class TestProtectCodeBlocks:
+    """Pure unit tests for the code-block placeholder round-trip, no Ollama
+    required. Incident: dejaq-cached-code-loss - generalize()'s 'neutral tone'
+    prompt deterministically rewrote a real multi-block Python answer (three
+    ways to increment a list) into pure prose with zero code fences left,
+    passing every existing sanity check (similar length, high content-word
+    overlap from surviving identifier names, same script). Reproduced live
+    against Gemma 4 E2B: a single fenced block is destroyed exactly the same
+    way, so this is not a block-count heuristic - every fenced block is always
+    protected."""
+
+    pytestmark = pytest.mark.no_model
+
+    CAPTAIN_CODE_ANSWER = (
+        "Here are three ways to increment each element of the `numbers` list by 2:\n\n"
+        "**1. Using a `for` loop, appending to a new list:**\n\n"
+        "```python\n"
+        "numbers = [1, 2, 3, 4, 5]\n"
+        "result = []\n"
+        "for n in numbers:\n"
+        "    result.append(n + 2)\n"
+        "print(result)  # [3, 4, 5, 6, 7]\n"
+        "```\n\n"
+        "**2. Using a `for` loop, modifying in place:**\n\n"
+        "```python\n"
+        "numbers = [1, 2, 3, 4, 5]\n"
+        "for i in range(len(numbers)):\n"
+        "    numbers[i] += 2\n"
+        "print(numbers)  # [3, 4, 5, 6, 7]\n"
+        "```\n\n"
+        "**3. Using a list comprehension:**\n\n"
+        "```python\n"
+        "numbers = [1, 2, 3, 4, 5]\n"
+        "result = [n + 2 for n in numbers]\n"
+        "print(result)  # [3, 4, 5, 6, 7]\n"
+        "```\n\n"
+        "The list comprehension is generally the most idiomatic and fastest approach in Python."
+    )
+
+    # The real, measured store-time corruption: a prose description with the
+    # placeholders dropped entirely, byte-for-byte what Gemma 4 E2B returned
+    # for the answer above.
+    CAPTAIN_PROSE_ONLY_REWRITE = (
+        "There are three methods to increment each element of a list named `numbers` by 2:\n\n"
+        "1. **Using a `for` loop and appending to a new list:** This method initializes an "
+        "empty list and iterates through the original list, adding the incremented value of "
+        "each element to the new list.\n"
+        "2. **Using a `for` loop to modify in place:** This method iterates through the indices "
+        "of the list and directly updates each element by adding 2 to its current value.\n"
+        "3. **Using a list comprehension:** This method creates a new list by applying the "
+        "operation $n + 2$ to every element $n$ in the original list.\n\n"
+        "The list comprehension method is generally considered the most idiomatic and efficient "
+        "approach in Python."
+    )
+
+    def test_no_code_blocks_is_a_no_op(self):
+        text = "The capital of France is Paris."
+        protected, blocks = _protect_code_blocks(text)
+        assert protected == text
+        assert blocks == []
+
+    def test_extracts_and_placeholders_each_block_in_order(self):
+        protected, blocks = _protect_code_blocks(self.CAPTAIN_CODE_ANSWER)
+
+        assert len(blocks) == 3
+        assert all(b.startswith("```python\n") and b.endswith("```") for b in blocks)
+        assert _code_block_placeholder(0) in protected
+        assert _code_block_placeholder(1) in protected
+        assert _code_block_placeholder(2) in protected
+        assert "```" not in protected
+        assert protected.index(_code_block_placeholder(0)) < protected.index(
+            _code_block_placeholder(1)
+        ) < protected.index(_code_block_placeholder(2))
+
+    def test_round_trip_reproduces_the_original_byte_for_byte(self):
+        protected, blocks = _protect_code_blocks(self.CAPTAIN_CODE_ANSWER)
+        restored = _restore_code_blocks(protected, blocks)
+        assert restored == self.CAPTAIN_CODE_ANSWER
+
+    def test_restore_fails_closed_when_a_placeholder_is_dropped(self):
+        """The real captured failure: the rewrite kept none of the
+        placeholders. Restoration must signal failure (None), not silently
+        return prose missing its code."""
+        _protected, blocks = _protect_code_blocks(self.CAPTAIN_CODE_ANSWER)
+        assert _restore_code_blocks(self.CAPTAIN_PROSE_ONLY_REWRITE, blocks) is None
+
+    def test_restore_fails_closed_when_a_placeholder_is_duplicated(self):
+        protected, blocks = _protect_code_blocks(self.CAPTAIN_CODE_ANSWER)
+        duplicated = protected.replace(
+            _code_block_placeholder(1),
+            f"{_code_block_placeholder(1)} {_code_block_placeholder(1)}",
+        )
+        assert _restore_code_blocks(duplicated, blocks) is None
+
+    def test_restore_succeeds_when_only_prose_between_blocks_changed(self):
+        """The intended path: the model rewords the surrounding prose but
+        leaves every placeholder alone, so restoration reproduces every code
+        block untouched while the tone-neutralized wording survives."""
+        protected, blocks = _protect_code_blocks(self.CAPTAIN_CODE_ANSWER)
+        reworded = protected.replace(
+            "Here are three ways to increment each element",
+            "There are three methods to increment each element",
+        )
+        restored = _restore_code_blocks(reworded, blocks)
+        assert restored is not None
+        assert "There are three methods" in restored
+        for block in blocks:
+            assert block in restored
+
+
+class TestGeneralizeCodeBlockProtection:
+    """Wiring tests: prove generalize() itself falls back to the raw answer
+    when the backend destroys a fenced code block, not just that
+    _restore_code_blocks() would reject it in isolation."""
+
+    pytestmark = pytest.mark.no_model
+
+    def test_falls_back_to_raw_answer_on_the_real_captured_code_loss(self):
+        backend = _FakeBackend(TestProtectCodeBlocks.CAPTAIN_PROSE_ONLY_REWRITE)
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        result = asyncio.run(service.generalize(TestProtectCodeBlocks.CAPTAIN_CODE_ANSWER))
+
+        assert result == TestProtectCodeBlocks.CAPTAIN_CODE_ANSWER
+        assert result.count("```") == 6
+
+    def test_sends_the_backend_a_placeholder_not_the_raw_code(self):
+        backend = _FakeBackend("some reply")
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        asyncio.run(service.generalize(TestProtectCodeBlocks.CAPTAIN_CODE_ANSWER))
+
+        sent = backend.requests[0].messages[-1]["content"]
+        assert "```" not in sent
+        assert _code_block_placeholder(0) in sent
+
+    def test_stores_the_tone_rewrite_with_code_spliced_back_in(self):
+        protected, _blocks = _protect_code_blocks(TestProtectCodeBlocks.CAPTAIN_CODE_ANSWER)
+        faithful_rewrite = protected.replace(
+            "Here are three ways to increment each element of the `numbers` list by 2:",
+            "There are three approaches to increment every element of the `numbers` list by 2:",
+        )
+        backend = _FakeBackend(faithful_rewrite)
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        result = asyncio.run(service.generalize(TestProtectCodeBlocks.CAPTAIN_CODE_ANSWER))
+
+        assert "There are three approaches" in result
+        assert result.count("```") == 6
+        assert "result.append(n + 2)" in result
+        assert "numbers[i] += 2" in result
+        assert "[n + 2 for n in numbers]" in result
+
+    def test_a_single_destroyed_block_falls_back_too(self):
+        """Not a block-count heuristic: one block lost is one block too many."""
+        raw = (
+            "Here is a function that checks if a number is prime:\n\n"
+            "```python\n"
+            "def is_prime(n):\n"
+            "    return n > 1 and all(n % i for i in range(2, n))\n"
+            "```\n\n"
+            "This runs in O(n) time."
+        )
+        prose_only = "The provided Python function determines whether a number is prime."
+        backend = _FakeBackend(prose_only)
+        service = ContextAdjusterService(backend, "qwen_1_5b", backend, "phi_generalizer")
+
+        result = asyncio.run(service.generalize(raw))
+
+        assert result == raw
 
 
 class TestIsAdjustmentSane:

@@ -14,6 +14,8 @@ from app.config import (
     CACHE_TRUST_DISTANCE,
     CHROMA_HOST,
     CHROMA_PORT,
+    TEXT_EMBEDDING_MODEL,
+    TEXT_EMBEDDING_QUERY_PREFIX,
 )
 from app.services.lexical_match import align
 
@@ -34,13 +36,13 @@ _embedder: SentenceTransformer | None = None
 def _get_embedder() -> SentenceTransformer:
     global _embedder
     if _embedder is None:
-        logger.info("Loading BAAI/bge-small-en-v1.5 embedder...")
-        _embedder = SentenceTransformer("BAAI/bge-small-en-v1.5")
+        logger.info("Loading %s embedder...", TEXT_EMBEDDING_MODEL)
+        _embedder = SentenceTransformer(TEXT_EMBEDDING_MODEL)
     return _embedder
 
 
 def _embed(text: str) -> list[float]:
-    return _get_embedder().encode(text, normalize_embeddings=True).tolist()
+    return _get_embedder().encode(TEXT_EMBEDDING_QUERY_PREFIX + text, normalize_embeddings=True).tolist()
 
 
 def embed_text(text: str) -> list[float]:
@@ -59,6 +61,7 @@ def derive_doc_id(
     *,
     image_text: str | None = None,
     image_dhash: str | None = None,
+    rag_document_id: int | None = None,
 ) -> str:
     """The one place an entry id is computed. Import it, don't reimplement it.
 
@@ -74,9 +77,16 @@ def derive_doc_id(
     compares them that way — a re-crop or a re-shoot of one page must land on
     one entry (see docs/image-gate.md).
 
-    Text entries keep their existing ids: the suffix is only added when an
-    attachment is present. Existing image entries are not migrated — at worst
-    one duplicate entry per query+image pair until the old one is evicted.
+    `rag_document_id` is a fourth, independent identity element: an explicit
+    `@`-reference to a knowledge-base document. It is appended rather than
+    made another `elif` branch because it can coexist with a file/image
+    attachment in principle, and — same reasoning as file/image — two
+    different referenced documents asking the same question must not collide.
+
+    Text entries keep their existing ids: a suffix is only added when the
+    corresponding identity element is present. Existing image entries are not
+    migrated — at worst one duplicate entry per query+image pair until the old
+    one is evicted.
     """
     if file_sha:
         source = f"{normalized_query}|file:{file_sha}"
@@ -86,6 +96,8 @@ def derive_doc_id(
         source = f"{normalized_query}|image-dhash:{image_dhash}"
     else:
         source = normalized_query
+    if rag_document_id is not None:
+        source = f"{source}|rag:{rag_document_id}"
     return hashlib.sha256(source.encode()).hexdigest()[:16]
 
 
@@ -108,6 +120,14 @@ class CacheLookupResult:
     # semantically (e.g. (("list", "string"),)) — a hint for the validator.
     # None when the words aligned or alignment wasn't informative.
     mismatches: tuple[tuple[str, str], ...] | None = None
+    # True only when the query and matched stored query are the SAME words
+    # (align().exact — see lexical_match.py). False when any word only
+    # matched via fuzzy letter-similarity, even if align() still calls that
+    # "aligned" — a near-identical but genuinely different entity name
+    # ("אוסטריה"/"אוסטרליה", Austria/Australia, ratio 0.93) fuzzy-matches
+    # and would otherwise read as a confirmed typo. The trust-tier validator
+    # skip below requires this, not just `not mismatches`.
+    lexically_exact: bool = True
     # Image fingerprints of the matched entry (present only for image entries).
     # Carried here from the entry metadata read during lookup so the router's
     # image gate needs no extra Chroma round-trip.
@@ -122,6 +142,10 @@ class CacheLookupResult:
     # deterministic, so the gate is equality. See services/file_text.py.
     file_sha: str | None = None
     file_kind: str | None = None
+    # Explicit `@`-reference identity of the matched entry (present only when
+    # the answer was grounded in one specific knowledge-base document by id,
+    # never by search). Exact-equality gate, same shape as file_sha.
+    rag_document_id: int | None = None
     # "human" when a person wrote this answer through Edit & Save, absent
     # otherwise. The serve path reads it to skip the context adjuster: a human
     # answer had no tone stripped from it, so there is nothing to put back, and
@@ -168,11 +192,26 @@ class MemoryService:
         start = time.time()
         query_embedding = _embed(normalized_query)
         n = min(_LOOKUP_N_RESULTS, self._collection.count() or 1)
-        results = self._collection.query(
-            query_embeddings=[query_embedding],
-            n_results=n,
-            include=["documents", "metadatas", "distances"],
-        )
+        try:
+            results = self._collection.query(
+                query_embeddings=[query_embedding],
+                n_results=n,
+                include=["documents", "metadatas", "distances"],
+            )
+        except chromadb.errors.InvalidArgumentError as exc:
+            if "dimension" in str(exc):
+                # The collection was built against a different embedding model
+                # (different vector width) than TEXT_EMBEDDING_MODEL is
+                # currently producing. There is no automatic rebuild - wipe
+                # the collection (or `dejaq-admin cache purge-images`'s
+                # sibling for text, once it exists) and let it refill.
+                logger.error(
+                    "Cache collection '%s' was built with a different embedding model "
+                    "and needs rebuilding (%s)", self._collection.name, exc,
+                )
+            else:
+                logger.exception("Cache lookup failed")
+            return [], None, None
 
         latency_ms = (time.time() - start) * 1000
         band_ceiling = max(CACHE_TRUST_DISTANCE, CACHE_BAND_MAX_DISTANCE)
@@ -232,10 +271,12 @@ class MemoryService:
                 # single-word-swap trap (list/string). Only informative when the
                 # words DIDN'T align; rescued hits aligned by construction.
                 mismatches: tuple[tuple[str, str], ...] | None = None
+                lexically_exact = True
                 if not rescued and matched_query:
                     align_result = align(normalized_query, matched_query)
                     if not align_result.aligned and align_result.mismatches:
                         mismatches = align_result.mismatches
+                    lexically_exact = align_result.exact
                 candidates.append(CacheLookupResult(
                     hit=True,
                     generalized_answer=generalized_answer,
@@ -247,12 +288,14 @@ class MemoryService:
                     requires_validation=requires_validation,
                     rescued=rescued,
                     mismatches=mismatches,
+                    lexically_exact=lexically_exact,
                     image_dhash=meta.get("image_dhash"),
                     image_clip=meta.get("image_clip"),
                     image_kind=meta.get("image_kind"),
                     image_text=meta.get("image_text"),
                     file_sha=meta.get("file_sha"),
                     file_kind=meta.get("file_kind"),
+                    rag_document_id=meta.get("rag_document_id"),
                     authored=meta.get("authored"),
                 ))
 
@@ -329,13 +372,16 @@ class MemoryService:
         image_text: str | None = None,
         file_sha: str | None = None,
         file_kind: str | None = None,
+        rag_document_id: int | None = None,
         authored: str | None = None,
+        rag_document_ids: str | None = None,
     ) -> str:
         doc_id = derive_doc_id(
             normalized_query,
             file_sha,
             image_text=image_text,
             image_dhash=image_dhash,
+            rag_document_id=rag_document_id,
         )
         embedding = _embed(normalized_query)
         metadata = {
@@ -361,12 +407,26 @@ class MemoryService:
         if file_sha and file_kind:
             metadata["file_sha"] = file_sha
             metadata["file_kind"] = file_kind
+        # Explicit `@`-reference identity: written only when the answer was
+        # grounded in one specific knowledge-base document by id. Exact
+        # equality gate on the serve path, same as file_sha above.
+        if rag_document_id is not None:
+            metadata["rag_document_id"] = rag_document_id
         # Provenance, written only when a person authored the answer. Absent on
         # every model-generated entry, so this is additive — nothing reads it
         # except the protections in overwrite_answer, the store guards and the
         # serve-path adjuster skip.
         if authored:
             metadata["authored"] = authored
+        # Grounding provenance: which RAG knowledge-base document(s) this
+        # answer was generated from, comma-joined ("3" or "3,7") since Chroma
+        # metadata values are scalar and one answer can draw on several
+        # chunks from different documents. Absent for ungrounded answers.
+        # Read by grounded_entry_ids() so an edited/deleted document can purge
+        # exactly the cache entries it actually grounded, not the whole
+        # namespace — see rag_admin_service.delete_document.
+        if rag_document_ids:
+            metadata["rag_document_ids"] = rag_document_ids
         self._collection.upsert(
             ids=[doc_id],
             embeddings=[embedding],
@@ -609,6 +669,45 @@ class MemoryService:
         ids = self.image_entry_ids()
         deleted = sum(1 for entry_id in ids if self.delete_entry(entry_id))
         logger.info("Purged %d image entries from %s", deleted, self._collection.name)
+        return deleted
+
+    def grounded_entry_ids(self, rag_document_id: int) -> list[str]:
+        """IDs of entries whose cached answer was grounded in this RAG document.
+
+        Matched in Python against the comma-joined `rag_document_ids`
+        metadata field, mirroring `image_entry_ids` above — Chroma metadata
+        values are scalar, so an entry grounded in several documents at once
+        cannot be matched with a `where` filter.
+        """
+        try:
+            results = self._collection.get(include=["metadatas"])
+        except Exception:
+            logger.error("Failed to list entries for RAG-grounded purge", exc_info=True)
+            return []
+        target = str(rag_document_id)
+        ids = []
+        for entry_id, meta in zip(results["ids"], results["metadatas"] or []):
+            raw = (meta or {}).get("rag_document_ids") or ""
+            if target in raw.split(","):
+                ids.append(entry_id)
+        return ids
+
+    def purge_grounded_entries(self, rag_document_id: int) -> int:
+        """Delete every entry grounded in this RAG document. Returns the count removed.
+
+        Called when the document is deleted (rag_admin_service.delete_document)
+        — the only way this codebase corrects a document's content is delete
+        the wrong version, then add the corrected text as a new document (see
+        rag_admin_service's module docstring) — so a stale grounded answer
+        never outlives the document it was built from. delete_entry cascades
+        to any aliases of a purged entry, same as every other purge path.
+        """
+        ids = self.grounded_entry_ids(rag_document_id)
+        deleted = sum(1 for entry_id in ids if self.delete_entry(entry_id))
+        logger.info(
+            "Purged %d RAG-grounded entries (doc_id=%s) from %s",
+            deleted, rag_document_id, self._collection.name,
+        )
         return deleted
 
     def count_file_entries(self, file_sha: str) -> int:

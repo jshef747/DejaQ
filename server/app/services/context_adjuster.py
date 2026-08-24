@@ -32,7 +32,8 @@ logger = logging.getLogger("dejaq.services.context_adjuster")
 
 DEFAULT_GENERALIZE_SYSTEM_PROMPT = (
     "Rewrite the ANSWER into a neutral, factual tone. Remove slang, humor, and "
-    "personality. Keep all facts. Output only the rewritten answer."
+    "personality. Keep all facts. Keep the ANSWER in the same language it is "
+    "written in - never translate it. Output only the rewritten answer."
 )
 
 DEFAULT_ADJUST_SYSTEM_PROMPT = (
@@ -47,7 +48,9 @@ DEFAULT_ADJUST_SYSTEM_PROMPT = (
     "information as the original, just reworded - never merge, drop, or "
     "summarize any of them unless asked to. Keep every named entity from the "
     "ANSWER - every place, event, organization, and date it mentions - in your "
-    "rewrite. Output only the rewritten answer."
+    "rewrite. Keep the ANSWER in the same language it is written in - never "
+    "translate it, even if the QUESTION is in a different language. Output "
+    "only the rewritten answer."
 )
 
 _TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
@@ -67,10 +70,10 @@ _STOPWORDS = frozenset({
 })
 
 
-def _content_words(text: str) -> frozenset[str]:
+def _content_words(text: str, min_len: int = 3) -> frozenset[str]:
     return frozenset(
         w for w in _TOKEN_RE.findall(text.lower())
-        if len(w) >= 3 and w not in _STOPWORDS
+        if len(w) >= min_len and w not in _STOPWORDS
     )
 
 
@@ -90,10 +93,76 @@ def is_topically_consistent(adjusted: str, cached_answer: str) -> bool:
     """
     cached_words = _content_words(cached_answer)
     if not cached_words:
-        return True  # nothing meaningful to compare against; don't block on it
+        # The reference text has no word >=3 chars - a bare chemical symbol
+        # ("Ag"), a number, a one-word "OK". That used to mean "nothing
+        # meaningful to compare against" and skip the check entirely, which
+        # let a generalizer/adjuster hallucination on a short answer (e.g.
+        # "Ag" rewritten into an unrelated sentence about "an interjection
+        # with no factual information") through unchecked - observed live,
+        # see the silver-symbol wrong-cache-hit regression test. Fall back to
+        # every non-stopword token, however short, so a short factual answer
+        # still has something to check the rewrite against.
+        cached_words = _content_words(cached_answer, min_len=1)
+        if not cached_words:
+            return True  # genuinely nothing to compare (pure stopwords/punctuation)
+        adjusted_words = _content_words(adjusted, min_len=1)
+        overlap = len(cached_words & adjusted_words)
+        return (overlap / len(cached_words)) >= ADJUSTER_MIN_TOPIC_OVERLAP
     adjusted_words = _content_words(adjusted)
     overlap = len(cached_words & adjusted_words)
     return (overlap / len(cached_words)) >= ADJUSTER_MIN_TOPIC_OVERLAP
+
+
+# Non-Latin-script ratio threshold for "this text is written in a non-Latin
+# script" - measured on real Hebrew answers: even short ones (e.g. "The
+# chemical symbol for gold is **Au**." rewritten in Hebrew) stay well above
+# this because the scaffolding words (the/is/of) are Hebrew too, only the
+# odd embedded Latin abbreviation or number is ASCII. 0.3 comfortably clears
+# a Hebrew sentence that quotes one or two short Latin terms while staying
+# far below what a genuinely Latin-script sentence (which only crosses zero
+# on stray punctuation-adjacent characters) can reach.
+_NON_LATIN_SCRIPT_RATIO = 0.3
+# A rewrite counts as "dropped the script" only once its own non-Latin ratio
+# falls under this - not exactly zero, since a faithful Hebrew rewrite may
+# legitimately keep a Latin abbreviation or two (e.g. "Au", "¥") without that
+# meaning the rewrite itself switched language.
+_LATIN_DRIFT_RATIO = 0.05
+
+
+def _non_latin_letter_ratio(text: str) -> float:
+    letters = [c for c in text if c.isalpha()]
+    if not letters:
+        return 0.0
+    return sum(1 for c in letters if not c.isascii()) / len(letters)
+
+
+def _language_preserved(original: str, rewritten: str) -> bool:
+    """True unless `original` is written in a non-Latin script and
+    `rewritten` has silently switched to (near-)pure Latin script.
+
+    The content-word overlap check above (is_topically_consistent) was
+    supposed to catch a rewrite that changes language too - translated text
+    shares no literal words with its source - but measured against real
+    generalizer output it doesn't always: a Hebrew answer that itself quotes
+    an English proper noun or abbreviation parenthetically (e.g. "האוקיינוס
+    ... הוא שקט (Pacific Ocean)") shares that one token with a FULL English
+    mistranslation, which is enough to clear the overlap floor. Numbers
+    survive translation for the same reason ("15 כפול 12" / "15 multiplied
+    by 12" both contain "180"). Comparing script composition directly closes
+    that gap: measured 15/15 (100%) Hebrew-to-English drift on the shipped
+    prompt before this fix, 6/15 (40%) residual after the prompt fix and the
+    content-overlap guard alone - all 6 residual cases are exactly this
+    shared-token leak, and this check catches every one of them (see
+    dejaq-acceptance-fixes report).
+
+    Never flags a same-script rewrite, whatever it changes - only a script
+    CHANGE trips it, so ordinary English-to-English (or Hebrew-to-Hebrew)
+    tone/fidelity issues are unaffected and still governed by the checks
+    above.
+    """
+    if _non_latin_letter_ratio(original) < _NON_LATIN_SCRIPT_RATIO:
+        return True  # original wasn't meaningfully non-Latin; nothing to preserve
+    return _non_latin_letter_ratio(rewritten) >= _LATIN_DRIFT_RATIO
 
 
 # Empirically stops the runaway shape observed in the incident (the
@@ -118,6 +187,68 @@ def is_topically_consistent(adjusted: str, cached_answer: str) -> bool:
 _GENERALIZE_STOP = ["\n\n\n*****"]
 
 _NGRAM_SIZE = 4
+
+# generalize()'s own system prompt ("neutral, factual tone... remove
+# personality") reads a fenced code block as prose to describe rather than
+# content to keep verbatim - measured directly: a 3B model (Gemma 4 E2B)
+# deterministically (temperature=0) rewrote a real multi-block Python answer
+# into pure prose with zero code fences left, passing every existing sanity
+# check (similar length, high content-word overlap - identifier names survive
+# as words, same script). A single fenced block can be destroyed exactly the
+# same way (a one-block `is_prime` answer flattened identically), so this is
+# not a block-count heuristic - it is unconditional per fenced block. No other
+# content class measured this way (inline code, markdown tables, numbered/
+# bulleted lists, links) was ever altered in structure by the same prompt.
+# Fix: never let the rewrite see a fenced block's content at all - swap each
+# one for a placeholder token before the call, splice the original bytes back
+# after. If the placeholder set does not round-trip exactly, that is a hard
+# signal the rewrite corrupted structure, so generalize() falls back to
+# storing the raw answer un-generalized (see _restore_code_blocks below).
+_CODE_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
+
+
+def _code_block_placeholder(index: int) -> str:
+    # Unicode math brackets rather than plain punctuation: distinctive enough
+    # that a small instruct model treats the token as an opaque ID to leave
+    # alone instead of prose to translate or reword, unlike a bare number or
+    # a quoted string which look like content.
+    return f"⟦CODE_BLOCK_{index}⟧"
+
+
+def _protect_code_blocks(text: str) -> tuple[str, list[str]]:
+    """Replace every fenced code block with an indexed placeholder.
+
+    Returns the placeholder-substituted text plus the original block text (
+    including its own ``` fences) in order, so _restore_code_blocks can put
+    each one back byte-for-byte.
+    """
+    blocks: list[str] = []
+
+    def _replace(match: re.Match[str]) -> str:
+        blocks.append(match.group(0))
+        return _code_block_placeholder(len(blocks) - 1)
+
+    protected = _CODE_FENCE_RE.sub(_replace, text)
+    return protected, blocks
+
+
+def _restore_code_blocks(text: str, blocks: list[str]) -> str | None:
+    """Splice the original code blocks back into a rewritten placeholder text.
+
+    Returns None - the caller's cue to fall back to the raw answer - if any
+    placeholder was dropped, reworded, or duplicated by the rewrite, since
+    that means the model touched what should have been an opaque token and
+    the byte-for-byte guarantee no longer holds.
+    """
+    restored = text
+    for index, block in enumerate(blocks):
+        placeholder = _code_block_placeholder(index)
+        if placeholder not in restored:
+            return None
+        restored = restored.replace(placeholder, block, 1)
+    if "CODE_BLOCK_" in restored:
+        return None  # a duplicated placeholder survived the single replace above
+    return restored
 
 
 def _ngram_repetition_ratio(text: str, n: int = _NGRAM_SIZE) -> float:
@@ -186,9 +317,21 @@ def _inherits_baseline_repetition(baseline: str, output: str, absolute_max: floa
 def is_generalization_sane(raw_answer: str, generalized: str) -> bool:
     """Store-time safety net for generalize()'s own output.
 
-    Unlike is_topically_consistent() (which gates adjust() against drifting
-    from an already-trusted cached answer), this catches generalize() itself
-    finishing the real rewrite and then failing to stop: the model loops,
+    Reuses is_topically_consistent() (adjust()'s own drift guard) to catch
+    generalize() dropping or replacing the raw answer's content instead of
+    neutralizing its tone - e.g. a short Hebrew answer ("וינה היא בירת
+    אוסטריה.") generalized into an unrelated English fragment ("Vina.").
+    Neither the length nor the repetition check below can see this: the
+    output is short (no blown ratio) and not repetitive, so it passed both
+    and was persisted as the permanent cache entry. Content-word overlap
+    catches it regardless of which language either side is in, since it
+    compares literal surviving words rather than translated meaning - which
+    also means a generalize() call that legitimately TRANSLATES the answer
+    (something the system prompt above now explicitly forbids) fails this
+    check too and falls back to storing the raw, correct-language answer.
+
+    This also catches generalize() itself finishing the real rewrite and
+    then failing to stop: the model loops,
     paraphrasing its own few-shot examples as fake continuation turns, until
     it hits the token cap (incident: dejaq-generalizer-runaway - a 52-char
     real answer produced a 5,456-character loop with no stop). Two
@@ -235,6 +378,10 @@ def is_generalization_sane(raw_answer: str, generalized: str) -> bool:
             raw_answer, generalized, GENERALIZE_NGRAM_REPEAT_RATIO_MAX
         )
     ):
+        return False
+    if not is_topically_consistent(generalized, raw_answer):
+        return False
+    if not _language_preserved(raw_answer, generalized):
         return False
     return True
 
@@ -337,6 +484,12 @@ class ContextAdjusterService:
 
         start = time.time()
 
+        # Swap fenced code blocks for opaque placeholders before the model
+        # ever sees them - see _CODE_FENCE_RE above for why. A no-code answer
+        # gets an empty `code_blocks` and `protected_answer == answer`, so this
+        # is a no-op for the common case.
+        protected_answer, code_blocks = _protect_code_blocks(answer)
+
         messages = [
             {"role": "system", "content": self.generalize_system_prompt},
             # Few-shot examples must stay inert (no real-world fact in
@@ -351,7 +504,7 @@ class ContextAdjusterService:
             {"role": "user", "content": "ANSWER: The little widget thingy is super handy, it just quietly does its own validation step before passing stuff along, no fuss!"},
             {"role": "assistant", "content": "The component performs an internal validation step before forwarding its input for further processing."},
             # Actual answer
-            {"role": "user", "content": f"ANSWER: {answer}"},
+            {"role": "user", "content": f"ANSWER: {protected_answer}"},
         ]
         # The rewrite budget, not the request's own (see
         # REWRITE_MAX_TOKENS in app/config.py, the same budget adjust()
@@ -433,6 +586,22 @@ class ContextAdjusterService:
             return answer
 
         generalized_text = generalized.text
+
+        # Splice the original code blocks back in byte-for-byte. A rewrite
+        # that dropped, reworded, or duplicated a placeholder failed to treat
+        # it as opaque - the same structural-loss failure the runaway/leak
+        # guards below exist for - so it gets the same fallback they use.
+        if code_blocks:
+            restored = _restore_code_blocks(generalized_text, code_blocks)
+            if restored is None:
+                logger.warning(
+                    "Generalizer output lost %d fenced code block(s) (raw_len=%d, "
+                    "generalized_len=%d); storing the raw answer un-generalized instead",
+                    len(code_blocks), len(answer), len(generalized_text),
+                )
+                return answer
+            generalized_text = restored
+
         if not is_generalization_sane(answer, generalized_text):
             logger.warning(
                 "Generalizer output failed sanity check (raw_len=%d, "
@@ -587,6 +756,13 @@ class ContextAdjusterService:
         if not is_topically_consistent(adjusted_text, general_answer):
             logger.warning(
                 "Context adjuster output failed topic-consistency check; "
+                "serving cached answer verbatim instead of the drifted rewrite"
+            )
+            return general_answer
+
+        if not _language_preserved(general_answer, adjusted_text):
+            logger.warning(
+                "Context adjuster output switched script/language; "
                 "serving cached answer verbatim instead of the drifted rewrite"
             )
             return general_answer

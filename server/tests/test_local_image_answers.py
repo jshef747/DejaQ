@@ -70,7 +70,9 @@ class VisionCapturingRouter(StreamingLocalRouterMixin):
         self.last_images: list[str] | None = None
         self.calls = 0
 
-    async def generate_local_response(self, query, history=None, max_tokens=1024, system_prompt=None, images=None):
+    async def generate_local_response(
+        self, query, history=None, max_tokens=1024, system_prompt=None, images=None, temperature=0.7
+    ):
         self.calls += 1
         self.last_images = images
         return self.answer, 12.0, "stop"

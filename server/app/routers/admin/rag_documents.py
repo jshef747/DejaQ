@@ -1,9 +1,9 @@
 import logging
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
 from starlette.concurrency import run_in_threadpool
 
-from app.config import MAX_ATTACHMENT_BYTES
+from app.config import MAX_ATTACHMENT_BYTES, USE_CELERY
 from app.schemas.admin.rag_documents import (
     RagDocumentDeleteResponse,
     RagDocumentItem,
@@ -17,10 +17,37 @@ from app.services.rag_admin_service import (
     RagDocumentNotFound,
     RagIngestError,
 )
+from app.tasks.rag_tasks import ingest_rag_document_task
 
 logger = logging.getLogger("dejaq.rag")
 
 router = APIRouter()
+
+
+def _dispatch_ingest(
+    workspace_slug: str, doc_id: int, chunks: list[str], background_tasks: BackgroundTasks
+) -> None:
+    """Hand the slow embed+index phase to a background job.
+
+    Mirrors the cache-store fallback in routers/openai_compat.py: try Celery
+    first, and if it is disabled or its broker is unreachable, fall back to a
+    FastAPI BackgroundTasks call of the exact same function - the document
+    still ingests, and the catalog row still reports real progress, just from
+    this worker process instead of a separate one. An already-working install
+    with Celery off must keep working, not fall back to guessing.
+    """
+    if USE_CELERY:
+        try:
+            ingest_rag_document_task.apply_async(
+                args=(workspace_slug, doc_id, chunks), ignore_result=True
+            )
+            return
+        except Exception:
+            logger.warning(
+                "Celery dispatch failed for rag ingest doc_id=%s; running in-process",
+                doc_id, exc_info=True,
+            )
+    background_tasks.add_task(rag_admin_service.run_ingest, workspace_slug, doc_id, chunks)
 
 
 def _map_workspace_errors(exc: Exception) -> HTTPException:
@@ -44,31 +71,38 @@ def list_rag_documents(workspace_slug: str):
         raise _map_workspace_errors(exc)
 
 
-@router.post("/workspaces/{workspace_slug}/rag-documents/text", response_model=RagDocumentItem)
+@router.post("/workspaces/{workspace_slug}/rag-documents/text", response_model=RagDocumentItem, status_code=202)
 def add_rag_text(
     workspace_slug: str,
     body: RagTextCreate,
+    background_tasks: BackgroundTasks,
 ):
     try:
-        return rag_admin_service.add_text(workspace_slug, body.title, body.content)
+        item, chunks = rag_admin_service.begin_text(workspace_slug, body.title, body.content)
     except (WorkspaceNotFound, RagIngestError, RagDisabledError) as exc:
         raise _map_workspace_errors(exc)
+    _dispatch_ingest(workspace_slug, item.id, chunks, background_tasks)
+    return item
 
 
-@router.post("/workspaces/{workspace_slug}/rag-documents/url", response_model=RagDocumentItem)
+@router.post("/workspaces/{workspace_slug}/rag-documents/url", response_model=RagDocumentItem, status_code=202)
 def add_rag_url(
     workspace_slug: str,
     body: RagUrlCreate,
+    background_tasks: BackgroundTasks,
 ):
     try:
-        return rag_admin_service.add_url(workspace_slug, body.url, body.title)
+        item, chunks = rag_admin_service.begin_url(workspace_slug, body.url, body.title)
     except (WorkspaceNotFound, RagIngestError, RagDisabledError) as exc:
         raise _map_workspace_errors(exc)
+    _dispatch_ingest(workspace_slug, item.id, chunks, background_tasks)
+    return item
 
 
-@router.post("/workspaces/{workspace_slug}/rag-documents/upload", response_model=RagDocumentItem)
+@router.post("/workspaces/{workspace_slug}/rag-documents/upload", response_model=RagDocumentItem, status_code=202)
 async def upload_rag_document(
     workspace_slug: str,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     title: str | None = Form(default=None),
 ):
@@ -81,8 +115,8 @@ async def upload_rag_document(
     if not data:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
     try:
-        return await run_in_threadpool(
-            rag_admin_service.add_upload,
+        item, chunks = await run_in_threadpool(
+            rag_admin_service.begin_upload,
             workspace_slug,
             file.filename,
             data,
@@ -91,6 +125,8 @@ async def upload_rag_document(
         )
     except (WorkspaceNotFound, RagIngestError, RagDisabledError) as exc:
         raise _map_workspace_errors(exc)
+    _dispatch_ingest(workspace_slug, item.id, chunks, background_tasks)
+    return item
 
 
 @router.delete(

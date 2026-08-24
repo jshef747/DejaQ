@@ -1,4 +1,4 @@
-"""Rug (RAG) — the vector side of the per-workspace knowledge layer.
+"""RAG — the vector side of the per-workspace knowledge layer.
 
 This module owns everything that touches ChromaDB for RAG: turning a document's
 text into chunks, embedding + storing those chunks, retrieving them for a query,
@@ -11,9 +11,10 @@ Design notes:
   ("{workspace_slug}__{dept}"). The cache is volatile — score-evicted and
   deleted on a thumbs-down — and curated knowledge must never be wiped that way.
   The "__rag_kb" suffix is load-bearing: the eviction beat task skips it.
-- Chunks are embedded with the SAME BGE model the cache uses
-  (`memory_chromaDB.embed_text`), so retrieval distances are comparable to cache
-  distances and there is one embedder loaded in-process, not two.
+- Chunks are embedded with the SAME text embedder the cache uses
+  (`memory_chromaDB.embed_text`, model configured via `TEXT_EMBEDDING_MODEL`),
+  so retrieval distances are comparable to cache distances and there is one
+  embedder loaded in-process, not two.
 - A chunk's id is deterministic ("{rag_document_id}:{index}") so re-indexing a
   document upserts over its old chunks instead of duplicating them.
 """
@@ -22,14 +23,17 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
+from typing import Callable
 
 import chromadb
+import numpy as np
 
 from app.config import (
     CHROMA_HOST,
     CHROMA_PORT,
     RAG_CHUNK_CHARS,
     RAG_CHUNK_OVERLAP,
+    RAG_EXHAUSTIVE_MAX_CHUNKS,
 )
 from app.services.memory_chromaDB import embed_text
 
@@ -47,6 +51,17 @@ logger = logging.getLogger("dejaq.rag")
 # (slug "rag" → namespace "{ws}__rag"), which would merge that department's Q→A
 # cache into the knowledge base and make the eviction guard skip it.
 RAG_NAMESPACE_SUFFIX = "__rag_kb"
+
+# Chroma rejects an upsert whose row count exceeds a server-side ceiling
+# derived from SQLite's bound-parameter limit (measured 5,461 on a local
+# install) - one request over it fails outright, not partially. A 4,100-chunk
+# document stayed under that by luck; a 5,722-chunk one (measured live,
+# fm/dejaq-kb-upload-progress) did not, and the whole upsert was rejected with
+# "Batch size N exceeds maximum batch size 5461" after minutes of embedding.
+# This constant is deliberately far below any observed minimum so ingestion
+# never has to probe the server's actual limit - it just slices the upsert
+# into requests that always fit.
+_MAX_UPSERT_BATCH = 1000
 
 
 def rag_namespace(workspace_slug: str) -> str:
@@ -133,13 +148,23 @@ def chunk_text(text: str) -> list[str]:
 
 # --- Indexing / retrieval / deletion ------------------------------------------
 
-def embed_chunks(chunks: list[str]) -> list[list[float]]:
-    """Embed chunks with the shared BGE model.
+def embed_chunks(
+    chunks: list[str], on_progress: Callable[[int], None] | None = None
+) -> list[list[float]]:
+    """Embed chunks with the shared BGE model, one at a time.
 
     Split out from index_document so a caller can pay this cost outside a DB
     transaction — it is the slow part of ingestion and holds no locks of its own.
+    `on_progress`, when given, is called with the count embedded so far after
+    every chunk. This is the only phase of ingestion whose cost scales with the
+    document's size, so it is the only honest unit of progress to report.
     """
-    return [embed_text(c) for c in chunks]
+    out: list[list[float]] = []
+    for i, chunk in enumerate(chunks, start=1):
+        out.append(embed_text(chunk))
+        if on_progress is not None:
+            on_progress(i)
+    return out
 
 
 def index_document(
@@ -182,17 +207,63 @@ def index_document(
         }
         for i in range(len(chunks))
     ]
-    collection.upsert(
-        ids=ids,
-        embeddings=embeddings,
-        documents=chunks,
-        metadatas=metadatas,
-    )
+    for start in range(0, len(ids), _MAX_UPSERT_BATCH):
+        end = start + _MAX_UPSERT_BATCH
+        collection.upsert(
+            ids=ids[start:end],
+            embeddings=embeddings[start:end],
+            documents=chunks[start:end],
+            metadatas=metadatas[start:end],
+        )
     logger.info(
         "rag_index namespace=%s doc_id=%s chunks=%d title=%r",
         namespace, rag_document_id, len(chunks), title[:60],
     )
     return len(chunks)
+
+
+def _ann_query(collection, query_embedding: list[float], n: int) -> tuple[list, list, list]:
+    """ChromaDB's own HNSW (approximate) search."""
+    results = collection.query(
+        query_embeddings=[query_embedding],
+        n_results=n,
+        include=["documents", "metadatas", "distances"],
+    )
+    if not (results["ids"] and results["ids"][0]):
+        return [], [], []
+    docs = results["documents"][0] if results["documents"] else []
+    metas = results["metadatas"][0] if results["metadatas"] else []
+    dists = results["distances"][0] if results["distances"] else []
+    return docs, metas, dists
+
+
+def _exhaustive_query(collection, query_embedding: list[float], n: int) -> tuple[list, list, list]:
+    """Brute-force linear scan over every chunk in the collection.
+
+    ChromaDB's HNSW index can miss a chunk that is objectively the best
+    match: measured on a real knowledge base where one large document's
+    chunks dominated the approximate graph, a chunk at cosine distance 0.044
+    (a near-perfect match) was never returned even at n_results=2000 of
+    5,136 total chunks — see evals/rag_recall/ and docs/rag-layer.md. A
+    curated knowledge base is small enough (gated by
+    RAG_EXHAUSTIVE_MAX_CHUNKS) that an exact scan is cheap and removes the
+    failure mode outright instead of tuning around it.
+
+    `embed_text` L2-normalizes its output, so cosine distance is `1 - dot
+    product` — the same metric the collection is created with
+    (`"hnsw:space": "cosine"`), just computed exactly instead of approximately.
+    """
+    got = collection.get(include=["embeddings", "documents", "metadatas"])
+    if not got["ids"]:
+        return [], [], []
+    embeddings = np.asarray(got["embeddings"], dtype=np.float32)
+    q = np.asarray(query_embedding, dtype=np.float32)
+    distances = 1.0 - (embeddings @ q)
+    order = np.argsort(distances)[:n]
+    docs = [got["documents"][i] for i in order]
+    metas = [got["metadatas"][i] for i in order]
+    dists = [float(distances[i]) for i in order]
+    return docs, metas, dists
 
 
 def retrieve(
@@ -204,26 +275,25 @@ def retrieve(
     """Return the closest RAG chunks to `query`, filtered by cosine distance.
 
     Returns [] when the collection is empty or nothing clears max_distance — the
-    caller then answers exactly as it does today, without grounding.
+    caller then answers exactly as it does today, without grounding. Below
+    RAG_EXHAUSTIVE_MAX_CHUNKS total chunks, searches exhaustively rather than
+    through Chroma's approximate index — see `_exhaustive_query`.
     """
     collection = get_rag_collection(namespace)
     count = collection.count()
     if count == 0:
         return []
     n = min(max(1, top_k), count)
-    results = collection.query(
-        query_embeddings=[embed_text(query)],
-        n_results=n,
-        include=["documents", "metadatas", "distances"],
-    )
-    if not (results["ids"] and results["ids"][0]):
+    query_embedding = embed_text(query)
+    if count <= RAG_EXHAUSTIVE_MAX_CHUNKS:
+        docs, metas, dists = _exhaustive_query(collection, query_embedding, n)
+    else:
+        docs, metas, dists = _ann_query(collection, query_embedding, n)
+    if not docs:
         return []
 
     out: list[RagChunk] = []
-    docs = results["documents"][0] if results["documents"] else []
-    metas = results["metadatas"][0] if results["metadatas"] else []
-    dists = results["distances"][0] if results["distances"] else []
-    for i in range(len(results["ids"][0])):
+    for i in range(len(docs)):
         dist = float(dists[i]) if i < len(dists) else 1.0
         if dist > max_distance:
             continue
@@ -237,6 +307,91 @@ def retrieve(
                 title=str(meta.get("title", "")),
                 distance=dist,
                 rag_document_id=int(meta.get("rag_document_id", 0)),
+                chunk_index=int(meta.get("chunk_index", i)),
+            )
+        )
+    return out
+
+
+def retrieve_multi(
+    namespace: str,
+    queries: list[str],
+    top_k: int,
+    max_distance: float,
+) -> list[RagChunk]:
+    """Retrieve against several query texts and merge by best distance.
+
+    Used because the context enricher's standalone rewrite of a follow-up can
+    drift far enough from the user's original wording to lose a chunk
+    retrieval would have found on the raw text (measured in
+    evals/rag_recall/measure_enrichment.py). Duplicate/blank query texts are
+    only searched once, so this costs nothing extra on a single-turn request
+    (enrich() is a no-op without history — same text twice, one search).
+    Each (document, chunk) keeps its best distance across every query it
+    matched under; the merged results are re-sorted and capped at top_k.
+    """
+    seen_queries = list(dict.fromkeys(q for q in queries if q))
+    if not seen_queries:
+        return []
+    best: dict[tuple[int, int], RagChunk] = {}
+    for query in seen_queries:
+        for chunk in retrieve(namespace, query, top_k, max_distance):
+            key = (chunk.rag_document_id, chunk.chunk_index)
+            existing = best.get(key)
+            if existing is None or chunk.distance < existing.distance:
+                best[key] = chunk
+    return sorted(best.values(), key=lambda c: c.distance)[:top_k]
+
+
+def retrieve_by_document(
+    namespace: str,
+    rag_document_id: int,
+    query: str,
+    top_k: int,
+) -> list[RagChunk]:
+    """Return the closest chunks to `query` FROM ONE DOCUMENT ONLY.
+
+    For an explicit `@`-reference: the caller already knows which document it
+    wants, so this is a `where={"rag_document_id": ...}` metadata filter, not a
+    nearest-neighbour search over the whole collection. It ranks only among
+    that document's own chunks and therefore cannot be crowded out by an
+    unrelated document the way `retrieve()` can (see docs — the measured
+    approximate-search recall bug this feature exists to sidestep). No
+    max_distance gate: the document is already pinned by id, not by distance,
+    so returning its top_k closest chunks regardless of distance is correct —
+    unlike `retrieve()`, there is no "wrong document" outcome to gate against.
+
+    Returns [] when the collection is empty or the document has no chunks
+    (deleted, or never indexed) — the caller then answers ungrounded, exactly
+    as `retrieve()`'s callers do on an empty result.
+    """
+    collection = get_rag_collection(namespace)
+    if collection.count() == 0:
+        return []
+    results = collection.query(
+        query_embeddings=[embed_text(query)],
+        n_results=max(1, top_k),
+        where={"rag_document_id": rag_document_id},
+        include=["documents", "metadatas", "distances"],
+    )
+    if not (results["ids"] and results["ids"][0]):
+        return []
+
+    out: list[RagChunk] = []
+    docs = results["documents"][0] if results["documents"] else []
+    metas = results["metadatas"][0] if results["metadatas"] else []
+    dists = results["distances"][0] if results["distances"] else []
+    for i in range(len(results["ids"][0])):
+        meta = metas[i] if i < len(metas) else {}
+        text = (docs[i] if i < len(docs) else "") or ""
+        if not text.strip():
+            continue
+        out.append(
+            RagChunk(
+                text=text,
+                title=str(meta.get("title", "")),
+                distance=float(dists[i]) if i < len(dists) else 1.0,
+                rag_document_id=int(meta.get("rag_document_id", rag_document_id)),
                 chunk_index=int(meta.get("chunk_index", i)),
             )
         )

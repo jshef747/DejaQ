@@ -10,15 +10,15 @@ class _FeedbackResult(BaseModel):
 
     Must carry every field the ROUTER reads, not just the ones this test
     asserts on: the router decides its response shape by inspecting them, so
-    a missing one is an AttributeError, not a None. `edit_status` was added
-    to the router by Edit & Save and never added here.
+    a missing one is an AttributeError rather than a None.
     """
 
     status: Literal["ok", "deleted"]
     new_score: float | None = None
+    edit_status: str | None = None
+    response_id: str | None = None
     escalation_status: str | None = None
     escalated_response: object | None = None
-    edit_status: str | None = None
 
 
 def test_gateway_route_accepts_org_key_not_arbitrary_bearer_token(monkeypatch):
@@ -137,10 +137,11 @@ def test_public_feedback_route_uses_gateway_context_and_shared_service(
     assert call["response_id"] == "acme__eng:doc-1"
     assert call["rating"] == "positive"
     assert call["comment"] == "helpful"
-    # The service parameter was renamed org -> workspace; the router passes
-    # `workspace=`, so asserting on "org" looked for a key nothing sends.
     assert call["workspace"] == "acme"
+    assert call["workspace_id"] == 1
     assert call["department"] == "eng"
+    assert call["cache_namespace"] == "acme--default"
+    assert call["validate_namespace"] is True
 
 
 def _collect_routes(router):
