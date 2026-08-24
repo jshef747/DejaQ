@@ -4,7 +4,7 @@ DejaQ is an LLM gateway that reduces cost and latency with semantic caching, loc
 
 ## Project Document
 
-[Project document](https://docs.google.com/document/d/18XAP_r1MI7rwU2BvKt5mA25AI7YqmIRA5KEmLbwauAo/edit?tab=t.0)
+[Project document](https://docs.google.com/document/d/12ikuBz_Ku1HKdQOogzSssXcVxonp96TVdpsIep8zJiw/edit?usp=sharing)
 
 ## Runtime Flow
 
