@@ -80,36 +80,21 @@ TEXT_EMBEDDING_QUERY_PREFIX = _get_text(
 # is configured server-wide, and every consumer must treat that as "ask the
 # workspace to configure a provider" rather than silently picking one.
 EXTERNAL_MODEL_NAME = os.getenv("DEJAQ_EXTERNAL_MODEL")
-# 0.2986 goes with classifier.py's re-derived score weights, not the old
-# 0.30/0.26 sweep of NVIDIA's weights - the two were searched jointly
-# (dejaq-routing-weights-hebrew) and shipping one without the other is an
-# untested combination, not "the best of both". 0.26 was the accuracy-
-# maximizing threshold for the OLD weights only; once the weights changed,
-# so does the distance distribution the threshold is cutting. On the
-# weights' own 122-item corpus this combination is a strict improvement
-# over the old 0.26/old-weights config (fewer false positives AND fewer
-# false negatives), cross-validated at +5.7 accuracy points over baseline.
-# Like the weights themselves, it does not rescue hard proofs or Hebrew -
-# see classifier.py's process_logits comment and the Hebrew hybrid in
-# openai_compat.py's routing step.
-ROUTING_THRESHOLD = _get_float("DEJAQ_ROUTING_THRESHOLD", 0.2986)
-
-# Multilingual difficulty classifier (LaBSE embedding + a LogisticRegression
-# head trained on 770 items across seven languages,
-# dejaq-classifier-probe-multilang) - now the classifier that decides
-# easy/hard routing for every language, no per-language branching (see
-# openai_compat.py's "classify" step). It replaced the old Hebrew-specific
-# judge (removed - see fm/dejaq-classifier-wire-in) and, on this branch, the
-# NVIDIA classifier below it: the old classifier missed essentially all hard
-# Hebrew and only ~16.6% of hard questions overall
-# (dejaq-classifier-wire-in/report.md), while this head was trained on
-# labelled Hebrew directly. Threshold 0.5 is the LogisticRegression default
-# decision boundary; class_weight="balanced" during training already
+# 0.50 is the LaBSE classifier's own LogisticRegression decision boundary -
+# not a swept number. class_weight="balanced" during training already
 # corrects for the 60/40 easy/hard class imbalance, so 0.5 is not naively
-# biased toward the majority class. Not swept against a captain-specified
-# cost ratio between the two routing-error directions - predict_proba
-# exposes every point on the ROC curve if one is ever specified.
-LABSE_CLASSIFIER_THRESHOLD = _get_float("DEJAQ_LABSE_CLASSIFIER_THRESHOLD", 0.5)
+# biased toward the majority class. The old 0.2986 belonged to the retired
+# NVIDIA classifier (an effort-index score topping out near 0.36, r=0.21
+# against the LaBSE score on the same 770-item corpus) - carrying it across
+# was measuring one instrument's number on the other's scale
+# (dejaq-difficulty-definition/report.md section 6). This is the single
+# threshold the routing path reads; there used to be a second one
+# (LABSE_CLASSIFIER_THRESHOLD) that predict_complexity applied to its own
+# internal "complexity" label, but openai_compat.py's routing step always
+# overwrote that label using this constant (or its per-workspace override)
+# before making the actual local/external decision - the second constant
+# never affected routing and has been folded into this one.
+ROUTING_THRESHOLD = _get_float("DEJAQ_ROUTING_THRESHOLD", 0.50)
 # Default ON: this is the classifier that serves routing decisions now.
 LOAD_LABSE_CLASSIFIER = _get_bool("DEJAQ_LOAD_LABSE_CLASSIFIER", True)
 # Default OFF on this branch: the old NVIDIA classifier (ClassifierService,

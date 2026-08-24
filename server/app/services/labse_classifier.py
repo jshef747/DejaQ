@@ -73,11 +73,14 @@ class LabseClassifierService:
     def predict_complexity(self, query: str) -> dict:
         """Returns dict with keys: complexity, score, task_type - same shape
         as ClassifierService.predict_complexity, so callers can log/compare
-        the two uniformly. Threshold: config.LABSE_CLASSIFIER_THRESHOLD.
+        the two uniformly. Threshold: config.ROUTING_THRESHOLD - the same
+        constant openai_compat.py's routing step re-applies (with its own
+        per-workspace override) to this call's score, so this label agrees
+        with the routing decision instead of a separate, dead threshold.
         """
         embedding = self._embed(query)
         score = float(self._head.predict_proba(embedding)[0][1])
-        complexity = "hard" if score >= config.LABSE_CLASSIFIER_THRESHOLD else "easy"
+        complexity = "hard" if score >= config.ROUTING_THRESHOLD else "easy"
         return {
             "complexity": complexity,
             "score": score,

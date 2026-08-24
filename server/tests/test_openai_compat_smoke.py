@@ -768,12 +768,9 @@ def test_force_hard_external_header_skips_classifier(monkeypatch):
 
 
 def test_auto_routing_routes_external_when_labse_scores_hard(monkeypatch):
-    """The per-workspace routing_threshold override only ever applied to the
-    old classifier's continuous score - LaBSE returns an already-decided
-    complexity (global DEJAQ_LABSE_CLASSIFIER_THRESHOLD, no per-workspace
-    override), so a workspace can no longer force auto-routing via
-    threshold. routing_threshold=0.0 here is inert; the hard verdict comes
-    from the LaBSE mock alone."""
+    """routing_threshold=0.0 here is inert either way; the hard verdict
+    comes from the LaBSE mock (HardClassifier) returning a score that
+    clears any threshold."""
 
     async def _noop_log(*args, **kwargs):
         return None
