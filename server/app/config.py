@@ -513,20 +513,34 @@ LOCAL_LLM_MODEL_NAME = _get_text("DEJAQ_LOCAL_LLM_MODEL_NAME", "gemma_local")
 # but it is a real content-fidelity gap worth watching, not a clean bill of
 # health. See the incident report (dejaq-generalizer-runaway) for the full
 # comparison.
-# Split back off granite4_1_3b onto its own tag (gemma_e2b), deliberately NOT
-# bundled with the normalizer/validator below: generalize() runs in the
-# background after a cache miss, and Ollama on this machine holds one slot per
-# loaded model, so a background call sharing a tag with normalizer/validator
-# queues in front of the next request's live validate()/adjust() call.
-# Measured directly: a live validate() call went from 199ms to 2,975ms when a
-# background generalize() on the same tag was in flight. Raising Ollama's slot
-# count was measured and rejected - no memory headroom on this machine. The
-# normalizer and validator stay on granite4_1_3b since both run sequentially
-# inside a single request and never collide with each other. gemma_e2b is the
-# only model proven for this specific role - see the phi_generalizer swap
-# history above (0/20 runaways vs phi3.5's 5/20, comparable-or-better
-# fidelity).
-GENERALIZER_MODEL_NAME = _get_text("DEJAQ_GENERALIZER_MODEL_NAME", "gemma_e2b")
+# Rejoined onto granite4_1_3b (back off its own gemma_e2b tag - see git
+# history for that split): four distinct resident Ollama tags (this role's
+# gemma_e2b, normalizer/validator's granite4_1_3b, local's gemma_local,
+# enricher/adjuster's qwen_1_5b) don't reliably stay loaded together on this
+# machine - a three-way branch comparison (dejaq-three-way-comparison)
+# measured 44/59 ollama-ps polls (75%) with NOTHING resident and local-answer
+# median latency at 9,572ms, against ~1,150-1,257ms on two other branches that
+# both stayed at 3 tags. That is an ~8x regression dominating every latency
+# number the app produces, and it hits every request, not a subset - strictly
+# worse than the queuing risk this rejoin reaccepts. Three arrangements that
+# get back to 3 tags were measured end to end (fm-dejaq-refresh-preflight-
+# fixes report): this one (generalizer -> granite4_1_3b, rejoining
+# normalizer/validator), moving normalizer+validator onto gemma_e2b instead
+# (same shared-tag shape, but gives up the ~2x normalizer/validator speed
+# edge granite4_1_3b measured over gemma_e2b for no offsetting benefit), and
+# moving the generalizer onto qwen_1_5b (measured fastest in isolation, but
+# qwen_1_5b has never been evaluated for this role the way granite4_1_3b and
+# gemma_e2b were above - only phi3.5 and gemma_e2b were, and phi3.5 ran away
+# 5/20 - and it would make the background rewrite compete with adjust(),
+# which sits on the live cache-hit path). This option keeps every role on an
+# already-quality-validated model (granite4_1_3b measured "no fabrication
+# regression... comparable-or-faster than gemma_e2b" for generalize() before
+# the split, and equal-accuracy/~2x-faster for normalizer/validate() below)
+# and reaccepts only the bounded, already-measured queuing cost: a live
+# validate() call going from 199ms to 2,975ms when a background generalize()
+# on the same tag is in flight. Raising Ollama's slot count was measured and
+# rejected - no memory headroom on this machine.
+GENERALIZER_MODEL_NAME = _get_text("DEJAQ_GENERALIZER_MODEL_NAME", "granite4_1_3b")
 # Every other candidate tested (qwen3:0.6b/1.7b, granite4.1:3b, phi4-mini:3.8b)
 # failed the "give me the short version" case - output was a near-verbatim
 # copy of the input instead of a genuine condensation. qwen_1_5b is the only
