@@ -37,7 +37,7 @@ class TestPredictComplexityThreshold:
 
     def test_score_at_or_above_threshold_is_hard(self):
         svc = self._service_with_stubbed_head(0.5)
-        with patch.object(labse_classifier.config, "LABSE_CLASSIFIER_THRESHOLD", 0.5):
+        with patch.object(labse_classifier.config, "ROUTING_THRESHOLD", 0.5):
             result = svc.predict_complexity("anything")
         assert result["complexity"] == "hard"
         assert result["score"] == pytest.approx(0.5)
@@ -45,7 +45,7 @@ class TestPredictComplexityThreshold:
 
     def test_score_below_threshold_is_easy(self):
         svc = self._service_with_stubbed_head(0.49)
-        with patch.object(labse_classifier.config, "LABSE_CLASSIFIER_THRESHOLD", 0.5):
+        with patch.object(labse_classifier.config, "ROUTING_THRESHOLD", 0.5):
             result = svc.predict_complexity("anything")
         assert result["complexity"] == "easy"
 

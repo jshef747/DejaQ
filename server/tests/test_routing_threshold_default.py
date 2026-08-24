@@ -1,8 +1,8 @@
-"""Routing at the DEJAQ_ROUTING_THRESHOLD default (0.2986, paired with the
-re-derived classifier weights - see app/config.py). Verifies the
-auto-routing decision on each side of the line when the workspace has no
-override, mirroring the existing test_auto_routing_uses_org_threshold_zero_to_route_external
-pattern.
+"""Routing at the DEJAQ_ROUTING_THRESHOLD default (0.50 - the LaBSE
+classifier's own LogisticRegression decision boundary, see app/config.py).
+Verifies the auto-routing decision on each side of the line when the
+workspace has no override, mirroring the existing
+test_auto_routing_uses_org_threshold_zero_to_route_external pattern.
 """
 import pytest
 from fastapi.testclient import TestClient
@@ -42,8 +42,8 @@ class StubRouter(StreamingLocalRouterMixin):
         return "local answer", 12.0, "stop"
 
 
-def test_default_routing_threshold_is_0_2986():
-    assert openai_compat.ROUTING_THRESHOLD == 0.2986
+def test_default_routing_threshold_is_0_50():
+    assert openai_compat.ROUTING_THRESHOLD == 0.50
 
 
 def _default_llm_config(monkeypatch):

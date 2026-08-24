@@ -1984,7 +1984,11 @@ async def run_chat_pipeline(
             # classifier's internal default - see llm_config.routing_threshold.
             try:
                 with trace.step("classify"):
-                    classification = _labse_classifier.predict_complexity(user_query)
+                    # enriched, not user_query: a bare follow-up turn
+                    # ("give me the short version") is not a question, and
+                    # scoring it as one under-fires on hard follow-ups (see
+                    # dejaq-difficulty-definition/report.md section 3(b)).
+                    classification = _labse_classifier.predict_complexity(enriched)
             except Exception:
                 logger.exception("LaBSE classifier failed")
                 classification = {"complexity": "easy", "score": 0.0, "task_type": "Unknown"}
