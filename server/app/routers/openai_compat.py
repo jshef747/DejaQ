@@ -121,6 +121,7 @@ from app.utils.exceptions import (
 from app.utils.logger import clear_request_id, content_snippet, hide_content, set_request_id
 from app.utils.pipeline_trace import PipelineTrace
 from app.schemas.chat import ExternalLLMRequest
+from app.services.language_gate import dominant_script, scripts_conflict
 from app.services.chat_messages import extract_pipeline_inputs
 from app.services.request_logger import request_logger
 from app.services.response_registry import ResponseInteraction, ServedTier, response_registry
@@ -1516,6 +1517,36 @@ async def run_chat_pipeline(
                     _cand_passed = False
                 else:
                     _cand_rag_anchored = True
+
+            # Language gate. The candidate's stored answer must be written
+            # in the same script as the question, so a Hebrew question is
+            # never served a cached English (or other cross-script) answer
+            # verbatim - see services/language_gate.py for why this is a
+            # cheap Unicode script check rather than a model call. It runs
+            # here, in the per-candidate gate loop, so it also covers the
+            # trusted-tier fast path (VALIDATOR_SKIP_DISTANCE) and the
+            # near-identical fast path (ADJUSTER_SKIP_DISTANCE) below -
+            # both of which serve the cached answer without ever reaching
+            # the validator or the adjuster, so a check placed in either of
+            # those would miss exactly the closest, most "trusted" matches.
+            # A REJECT falls through to the next pool candidate exactly
+            # like an image/file/rag REJECT above; if nothing survives,
+            # this becomes a normal cache miss and the question is
+            # answered fresh, in its own language.
+            if _cand_passed and _candidate.generalized_answer:
+                _lang_conflict = scripts_conflict(user_query, _candidate.generalized_answer)
+                logger.info(
+                    "language_gate %s - query_script=%s answer_script=%s | text_distance=%.4f "
+                    "matched_prompt=%s entry=%s",
+                    "REJECT" if _lang_conflict else "ACCEPT",
+                    dominant_script(user_query),
+                    dominant_script(_candidate.generalized_answer),
+                    float(_candidate.distance or 0.0),
+                    _diagnostic_prompt(_candidate.matched_query) or "",
+                    _candidate.entry_id or "?",
+                )
+                if _lang_conflict:
+                    _cand_passed = False
 
             if _cand_passed:
                 cache_lookup = _candidate
