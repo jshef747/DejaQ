@@ -52,23 +52,18 @@ export function diffQueries(typed: string, stored: string): { typed: DiffWord[];
 }
 
 // x-dejaq-cache-matched-query is a diagnostic header, not the stored text:
-// the server collapses whitespace, hard-truncates it at 200 characters with
-// no ellipsis, and latin-1-replaces every character outside that range with
-// "?" (openai_compat.py _diagnostic_prompt / _sanitize_headers). Diffing
-// against a value mangled either way underlines words as "changed" that were
-// never typed differently.
+// the server collapses whitespace and hard-truncates it at 200 characters
+// with no ellipsis (openai_compat.py _diagnostic_prompt). The value itself
+// is percent-encoded on the wire and decoded back exactly server-side
+// (_encode_header_text) and client-side (decodeURIComponent in
+// chat-api.ts), so truncation is the only way it can still differ from the
+// real stored text. Diffing a truncated value would underline a cut-off
+// tail word as "changed" when it was never typed differently.
 //
 // Truncation shows in the length alone: the value is whitespace-collapsed
-// before the cut, so only a truncated one reaches the limit. Replacement is
-// not readable from the value by itself — a literal "?" is ordinary in the
-// questions this product is asked ("what does foo?.bar do") — so it is only
-// claimed when the typed question carries a character the header could not
-// have survived, which is the only case where a "?" in the stored value is
-// evidence of anything.
+// before the cut, so only a truncated one reaches the limit.
 const HEADER_TRUNCATE_LIMIT = 200;
-const NON_LATIN1 = /[^\u0000-\u00ff]/;
 
-export function isLossyHeaderText(stored: string, typed: string | null): boolean {
-  if (stored.length >= HEADER_TRUNCATE_LIMIT) return true;
-  return typed !== null && NON_LATIN1.test(typed) && stored.includes("?");
+export function isLossyHeaderText(stored: string): boolean {
+  return stored.length >= HEADER_TRUNCATE_LIMIT;
 }

@@ -4,6 +4,7 @@ import base64
 import inspect
 import logging
 import time
+import urllib.parse
 import uuid
 from dataclasses import dataclass, field
 from typing import AsyncGenerator
@@ -565,12 +566,24 @@ def _diagnostic_prompt(text: str | None, limit: int = 200) -> str | None:
     return prompt[:limit]
 
 
+def _encode_header_text(value: str) -> str:
+    """Percent-encode free-text diagnostic values for a header (RFC 3986 /
+    encodeURIComponent-compatible). HTTP headers are Latin-1 only (RFC 7230;
+    Starlette encodes headers as latin-1 in Response.init_headers), so a
+    matched/nearest/enriched query outside Latin-1 - any non-Latin script,
+    or even an em-dash or curly quote in English - would otherwise be
+    destroyed. Percent-encoding keeps the value ASCII (and therefore
+    Latin-1-safe) while surviving the trip byte-for-byte; the client decodes
+    with `decodeURIComponent`."""
+    return urllib.parse.quote(value, safe="")
+
+
 def _sanitize_headers(headers: dict[str, str]) -> dict[str, str]:
-    """Make every header value Latin-1-safe (RFC 7230; Starlette encodes
-    headers as latin-1 in Response.init_headers). Free-text diagnostic values
-    (nearest/matched cache prompts) can carry characters like em-dashes or
-    curly quotes that raise UnicodeEncodeError there and crash the whole
-    request; replace rather than drop so the header stays useful."""
+    """Final safety net only: make every header value Latin-1-safe (RFC 7230;
+    Starlette encodes headers as latin-1 in Response.init_headers). Diagnostic
+    text values must already be percent-encoded via `_encode_header_text`
+    before reaching here - this is just a backstop so a value that somehow
+    isn't (a bug, a future header) can never crash the request."""
     return {
         key: value.encode("latin-1", errors="replace").decode("latin-1")
         for key, value in headers.items()
@@ -583,7 +596,7 @@ def _nearest_headers(cache_lookup: CacheLookupResult) -> dict[str, str]:
         return {}
     return _sanitize_headers({
         "x-dejaq-nearest-cache-distance": f"{cache_lookup.nearest_distance:.4f}",
-        "x-dejaq-nearest-cache-prompt": prompt,
+        "x-dejaq-nearest-cache-prompt": _encode_header_text(prompt),
     })
 
 
@@ -598,7 +611,7 @@ def _enriched_headers(user_query: str, enriched: str, enrich_succeeded: bool) ->
     prompt = _diagnostic_prompt(enriched)
     if prompt is None:
         return {}
-    return _sanitize_headers({"x-dejaq-enriched-query": prompt})
+    return _sanitize_headers({"x-dejaq-enriched-query": _encode_header_text(prompt)})
 
 
 def _nearest_log_suffix(cache_lookup: CacheLookupResult) -> str:
@@ -1855,7 +1868,7 @@ async def run_chat_pipeline(
                     "x-dejaq-tier": "cache",
                     "x-dejaq-response-id": response_id,
                     "x-dejaq-cache-distance": f"{_cache_distance:.4f}",
-                    "x-dejaq-cache-matched-query": _cache_matched_query,
+                    "x-dejaq-cache-matched-query": _encode_header_text(_cache_matched_query),
                     "x-dejaq-validator-verdict": "valid",
                 })
                 if _human_authored:

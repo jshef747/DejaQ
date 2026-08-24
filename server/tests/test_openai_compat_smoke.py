@@ -1,3 +1,5 @@
+import urllib.parse
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -584,7 +586,7 @@ def test_cache_miss_includes_difficulty_and_nearest_cache_headers(monkeypatch, c
     assert response.status_code == 200
     assert response.headers["x-dejaq-prompt-difficulty-score"] == "0.4200"
     assert response.headers["x-dejaq-nearest-cache-distance"] == "0.2346"
-    assert response.headers["x-dejaq-nearest-cache-prompt"] == "capital city of france"
+    assert urllib.parse.unquote(response.headers["x-dejaq-nearest-cache-prompt"]) == "capital city of france"
 
     done = next(
         record.message
@@ -686,9 +688,9 @@ def test_cache_hit_includes_nearest_cache_headers_without_difficulty_score(monke
 
     assert response.status_code == 200
     assert response.headers["x-dejaq-cache-distance"] == "0.0400"
-    assert response.headers["x-dejaq-cache-matched-query"] == "capital of france"
+    assert urllib.parse.unquote(response.headers["x-dejaq-cache-matched-query"]) == "capital of france"
     assert response.headers["x-dejaq-nearest-cache-distance"] == "0.0400"
-    assert response.headers["x-dejaq-nearest-cache-prompt"] == "capital of france"
+    assert urllib.parse.unquote(response.headers["x-dejaq-nearest-cache-prompt"]) == "capital of france"
     assert "x-dejaq-prompt-difficulty-score" not in response.headers
 
     done = next(
@@ -1749,7 +1751,9 @@ def test_cache_miss_with_non_latin1_nearest_prompt_does_not_crash(monkeypatch):
     """Regression for dejaq-big-eval-v2 report section 9.1 (q265/q369): an
     em-dash in the nearest cached prompt used to raise UnicodeEncodeError
     inside Starlette's header encoding and turn the whole request into a 500.
-    Must now return 200 with a sanitized (not dropped) header."""
+    Must now return 200 with the em-dash intact (percent-encoded on the wire,
+    decoding back to the exact original) - not just a header that survives
+    without crashing."""
     async def _noop_log(*args, **kwargs):
         return None
 
@@ -1776,8 +1780,8 @@ def test_cache_miss_with_non_latin1_nearest_prompt_does_not_crash(monkeypatch):
 
     assert response.status_code == 200
     header = response.headers["x-dejaq-nearest-cache-prompt"]
-    assert "—" not in header
-    header.encode("latin-1")  # must not raise
+    header.encode("latin-1")  # wire value itself must be latin-1 safe (percent-encoded)
+    assert urllib.parse.unquote(header) == "the treaty — signed in 1848 — ended the war"
 
 
 def test_cache_hit_with_non_latin1_matched_query_does_not_crash(monkeypatch):
@@ -1806,9 +1810,11 @@ def test_cache_hit_with_non_latin1_matched_query_does_not_crash(monkeypatch):
 
     assert response.status_code == 200
     header = response.headers["x-dejaq-cache-matched-query"]
-    assert "’" not in header
-    header.encode("latin-1")  # must not raise
-    assert response.headers["x-dejaq-nearest-cache-prompt"].encode("latin-1")
+    header.encode("latin-1")  # wire value itself must be latin-1 safe (percent-encoded)
+    assert urllib.parse.unquote(header) == StubNonLatin1HitMemory.MATCHED_QUERY
+    nearest_header = response.headers["x-dejaq-nearest-cache-prompt"]
+    nearest_header.encode("latin-1")
+    assert urllib.parse.unquote(nearest_header) == StubNonLatin1HitMemory.MATCHED_QUERY
 
 
 def test_cache_hit_includes_enriched_query_header_when_rewritten(monkeypatch):
@@ -1836,7 +1842,7 @@ def test_cache_hit_includes_enriched_query_header_when_rewritten(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert response.headers["x-dejaq-enriched-query"] == "What is the capital of France?"
+    assert urllib.parse.unquote(response.headers["x-dejaq-enriched-query"]) == "What is the capital of France?"
 
 
 def test_cache_hit_omits_enriched_query_header_when_not_rewritten(monkeypatch):
@@ -1871,9 +1877,11 @@ def test_cache_hit_with_non_latin1_enriched_query_does_not_crash(monkeypatch):
     question is free text in whatever language the user wrote in, and must go
     through the same _sanitize_headers path or a non-Latin-1 rewrite crashes
     the request the same way the matched-query header once did."""
+    ENRICHED = "how many people died in the war — the one that ended in 1848?"
+
     class NonLatin1Enricher:
         async def enrich(self, message: str, history: list[dict]) -> str:
-            return "how many people died in the war — the one that ended in 1848?"
+            return ENRICHED
 
     async def _noop_log(*args, **kwargs):
         return None
@@ -1896,19 +1904,95 @@ def test_cache_hit_with_non_latin1_enriched_query_does_not_crash(monkeypatch):
 
     assert response.status_code == 200
     header = response.headers["x-dejaq-enriched-query"]
-    assert "—" not in header
-    header.encode("latin-1")  # must not raise
+    header.encode("latin-1")  # wire value itself must be latin-1 safe (percent-encoded)
+    assert urllib.parse.unquote(header) == ENRICHED
+
+
+class StubMultiScriptHitMemory:
+    """Matched/nearest cache query is Hebrew mixed with an em-dash - the bug
+    this whole file is a regression suite for: `_sanitize_headers` used to
+    Latin-1-replace every character outside Latin-1 with "?", so a Hebrew
+    (or Arabic, Chinese, etc.) question came back as a string of "?"
+    entirely, not just an em-dash getting mangled."""
+
+    MATCHED_QUERY = "מה בירת צרפת — עיר האורות?"
+
+    def lookup_cache(self, clean_query: str):
+        return CacheLookupResult(
+            hit=True,
+            generalized_answer="Cached Paris answer.",
+            entry_id="doc123",
+            distance=0.04,
+            matched_query=self.MATCHED_QUERY,
+            nearest_distance=0.04,
+            nearest_prompt=self.MATCHED_QUERY,
+        )
+
+    def check_cache(self, clean_query: str):
+        return ("Cached Paris answer.", "doc123", 0.04, self.MATCHED_QUERY)
+
+    def increment_hit_count(self, doc_id: str):
+        return None
+
+
+def test_cache_hit_headers_survive_hebrew_and_chinese_round_trip(monkeypatch):
+    """The bug report: a Hebrew matched query rendered in the "Why this
+    matched" panel as `??? ????? ???? ?? ???????` because `_sanitize_headers`
+    Latin-1-replaced every non-Latin-1 character. Covers all three free-text
+    headers (matched query, nearest cache prompt, enriched query) with Hebrew,
+    Chinese, and an em-dash in one request, so this can never silently
+    regress to the Latin-1-only path again."""
+    ENRICHED = "法国的首都是什么 — 巴黎?"
+
+    class MultiScriptEnricher:
+        async def enrich(self, message: str, history: list[dict]) -> str:
+            return ENRICHED
+
+    async def _noop_log(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(openai_compat, "_enricher", MultiScriptEnricher())
+    monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
+    monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMultiScriptHitMemory())
+    monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
+
+    client = TestClient(app, headers=_AUTH)
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "what is the capital of france"}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+
+    matched_header = response.headers["x-dejaq-cache-matched-query"]
+    nearest_header = response.headers["x-dejaq-nearest-cache-prompt"]
+    enriched_header = response.headers["x-dejaq-enriched-query"]
+
+    # Wire values must be plain ASCII (percent-encoded) - latin-1 safe by construction.
+    matched_header.encode("latin-1")
+    nearest_header.encode("latin-1")
+    enriched_header.encode("latin-1")
+
+    # Exact equality is the whole point: a Latin-1-replace regression would
+    # turn every non-Latin-1 character into "?", so anything short of an
+    # exact match means the mangling is back.
+    assert urllib.parse.unquote(matched_header) == StubMultiScriptHitMemory.MATCHED_QUERY
+    assert urllib.parse.unquote(nearest_header) == StubMultiScriptHitMemory.MATCHED_QUERY
+    assert urllib.parse.unquote(enriched_header) == ENRICHED
 
 
 def test_sanitize_headers_covers_every_free_text_diagnostic_header():
-    """Proves the shared choke point, not per-site patching: every free-text
-    header declared in app/main.py's CORS expose_headers list must survive
-    _sanitize_headers unencodable-latin1-safe. Numeric/enum headers are
-    trivially safe by construction; this asserts the ones that carry raw
-    stored/query text specifically. A new free-text header added to a headers
-    dict without going through _sanitize_headers would not be caught by this
-    test directly, but the two end-to-end tests above prove the two known
-    free-text headers both route through it."""
+    """_sanitize_headers is now a last-resort backstop, not the encoding
+    path (that's `_encode_header_text`, exercised end-to-end by the
+    non-latin1 round-trip tests above). This proves the backstop itself still
+    makes every free-text header declared in app/main.py's CORS
+    expose_headers list latin-1-safe, in case a value somehow reaches it
+    un-percent-encoded (a bug, a future header)."""
     from app.main import app as fastapi_app
 
     expose_headers = None

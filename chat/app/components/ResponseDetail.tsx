@@ -371,7 +371,7 @@ function WhyItMatched({ typedQuery, message }: { typedQuery: string | null; mess
     );
   }
 
-  const lossy = isLossyHeaderText(stored, typedQuery);
+  const lossy = isLossyHeaderText(stored);
   const diff = typedQuery && !lossy ? diffQueries(typedQuery, stored) : null;
   const tier = distance <= TRUST_DISTANCE ? "Trusted" : distance <= BAND_MAX_DISTANCE ? "Band" : "Rescue";
   const validatorNeeded = distance > VALIDATOR_SKIP_DISTANCE;
@@ -424,9 +424,8 @@ function WhyItMatched({ typedQuery, message }: { typedQuery: string | null; mess
           </div>
           {lossy && (
             <div style={{ color: "var(--fg-dimmer)", fontSize: "11.5px", lineHeight: "17px", marginTop: "7px" }}>
-              Shown as the server reported it. This diagnostic value may be shortened, or carry
-              replacements for characters the header cannot hold, so it is not compared word by
-              word.
+              Shown as the server reported it. This diagnostic value is truncated at 200
+              characters, so it is not compared word by word.
             </div>
           )}
         </>

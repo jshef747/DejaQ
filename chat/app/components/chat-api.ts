@@ -19,6 +19,20 @@ function dejaqHeaders(overrides?: { server?: string; apiKey?: string }): Record<
   return headers;
 }
 
+// x-dejaq-cache-matched-query / -enriched-query / -nearest-cache-prompt carry
+// free user text (any script, em-dashes, curly quotes) percent-encoded by the
+// server (openai_compat.py `_encode_header_text`) since HTTP headers are
+// Latin-1 only. Malformed input can't actually reach here - the server always
+// encodes - but a raw fallback is cheap insurance against a future drift.
+function decodeHeaderText(value: string | null): string | null {
+  if (value === null) return null;
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 export interface ChatApiMessage {
   role: "user" | "assistant" | "system";
   content: string;
@@ -172,9 +186,9 @@ export async function sendChatMessage(
   const promptDifficulty = response.headers.get("x-dejaq-prompt-difficulty") ?? null;
   const rawDistance = response.headers.get("x-dejaq-cache-distance");
   const cacheDistance = rawDistance !== null ? Number(rawDistance) : null;
-  const cacheMatchedQuery = response.headers.get("x-dejaq-cache-matched-query") ?? null;
+  const cacheMatchedQuery = decodeHeaderText(response.headers.get("x-dejaq-cache-matched-query"));
   const answerAuthored = response.headers.get("x-dejaq-answer-authored") ?? null;
-  const cacheEnrichedQuery = response.headers.get("x-dejaq-enriched-query") ?? null;
+  const cacheEnrichedQuery = decodeHeaderText(response.headers.get("x-dejaq-enriched-query"));
   const rawRagChunks = response.headers.get("x-dejaq-rag-chunks");
   const ragChunks = rawRagChunks !== null ? Number(rawRagChunks) : null;
   const ragDocumentTitle = response.headers.get("x-dejaq-rag-document-title") ?? null;
