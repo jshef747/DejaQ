@@ -528,11 +528,20 @@ LOCAL_LLM_MODEL_NAME = _get_text("DEJAQ_LOCAL_LLM_MODEL_NAME", "gemma_local")
 # but it is a real content-fidelity gap worth watching, not a clean bill of
 # health. See the incident report (dejaq-generalizer-runaway) for the full
 # comparison.
-# granite4.1:3b: no fabrication regression on the known defect's two inputs,
-# comparable-or-faster than gemma_e2b, and bundles onto the same tag as the
-# normalizer/validator below - three roles sharing one (smaller) tag, same
-# shape as today.
-GENERALIZER_MODEL_NAME = _get_text("DEJAQ_GENERALIZER_MODEL_NAME", "granite4_1_3b")
+# Split back off granite4_1_3b onto its own tag (gemma_e2b), deliberately NOT
+# bundled with the normalizer/validator below: generalize() runs in the
+# background after a cache miss, and Ollama on this machine holds one slot per
+# loaded model, so a background call sharing a tag with normalizer/validator
+# queues in front of the next request's live validate()/adjust() call.
+# Measured directly: a live validate() call went from 199ms to 2,975ms when a
+# background generalize() on the same tag was in flight. Raising Ollama's slot
+# count was measured and rejected - no memory headroom on this machine. The
+# normalizer and validator stay on granite4_1_3b since both run sequentially
+# inside a single request and never collide with each other. gemma_e2b is the
+# only model proven for this specific role - see the phi_generalizer swap
+# history above (0/20 runaways vs phi3.5's 5/20, comparable-or-better
+# fidelity).
+GENERALIZER_MODEL_NAME = _get_text("DEJAQ_GENERALIZER_MODEL_NAME", "gemma_e2b")
 # Every other candidate tested (qwen3:0.6b/1.7b, granite4.1:3b, phi4-mini:3.8b)
 # failed the "give me the short version" case - output was a near-verbatim
 # copy of the input instead of a genuine condensation. qwen_1_5b is the only
