@@ -110,6 +110,7 @@ def _post(
     pdf: bytes | None = None,
     markdown: bytes | None = None,
     sticky: bool = False,
+    routing_mode: str | None = None,
 ):
     content: list[dict] = [{"type": "input_text", "text": query}]
     if pdf is not None:
@@ -125,6 +126,8 @@ def _post(
     headers = dict(_AUTH)
     if sticky:
         headers["X-DejaQ-Attachment-Sticky"] = "true"
+    if routing_mode:
+        headers["X-DejaQ-Routing-Mode"] = routing_mode
     return TestClient(app, headers=headers).post(
         "/v1/responses",
         json={"model": "gpt-4o", "input": [{"role": "user", "content": content}], "stream": False},
@@ -484,7 +487,16 @@ def _post_pdf_miss_with_broken_celery(monkeypatch, memory, adjuster):
     monkeypatch.setattr(openai_compat, "USE_CELERY", True)
     monkeypatch.setattr(openai_compat, "generalize_and_store_task", BrokenCeleryTask())
     _patch_external_provider(monkeypatch, PROVIDER_ANSWER)
-    return _post(ORIGINAL_QUESTION, pdf=PDF_A)
+    # These three tests are about the STORE, not the route: a broker outage
+    # must not write an ungated entry whichever model answered. They stub an
+    # external provider and assert its answer, so the route has to be the
+    # external one - and a PDF with extractable text now routes LOCAL by
+    # default (a file with usable text is answered by the local model since
+    # "answer attached files with the local model"), where `llm_router=None` in
+    # this module's fixture is never a real object. `hard_external` is the
+    # documented policy ceiling above that capability check, so it pins the
+    # route the way a caller would rather than by re-stubbing the router.
+    return _post(ORIGINAL_QUESTION, pdf=PDF_A, routing_mode="hard_external")
 
 
 def test_celery_fallback_stores_the_file_identity(monkeypatch):

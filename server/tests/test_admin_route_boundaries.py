@@ -6,10 +6,19 @@ from pydantic import BaseModel
 
 
 class _FeedbackResult(BaseModel):
+    """Stand-in for services.feedback_service.FeedbackResult.
+
+    Must carry every field the ROUTER reads, not just the ones this test
+    asserts on: the router decides its response shape by inspecting them, so
+    a missing one is an AttributeError, not a None. `edit_status` was added
+    to the router by Edit & Save and never added here.
+    """
+
     status: Literal["ok", "deleted"]
     new_score: float | None = None
     escalation_status: str | None = None
     escalated_response: object | None = None
+    edit_status: str | None = None
 
 
 def test_gateway_route_accepts_org_key_not_arbitrary_bearer_token(monkeypatch):
@@ -128,7 +137,9 @@ def test_public_feedback_route_uses_gateway_context_and_shared_service(
     assert call["response_id"] == "acme__eng:doc-1"
     assert call["rating"] == "positive"
     assert call["comment"] == "helpful"
-    assert call["org"] == "acme"
+    # The service parameter was renamed org -> workspace; the router passes
+    # `workspace=`, so asserting on "org" looked for a key nothing sends.
+    assert call["workspace"] == "acme"
     assert call["department"] == "eng"
 
 

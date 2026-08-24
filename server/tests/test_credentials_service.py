@@ -48,7 +48,40 @@ def test_credential_service_fully_masks_short_keys(credential_key):
     assert CredentialService().mask("short123") == "********"
 
 
-def test_credential_provider_check_constraint_rejects_invalid_provider(isolated_org_db):
+def test_credential_provider_is_validated_in_python_not_by_the_database(credential_key, isolated_org_db):
+    """There is deliberately no CHECK constraint on `provider`.
+
+    Migration e5f6a7b8c9d0 dropped it: the supported-provider set is owned by
+    `credential_service.SUPPORTED_PROVIDERS`, and duplicating it in the schema
+    cost a full SQLite table rebuild for every provider added. This replaces a
+    test that asserted the dropped constraint still fired - it pinned behaviour
+    the codebase had intentionally removed, so it failed everywhere. The
+    invariant is real, it just lives one layer up.
+    """
+    from app.db.models.workspace import Workspace
+    from app.db.session import get_session
+    from app.services.credential_service import CredentialService
+
+    with get_session() as session:
+        ws = Workspace(name="Acme", slug="acme")
+        session.add(ws)
+        session.flush()
+        workspace_id = ws.id
+
+    with get_session() as session:
+        with pytest.raises(ValueError, match="Unsupported provider"):
+            CredentialService().upsert(session, workspace_id, "invalid_provider", "sk-whatever")
+
+
+def test_credential_unique_constraint_rejects_a_duplicate_provider(isolated_org_db):
+    """One credential per (workspace, provider), enforced by the database.
+
+    Worth its own test because this constraint was silently ABSENT for a while:
+    d1e2f3a4b5c6 dropped and recreated it inside a batch rebuild that did not
+    survive, and e5f6a7b8c9d0 restored it while rebuilding the table anyway.
+    Nothing else would notice it going missing again - a duplicate row just
+    means two encrypted keys where every reader expects one.
+    """
     from sqlalchemy import text
     from sqlalchemy.exc import IntegrityError
 
@@ -61,12 +94,15 @@ def test_credential_provider_check_constraint_rejects_invalid_provider(isolated_
         session.flush()
         workspace_id = ws.id
 
+    insert = text(
+        "INSERT INTO workspace_provider_credentials "
+        "(workspace_id, provider, encrypted_key) VALUES (:workspace_id, :provider, :encrypted_key)"
+    )
+    row = {"workspace_id": workspace_id, "provider": "google", "encrypted_key": "ciphertext"}
+
+    with get_session() as session:
+        session.execute(insert, row)
+
     with pytest.raises(IntegrityError):
         with get_session() as session:
-            session.execute(
-                text(
-                    "INSERT INTO workspace_provider_credentials "
-                    "(workspace_id, provider, encrypted_key) VALUES (:workspace_id, :provider, :encrypted_key)"
-                ),
-                {"workspace_id": workspace_id, "provider": "invalid_provider", "encrypted_key": "ciphertext"},
-            )
+            session.execute(insert, {**row, "encrypted_key": "second-ciphertext"})

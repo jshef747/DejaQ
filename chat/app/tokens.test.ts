@@ -6,7 +6,11 @@ import { describe, expect, it } from "vitest";
 // in a selector list, so the prefers-color-scheme block and the forced
 // [data-theme="light"] block each carry the whole thing. Drift between them
 // is silent: one theme path keeps working while the other goes stale.
-const css = readFileSync(join(__dirname, "tokens.css"), "utf8");
+// Line endings normalised: the block patterns below anchor on a bare LF and
+// a Windows checkout (core.autocrlf) hands back CRLF, which fails every one
+// of them - the test then reports the palettes as MISSING rather than out of
+// step, on a file that is perfectly fine.
+const css = readFileSync(join(__dirname, "tokens.css"), "utf8").replace(/\r\n/g, "\n");
 
 function declarations(block: string): Record<string, string> {
   const out: Record<string, string> = {};

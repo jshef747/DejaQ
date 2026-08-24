@@ -1,11 +1,55 @@
 import os
 import re
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 START_SCRIPT = ROOT_DIR / "start.sh"
+# The path as BASH must receive it. On Windows str(START_SCRIPT) is a
+# backslash path, and bash consumes each backslash as an escape - the
+# invocation then fails with "No such file or directory" on a mangled name
+# and every assertion here reads as a start.sh bug rather than a path one.
+# Git Bash accepts the forward-slash form of a drive path unchanged.
+START_SCRIPT_ARG = START_SCRIPT.as_posix()
+
+
+def _bash() -> str:
+    """The bash these tests must run start.sh under.
+
+    Plain "bash" is wrong on Windows. PATH resolution finds Git's *msys* binary
+    (`Git/usr/bin/bash.exe`), which is meant to be run from inside an already
+    mounted msys environment - launched cold from subprocess it resolves
+    neither `C:/...` nor `/c/...` and reports the script as missing, exit 127.
+    `Git/bin/bash.exe` is the wrapper that sets that environment up first, and
+    it runs the script correctly.
+
+    The Git root is found by walking up from wherever `git` lives rather than
+    assuming a fixed depth: `git` resolves to `Git/mingw64/bin/git.exe` in a
+    Git Bash shell and `Git/cmd/git.exe` from cmd, so no single `parents[n]`
+    is right in both.
+
+    Falls back to "bash" when no wrapper is found, so a machine with a real
+    bash on PATH (WSL, a POSIX box) is unaffected.
+    """
+    if sys.platform != "win32":
+        return "bash"
+    roots = []
+    git = shutil.which("git")
+    if git:
+        roots.extend(Path(git).resolve().parents)
+    roots.append(Path(r"C:\Program Files\Git"))
+    roots.append(Path(r"C:\Program Files (x86)\Git"))
+    for root in roots:
+        wrapper = root / "bin" / "bash.exe"
+        if wrapper.is_file():
+            return str(wrapper)
+    return "bash"
+
+
+BASH = _bash()
 
 
 def _run_start(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -16,7 +60,7 @@ def _run_start(*args: str, env: dict[str, str] | None = None) -> subprocess.Comp
         **(env or {}),
     }
     return subprocess.run(
-        ["bash", str(START_SCRIPT), *args],
+        [BASH, START_SCRIPT_ARG, *args],
         cwd=ROOT_DIR,
         env=merged_env,
         text=True,
@@ -88,7 +132,7 @@ def test_start_script_log_grep_pattern_matches_openai_compat_log_format():
 
 def test_terminal_log_formatter_adds_separator_without_rewriting_input():
     result = subprocess.run(
-        ["bash", str(START_SCRIPT), "--format-log-lines"],
+        [BASH, START_SCRIPT_ARG, "--format-log-lines"],
         cwd=ROOT_DIR,
         input="first log\nsecond log\n",
         text=True,
