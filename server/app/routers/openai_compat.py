@@ -87,6 +87,7 @@ from app.config import (
     CACHE_BAND_MAX_DISTANCE,
     CACHE_FILE_ENABLED,
     CONTEXT_ADJUSTER_MODEL_NAME,
+    DEFAULT_CLASSIFIER_CHOICE,
     DEFAULT_MAX_TOKENS,
     CACHE_IMAGE_MAX_DISTANCE,
     CACHE_IMAGE_MAX_HAMMING,
@@ -96,6 +97,7 @@ from app.config import (
     ENRICHER_MODEL_NAME,
     EXTERNAL_MODEL_NAME,
     GENERALIZER_MODEL_NAME,
+    LEGACY_ROUTING_THRESHOLD,
     LOAD_LABSE_CLASSIFIER,
     LOAD_LEGACY_CLASSIFIER,
     LOCAL_ATTACHMENT_MAX_TOKENS,
@@ -154,6 +156,15 @@ class EffectiveLlmConfig:
     # where it is turned into a 422 PipelineError before any provider lookup.
     external_model: str | None
     routing_threshold: float
+    # "legacy" or "labse" - which classifier decides routing for this
+    # workspace. The two classifiers score on completely different scales
+    # (legacy tops out ~0.30, LaBSE crosses ~0.50), so `routing_threshold`
+    # above is LaBSE's threshold only - `legacy_routing_threshold` below is
+    # the legacy classifier's own, and `active_routing_threshold` picks
+    # whichever one actually applies. Never compare a score from one
+    # classifier against the other's threshold.
+    classifier_choice: str = DEFAULT_CLASSIFIER_CHOICE
+    legacy_routing_threshold: float = LEGACY_ROUTING_THRESHOLD
     # The recorded provider for external_model - the credential lookup key.
     # None for a row with no recorded provider (never saved, or a model the
     # qualification migration f7a8b9c0d1e2 could not place) or for the
@@ -212,6 +223,19 @@ class EffectiveLlmConfig:
     rewrite_max_tokens_overridden: bool = False
     ollama_num_ctx_overridden: bool = False
 
+    @property
+    def active_routing_threshold(self) -> float:
+        """The threshold that belongs to whichever classifier is active.
+
+        Picking this by classifier_choice - never a single shared field - is
+        the whole point: the two classifiers score on different scales, and
+        a shared threshold silently misroutes whichever one it wasn't tuned
+        for (see LEGACY_ROUTING_THRESHOLD's comment in app/config.py).
+        """
+        if self.classifier_choice == "legacy":
+            return self.legacy_routing_threshold
+        return self.routing_threshold
+
 
 # --- Service singletons (shared with main process; each service is safe to instantiate once per router module) ---
 logger.info("Initializing OpenAI-compat services...")
@@ -220,11 +244,42 @@ _llm_router = get_llm_router_service()
 _adjuster = get_context_adjuster_service()
 _enricher = get_context_enricher_service()
 _validator = get_validator_service()
+# _classifier (legacy NVIDIA DeBERTa, ~1.5GB) loads eagerly here only when
+# LOAD_LEGACY_CLASSIFIER is set (a staging/dev escape hatch - see its
+# config.py comment). Otherwise it is left None and lazy-loaded on the FIRST
+# request from any workspace whose classifier_choice picks "legacy" (see
+# _get_legacy_classifier below) - the picker must not silently cost every
+# install a second resident model just because the option exists. Once
+# loaded (either way) it stays resident: ClassifierService is a singleton
+# class, so there is no cost to reload on a later request, and no attempt is
+# made to unload it - this machine has already proven it cannot hold four
+# resident Ollama models, and an unload/reload cycle on a model this size
+# would trade that risk for request-latency spikes instead.
 _classifier = ClassifierService() if LOAD_LEGACY_CLASSIFIER else None
 _labse_classifier = LabseClassifierService() if LOAD_LABSE_CLASSIFIER else None
 _external_llm = ExternalLLMService()
 # MemoryService is namespace-aware; use get_memory_service(namespace) per-request
+logger.info(
+    "Classifiers loaded at startup: labse=%s legacy=%s (legacy lazy-loads on first "
+    "workspace request that selects classifier_choice=legacy, if not already loaded)",
+    _labse_classifier is not None,
+    _classifier is not None,
+)
 logger.info("OpenAI-compat services ready.")
+
+
+def _get_legacy_classifier() -> ClassifierService:
+    global _classifier
+    if _classifier is None:
+        logger.info("Lazy-loading legacy classifier (NVIDIA DeBERTa, ~1.5GB) - first request selecting it")
+        _classifier = ClassifierService()
+    return _classifier
+
+
+def _classifier_for_choice(choice: str):
+    if choice == "legacy":
+        return _get_legacy_classifier()
+    return _labse_classifier
 
 
 class PipelineError(Exception):
@@ -299,6 +354,8 @@ def _effective_from_config(config) -> EffectiveLlmConfig:
         external_model=config.external_model,
         external_provider=config.external_provider,
         routing_threshold=config.routing_threshold,
+        classifier_choice=config.classifier_choice,
+        legacy_routing_threshold=config.legacy_routing_threshold,
         local_model=config.local_model,
         generalizer_model=config.generalizer_model,
         adjuster_model=config.adjuster_model,
@@ -2004,30 +2061,41 @@ async def run_chat_pipeline(
         elif routing_mode == ROUTING_MODE_HARD_EXTERNAL:
             classification = {"complexity": "hard", "score": 1.0, "task_type": "forced_external"}
         else:
-            # LaBSE decides the score for every language, no per-language
-            # branching - it replaced both the old NVIDIA classifier (still
-            # in the tree, LOAD_LEGACY_CLASSIFIER, for staging) and the
-            # Hebrew-specific judge (removed entirely - see
-            # fm/dejaq-classifier-wire-in), since it was trained on labelled
-            # Hebrew directly and the judge it replaced was not. The
-            # easy/hard cut is the workspace's own routing_threshold (falls
-            # back to DEJAQ_ROUTING_THRESHOLD when unset), not the
-            # classifier's internal default - see llm_config.routing_threshold.
+            # Which classifier decides the score is a per-workspace pick
+            # (llm_config.classifier_choice, dashboard Pipeline page) between
+            # LaBSE (shipped default - trained on labelled Hebrew directly,
+            # replaced the old NVIDIA classifier and the Hebrew-specific
+            # judge, see fm/dejaq-classifier-wire-in) and the legacy NVIDIA
+            # classifier (kept for staging/rollback). The easy/hard cut is
+            # ALWAYS that same classifier's own threshold
+            # (active_routing_threshold) - the two score on completely
+            # different scales and must never be compared against the
+            # other's cut (see LEGACY_ROUTING_THRESHOLD in app/config.py).
+            active_classifier = _classifier_for_choice(llm_config.classifier_choice)
             try:
                 with trace.step("classify"):
                     # enriched, not user_query: a bare follow-up turn
                     # ("give me the short version") is not a question, and
                     # scoring it as one under-fires on hard follow-ups (see
                     # dejaq-difficulty-definition/report.md section 3(b)).
-                    classification = _labse_classifier.predict_complexity(enriched)
+                    classification = active_classifier.predict_complexity(enriched)
             except Exception:
-                logger.exception("LaBSE classifier failed")
+                logger.exception("Difficulty classifier (%s) failed", llm_config.classifier_choice)
                 classification = {"complexity": "easy", "score": 0.0, "task_type": "Unknown"}
             else:
+                threshold = llm_config.active_routing_threshold
                 classification = {
                     **classification,
-                    "complexity": "hard" if classification["score"] >= llm_config.routing_threshold else "easy",
+                    "complexity": "hard" if classification["score"] >= threshold else "easy",
                 }
+                logger.info(
+                    "Routing classify: workspace=%s classifier=%s score=%.4f threshold=%.4f -> %s",
+                    workspace_slug,
+                    llm_config.classifier_choice,
+                    classification["score"],
+                    threshold,
+                    classification["complexity"],
+                )
 
         complexity = classification["complexity"]
         route = "external" if complexity == "hard" else "local"

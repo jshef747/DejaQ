@@ -138,7 +138,7 @@ function stageOverridden(stage: StageMeta, config: LlmConfigResponse): boolean {
   );
 }
 
-type SelectedStage = PipelineRole | "external_model" | null;
+type SelectedStage = PipelineRole | "external_model" | "classifier" | null;
 type StatusState = { kind: "idle" | "success" | "error"; text: string };
 
 function onActivateKey(handler: () => void) {
@@ -177,7 +177,7 @@ export default function PipelineClient({ workspaceSlug, initialConfig, initialAv
   }, [configKey]);
 
   useEffect(() => {
-    if (!selected || selected === "external_model") return;
+    if (!selected || selected === "external_model" || selected === "classifier") return;
     const stage = STAGE_BY_KEY[selected];
     setDraftValue(config[selected] ?? "");
     const prompts: Record<string, string> = {};
@@ -220,7 +220,7 @@ export default function PipelineClient({ workspaceSlug, initialConfig, initialAv
   }
 
   async function handleSaveStage() {
-    if (!selected || selected === "external_model") return;
+    if (!selected || selected === "external_model" || selected === "classifier") return;
     const stage = STAGE_BY_KEY[selected];
     const patch = buildStagePatch(stage);
     if (Object.keys(patch).length === 0) {
@@ -374,7 +374,11 @@ export default function PipelineClient({ workspaceSlug, initialConfig, initialAv
             </div>
             <div>
               <span className="ds-flow-lbl miss">MISS</span>
-              <LockedNode name="Difficulty Classifier" model="DeBERTa" sub="easy or hard" wide />
+              <ClassifierFlowNode
+                config={config}
+                selected={selected === "classifier"}
+                onSelect={() => setSelected("classifier")}
+              />
               <div className="ds-flow-conn" />
               <FlowNode
                 stage={STAGES[4]}
@@ -430,6 +434,15 @@ export default function PipelineClient({ workspaceSlug, initialConfig, initialAv
           <div className="ds-flow-empty">Click a stage in the flow to view or change its model and prompt.</div>
         ) : selected === "external_model" ? (
           <ExternalEditor
+            config={config}
+            workspaceSlug={workspaceSlug}
+            onConfigUpdate={(next) => {
+              setConfig(next);
+              router.refresh();
+            }}
+          />
+        ) : selected === "classifier" ? (
+          <ClassifierEditor
             config={config}
             workspaceSlug={workspaceSlug}
             onConfigUpdate={(next) => {
@@ -552,6 +565,54 @@ function LockedNode({ name, model, sub, wide }: { name: string; model: string; s
       <div className="ds-flow-row">
         <span className="ds-flow-model">{model}</span>
         <span className="ds-flow-sub">{sub}</span>
+      </div>
+    </div>
+  );
+}
+
+const CLASSIFIER_LABEL: Record<"legacy" | "labse", string> = {
+  legacy: "Legacy (NVIDIA DeBERTa)",
+  labse: "LaBSE",
+};
+
+// Not a *_model role and not in STAGES: it's a two-way pick between two
+// classifiers plus each one's own routing threshold, not an Ollama catalog
+// selection - see ClassifierEditor. The active threshold is shown right in
+// the flow so it's visible without opening the editor - the two classifiers'
+// thresholds are never interchangeable (see server/app/config.py
+// LEGACY_ROUTING_THRESHOLD) and this is the one place that fact must be
+// impossible to miss.
+function ClassifierFlowNode({
+  config,
+  selected,
+  onSelect,
+}: {
+  config: LlmConfigResponse;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const overridden = "classifier_choice" in config.overrides;
+  const activeThreshold =
+    config.classifier_choice === "legacy" ? config.legacy_routing_threshold : config.routing_threshold;
+  return (
+    <div
+      className={`ds-flow-node${selected ? " sel" : ""}`}
+      style={{ maxWidth: "none" }}
+      onClick={onSelect}
+      role="button"
+      tabIndex={0}
+      aria-pressed={selected}
+      onKeyDown={onActivateKey(onSelect)}
+    >
+      <div className="ds-flow-row">
+        <span className="ds-flow-name">Difficulty Classifier</span>
+        <span className={`ds-pill ${overridden ? "ds-pill-hit" : "ds-pill-neutral"}`}>
+          {overridden ? "Overridden" : "Default"}
+        </span>
+      </div>
+      <div className="ds-flow-row">
+        <span className="ds-flow-model">{CLASSIFIER_LABEL[config.classifier_choice]}</span>
+        <span className="ds-flow-sub">threshold {activeThreshold?.toFixed(4)}</span>
       </div>
     </div>
   );
@@ -836,6 +897,180 @@ function ExternalEditor({
             Save
           </Button>
           {budgetOverridden && (
+            <Button onClick={handleReset} disabled={busy}>
+              Reset to default
+            </Button>
+          )}
+        </div>
+        <StatusText status={status} style={{ display: "block", marginTop: 10 }} />
+      </div>
+    </div>
+  );
+}
+
+function ClassifierEditor({
+  config,
+  workspaceSlug,
+  onConfigUpdate,
+}: {
+  config: LlmConfigResponse;
+  workspaceSlug: string;
+  onConfigUpdate: (next: LlmConfigResponse) => void;
+}) {
+  const [draftChoice, setDraftChoice] = useState<"legacy" | "labse">(config.classifier_choice);
+  // Both thresholds are always editable, regardless of which classifier is
+  // currently active - switching classifier_choice must never lose or
+  // overwrite the other one's stored value (each is its own column server-
+  // side, see server/app/db/models/workspace_llm_config.py).
+  const [draftLabseThreshold, setDraftLabseThreshold] = useState(
+    "routing_threshold" in config.overrides ? String(config.routing_threshold) : "",
+  );
+  const [draftLegacyThreshold, setDraftLegacyThreshold] = useState(
+    "legacy_routing_threshold" in config.overrides ? String(config.legacy_routing_threshold) : "",
+  );
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<StatusState>({ kind: "idle", text: "" });
+
+  useEffect(() => {
+    setDraftChoice(config.classifier_choice);
+    setDraftLabseThreshold("routing_threshold" in config.overrides ? String(config.routing_threshold) : "");
+    setDraftLegacyThreshold(
+      "legacy_routing_threshold" in config.overrides ? String(config.legacy_routing_threshold) : "",
+    );
+    setStatus({ kind: "idle", text: "" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config]);
+
+  const overridden =
+    "classifier_choice" in config.overrides ||
+    "routing_threshold" in config.overrides ||
+    "legacy_routing_threshold" in config.overrides;
+
+  function buildPatch(): LlmConfigUpdate {
+    const patch: LlmConfigUpdate = {};
+    if (draftChoice !== config.classifier_choice) patch.classifier_choice = draftChoice;
+    const labseCurrent = "routing_threshold" in config.overrides ? String(config.routing_threshold) : "";
+    if (draftLabseThreshold.trim() !== labseCurrent) {
+      patch.routing_threshold = draftLabseThreshold.trim() === "" ? null : Number(draftLabseThreshold);
+    }
+    const legacyCurrent = "legacy_routing_threshold" in config.overrides ? String(config.legacy_routing_threshold) : "";
+    if (draftLegacyThreshold.trim() !== legacyCurrent) {
+      patch.legacy_routing_threshold = draftLegacyThreshold.trim() === "" ? null : Number(draftLegacyThreshold);
+    }
+    return patch;
+  }
+
+  async function handleSave() {
+    const patch = buildPatch();
+    if (Object.keys(patch).length === 0) {
+      setStatus({ kind: "idle", text: "No changes to save." });
+      return;
+    }
+    setBusy(true);
+    setStatus({ kind: "idle", text: "" });
+    const res = await updateLlmConfig(workspaceSlug, patch);
+    setBusy(false);
+    if (!res.ok) {
+      setStatus({ kind: "error", text: res.error });
+      return;
+    }
+    onConfigUpdate(res.data);
+    setStatus({ kind: "success", text: "Saved." });
+  }
+
+  async function handleReset() {
+    setBusy(true);
+    setStatus({ kind: "idle", text: "" });
+    const res = await updateLlmConfig(workspaceSlug, {
+      classifier_choice: null,
+      routing_threshold: null,
+      legacy_routing_threshold: null,
+    });
+    setBusy(false);
+    if (!res.ok) {
+      setStatus({ kind: "error", text: res.error });
+      return;
+    }
+    onConfigUpdate(res.data);
+    setStatus({ kind: "success", text: "Reset to default." });
+  }
+
+  return (
+    <div className="ds-flow-panel">
+      <div className="ds-flow-panel-hd">
+        <span style={{ fontWeight: 700, fontSize: 14.5 }}>Difficulty Classifier</span>
+        <span className={`ds-pill ${overridden ? "ds-pill-hit" : "ds-pill-neutral"}`}>
+          {overridden ? "Overridden" : "Default"}
+        </span>
+      </div>
+      <div className="ds-flow-panel-bd">
+        <div className="ds-flow-warnrow">
+          <span>&#9650;</span>
+          <span>
+            The two classifiers score on completely different scales (legacy tops out around 0.30, LaBSE
+            crosses around 0.50) and keep separate thresholds below - switching classifiers brings its own
+            threshold with it automatically. Legacy is a second ~1.5GB model: it loads into memory the first
+            time any workspace selects it, then stays resident for the life of the process.
+          </span>
+        </div>
+
+        <Field label="Active classifier">
+          <div style={{ display: "flex", gap: 8 }}>
+            {(["labse", "legacy"] as const).map((choice) => (
+              <Button
+                key={choice}
+                variant={draftChoice === choice ? "primary" : undefined}
+                disabled={busy}
+                onClick={() => setDraftChoice(choice)}
+              >
+                {CLASSIFIER_LABEL[choice]}
+                {config.classifier_choice === choice ? " — active now" : ""}
+              </Button>
+            ))}
+          </div>
+        </Field>
+
+        <Field
+          label={`LaBSE routing threshold${config.classifier_choice === "labse" ? " (active)" : ""}`}
+          hint="Empty uses the shipped default (0.5000). Only takes effect while LaBSE is the active classifier - editing it never touches the legacy threshold below."
+        >
+          <input
+            type="number"
+            min={0}
+            max={1}
+            step={0.0001}
+            value={draftLabseThreshold}
+            onChange={(e) => setDraftLabseThreshold(e.target.value)}
+            disabled={busy}
+            placeholder={String(config.routing_threshold)}
+            className="ds-input"
+            style={{ fontFamily: "var(--font-mono)", opacity: busy ? 0.62 : 1 }}
+          />
+        </Field>
+
+        <Field
+          label={`Legacy routing threshold${config.classifier_choice === "legacy" ? " (active)" : ""}`}
+          hint="Empty uses the shipped default (0.2986 - the legacy classifier's own decision boundary). Only takes effect while Legacy is the active classifier - editing it never touches the LaBSE threshold above."
+        >
+          <input
+            type="number"
+            min={0}
+            max={1}
+            step={0.0001}
+            value={draftLegacyThreshold}
+            onChange={(e) => setDraftLegacyThreshold(e.target.value)}
+            disabled={busy}
+            placeholder={String(config.legacy_routing_threshold)}
+            className="ds-input"
+            style={{ fontFamily: "var(--font-mono)", opacity: busy ? 0.62 : 1 }}
+          />
+        </Field>
+
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <Button variant="primary" onClick={handleSave} loading={busy} disabled={busy}>
+            Save
+          </Button>
+          {overridden && (
             <Button onClick={handleReset} disabled={busy}>
               Reset to default
             </Button>

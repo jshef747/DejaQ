@@ -105,6 +105,17 @@ LOAD_LABSE_CLASSIFIER = _get_bool("DEJAQ_LOAD_LABSE_CLASSIFIER", True)
 # not lose it when this branch merges; flip this on for local
 # fallback/comparison without reverting any code.
 LOAD_LEGACY_CLASSIFIER = _get_bool("DEJAQ_LOAD_LEGACY_CLASSIFIER", False)
+# Which classifier a workspace routes on by default when it has no
+# classifier_choice override - "labse", matching LOAD_LABSE_CLASSIFIER's own
+# default, so an existing install's routing behaviour is unchanged on upgrade.
+DEFAULT_CLASSIFIER_CHOICE = "labse"
+# The legacy NVIDIA classifier's own natural cut (its weight vector was
+# jointly searched with this exact value - see classifier.py's
+# prompt_complexity_score comment). ROUTING_THRESHOLD above (0.50) is LaBSE's
+# threshold; the two classifiers score on different scales and must never
+# share one - see llm_config_service.py and docs/image-gate.md's sibling
+# warning about hand-tuning swept thresholds.
+LEGACY_ROUTING_THRESHOLD = _get_float("DEJAQ_LEGACY_ROUTING_THRESHOLD", 0.2986)
 CREDENTIAL_ENCRYPTION_KEY = os.getenv("DEJAQ_CREDENTIAL_ENCRYPTION_KEY", "")
 
 # API key cache

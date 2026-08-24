@@ -1,13 +1,21 @@
 from dotenv import load_dotenv
 load_dotenv()
 
+# Configured before any router/service import below - those modules log at
+# IMPORT time (service singletons, model loading), not just inside request
+# handlers or the lifespan startup event. Configuring the root logger after
+# those imports silently drops every one of those messages (default logging
+# has no handler and sits at WARNING) - this bit our own classifier-picker
+# startup log (dejaq-fixtures-and-classifier-picker) before this fix.
+from app.utils.logger import setup_logging
+setup_logging()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import openai_compat, openai_responses, departments, feedback, rag_documents_public
 from app.routers.admin import router as admin_router
 from app.middleware.admin_loopback import AdminLoopbackMiddleware
 from app.middleware.api_key import ApiKeyMiddleware
-from app.utils.logger import setup_logging
 from app.config import (
     CONTEXT_ADJUSTER_MODEL_NAME,
     CREDENTIAL_ENCRYPTION_KEY,
@@ -29,8 +37,6 @@ from app.services.service_factory import (
 import logging
 from contextlib import asynccontextmanager
 
-# 1. Setup Global Logging
-setup_logging()
 logger = logging.getLogger("dejaq.main")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
