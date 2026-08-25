@@ -174,6 +174,62 @@ CACHE_RESCUE_MAX_DISTANCE = _get_float("DEJAQ_CACHE_RESCUE_MAX_DISTANCE", 0.60)
 # typo becomes an instant trusted hit next time.
 CACHE_ALIAS_ENABLED = _get_bool("DEJAQ_CACHE_ALIAS_ENABLED", True)
 
+# Alternative drafts (the semantic tie-breaker). When the two closest cache
+# candidates sit at near-identical cosine distance, the embedding is telling us
+# it cannot separate them - and today that coin-flip is resolved silently, in
+# favour of whichever entry happened to be closer by a few thousandths. With
+# this on, both are returned and the user picks; the pick applies the ordinary
+# +1.0 positive-feedback delta to the chosen entry.
+#
+# Ships OFF. This changes what a serve path returns, so it is opt-in per
+# workspace (see drafts_enabled on workspace_llm_configs) rather than a
+# default-on rollout.
+CACHE_DRAFTS_ENABLED = _get_bool("DEJAQ_CACHE_DRAFTS_ENABLED", False)
+
+# Baseline quality: BOTH candidates must be at or below this cosine distance
+# before either is offered. Expressed as a distance ceiling rather than a score
+# floor because lower is better in cosine space - the same units the rest of the
+# lookup uses.
+#
+# Capped at CACHE_TRUST_DISTANCE (0.15) - the trusted-zone ceiling - because
+# BOTH drafts are validated on merit. The served answer goes through the
+# validator like any other hit; the alternate goes through its own call on the
+# tie path (openai_compat.py, the `validate_alt` step), which is a different
+# entry matched by a different stored question and so needs checking in its own
+# right.
+#
+# It was capped at VALIDATOR_SKIP_DISTANCE while the alternate was shown
+# unchecked, and that was the correct bound for that design: numbered-item
+# siblings ("solve part a" / "part b") measure 0.0898 - inside a 0.15 window -
+# and those are exactly what the validator exists to reject (docs/image-gate.md).
+# Validating the alternate is what removed the argument, so the cap moved to the
+# line the pipeline already draws for a servable cached answer. It stops there
+# and not higher: past 0.15 the embedding is no longer trusted for the SERVED
+# answer either.
+#
+# The cost is one extra validate() call, and only on a turn where a tie actually
+# fires - which the reachability measurement says is rare, since ordinary
+# sequential traffic never accumulates the pair at all (it takes concurrent
+# misses of one question). A rejected alternate is not an error: the turn
+# degrades to the ordinary single-answer hit.
+CACHE_DRAFTS_MAX_DISTANCE = _get_float("DEJAQ_CACHE_DRAFTS_MAX_DISTANCE", 0.05)
+
+# Semantic proximity: how close the two distances must be to count as a tie.
+# 0.02 against the 0.05 window above - a gap that small is inside the noise the
+# embedding itself carries, which is exactly the population this feature is for.
+CACHE_DRAFTS_MAX_DELTA = _get_float("DEJAQ_CACHE_DRAFTS_MAX_DELTA", 0.02)
+
+# Convergence. Drafts are offered only while NEITHER entry has won yet, i.e.
+# their feedback scores differ by less than this. One pick applies +1.0, which
+# produces a gap of exactly 1.0 - not < 1.0 - so the tie is settled and the
+# chooser never appears for that pair again. Without this rule a distance-based
+# trigger would re-ask the same question of every user forever.
+#
+# Deliberately NOT a per-workspace setting: it is the mechanism that makes the
+# feature terminate, not a policy dial, and it is meaningless apart from the
+# +1.0 delta in feedback_service that it is paired with.
+CACHE_DRAFTS_MAX_SCORE_GAP = 1.0
+
 # Image fingerprint gate: a cached entry that carries an image is served to an
 # image request ONLY if BOTH the CLIP cosine distance and the perceptual-hash
 # (dHash) hamming distance are within bounds. Image hits get NO unguarded fast

@@ -127,6 +127,13 @@ export type LlmConfigResponse = {
   // that says what clearing the field restores, never the effective fields
   // above (those show the override once one is set).
   token_budget_defaults: Record<TokenBudgetField, number>;
+  // Alternative drafts (the semantic tie-breaker). Effective values -
+  // override-or-default, like the token budgets above.
+  drafts_enabled: boolean;
+  drafts_max_distance: number;
+  drafts_max_delta: number;
+  // Same contract as token_budget_defaults: what clearing the field restores.
+  draft_defaults: Record<DraftThresholdField, number>;
   overrides: Record<string, unknown>;
   is_default: boolean;
   updated_at: string | null;
@@ -154,7 +161,14 @@ export type LlmConfigUpdate = Partial<{
   default_max_tokens: number | null;
   rewrite_max_tokens: number | null;
   ollama_num_ctx: number | null;
+  drafts_enabled: boolean | null;
+  drafts_max_distance: number | null;
+  drafts_max_delta: number | null;
 }>;
+
+/** The two alternative-draft thresholds. `drafts_enabled` is a switch, not a
+ * threshold, so it is deliberately not one of these. */
+export type DraftThresholdField = "drafts_max_distance" | "drafts_max_delta";
 
 /** Prompt field identifiers - keys into LlmConfigResponse/Update's
  * *_system_prompt fields. */

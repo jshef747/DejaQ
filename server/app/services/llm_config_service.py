@@ -4,6 +4,10 @@ from typing import Any
 from pydantic import BaseModel
 
 from app.config import (
+    CACHE_DRAFTS_ENABLED,
+    CACHE_DRAFTS_MAX_DELTA,
+    CACHE_DRAFTS_MAX_DISTANCE,
+    CACHE_TRUST_DISTANCE,
     CONTEXT_ADJUSTER_MODEL_NAME,
     DEFAULT_CLASSIFIER_CHOICE,
     DEFAULT_MAX_TOKENS,
@@ -78,6 +82,27 @@ _TOKEN_BUDGET_FIELDS = {
     "ollama_num_ctx",
 }
 
+# Alternative-draft override fields - each mirrors a CACHE_DRAFTS_* global in
+# app/config.py. Validated for the RELATIONSHIP between the two thresholds and
+# against the trusted-zone ceiling (§ _validate_draft_overrides), for the same
+# reason the token budgets are: each value can look reasonable on its own while
+# the combination is incoherent.
+_DRAFT_FIELDS = {
+    "drafts_enabled",
+    "drafts_max_distance",
+    "drafts_max_delta",
+}
+
+# The two that participate in the relationship check. `drafts_enabled` is
+# deliberately NOT here: it is a switch, not a threshold, and validating the
+# pair on a bare on/off toggle would let a deployment whose CACHE_DRAFTS_*
+# env defaults sit outside the bounds reject `{"drafts_enabled": true}` for a
+# field the admin never sent and cannot see in that request.
+_DRAFT_THRESHOLD_FIELDS = {
+    "drafts_max_distance",
+    "drafts_max_delta",
+}
+
 # 1024 is not a guess - it's the exact value config.py records as having
 # measurably truncated ordinary answers mid-sentence before DEFAULT_MAX_TOKENS
 # was raised to 4096 (see the comment there). Refuse it and anything at or
@@ -146,7 +171,10 @@ class LlmConfigResult(BaseModel):
     # attachment size, not generation length), so it is not validated
     # against them.
     local_attachment_max_tokens: int
-    # The shipped/global default for each of the four fields above, ALWAYS -
+    drafts_enabled: bool
+    drafts_max_distance: float
+    drafts_max_delta: float
+    # The shipped/global default for each of the resolved fields above, ALWAYS -
     # regardless of whether this workspace overrides it. The fields above are
     # the EFFECTIVE value (override-or-default), so once a workspace has an
     # override set, nothing else in this response still names what clearing
@@ -155,7 +183,11 @@ class LlmConfigResult(BaseModel):
     # that correctly. Hardcoding these client-side would drift from a
     # deployment that sets DEJAQ_DEFAULT_MAX_TOKENS etc.
     token_budget_defaults: dict[str, int]
-    overrides: dict[str, str | float | int]
+    # Same contract as token_budget_defaults, for the two draft thresholds: the
+    # effective fields above become the override once one is set, so nothing
+    # else in this response still names what clearing it restores.
+    draft_defaults: dict[str, float]
+    overrides: dict[str, str | float | int | bool]
     updated_at: datetime | None
     is_default: bool
     credentials_configured: list[str]
@@ -259,8 +291,19 @@ def _effective(row, credentials_configured: list[str] | None = None) -> LlmConfi
             row.local_attachment_max_tokens if row and row.local_attachment_max_tokens is not None
             else LOCAL_ATTACHMENT_MAX_TOKENS
         ),
+        "drafts_enabled": (
+            row.drafts_enabled if row and row.drafts_enabled is not None else CACHE_DRAFTS_ENABLED
+        ),
+        "drafts_max_distance": (
+            row.drafts_max_distance if row and row.drafts_max_distance is not None
+            else CACHE_DRAFTS_MAX_DISTANCE
+        ),
+        "drafts_max_delta": (
+            row.drafts_max_delta if row and row.drafts_max_delta is not None
+            else CACHE_DRAFTS_MAX_DELTA
+        ),
     }
-    overrides: dict[str, str | float | int] = {}
+    overrides: dict[str, str | float | int | bool] = {}
     if row:
         for field in (
             "external_model",
@@ -284,6 +327,9 @@ def _effective(row, credentials_configured: list[str] | None = None) -> LlmConfi
             "rewrite_max_tokens",
             "ollama_num_ctx",
             "local_attachment_max_tokens",
+            "drafts_enabled",
+            "drafts_max_distance",
+            "drafts_max_delta",
         ):
             stored = getattr(row, field)
             if stored is not None:
@@ -296,6 +342,10 @@ def _effective(row, credentials_configured: list[str] | None = None) -> LlmConfi
             "rewrite_max_tokens": REWRITE_MAX_TOKENS,
             "ollama_num_ctx": OLLAMA_NUM_CTX,
             "local_attachment_max_tokens": LOCAL_ATTACHMENT_MAX_TOKENS,
+        },
+        draft_defaults={
+            "drafts_max_distance": CACHE_DRAFTS_MAX_DISTANCE,
+            "drafts_max_delta": CACHE_DRAFTS_MAX_DELTA,
         },
         overrides=overrides,
         updated_at=row.updated_at if row else None,
@@ -619,6 +669,85 @@ def _validate_and_resolve_external_model(payload: dict[str, Any], fields_set: se
     return {"external_provider": external_provider}
 
 
+def _effective_draft_value(
+    field: str,
+    payload: dict[str, Any],
+    fields_set: set[str],
+    row,
+    global_default: float,
+) -> float:
+    """The value `field` would have AFTER this update lands - same contract as
+    _effective_token_value, and for the same reason: the relationship between
+    the two draft thresholds has to be judged against the resulting pair, not
+    against whichever one this particular PUT happens to carry."""
+    if field in fields_set:
+        value = payload.get(field)
+        return value if value is not None else global_default
+    stored = getattr(row, field, None) if row is not None else None
+    return stored if stored is not None else global_default
+
+
+def _validate_draft_overrides(payload: dict[str, Any], fields_set: set[str], row) -> None:
+    """Reject an alternative-draft threshold combination that cannot mean anything.
+
+    - Both thresholds must be positive. A zero or negative distance window
+      offers nothing; a zero delta would only fire on an exact numerical tie.
+    - `drafts_max_delta` must not exceed `drafts_max_distance`. A tie tolerance
+      wider than the window it operates inside is incoherent - every pair
+      inside the window would count as tied, which is not a tie-breaker, it is
+      an always-on second answer.
+    - `drafts_max_distance` is capped at CACHE_TRUST_DISTANCE, the trusted-zone
+      ceiling. BOTH drafts are validated on merit: the served answer like any
+      other hit, and the alternate by its own validate() call on the tie path
+      (openai_compat.py, `validate_alt`), added precisely so this cap could be
+      the trusted ceiling rather than VALIDATOR_SKIP_DISTANCE. The earlier,
+      much tighter cap existed only because the alternate was shown unchecked -
+      which is what made numbered-item siblings ("solve part a" / "part b",
+      measured 0.0898) dangerous inside the trusted zone. The validator is what
+      separates those from a real paraphrase, and it now runs on the alternate,
+      so the trusted ceiling is the right bound. Above it the embedding is no
+      longer trusted for the SERVED answer either, which is why the cap stops
+      there and not higher.
+
+    Only reachable when this update actually touches one of the draft fields.
+    """
+    max_distance = _effective_draft_value(
+        "drafts_max_distance", payload, fields_set, row, CACHE_DRAFTS_MAX_DISTANCE
+    )
+    max_delta = _effective_draft_value(
+        "drafts_max_delta", payload, fields_set, row, CACHE_DRAFTS_MAX_DELTA
+    )
+
+    if max_distance <= 0:
+        raise InvalidLlmConfigUpdate(
+            f"drafts_max_distance: {max_distance} must be greater than 0 - it is a "
+            "cosine distance ceiling, and a window of zero can never contain a candidate."
+        )
+    if max_delta <= 0:
+        raise InvalidLlmConfigUpdate(
+            f"drafts_max_delta: {max_delta} must be greater than 0 - a delta of zero "
+            "would only fire on an exact numerical tie, which effectively disables the "
+            "feature. Clear drafts_enabled to turn it off instead."
+        )
+    if max_delta > max_distance:
+        raise InvalidLlmConfigUpdate(
+            f"drafts_max_delta: {max_delta} cannot exceed the quality window "
+            f"({max_distance}, drafts_max_distance) - a tie tolerance wider than the "
+            "window it operates inside makes every candidate in that window count as "
+            "tied, which is an always-on second answer rather than a tie-breaker."
+        )
+    if max_distance > CACHE_TRUST_DISTANCE:
+        raise InvalidLlmConfigUpdate(
+            f"drafts_max_distance: {max_distance} exceeds the ceiling of "
+            f"{CACHE_TRUST_DISTANCE} (CACHE_TRUST_DISTANCE). Both drafts are "
+            "validated - the served answer like any other hit, the alternate by its "
+            "own validator call on the tie path - so the bound is the trusted zone "
+            "itself. Past it the embedding is no longer trusted for the SERVED "
+            "answer either, and a window that reaches into the validator-guarded "
+            "band would offer a candidate the pipeline does not serve unguarded."
+        )
+
+
 def _get_workspace(session, workspace_slug: str) -> Workspace:
     workspace = session.query(Workspace).filter_by(slug=workspace_slug).first()
     if workspace is None:
@@ -652,9 +781,12 @@ def update_for_workspace(
 
     with get_session() as session:
         workspace = _get_workspace(session, workspace_slug)
-        if fields_set & _TOKEN_BUDGET_FIELDS:
+        if fields_set & (_TOKEN_BUDGET_FIELDS | _DRAFT_THRESHOLD_FIELDS):
             existing_row = llm_config_repo.get_for_workspace(session, workspace.id)
-            _validate_token_budget_overrides(payload, fields_set, existing_row)
+            if fields_set & _TOKEN_BUDGET_FIELDS:
+                _validate_token_budget_overrides(payload, fields_set, existing_row)
+            if fields_set & _DRAFT_THRESHOLD_FIELDS:
+                _validate_draft_overrides(payload, fields_set, existing_row)
         row = llm_config_repo.upsert_for_workspace(session, workspace.id, payload, fields_set)
         credentials = [item.provider for item in credential_repo.list_credentials(session, workspace.id)]
         return _effective(row, credentials)

@@ -3,6 +3,10 @@ from __future__ import annotations
 from typing import Annotated, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+# One shape for both gateways: a client that speaks either API gets the same
+# draft object, and there is only one place to change it.
+from app.schemas.openai_compat import DejaQDraft
+
 
 class OAIResponsesContentPart(BaseModel):
     type: Literal["input_text", "input_image", "input_file", "output_text"]
@@ -84,6 +88,12 @@ class OAIResponse(BaseModel):
     output: list[OAIResponseOutputMessage]
     output_text: str
     usage: OAIResponseUsage
+    # DejaQ extension, absent unless the semantic tie-breaker fired on a cache
+    # hit. `output`/`output_text` still carry the served answer on their own, so
+    # a client that ignores unknown keys behaves exactly as it did before.
+    # Never set on an attachment request: two entries for one image or file are
+    # either two different documents' answers or the same one twice.
+    dejaq_drafts: Optional[list[DejaQDraft]] = None
 
 
 # --- Streaming event shapes ---

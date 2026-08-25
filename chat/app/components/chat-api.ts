@@ -33,6 +33,17 @@ function decodeHeaderText(value: string | null): string | null {
   }
 }
 
+/** One of two cached answers the semantic tie-breaker could not separate.
+ *
+ * Draft A is always the answer that was actually served and streamed, so a
+ * client that ignores this list entirely still shows the right text. */
+export interface Draft {
+  label: "A" | "B";
+  responseId: string;
+  content: string;
+  distance: number;
+}
+
 export interface ChatApiMessage {
   role: "user" | "assistant" | "system";
   content: string;
@@ -59,6 +70,9 @@ export interface ChatSuccess {
   // "human" when the served cache entry holds an answer a person wrote through
   // Edit & Save. Null on a miss, and on an ordinary cache entry.
   answerAuthored: string | null;
+  // Both alternatives when the tie-breaker fired, null otherwise. Arrives on
+  // the terminal SSE chunk, so it is only settled once the stream is drained.
+  drafts: Draft[] | null;
   // The standalone question the context enricher rewrote a follow-up into
   // before searching the cache. Null both when there was nothing to rewrite
   // (enrich() returned the message unchanged) and on any non-cache answer.
@@ -211,6 +225,11 @@ export async function sendChatMessage(
   // in `generating` with no way out - the outer try/catch below is what fixes
   // that now, by turning it into a `streamError` result instead of a throw.)
   let streamError: string | null = null;
+  // Rides the terminal chunk rather than an event of its own: an OpenAI SDK
+  // parses every `data:` line as a chunk, so a foreign shape would break other
+  // clients. Nothing here has to look for the last frame - only one chunk ever
+  // carries the key.
+  let drafts: Draft[] | null = null;
   try {
     outer: while (true) {
       let value: Uint8Array | undefined;
@@ -247,6 +266,16 @@ export async function sendChatMessage(
             if (delta) {
               text += delta;
               onDelta?.(delta);
+            }
+            if (Array.isArray(chunk?.dejaq_drafts)) {
+              drafts = chunk.dejaq_drafts.map(
+                (d: Record<string, unknown>): Draft => ({
+                  label: d.label === "B" ? "B" : "A",
+                  responseId: String(d.response_id ?? ""),
+                  content: String(d.content ?? ""),
+                  distance: Number(d.distance ?? 0),
+                }),
+              );
             }
           } catch {
             // malformed chunk — skip
@@ -294,6 +323,9 @@ export async function sendChatMessage(
     cacheEnrichedQuery,
     ragChunks,
     ragDocumentTitle,
+    // A stream that broke part-way never reached the terminal chunk, so a
+    // half-read answer is never presented as a choice.
+    drafts: streamError ? null : drafts,
     streamError,
   };
 }
@@ -456,6 +488,64 @@ export async function saveEditedAnswer(
   return {
     kind: "success",
     editStatus: data.editStatus ?? null,
+    responseId: data.responseId ?? null,
+    newScore: data.newScore,
+  };
+}
+
+export type DraftChoiceStatus = "recorded" | "not_found";
+
+export interface DraftChoiceSuccess {
+  kind: "success";
+  draftChoice: DraftChoiceStatus | null;
+  // The entry the point landed on. Adopt it: later feedback and edits on this
+  // turn must address the draft the user kept, not the one that was served.
+  responseId: string | null;
+  newScore?: number;
+}
+
+export type DraftChoiceResult = DraftChoiceSuccess | ApiError;
+
+/** Keep one of two alternative drafts.
+ *
+ * This IS the thumbs-up - one request, so the point lands on the answer the
+ * person actually chose. The rejected draft is recorded but never penalised:
+ * by the tie-breaker's own definition it was a high-quality match that another
+ * user may well prefer.
+ */
+export async function chooseDraft(
+  interactionId: string | null,
+  chosenDraftResponseId: string,
+  rejectedDraftResponseIds: string[],
+  deptSlug: string,
+): Promise<DraftChoiceResult> {
+  let response: Response;
+  try {
+    response = await fetch("/api/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...dejaqHeaders() },
+      body: JSON.stringify({
+        interactionId,
+        chosenDraftResponseId,
+        rejectedDraftResponseIds,
+        rating: "positive",
+        comment: "",
+        deptSlug,
+      }),
+    });
+  } catch {
+    return { kind: "error", status: 0, message: "Network error. Could not record your choice." };
+  }
+
+  if (!response.ok) {
+    const detail = await parseErrorDetail(response);
+    return { kind: "error", status: response.status, message: userFacingError(response.status, detail) };
+  }
+
+  const data = await response.json();
+  return {
+    kind: "success",
+    draftChoice: data.draftChoice ?? null,
     responseId: data.responseId ?? null,
     newScore: data.newScore,
   };

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -53,6 +53,17 @@ class WorkspaceLlmConfig(Base):
     # LOCAL_ATTACHMENT_MAX_TOKENS in app/config.py; NULL falls back to it. See
     # that constant's comment and the size gate in openai_compat.py.
     local_attachment_max_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Alternative drafts (the semantic tie-breaker) - each mirrors the global
+    # default of the same name in app/config.py (CACHE_DRAFTS_*); NULL falls
+    # back to it. drafts_max_delta must not exceed drafts_max_distance, and
+    # drafts_max_distance is capped at CACHE_TRUST_DISTANCE - both drafts are
+    # validated (the served answer like any other hit, the alternate by its own
+    # validator call on the tie path), so the trusted zone is the right bound; a
+    # window past it would offer a candidate the pipeline does not serve
+    # unguarded either. Enforced in services/llm_config_service.py.
+    drafts_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    drafts_max_distance: Mapped[float | None] = mapped_column(Float, nullable=True)
+    drafts_max_delta: Mapped[float | None] = mapped_column(Float, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

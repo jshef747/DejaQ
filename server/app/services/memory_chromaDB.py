@@ -142,6 +142,14 @@ class CacheLookupResult:
     # deterministic, so the gate is equality. See services/file_text.py.
     file_sha: str | None = None
     file_kind: str | None = None
+    # This entry's accumulated feedback score, and the root it points at when it
+    # is an alias. Both are read off the same metadata the lookup already
+    # fetches, and both are needed by the alternative-drafts tie-breaker: the
+    # score is what settles a tie once somebody picks (see
+    # services/draft_selector.py), and alias_of is what stops an alias being
+    # offered as a "second" draft when it holds a byte-copy of its root's answer.
+    score: float = 0.0
+    alias_of: str | None = None
     # Explicit `@`-reference identity of the matched entry (present only when
     # the answer was grounded in one specific knowledge-base document by id,
     # never by search). Exact-equality gate, same shape as file_sha.
@@ -297,6 +305,8 @@ class MemoryService:
                     file_kind=meta.get("file_kind"),
                     rag_document_id=meta.get("rag_document_id"),
                     authored=meta.get("authored"),
+                    score=score,
+                    alias_of=meta.get("alias_of"),
                 ))
 
         if not candidates:
@@ -777,6 +787,19 @@ class MemoryService:
         if not result["ids"]:
             return None
         return result["metadatas"][0]
+
+    def get_entry_query(self, entry_id: str) -> Optional[str]:
+        """Return the normalized query a cache entry is keyed on, or None.
+
+        The document IS the cache key (see store_interaction), so this is what
+        `lookup_cache_pool` has to be handed to re-run the lookup an entry was
+        served by - which is how feedback_service re-derives the pair a drafts
+        pick claims to have come from, without storing the offered ids.
+        """
+        result = self._collection.get(ids=[entry_id], include=["documents"])
+        if not result["ids"] or not result.get("documents"):
+            return None
+        return result["documents"][0]
 
     def update_entry_metadata(self, entry_id: str, metadata: dict) -> bool:
         """Replace the full metadata for a cache entry. ChromaDB requires the complete dict."""

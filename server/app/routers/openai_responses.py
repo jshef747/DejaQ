@@ -199,7 +199,14 @@ def _build_response_body(
             output_tokens=result.completion_tokens,
             total_tokens=result.prompt_tokens + result.completion_tokens,
         ),
-    ).model_dump()
+        dejaq_drafts=result.drafts,
+    ).model_dump(
+        # Dropped entirely when no tie fired, so the body stays byte-identical
+        # to what it was before this feature existed. This one function builds
+        # BOTH the buffered response and the terminal `response.completed`
+        # payload, so the rule cannot land on one path and miss the other.
+        exclude=None if result.drafts else {"dejaq_drafts"}
+    )
 
 
 async def _stream_responses_generator(

@@ -81,6 +81,16 @@ export default function SettingsClient({
   );
   const [externalModel, setExternalModel] = useState(initialConfig.external_model ?? "");
   const [threshold, setThreshold] = useState(initialConfig.routing_threshold ?? 0.75);
+  // Alternative drafts. The two thresholds are held as strings so an empty
+  // field reads as "no override, use the default" - never as the number 0,
+  // which is a real (and invalid) value.
+  const [draftsEnabled, setDraftsEnabled] = useState(initialConfig.drafts_enabled ?? false);
+  const [draftsDistance, setDraftsDistance] = useState(
+    "drafts_max_distance" in initialConfig.overrides ? String(initialConfig.drafts_max_distance) : "",
+  );
+  const [draftsDelta, setDraftsDelta] = useState(
+    "drafts_max_delta" in initialConfig.overrides ? String(initialConfig.drafts_max_delta) : "",
+  );
   const [apiKey, setApiKey] = useState("");
   const [credentials, setCredentials] = useState(initialCredentials);
   const [modelsByProvider, setModelsByProvider] = useState(initialModelsByProvider);
@@ -116,6 +126,13 @@ export default function SettingsClient({
     setProvider(initialProviderFor(initialModelsByProvider, initialConfig.external_model));
     setExternalModel(initialConfig.external_model ?? "");
     setThreshold(initialConfig.routing_threshold ?? 0.75);
+    setDraftsEnabled(initialConfig.drafts_enabled ?? false);
+    setDraftsDistance(
+      "drafts_max_distance" in initialConfig.overrides ? String(initialConfig.drafts_max_distance) : "",
+    );
+    setDraftsDelta(
+      "drafts_max_delta" in initialConfig.overrides ? String(initialConfig.drafts_max_delta) : "",
+    );
     setCredentials(initialCredentials);
     setModelsByProvider(initialModelsByProvider);
     setApiKey("");
@@ -206,6 +223,17 @@ export default function SettingsClient({
     const patch: LlmConfigUpdate = {};
     if (externalModel !== initialConfig.external_model) patch.external_model = externalModel;
     if (threshold !== initialConfig.routing_threshold) patch.routing_threshold = threshold;
+    if (draftsEnabled !== initialConfig.drafts_enabled) patch.drafts_enabled = draftsEnabled;
+    // An emptied field clears the override (null), which is the only way to
+    // get the shipped default back.
+    const distancePatch = draftsDistance.trim() === "" ? null : Number(draftsDistance);
+    const deltaPatch = draftsDelta.trim() === "" ? null : Number(draftsDelta);
+    const storedDistance =
+      "drafts_max_distance" in initialConfig.overrides ? initialConfig.drafts_max_distance : null;
+    const storedDelta =
+      "drafts_max_delta" in initialConfig.overrides ? initialConfig.drafts_max_delta : null;
+    if (distancePatch !== storedDistance) patch.drafts_max_distance = distancePatch;
+    if (deltaPatch !== storedDelta) patch.drafts_max_delta = deltaPatch;
 
     if (!trimmedKey && Object.keys(patch).length === 0) {
       setSaveStatus({ kind: "info", text: "No changes to save." });
@@ -251,6 +279,9 @@ export default function SettingsClient({
     const res = await updateLlmConfig(workspaceSlug, {
       external_model: null,
       routing_threshold: null,
+      drafts_enabled: null,
+      drafts_max_distance: null,
+      drafts_max_delta: null,
     });
     setSaveBusy(false);
     if (!res.ok) {
@@ -260,6 +291,9 @@ export default function SettingsClient({
     setProvider(initialProviderFor(modelsByProvider, res.data.external_model));
     setExternalModel(res.data.external_model ?? "");
     setThreshold(res.data.routing_threshold ?? 0.75);
+    setDraftsEnabled(res.data.drafts_enabled ?? false);
+    setDraftsDistance("");
+    setDraftsDelta("");
     setApiKey("");
     setSaveStatus({ kind: "success", text: `Defaults restored ${formatTime(new Date())}` });
     router.refresh();
@@ -398,6 +432,63 @@ export default function SettingsClient({
                 </div>
               </div>
             </Field>
+          </div>
+
+          {/* Alternative drafts. Lives here rather than on the Pipeline page
+              because it is a numeric, non-model pipeline knob - the same kind
+              as the difficulty threshold directly above it. Every stage on the
+              Pipeline page is an Ollama-role editor. */}
+          <div style={{ borderTop: "1px solid var(--border)", padding: "16px 20px" }}>
+            <div style={{ alignItems: "center", display: "flex", gap: 10, marginBottom: 6 }}>
+              <input
+                id="drafts-enabled"
+                type="checkbox"
+                checked={draftsEnabled}
+                onChange={(e) => setDraftsEnabled(e.target.checked)}
+                style={{ accentColor: "var(--accent)", cursor: "pointer", height: 14, width: 14 }}
+              />
+              <label htmlFor="drafts-enabled" style={{ cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
+                Alternative drafts
+              </label>
+            </div>
+            <p style={{ color: "var(--fg-dim)", fontSize: 12, lineHeight: "18px", margin: "0 0 14px 24px" }}>
+              When two cached answers score almost identically for a question, show both and let the
+              user choose instead of picking one silently. The winner gains a point, which settles the
+              tie for everyone who asks next. Off by default.
+            </p>
+
+            {draftsEnabled && (
+              <div style={{ display: "grid", gap: 12, gridTemplateColumns: "220px 1fr", marginLeft: 24 }}>
+                <Field
+                  label="Quality window"
+                  hint={`How close to the question both answers must be before either is offered. Empty uses the default (${initialConfig.draft_defaults.drafts_max_distance}). Capped there: the alternative is shown without a validator check, so the window cannot reach past the distance where the match alone is trusted.`}
+                >
+                  <input
+                    className="ds-input"
+                    type="number"
+                    min="0"
+                    step="0.005"
+                    value={draftsDistance}
+                    placeholder={String(initialConfig.draft_defaults.drafts_max_distance)}
+                    onChange={(e) => setDraftsDistance(e.target.value)}
+                  />
+                </Field>
+                <Field
+                  label="Proximity threshold"
+                  hint={`How close the two scores must be to count as tied. Wider means the choice appears more often. Empty uses the default (${initialConfig.draft_defaults.drafts_max_delta}); cannot exceed the quality window.`}
+                >
+                  <input
+                    className="ds-input"
+                    type="number"
+                    min="0"
+                    step="0.005"
+                    value={draftsDelta}
+                    placeholder={String(initialConfig.draft_defaults.drafts_max_delta)}
+                    onChange={(e) => setDraftsDelta(e.target.value)}
+                  />
+                </Field>
+              </div>
+            )}
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "flex-end", padding: "12px 20px", borderTop: "1px solid var(--border)" }}>

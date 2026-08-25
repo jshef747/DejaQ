@@ -236,6 +236,33 @@ class ResponseRegistry:
             return None
         return interaction
 
+    async def set_response_id(self, interaction_id: str, response_id: str) -> None:
+        """Re-point an interaction at a different cache entry.
+
+        One caller: a user keeping one of two alternative drafts. The record was
+        written naming the draft that was SERVED, and everything that later
+        addresses this interaction without repeating a response_id resolves
+        through it - `submit_feedback` falls back to `interaction.response_id`.
+        Left alone, a thumbs-down on the answer the user kept would delete the
+        one they discarded (and on a first negative, delete it outright), while
+        a thumbs-up would score it and hand the settled pair its score gap back.
+
+        Idempotent, and deliberately silent when the row is gone: this runs
+        after the pick has already been applied, and losing the re-point is not
+        worth failing a request the user has otherwise completed.
+        """
+        if self._db is None:
+            raise RuntimeError("ResponseRegistry is not initialized")
+        await self._db.execute(
+            """
+            UPDATE response_interactions
+            SET response_id = ?
+            WHERE interaction_id = ?
+            """,
+            (response_id, interaction_id),
+        )
+        await self._db.commit()
+
     async def acquire_escalation(self, interaction_id: str) -> bool:
         if self._db is None:
             raise RuntimeError("ResponseRegistry is not initialized")

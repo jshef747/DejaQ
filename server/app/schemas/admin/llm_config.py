@@ -49,12 +49,17 @@ class LlmConfigResponse(BaseModel):
     rewrite_max_tokens: int
     ollama_num_ctx: int
     local_attachment_max_tokens: int
+    drafts_enabled: bool
+    drafts_max_distance: float
+    drafts_max_delta: float
     # The shipped/global default for each token budget field, regardless of
     # whether this workspace overrides it - see LlmConfigResult in
     # llm_config_service.py for why the effective fields above can't serve
     # this on their own once an override is set.
     token_budget_defaults: dict[str, int]
-    overrides: dict[str, str | float | int]
+    # Same contract as token_budget_defaults, for the two draft thresholds.
+    draft_defaults: dict[str, float]
+    overrides: dict[str, str | float | int | bool]
     updated_at: datetime | None
     is_default: bool
     credentials_configured: list[str]
@@ -98,6 +103,15 @@ class LlmConfigUpdate(BaseModel):
     # window at request time, so a value raised past what the context window
     # can hold is harmless, not rejected here.
     local_attachment_max_tokens: int | None = Field(default=None, gt=0)
+    # Alternative drafts. Bounds here are the coarse ones a single field can be
+    # judged by; the relationship between the two thresholds, and the ceiling
+    # at CACHE_TRUST_DISTANCE, live in
+    # llm_config_service._validate_draft_overrides for the same reason the
+    # token budgets' do - they need both values at once and must name which
+    # rule was broken.
+    drafts_enabled: bool | None = None
+    drafts_max_distance: float | None = Field(default=None, gt=0.0, le=1.0)
+    drafts_max_delta: float | None = Field(default=None, gt=0.0, le=1.0)
 
     @field_validator(*PROMPT_FIELDS)
     @classmethod

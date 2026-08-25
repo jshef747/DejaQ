@@ -4,6 +4,7 @@ import logging
 from typing import Literal
 import sqlite3
 
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 import app.config as config
@@ -11,7 +12,9 @@ from app.schemas.feedback import EscalatedResponse
 from app.schemas.admin.feedback import FeedbackItem, FeedbackListResponse
 from app.services.answer_edit import apply_edited_answer
 from app.services.escalation import escalate
+from app.services.draft_selector import select_draft_pair
 from app.services.memory_chromaDB import get_memory_service
+from app.services import pipeline_config_cache
 from app.services.request_logger import ensure_stats_schema, request_logger
 from app.services.response_registry import compute_messages_hash, response_registry
 
@@ -43,6 +46,9 @@ class FeedbackResult(BaseModel):
     # Edit & Save. Mirrors schemas/feedback.FeedbackResponse - edit both together.
     edit_status: Literal["saved", "created", "not_cached", "message_mismatch"] | None = None
     response_id: str | None = None
+    # Alternative drafts. Mirrors schemas/feedback.FeedbackResponse - edit both
+    # together.
+    draft_choice: Literal["recorded", "not_found"] | None = None
     escalated_response: EscalatedResponse | None = None
     escalation_status: (
         Literal[
@@ -186,6 +192,72 @@ def _checked_namespace(
     return namespace, doc_id
 
 
+def _draft_pair_for(interaction_response_id: str, workspace: str) -> tuple[str, str] | None:
+    """The (served, alternate) response ids a drafts turn would have offered.
+
+    Re-runs the ORDINARY lookup, keyed on the served entry's own stored query -
+    which is the cache key itself (memory.get_entry_query), so the pool this
+    ranks is the pool that turn ranked - and hands it to the same
+    `select_draft_pair` the serve path uses, with the workspace's own
+    thresholds. Returns None when the entry is gone or nothing pairs with it.
+
+    Synchronous: Chroma and the config cache are both blocking, so callers run
+    this in a threadpool.
+    """
+    namespace, entry_id = _split_response_id(interaction_response_id)
+    memory = get_memory_service(namespace)
+    normalized_query = memory.get_entry_query(entry_id)
+    if not normalized_query:
+        return None
+
+    try:
+        llm_config = pipeline_config_cache.get_effective_config(workspace)
+        max_distance = llm_config.drafts_max_distance
+        max_delta = llm_config.drafts_max_delta
+    except Exception:
+        # A missing workspace row (or an unreachable config cache) must not turn
+        # into a 500 on a thumbs-up. The shipped defaults are the same numbers
+        # the serve path would have used for a workspace with no override.
+        max_distance = config.CACHE_DRAFTS_MAX_DISTANCE
+        max_delta = config.CACHE_DRAFTS_MAX_DELTA
+
+    candidates, _, _ = memory.lookup_cache_pool(normalized_query)
+    eligible = [
+        candidate for candidate in candidates
+        if not candidate.requires_validation and candidate.authored != "human"
+    ]
+    pair = select_draft_pair(
+        eligible,
+        max_distance=max_distance,
+        max_delta=max_delta,
+        max_score_gap=config.CACHE_DRAFTS_MAX_SCORE_GAP,
+    )
+    if pair is None:
+        return None
+    return (
+        f"{namespace}:{pair.primary.entry_id or ''}",
+        f"{namespace}:{pair.alternate.entry_id or ''}",
+    )
+
+
+async def _is_a_draft_of(
+    *,
+    interaction,
+    chosen_draft_response_id: str,
+    workspace: str,
+) -> bool:
+    """Whether the chosen id is one of the two drafts this interaction offered."""
+    served = interaction.response_id
+    if not served:
+        return False
+    # Draft A is always the served answer, so the cheap case needs no lookup at
+    # all - and it is also the case where the user kept what they were given.
+    if chosen_draft_response_id == served:
+        return True
+    pair = await run_in_threadpool(_draft_pair_for, served, workspace)
+    return pair is not None and chosen_draft_response_id in pair
+
+
 async def _apply_cache_feedback(
     *,
     response_id: str,
@@ -237,6 +309,8 @@ async def submit_feedback(
     interaction_id: str | None = None,
     messages: list[dict] | None = None,
     edited_answer: str | None = None,
+    chosen_draft_response_id: str | None = None,
+    rejected_draft_response_ids: list[str] | None = None,
     rating: Literal["positive", "negative"],
     comment: str | None,
     workspace: str,
@@ -268,6 +342,56 @@ async def submit_feedback(
         if interaction is None:
             raise FeedbackNotFound(interaction_id)
         cache_response_id = cache_response_id or interaction.response_id
+
+    # Alternative drafts: the user kept one of two tied cache entries, so the
+    # +1.0 below has to land on the one they kept rather than on whichever was
+    # served first. Redirecting cache_response_id is all that takes - the
+    # existing scoring path then runs unchanged, including its own namespace
+    # check on the id we just adopted.
+    draft_choice: Literal["recorded", "not_found"] | None = None
+    if chosen_draft_response_id is not None:
+        # Re-checked here rather than trusted: FeedbackRequest enforces both,
+        # but this service is also reachable from the admin surface, whose
+        # schema does not.
+        if rating != "positive":
+            raise ValueError("chosen_draft_response_id requires rating='positive'")
+        if interaction is None:
+            raise ValueError("chosen_draft_response_id requires a valid interaction_id")
+        if edited_answer is not None:
+            raise ValueError(
+                "chosen_draft_response_id and edited_answer cannot be combined"
+            )
+        # Every draft id is client-supplied and names a ChromaDB collection, so
+        # each one is proved to belong to this caller BEFORE it is scored or
+        # written to the feedback log - the rejected ids included, even though
+        # nothing scores them.
+        for draft_id in [chosen_draft_response_id, *(rejected_draft_response_ids or [])]:
+            _checked_namespace(
+                response_id=draft_id,
+                workspace=workspace,
+                department=department,
+                validate_namespace=validate_namespace,
+                cache_namespace=cache_namespace,
+            )
+        # Namespace ownership is not enough. The pair that was OFFERED is not
+        # stored anywhere (no column, no second migration), so the chosen id is
+        # instead re-derived from what the interaction already knows: it must be
+        # the entry the interaction currently points at (draft A, the served
+        # answer), or the alternate the same lookup produces for that entry
+        # (draft B). Without this an unrelated entry in the caller's own
+        # namespace takes the +1.0 AND the interaction is re-pointed at it, so a
+        # later thumbs-down deletes an entry the user was never shown.
+        if not await _is_a_draft_of(
+            interaction=interaction,
+            chosen_draft_response_id=chosen_draft_response_id,
+            workspace=workspace,
+        ):
+            raise ValueError(
+                "chosen_draft_response_id was not one of the drafts offered for "
+                "this interaction"
+            )
+        cache_response_id = chosen_draft_response_id
+        draft_choice = "recorded"
 
     edit_outcome = None
     if edited_answer is not None:
@@ -325,24 +449,73 @@ async def submit_feedback(
                 cache_namespace=cache_namespace,
             )
         except FeedbackNotFound:
-            # Only reachable when an edit already succeeded and the entry
-            # vanished before it could be scored - a concurrent thumbs-down
-            # delete. Raising here would answer 404, and the client would tell
-            # the user the save failed while their text sits in the cache (or,
-            # in the delete case, correctly does not). The write is what the
-            # user asked for; the lost +1.0 is not worth a false failure.
-            if edit_outcome is None:
+            # Two ways the target can vanish between being named and being
+            # scored, and neither is worth failing the whole request over. They
+            # are mutually exclusive by schema (a pick cannot carry an edit), so
+            # one handler covers both without either masking the other.
+            if edit_outcome is not None:
+                # An edit already succeeded and the entry went - a concurrent
+                # thumbs-down delete. Raising here would answer 404, and the
+                # client would tell the user the save failed while their text
+                # sits in the cache (or, in the delete case, correctly does
+                # not). The write is what the user asked for; the lost +1.0 is
+                # not worth a false failure.
+                logger.warning(
+                    "Edit landed but its entry vanished before scoring: %s", cache_response_id
+                )
+                result = FeedbackResult(status="ok")
+            elif draft_choice is not None:
+                # A kept draft whose entry has since gone (evicted, or deleted
+                # by somebody else's thumbs-down). The pick is simply lost -
+                # 404 would tell the user their choice failed when the only
+                # thing that failed is a point landing on an unreachable entry,
+                # and the answer they kept is already on their screen.
+                logger.info(
+                    "Draft choice landed on a missing entry: %s", cache_response_id
+                )
+                result = FeedbackResult(status="ok")
+                draft_choice = "not_found"
+            else:
                 raise
-            logger.warning(
-                "Edit landed but its entry vanished before scoring: %s", cache_response_id
-            )
-            result = FeedbackResult(status="ok")
     else:
         result = FeedbackResult(status="ok")
 
     if edit_outcome is not None:
         result.edit_status = edit_outcome.edit_status
         result.response_id = edit_outcome.response_id
+
+    if draft_choice is not None:
+        result.draft_choice = draft_choice
+        # The entry the point actually landed on, so the client adopts it for
+        # any later feedback or edit - the same contract Edit & Save set.
+        result.response_id = cache_response_id
+        # And re-point the interaction itself, which is the part a client
+        # CANNOT fix for us. The record was written naming the draft that was
+        # served; every later call that sends only an interaction_id resolves
+        # through it. Left pointing at the discarded draft, a thumbs-down on
+        # the kept answer would delete the OTHER entry - a perfectly good one,
+        # and on a first negative, immediately - and a thumbs-up would score it
+        # and hand the now-settled pair its score gap back, re-arming the
+        # chooser this pick just closed.
+        if draft_choice == "recorded" and interaction is not None and cache_response_id:
+            try:
+                await response_registry.set_response_id(
+                    interaction.interaction_id, cache_response_id
+                )
+            except Exception:
+                logger.warning(
+                    "Draft choice recorded but the interaction could not be re-pointed: %s",
+                    interaction.interaction_id,
+                    exc_info=True,
+                )
+        logger.info(
+            "draft_choice=%s kept=%s rejected=%s workspace=%s dept=%s",
+            draft_choice,
+            cache_response_id,
+            rejected_draft_response_ids or [],
+            workspace,
+            department,
+        )
 
     if interaction_id:
         await request_logger.log_feedback(

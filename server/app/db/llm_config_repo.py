@@ -27,6 +27,9 @@ _CONFIG_FIELDS = {
     "rewrite_max_tokens",
     "ollama_num_ctx",
     "local_attachment_max_tokens",
+    "drafts_enabled",
+    "drafts_max_distance",
+    "drafts_max_delta",
 }
 
 

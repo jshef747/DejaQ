@@ -30,6 +30,12 @@ export async function POST(request: NextRequest) {
         rating: body.rating,
         ...(Array.isArray(body.messages) ? { messages: body.messages } : {}),
         ...(typeof body.editedAnswer === "string" ? { edited_answer: body.editedAnswer } : {}),
+        ...(typeof body.chosenDraftResponseId === "string"
+          ? { chosen_draft_response_id: body.chosenDraftResponseId }
+          : {}),
+        ...(Array.isArray(body.rejectedDraftResponseIds)
+          ? { rejected_draft_response_ids: body.rejectedDraftResponseIds }
+          : {}),
         ...(typeof body.comment === "string" && body.comment.trim()
           ? { comment: body.comment.trim() }
           : {}),
@@ -49,6 +55,8 @@ export async function POST(request: NextRequest) {
     status: data.status,
     newScore: data.new_score,
     editStatus: data.edit_status ?? null,
+    // "recorded" scored the kept draft; "not_found" means it was already gone.
+    draftChoice: data.draft_choice ?? null,
     // The entry the edit actually landed on, when the server redirected or
     // created one. Null on an ordinary thumbs-up.
     responseId: data.response_id ?? null,

@@ -19,6 +19,7 @@ class _FeedbackResult(BaseModel):
     response_id: str | None = None
     escalation_status: str | None = None
     escalated_response: object | None = None
+    draft_choice: str | None = None
 
 
 def test_gateway_route_accepts_org_key_not_arbitrary_bearer_token(monkeypatch):

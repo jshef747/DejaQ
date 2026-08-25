@@ -28,6 +28,10 @@ const SSE_HEADERS_TO_FORWARD = [
   "x-dejaq-rag-chunks",
   "x-dejaq-rag-document-id",
   "x-dejaq-rag-document-title",
+  // "2" when the semantic tie-breaker fired. The drafts themselves ride the
+  // terminal SSE chunk; this lets the client know a choice is coming before
+  // it has read a byte of the body.
+  "x-dejaq-drafts",
 ];
 
 interface ChatMsg {
