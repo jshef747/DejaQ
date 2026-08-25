@@ -425,6 +425,7 @@ def test_cache_answer_registers_interaction_and_emits_tier_headers(monkeypatch):
     monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
     monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
     monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "_validator", StubValidatorValid())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubHitMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
     monkeypatch.setattr(openai_compat, "response_registry", registry, raising=False)
@@ -671,6 +672,7 @@ def test_cache_hit_includes_nearest_cache_headers_without_difficulty_score(monke
     monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
     monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
     monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "_validator", StubValidatorValid())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubHitMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
 
@@ -1184,6 +1186,7 @@ def test_chat_completions_logs_compact_hit_summary(monkeypatch, caplog):
     monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
     monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
     monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "_validator", StubValidatorValid())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubHitMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
 
@@ -1497,6 +1500,7 @@ def test_no_alias_stored_for_trusted_hit(monkeypatch):
     monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
     monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
     monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "_validator", StubValidatorValid())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubHitMemory())
     monkeypatch.setattr(openai_compat, "_store_alias_bg", _noop_alias)
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
@@ -1795,6 +1799,7 @@ def test_cache_hit_with_non_latin1_matched_query_does_not_crash(monkeypatch):
     monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
     monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
     monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "_validator", StubValidatorValid())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubNonLatin1HitMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
 
@@ -1954,6 +1959,7 @@ def test_cache_hit_headers_survive_hebrew_and_chinese_round_trip(monkeypatch):
     monkeypatch.setattr(openai_compat, "_enricher", MultiScriptEnricher())
     monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
     monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "_validator", StubValidatorValid())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubMultiScriptHitMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _noop_log)
 

@@ -25,6 +25,7 @@ from tests.test_openai_compat_smoke import (
     StubMemory,
     StubNormalizer,
     StubRouter,
+    StubValidatorValid,
 )
 
 pytestmark = pytest.mark.no_model
@@ -186,6 +187,7 @@ def test_cache_hit_unaffected_by_unconfigured_external_model(monkeypatch):
     monkeypatch.setattr(openai_compat, "_enricher", StubEnricher())
     monkeypatch.setattr(openai_compat, "_normalizer", StubNormalizer())
     monkeypatch.setattr(openai_compat, "_adjuster", StubAdjuster())
+    monkeypatch.setattr(openai_compat, "_validator", StubValidatorValid())
     monkeypatch.setattr(openai_compat, "_external_llm", StubExternalLLM())
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: StubHitMemory())
     monkeypatch.setattr(openai_compat.request_logger, "log", _log)
