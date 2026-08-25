@@ -345,6 +345,14 @@ combined with `edited_answer` (both `422`) — those are two writes to one entry
 order between them. Every id is namespace-checked against the caller's own workspace before
 anything is scored or logged, rejected ids included.
 
+`chosen_draft_response_id` is checked further: it must be a draft this interaction actually
+offered. The offered pair is not stored anywhere (no column, no migration), so it is re-derived —
+the id must either equal the interaction's current `response_id` (draft A, the served answer) or
+be the alternate the same lookup produces for that entry (draft B). Anything else is a `422`
+naming the reason, never silently ignored. Without this, an unrelated entry in the caller's own
+namespace takes the `+1.0` **and** the interaction is re-pointed at it, so a later thumbs-down
+deletes an entry the user was never shown.
+
 | Field | Meaning |
 | --- | --- |
 | `draft_choice` | `recorded`, or `not_found` when the entry was evicted before the pick landed — not an error; the answer is already on the user's screen |

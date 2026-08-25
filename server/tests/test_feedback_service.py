@@ -579,6 +579,14 @@ def _patch_for_draft_choice(monkeypatch, memory, interaction=None):
     monkeypatch.setattr(feedback_service, "response_registry", registry)
     monkeypatch.setattr(feedback_service.request_logger, "log_feedback", _log_feedback)
     monkeypatch.setattr(feedback_service, "get_memory_service", lambda namespace: memory)
+    # The pair these tests describe: doc-a was served (the interaction points at
+    # it), doc-b was the alternate. Re-derivation itself is a Chroma round-trip
+    # and is covered directly by TestDraftPairReDerivation below.
+    monkeypatch.setattr(
+        feedback_service,
+        "_draft_pair_for",
+        lambda served, workspace: ("acme__eng:doc-a", "acme__eng:doc-b"),
+    )
     feedback_service._test_registry = registry
     return feedback_service
 
@@ -745,3 +753,146 @@ def test_ordinary_feedback_never_repoints_the_interaction(monkeypatch):
     )
 
     assert feedback_service._test_registry.repointed == []
+
+
+# --- Alternative drafts: the chosen id must be one of the two offered --------
+
+def test_draft_choice_rejects_an_entry_that_was_never_offered(monkeypatch):
+    """The PR 70 review's exact case.
+
+    An unrelated entry in the caller's OWN namespace passes the namespace
+    check, and before this rule it took the +1.0 and the interaction was
+    re-pointed at it - so a later thumbs-down on that turn would delete an
+    entry the user was never shown. The offered pair is not stored anywhere
+    (no column, no second migration), so the id is re-derived instead: it must
+    be the served entry or the alternate the same lookup produces for it.
+    """
+    memory = _ScoringMemory()
+    feedback_service = _patch_for_draft_choice(monkeypatch, memory)
+
+    with pytest.raises(ValueError) as exc:
+        _submit_draft_choice(
+            feedback_service, chosen_draft_response_id="acme__eng:unrelated"
+        )
+
+    # An honest reason, not a silent ignore.
+    assert "not one of the drafts offered" in str(exc.value)
+    assert memory.scored == []
+    assert feedback_service._test_registry.repointed == []
+
+
+def test_draft_choice_still_accepts_the_alternate(monkeypatch):
+    """The legitimate pick - draft B - is unaffected by the rule above."""
+    memory = _ScoringMemory()
+    feedback_service = _patch_for_draft_choice(monkeypatch, memory)
+
+    result = _submit_draft_choice(feedback_service)
+
+    assert result.draft_choice == "recorded"
+    assert memory.scored == [("doc-b", 1.0)]
+
+
+def test_draft_choice_still_accepts_keeping_the_served_answer(monkeypatch):
+    """Draft A is the answer that was served, so keeping it needs no lookup at
+    all - and a user who agrees with what they were given is the common pick."""
+    memory = _ScoringMemory()
+    feedback_service = _patch_for_draft_choice(monkeypatch, memory)
+    # Prove the served-id case does not depend on re-derivation working.
+    monkeypatch.setattr(
+        feedback_service,
+        "_draft_pair_for",
+        lambda served, workspace: pytest.fail("served id must not need a lookup"),
+    )
+
+    result = _submit_draft_choice(
+        feedback_service,
+        chosen_draft_response_id="acme__eng:doc-a",
+        rejected_draft_response_ids=["acme__eng:doc-b"],
+    )
+
+    assert result.draft_choice == "recorded"
+    assert memory.scored == [("doc-a", 1.0)]
+
+
+class _PoolMemory:
+    """Enough of MemoryService for _draft_pair_for: the entry's stored query
+    (which IS the cache key) and the ranked candidate pool it looks up."""
+
+    def __init__(self, query, candidates):
+        self._query = query
+        self._candidates = candidates
+
+    def get_entry_query(self, entry_id):
+        return self._query
+
+    def lookup_cache_pool(self, normalized_query):
+        return (self._candidates, None, None)
+
+
+def _pool_candidate(entry_id, distance, answer, score=0.0):
+    from app.services.memory_chromaDB import CacheLookupResult
+
+    return CacheLookupResult(
+        hit=True,
+        generalized_answer=answer,
+        entry_id=entry_id,
+        distance=distance,
+        matched_query="how do i reset the password",
+        score=score,
+    )
+
+
+class TestDraftPairReDerivation:
+    """`_draft_pair_for` - the lookup that stands in for the ids nobody stored."""
+
+    def _service(self, monkeypatch, memory):
+        from app.services import feedback_service
+
+        monkeypatch.setattr(feedback_service, "get_memory_service", lambda ns: memory)
+        # Not a configured workspace here; the shipped CACHE_DRAFTS_* defaults
+        # are the fallback, which is exactly what an un-overridden workspace uses.
+        return feedback_service
+
+    def test_re_derives_the_pair_that_was_offered(self, monkeypatch):
+        memory = _PoolMemory(
+            "how do i reset the password",
+            [
+                _pool_candidate("doc-a", 0.0089, "Call the service desk on extension 4400."),
+                _pool_candidate("doc-b", 0.0184, "Email support and they will send a reset link."),
+            ],
+        )
+        feedback_service = self._service(monkeypatch, memory)
+
+        assert feedback_service._draft_pair_for("acme__eng:doc-a", "acme") == (
+            "acme__eng:doc-a",
+            "acme__eng:doc-b",
+        )
+
+    def test_an_unrelated_entry_is_not_in_the_pair(self, monkeypatch):
+        memory = _PoolMemory(
+            "how do i reset the password",
+            [
+                _pool_candidate("doc-a", 0.0089, "Call the service desk on extension 4400."),
+                _pool_candidate("doc-b", 0.0184, "Email support and they will send a reset link."),
+            ],
+        )
+        feedback_service = self._service(monkeypatch, memory)
+
+        pair = feedback_service._draft_pair_for("acme__eng:doc-a", "acme")
+
+        assert "acme__eng:unrelated" not in pair
+
+    def test_a_vanished_entry_pairs_with_nothing(self, monkeypatch):
+        feedback_service = self._service(monkeypatch, _PoolMemory(None, []))
+
+        assert feedback_service._draft_pair_for("acme__eng:doc-a", "acme") is None
+
+    def test_an_untied_pool_pairs_with_nothing(self, monkeypatch):
+        """No tie means no drafts were offered, so no chosen id is derivable."""
+        memory = _PoolMemory(
+            "how do i reset the password",
+            [_pool_candidate("doc-a", 0.0089, "Call the service desk on extension 4400.")],
+        )
+        feedback_service = self._service(monkeypatch, memory)
+
+        assert feedback_service._draft_pair_for("acme__eng:doc-a", "acme") is None

@@ -34,6 +34,64 @@ _MAX_ANSWER_JACCARD = 0.9
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
 
+# Unit and currency SPELLINGS, folded to one form before the overlap is
+# measured. The comparison is a word-overlap ratio, so "3422°C" and "3422
+# degrees Celsius" tokenise to different word sets and score 0.70 - two
+# writings of one fact, offered to the user as a real choice.
+#
+# That is not an edge case here, it is the common one. The trigger population
+# is created by CONCURRENT misses (a sequential near-variant hits the entry
+# that already exists and is never stored), so the two entries in a natural
+# tie are two answers to the SAME question - which means two phrasings of one
+# answer far more often than a real disagreement.
+#
+# Normalising rather than lowering _MAX_ANSWER_JACCARD is deliberate: the
+# ceiling stays at 0.9 so a narrow factual disagreement ("a nine minute walk"
+# vs "a ten minute walk", measured 0.846) is still offered, which is the case
+# this feature exists for. Only the spelling of a unit is cancelled, never a
+# difference in what the answer says.
+#
+# Substituted into the lowercased text before tokenising, longest key first so
+# "°c" is consumed before the bare "°". Each replacement is padded with spaces
+# because a symbol sits flush against its number ("3422°c", "50%", "$100").
+_SYMBOL_SPELLINGS = {
+    "℃": " degrees celsius ",
+    "℉": " degrees fahrenheit ",
+    "°c": " degrees celsius ",
+    "°f": " degrees fahrenheit ",
+    "°": " degrees ",
+    "%": " percent ",
+    "$": " dollars ",
+    "€": " euros ",
+    "£": " pounds ",
+    "¥": " yen ",
+    "₪": " shekels ",
+}
+
+# Written-out spellings of the same units, folded onto one token each. Covers
+# the singular/plural pair and the usual abbreviations; anything not listed is
+# left alone, which is the safe direction (an unfolded token can only make two
+# answers look MORE different, never less).
+_TOKEN_ALIASES = {
+    "degree": "degrees",
+    "deg": "degrees",
+    "degs": "degrees",
+    "centigrade": "celsius",
+    "percentage": "percent",
+    "percents": "percent",
+    "pct": "percent",
+    "dollar": "dollars",
+    "usd": "dollars",
+    "euro": "euros",
+    "eur": "euros",
+    "pound": "pounds",
+    "gbp": "pounds",
+    "jpy": "yen",
+    "shekel": "shekels",
+    "ils": "shekels",
+    "nis": "shekels",
+}
+
 
 @dataclass(frozen=True)
 class DraftPair:
@@ -51,7 +109,11 @@ class DraftPair:
 
 
 def _tokens(text: str) -> set[str]:
-    return set(_WORD_RE.findall(text.lower()))
+    lowered = text.lower()
+    for symbol, spelling in _SYMBOL_SPELLINGS.items():
+        if symbol in lowered:
+            lowered = lowered.replace(symbol, spelling)
+    return {_TOKEN_ALIASES.get(word, word) for word in _WORD_RE.findall(lowered)}
 
 
 def _normalized(text: str) -> str:

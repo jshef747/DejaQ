@@ -788,6 +788,19 @@ class MemoryService:
             return None
         return result["metadatas"][0]
 
+    def get_entry_query(self, entry_id: str) -> Optional[str]:
+        """Return the normalized query a cache entry is keyed on, or None.
+
+        The document IS the cache key (see store_interaction), so this is what
+        `lookup_cache_pool` has to be handed to re-run the lookup an entry was
+        served by - which is how feedback_service re-derives the pair a drafts
+        pick claims to have come from, without storing the offered ids.
+        """
+        result = self._collection.get(ids=[entry_id], include=["documents"])
+        if not result["ids"] or not result.get("documents"):
+            return None
+        return result["documents"][0]
+
     def update_entry_metadata(self, entry_id: str, metadata: dict) -> bool:
         """Replace the full metadata for a cache entry. ChromaDB requires the complete dict."""
         try:

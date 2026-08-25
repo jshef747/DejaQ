@@ -4,6 +4,7 @@ import logging
 from typing import Literal
 import sqlite3
 
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 import app.config as config
@@ -11,7 +12,9 @@ from app.schemas.feedback import EscalatedResponse
 from app.schemas.admin.feedback import FeedbackItem, FeedbackListResponse
 from app.services.answer_edit import apply_edited_answer
 from app.services.escalation import escalate
+from app.services.draft_selector import select_draft_pair
 from app.services.memory_chromaDB import get_memory_service
+from app.services import pipeline_config_cache
 from app.services.request_logger import ensure_stats_schema, request_logger
 from app.services.response_registry import compute_messages_hash, response_registry
 
@@ -189,6 +192,72 @@ def _checked_namespace(
     return namespace, doc_id
 
 
+def _draft_pair_for(interaction_response_id: str, workspace: str) -> tuple[str, str] | None:
+    """The (served, alternate) response ids a drafts turn would have offered.
+
+    Re-runs the ORDINARY lookup, keyed on the served entry's own stored query -
+    which is the cache key itself (memory.get_entry_query), so the pool this
+    ranks is the pool that turn ranked - and hands it to the same
+    `select_draft_pair` the serve path uses, with the workspace's own
+    thresholds. Returns None when the entry is gone or nothing pairs with it.
+
+    Synchronous: Chroma and the config cache are both blocking, so callers run
+    this in a threadpool.
+    """
+    namespace, entry_id = _split_response_id(interaction_response_id)
+    memory = get_memory_service(namespace)
+    normalized_query = memory.get_entry_query(entry_id)
+    if not normalized_query:
+        return None
+
+    try:
+        llm_config = pipeline_config_cache.get_effective_config(workspace)
+        max_distance = llm_config.drafts_max_distance
+        max_delta = llm_config.drafts_max_delta
+    except Exception:
+        # A missing workspace row (or an unreachable config cache) must not turn
+        # into a 500 on a thumbs-up. The shipped defaults are the same numbers
+        # the serve path would have used for a workspace with no override.
+        max_distance = config.CACHE_DRAFTS_MAX_DISTANCE
+        max_delta = config.CACHE_DRAFTS_MAX_DELTA
+
+    candidates, _, _ = memory.lookup_cache_pool(normalized_query)
+    eligible = [
+        candidate for candidate in candidates
+        if not candidate.requires_validation and candidate.authored != "human"
+    ]
+    pair = select_draft_pair(
+        eligible,
+        max_distance=max_distance,
+        max_delta=max_delta,
+        max_score_gap=config.CACHE_DRAFTS_MAX_SCORE_GAP,
+    )
+    if pair is None:
+        return None
+    return (
+        f"{namespace}:{pair.primary.entry_id or ''}",
+        f"{namespace}:{pair.alternate.entry_id or ''}",
+    )
+
+
+async def _is_a_draft_of(
+    *,
+    interaction,
+    chosen_draft_response_id: str,
+    workspace: str,
+) -> bool:
+    """Whether the chosen id is one of the two drafts this interaction offered."""
+    served = interaction.response_id
+    if not served:
+        return False
+    # Draft A is always the served answer, so the cheap case needs no lookup at
+    # all - and it is also the case where the user kept what they were given.
+    if chosen_draft_response_id == served:
+        return True
+    pair = await run_in_threadpool(_draft_pair_for, served, workspace)
+    return pair is not None and chosen_draft_response_id in pair
+
+
 async def _apply_cache_feedback(
     *,
     response_id: str,
@@ -303,6 +372,23 @@ async def submit_feedback(
                 department=department,
                 validate_namespace=validate_namespace,
                 cache_namespace=cache_namespace,
+            )
+        # Namespace ownership is not enough. The pair that was OFFERED is not
+        # stored anywhere (no column, no second migration), so the chosen id is
+        # instead re-derived from what the interaction already knows: it must be
+        # the entry the interaction currently points at (draft A, the served
+        # answer), or the alternate the same lookup produces for that entry
+        # (draft B). Without this an unrelated entry in the caller's own
+        # namespace takes the +1.0 AND the interaction is re-pointed at it, so a
+        # later thumbs-down deletes an entry the user was never shown.
+        if not await _is_a_draft_of(
+            interaction=interaction,
+            chosen_draft_response_id=chosen_draft_response_id,
+            workspace=workspace,
+        ):
+            raise ValueError(
+                "chosen_draft_response_id was not one of the drafts offered for "
+                "this interaction"
             )
         cache_response_id = chosen_draft_response_id
         draft_choice = "recorded"

@@ -270,3 +270,39 @@ class TestAnswersDiverge:
 
     def test_punctuation_only_difference_is_not_a_choice(self):
         assert answers_diverge("Yes, absolutely.", "Yes - absolutely!") is None
+
+    def test_the_same_temperature_written_two_ways_is_not_a_choice(self):
+        """The tungsten pair from the PR 70 review, and the ONLY natural tie it
+        could produce.
+
+        The trigger population comes from concurrent misses of one question, so
+        the two entries are two phrasings of one answer far more often than a
+        real disagreement. Untokenised this pair scored 0.70 - under the 0.9
+        ceiling - and the user was asked to choose between the same fact
+        written twice.
+        """
+        assert answers_diverge(
+            "The melting point of tungsten is 3422°C.",
+            "The melting point of tungsten is 3422 degrees Celsius.",
+        ) is None
+
+    def test_percent_and_currency_spellings_are_not_a_choice(self):
+        assert answers_diverge("Interest is 5%.", "Interest is 5 percent.") is None
+        assert answers_diverge("It costs $100.", "It costs 100 dollars.") is None
+
+    def test_normalising_units_does_not_swallow_a_real_disagreement(self):
+        """The pair the 0.9 ceiling exists to protect, re-asserted against the
+        normalisation: "nine" vs "ten" is a difference in what the answer SAYS,
+        not in how a unit is spelled, so it must still be offered - at the same
+        0.846 the ceiling was set against.
+        """
+        ratio = answers_diverge(ANSWER_A, ANSWER_A.replace("nine", "ten"))
+        assert ratio is not None
+        assert round(ratio, 3) == 0.846
+
+    def test_a_real_temperature_disagreement_is_still_a_choice(self):
+        """Normalising the UNIT must not normalise away the VALUE."""
+        assert answers_diverge(
+            "The melting point of tungsten is 3422°C.",
+            "The melting point of tungsten is 3400 degrees Celsius.",
+        ) is not None
