@@ -88,14 +88,14 @@ class TrackingAdjuster(StubAdjuster):
         return "ADJUSTED — blind rewrite"
 
 
-def _patch_pipeline(monkeypatch, *, validator, adjuster, memory):
+def _patch_pipeline(monkeypatch, *, validator, adjuster, memory, llm_router=None):
     async def _noop_log(*a, **k):
         return None
 
     monkeypatch.setattr(
         openai_compat, "_services_for_model_profile",
         lambda profile, llm_config=None: openai_compat.ModelServices(
-            normalizer=StubNormalizer(), llm_router=None,
+            normalizer=StubNormalizer(), llm_router=llm_router,
             adjuster=adjuster, enricher=StubEnricher(), validator=validator,
         ),
     )
@@ -110,6 +110,7 @@ def _post(
     pdf: bytes | None = None,
     markdown: bytes | None = None,
     sticky: bool = False,
+    routing_mode: str | None = None,
 ):
     content: list[dict] = [{"type": "input_text", "text": query}]
     if pdf is not None:
@@ -125,6 +126,8 @@ def _post(
     headers = dict(_AUTH)
     if sticky:
         headers["X-DejaQ-Attachment-Sticky"] = "true"
+    if routing_mode:
+        headers["X-DejaQ-Routing-Mode"] = routing_mode
     return TestClient(app, headers=headers).post(
         "/v1/responses",
         json={"model": "gpt-4o", "input": [{"role": "user", "content": content}], "stream": False},
@@ -417,10 +420,11 @@ class RecordingStoreMemory:
     def store_interaction(
         self, normalized_query, generalized_answer, original_query, user_id,
         image_dhash=None, image_clip=None, image_kind=None, image_text=None,
-        file_sha=None, file_kind=None,
+        file_sha=None, file_kind=None, rag_document_ids=None, rag_document_id=None,
     ) -> str:
         doc_id = derive_doc_id(
-            normalized_query, file_sha, image_text=image_text, image_dhash=image_dhash
+            normalized_query, file_sha, image_text=image_text, image_dhash=image_dhash,
+            rag_document_id=rag_document_id,
         )
         self.stored.append({
             "doc_id": doc_id,
@@ -479,12 +483,43 @@ def _patch_external_provider(monkeypatch, answer: str):
 PROVIDER_ANSWER = "Either party may terminate this agreement with thirty days written notice."
 
 
+class HardContentJudgeRouter:
+    """Stands in for the local model on the hard-content judge call only.
+
+    PDF_A is small enough to fit the local context window, so a file-attached
+    miss now runs the hard-content judge before deciding local vs. external
+    (see openai_compat.py's file routing) — a real local model this old
+    `llm_router=None` fixture never anticipated. These tests are about the
+    CELERY FALLBACK on an external-routed miss, not about routing itself, so
+    this always answers HARD to send the request external, matching what
+    every one of these tests set up (a provider stub, an external model
+    config) and asserted on before that judge call existed. Any other call
+    (real local generation) is not expected in a celery-fallback test and
+    fails loudly rather than silently answering something wrong.
+    """
+
+    async def generate_local_response(self, *args, **kwargs):
+        return "HARD", None, "stop"
+
+
 def _post_pdf_miss_with_broken_celery(monkeypatch, memory, adjuster):
-    _patch_pipeline(monkeypatch, validator=RecordingValidator(True), adjuster=adjuster, memory=memory)
+    _patch_pipeline(
+        monkeypatch, validator=RecordingValidator(True), adjuster=adjuster, memory=memory,
+        llm_router=HardContentJudgeRouter(),
+    )
     monkeypatch.setattr(openai_compat, "USE_CELERY", True)
     monkeypatch.setattr(openai_compat, "generalize_and_store_task", BrokenCeleryTask())
     _patch_external_provider(monkeypatch, PROVIDER_ANSWER)
-    return _post(ORIGINAL_QUESTION, pdf=PDF_A)
+    # These three tests are about the STORE, not the route: a broker outage
+    # must not write an ungated entry whichever model answered. They stub an
+    # external provider and assert its answer, so the route has to be the
+    # external one - and a PDF with extractable text now routes LOCAL by
+    # default (a file with usable text is answered by the local model since
+    # "answer attached files with the local model"), where `llm_router=None` in
+    # this module's fixture is never a real object. `hard_external` is the
+    # documented policy ceiling above that capability check, so it pins the
+    # route the way a caller would rather than by re-stubbing the router.
+    return _post(ORIGINAL_QUESTION, pdf=PDF_A, routing_mode="hard_external")
 
 
 def test_celery_fallback_stores_the_file_identity(monkeypatch):

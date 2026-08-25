@@ -8,7 +8,9 @@ from typing import AsyncGenerator
 from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from app.config import MAX_ATTACHMENT_BYTES
+from app.config import MAX_ATTACHMENT_BYTES, RAG_ENABLED
+from app.db import rag_document_repo
+from app.db.session import get_session
 from app.dependencies.auth import ResolvedWorkspace, require_org_key
 
 from app.schemas.openai_compat import OAIMessage
@@ -297,6 +299,27 @@ async def responses(
     background_tasks: BackgroundTasks,
     resolved_workspace: ResolvedWorkspace = Depends(require_org_key),
 ):
+    rag_document_title: str | None = None
+    if oai_request.rag_document_id is not None:
+        if not RAG_ENABLED:
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "RAG is disabled on this server (DEJAQ_RAG_ENABLED=false)."},
+            )
+        with get_session() as session:
+            rag_doc = rag_document_repo.get(
+                session, resolved_workspace.workspace_id, oai_request.rag_document_id
+            )
+            if rag_doc is None:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "detail": f"rag_document_id {oai_request.rag_document_id} not found "
+                        "in this workspace."
+                    },
+                )
+            rag_document_title = rag_doc.title
+
     try:
         messages, image, file = _responses_request_to_messages(oai_request)
         result = await run_chat_pipeline(
@@ -308,6 +331,8 @@ async def responses(
             background_tasks=background_tasks,
             image=image,
             file=file,
+            rag_document_id=oai_request.rag_document_id,
+            rag_document_title=rag_document_title,
             stream=bool(oai_request.stream),
         )
     except PipelineError as exc:

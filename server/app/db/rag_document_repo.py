@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from app.db.models.rag_document import RagDocument
 
 
-def create(
+def start_processing_new(
     session: Session,
     workspace_id: int,
     *,
@@ -13,8 +13,14 @@ def create(
     source_ref: str | None,
     sha: str,
     char_count: int,
-    chunk_count: int,
+    progress_total: int,
+    byte_size: int = 0,
 ) -> RagDocument:
+    """Catalog a brand-new document as ingestion begins.
+
+    chunk_count stays 0 until `finish_ready` - a row in status="processing"
+    must never be mistaken for indexed knowledge (see rag_admin_service).
+    """
     row = RagDocument(
         workspace_id=workspace_id,
         title=title,
@@ -23,7 +29,11 @@ def create(
         source_ref=source_ref,
         sha=sha,
         char_count=char_count,
-        chunk_count=chunk_count,
+        byte_size=byte_size,
+        chunk_count=0,
+        status="processing",
+        progress_current=0,
+        progress_total=progress_total,
     )
     session.add(row)
     session.flush()
@@ -31,7 +41,7 @@ def create(
     return row
 
 
-def update_content(
+def start_processing_existing(
     session: Session,
     row: RagDocument,
     *,
@@ -40,19 +50,48 @@ def update_content(
     source: str,
     source_ref: str | None,
     char_count: int,
-    chunk_count: int,
+    progress_total: int,
+    byte_size: int = 0,
 ) -> RagDocument:
-    """Refresh an existing document in place, keeping its id.
+    """Re-ingest an existing document (same sha) in place, keeping its id.
 
-    Re-adding the same words (same sha) is a replace. It updates this row rather
-    than swapping it for a new one, so the id chunks are keyed by never changes.
+    chunk_count is left untouched until `finish_ready` - the previous version
+    keeps grounding answers while the new one embeds.
     """
     row.title = title
     row.kind = kind
     row.source = source
     row.source_ref = source_ref
     row.char_count = char_count
+    row.byte_size = byte_size
+    row.status = "processing"
+    row.progress_current = 0
+    row.progress_total = progress_total
+    row.error_message = None
+    session.flush()
+    session.refresh(row)
+    return row
+
+
+def update_progress(session: Session, row: RagDocument, *, current: int) -> None:
+    row.progress_current = current
+    session.flush()
+
+
+def finish_ready(session: Session, row: RagDocument, *, chunk_count: int) -> RagDocument:
+    row.status = "ready"
     row.chunk_count = chunk_count
+    row.progress_current = chunk_count
+    row.progress_total = chunk_count
+    row.error_message = None
+    session.flush()
+    session.refresh(row)
+    return row
+
+
+def finish_failed(session: Session, row: RagDocument, *, reason: str) -> RagDocument:
+    row.status = "failed"
+    row.error_message = reason
     session.flush()
     session.refresh(row)
     return row

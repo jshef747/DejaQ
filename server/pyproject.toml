@@ -8,7 +8,6 @@ dependencies = [
     "accelerate>=1.12.0",
     "fastapi>=0.129.0",
     "huggingface-hub>=1.4.1",
-    "llmlingua>=0.2.2",
     "pydantic>=2.12.5",
     "httpx>=0.28.1",
     "torch>=2.10.0",
@@ -39,7 +38,7 @@ dependencies = [
     # Used by services/image_fingerprint.py, which imported it while it was in
     # neither pyproject.toml nor uv.lock — the venv worked only by accident.
     "pillow>=11.0.0",
-    # RAG (Rug) knowledge layer: HTML→text for URL ingestion (services/rag_ingest.py).
+    # RAG knowledge layer: HTML→text for URL ingestion (services/rag_ingest.py).
     # MIT-licensed, lightweight — no AGPL dependency, matching the pypdf choice above.
     "beautifulsoup4>=4.12.0",
     # Required by FastAPI to parse multipart/form-data — the RAG document upload
@@ -75,4 +74,5 @@ markers = [
     "gemma_e2b: requires Gemma 4 E2B",
     "llama: requires Gemma 4 26B A4B",
     "deberta: requires NVIDIA DeBERTa",
+    "labse: requires the LaBSE classifier",
 ]

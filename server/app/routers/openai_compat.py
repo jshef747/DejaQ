@@ -4,6 +4,7 @@ import base64
 import inspect
 import logging
 import time
+import urllib.parse
 import uuid
 from dataclasses import dataclass, field
 from typing import AsyncGenerator
@@ -33,6 +34,7 @@ from app.services.credential_service import (
     get_workspace_provider_key,
 )
 from app.services.llm_providers import LIVE_PROVIDERS
+from app.services.llm_providers.litellm_transport import external_supports_pdf
 from app.services.memory_chromaDB import (
     CacheLookupResult,
     derive_doc_id,
@@ -62,6 +64,7 @@ from app.services import (
     rag_service,
 )
 from app.services.classifier import ClassifierService
+from app.services.labse_classifier import LabseClassifierService
 from app.services.context_adjuster import (
     DEFAULT_ADJUST_SYSTEM_PROMPT,
     DEFAULT_GENERALIZE_SYSTEM_PROMPT,
@@ -91,6 +94,7 @@ from app.config import (
     CACHE_DRAFTS_MAX_SCORE_GAP,
     CACHE_FILE_ENABLED,
     CONTEXT_ADJUSTER_MODEL_NAME,
+    DEFAULT_CLASSIFIER_CHOICE,
     DEFAULT_MAX_TOKENS,
     CACHE_IMAGE_MAX_DISTANCE,
     CACHE_IMAGE_MAX_HAMMING,
@@ -100,14 +104,15 @@ from app.config import (
     ENRICHER_MODEL_NAME,
     EXTERNAL_MODEL_NAME,
     GENERALIZER_MODEL_NAME,
+    LEGACY_ROUTING_THRESHOLD,
+    LOAD_LABSE_CLASSIFIER,
+    LOAD_LEGACY_CLASSIFIER,
     LOCAL_ATTACHMENT_MAX_TOKENS,
     LOCAL_LLM_MODEL_NAME,
     NORMALIZER_MODEL_NAME,
     OLLAMA_NUM_CTX,
-    RAG_ENABLED,
     RAG_FORCE_EXTERNAL,
     RAG_MAX_CONTEXT_CHARS,
-    RAG_MAX_DISTANCE,
     RAG_TOP_K,
     REWRITE_MAX_TOKENS,
     ROUTING_THRESHOLD,
@@ -116,10 +121,16 @@ from app.config import (
     VALIDATOR_SKIP_DISTANCE,
 )
 from app.db.session import get_session
-from app.utils.exceptions import ExternalLLMAuthError, ExternalLLMError
+from app.utils.exceptions import (
+    ExternalAttachmentTooLargeError,
+    ExternalAttachmentUnsupportedError,
+    ExternalLLMAuthError,
+    ExternalLLMError,
+)
 from app.utils.logger import clear_request_id, content_snippet, hide_content, set_request_id
 from app.utils.pipeline_trace import PipelineTrace
 from app.schemas.chat import ExternalLLMRequest
+from app.services.language_gate import dominant_script, scripts_conflict
 from app.services.chat_messages import extract_pipeline_inputs
 from app.services.request_logger import request_logger
 from app.services.response_registry import ResponseInteraction, ServedTier, response_registry
@@ -152,6 +163,15 @@ class EffectiveLlmConfig:
     # where it is turned into a 422 PipelineError before any provider lookup.
     external_model: str | None
     routing_threshold: float
+    # "legacy" or "labse" - which classifier decides routing for this
+    # workspace. The two classifiers score on completely different scales
+    # (legacy tops out ~0.30, LaBSE crosses ~0.50), so `routing_threshold`
+    # above is LaBSE's threshold only - `legacy_routing_threshold` below is
+    # the legacy classifier's own, and `active_routing_threshold` picks
+    # whichever one actually applies. Never compare a score from one
+    # classifier against the other's threshold.
+    classifier_choice: str = DEFAULT_CLASSIFIER_CHOICE
+    legacy_routing_threshold: float = LEGACY_ROUTING_THRESHOLD
     # The recorded provider for external_model - the credential lookup key.
     # None for a row with no recorded provider (never saved, or a model the
     # qualification migration f7a8b9c0d1e2 could not place) or for the
@@ -217,6 +237,19 @@ class EffectiveLlmConfig:
     rewrite_max_tokens_overridden: bool = False
     ollama_num_ctx_overridden: bool = False
 
+    @property
+    def active_routing_threshold(self) -> float:
+        """The threshold that belongs to whichever classifier is active.
+
+        Picking this by classifier_choice - never a single shared field - is
+        the whole point: the two classifiers score on different scales, and
+        a shared threshold silently misroutes whichever one it wasn't tuned
+        for (see LEGACY_ROUTING_THRESHOLD's comment in app/config.py).
+        """
+        if self.classifier_choice == "legacy":
+            return self.legacy_routing_threshold
+        return self.routing_threshold
+
 
 # --- Service singletons (shared with main process; each service is safe to instantiate once per router module) ---
 logger.info("Initializing OpenAI-compat services...")
@@ -225,10 +258,50 @@ _llm_router = get_llm_router_service()
 _adjuster = get_context_adjuster_service()
 _enricher = get_context_enricher_service()
 _validator = get_validator_service()
-_classifier = ClassifierService()
+# _classifier (legacy NVIDIA DeBERTa, ~1.5GB) loads eagerly here only when
+# LOAD_LEGACY_CLASSIFIER is set (a staging/dev escape hatch - see its
+# config.py comment). Otherwise it is left None and lazy-loaded on the FIRST
+# request from any workspace whose classifier_choice picks "legacy" (see
+# _get_legacy_classifier below) - the picker must not silently cost every
+# install a second resident model just because the option exists. Once
+# loaded (either way) it stays resident: ClassifierService is a singleton
+# class, so there is no cost to reload on a later request, and no attempt is
+# made to unload it - this machine has already proven it cannot hold four
+# resident Ollama models, and an unload/reload cycle on a model this size
+# would trade that risk for request-latency spikes instead.
+_classifier = ClassifierService() if LOAD_LEGACY_CLASSIFIER else None
+_labse_classifier = LabseClassifierService() if LOAD_LABSE_CLASSIFIER else None
 _external_llm = ExternalLLMService()
 # MemoryService is namespace-aware; use get_memory_service(namespace) per-request
+logger.info(
+    "Classifiers loaded at startup: labse=%s legacy=%s (legacy lazy-loads on first "
+    "workspace request that selects classifier_choice=legacy, if not already loaded)",
+    _labse_classifier is not None,
+    _classifier is not None,
+)
 logger.info("OpenAI-compat services ready.")
+
+
+def _get_legacy_classifier() -> ClassifierService:
+    global _classifier
+    if _classifier is None:
+        logger.info("Lazy-loading legacy classifier (NVIDIA DeBERTa, ~1.5GB) - first request selecting it")
+        _classifier = ClassifierService()
+    return _classifier
+
+
+def _get_labse_classifier() -> LabseClassifierService:
+    global _labse_classifier
+    if _labse_classifier is None:
+        logger.info("Lazy-loading LaBSE classifier - first request selecting it since DEJAQ_LOAD_LABSE_CLASSIFIER=false")
+        _labse_classifier = LabseClassifierService()
+    return _labse_classifier
+
+
+def _classifier_for_choice(choice: str):
+    if choice == "legacy":
+        return _get_legacy_classifier()
+    return _get_labse_classifier()
 
 
 class PipelineError(Exception):
@@ -309,6 +382,8 @@ def _effective_from_config(config) -> EffectiveLlmConfig:
         external_model=config.external_model,
         external_provider=config.external_provider,
         routing_threshold=config.routing_threshold,
+        classifier_choice=config.classifier_choice,
+        legacy_routing_threshold=config.legacy_routing_threshold,
         local_model=config.local_model,
         generalizer_model=config.generalizer_model,
         adjuster_model=config.adjuster_model,
@@ -521,12 +596,24 @@ def _diagnostic_prompt(text: str | None, limit: int = 200) -> str | None:
     return prompt[:limit]
 
 
+def _encode_header_text(value: str) -> str:
+    """Percent-encode free-text diagnostic values for a header (RFC 3986 /
+    encodeURIComponent-compatible). HTTP headers are Latin-1 only (RFC 7230;
+    Starlette encodes headers as latin-1 in Response.init_headers), so a
+    matched/nearest/enriched query outside Latin-1 - any non-Latin script,
+    or even an em-dash or curly quote in English - would otherwise be
+    destroyed. Percent-encoding keeps the value ASCII (and therefore
+    Latin-1-safe) while surviving the trip byte-for-byte; the client decodes
+    with `decodeURIComponent`."""
+    return urllib.parse.quote(value, safe="")
+
+
 def _sanitize_headers(headers: dict[str, str]) -> dict[str, str]:
-    """Make every header value Latin-1-safe (RFC 7230; Starlette encodes
-    headers as latin-1 in Response.init_headers). Free-text diagnostic values
-    (nearest/matched cache prompts) can carry characters like em-dashes or
-    curly quotes that raise UnicodeEncodeError there and crash the whole
-    request; replace rather than drop so the header stays useful."""
+    """Final safety net only: make every header value Latin-1-safe (RFC 7230;
+    Starlette encodes headers as latin-1 in Response.init_headers). Diagnostic
+    text values must already be percent-encoded via `_encode_header_text`
+    before reaching here - this is just a backstop so a value that somehow
+    isn't (a bug, a future header) can never crash the request."""
     return {
         key: value.encode("latin-1", errors="replace").decode("latin-1")
         for key, value in headers.items()
@@ -539,7 +626,7 @@ def _nearest_headers(cache_lookup: CacheLookupResult) -> dict[str, str]:
         return {}
     return _sanitize_headers({
         "x-dejaq-nearest-cache-distance": f"{cache_lookup.nearest_distance:.4f}",
-        "x-dejaq-nearest-cache-prompt": prompt,
+        "x-dejaq-nearest-cache-prompt": _encode_header_text(prompt),
     })
 
 
@@ -554,7 +641,7 @@ def _enriched_headers(user_query: str, enriched: str, enrich_succeeded: bool) ->
     prompt = _diagnostic_prompt(enriched)
     if prompt is None:
         return {}
-    return _sanitize_headers({"x-dejaq-enriched-query": prompt})
+    return _sanitize_headers({"x-dejaq-enriched-query": _encode_header_text(prompt)})
 
 
 def _nearest_log_suffix(cache_lookup: CacheLookupResult) -> str:
@@ -738,21 +825,30 @@ _HARD_CONTENT_JUDGE_SYSTEM_PROMPT = (
 )
 
 
-async def _judge_hard_content(llm_router, judge_text: str) -> bool:
-    """Ask the local model whether attached content (inlined file text, or a
-    document image's OCR'd text) needs the external model instead of local
-    generation. Returns True for "hard" (route external), False for "easy".
+async def _judge_hard_content(
+    llm_router, judge_text: str, system_prompt: str = _HARD_CONTENT_JUDGE_SYSTEM_PROMPT
+) -> bool:
+    """Ask a local model whether `judge_text` needs the external model instead
+    of local generation. Returns True for "hard" (route external), False for
+    "easy". Shared by every attachment hard-content judge caller (image OCR
+    text, inlined file text) - same one-word-verdict mechanism, only the
+    model and prompt differ per caller.
 
     Never raises: any exception, timeout, or answer that doesn't clearly say
     HARD defaults to EASY, which routes local - the cheap direction to be
     wrong in. Logged, never propagated into the request.
+
+    temperature=0.0: a routing verdict must be deterministic - the same
+    question must not route differently on two runs. Ordinary answer
+    generation (generate_local_response's own default) keeps sampling.
     """
     try:
         text, _, _ = await llm_router.generate_local_response(
             judge_text,
             history=None,
             max_tokens=8,
-            system_prompt=_HARD_CONTENT_JUDGE_SYSTEM_PROMPT,
+            system_prompt=system_prompt,
+            temperature=0.0,
         )
     except Exception:
         logger.exception("Hard-content judge failed; defaulting to easy")
@@ -816,7 +912,7 @@ async def _judge_hard_content_over_text(llm_router, user_query: str, text: str) 
 
 
 def _query_with_rag_context(user_query: str, chunks: list) -> str:
-    """Prepend retrieved workspace knowledge (Rug) to the query, fenced + labelled.
+    """Prepend retrieved workspace knowledge (RAG) to the query, fenced + labelled.
 
     Mirrors _query_with_inlined_file: the knowledge is untrusted DATA to answer
     FROM, never instructions to follow. Total injected text is capped at
@@ -1012,9 +1108,14 @@ def _bg_generalize_and_store(
     image_text: str | None = None,
     file_sha: str | None = None,
     file_kind: str | None = None,
+    rag_document_ids: str | None = None,
+    rag_document_id: int | None = None,
 ) -> None:
     start = time.perf_counter()
-    doc_id = _doc_id(clean_query, file_sha, image_text=image_text, image_dhash=image_dhash)
+    doc_id = _doc_id(
+        clean_query, file_sha, image_text=image_text, image_dhash=image_dhash,
+        rag_document_id=rag_document_id,
+    )
     try:
         # Same guard the Celery task carries: a person wrote this answer through
         # Edit & Save while this store was still pending, and their text must
@@ -1027,11 +1128,11 @@ def _bg_generalize_and_store(
                 doc_id,
             )
             return
-        # Attachment-anchored answers are stored verbatim — see the note in
-        # tasks/cache_tasks.py: generalization cannot see the image or the file
-        # and invents specifics, and the gate already pins the answer to one
-        # attachment.
-        if image_kind or file_kind:
+        # Attachment/reference-anchored answers are stored verbatim — see the
+        # note in tasks/cache_tasks.py: generalization cannot see the image,
+        # file, or referenced document and invents specifics, and the gate
+        # already pins the answer to one attachment/document.
+        if image_kind or file_kind or rag_document_id is not None:
             generalized = answer
         else:
             llm_config = _llm_config_for_workspace_slug(tenant_id)
@@ -1053,6 +1154,8 @@ def _bg_generalize_and_store(
             image_dhash=image_dhash, image_clip=image_clip,
             image_kind=image_kind, image_text=image_text,
             file_sha=file_sha, file_kind=file_kind,
+            rag_document_ids=rag_document_ids,
+            rag_document_id=rag_document_id,
         )
         latency_ms = int((time.perf_counter() - start) * 1000)
         query = content_snippet(clean_query)
@@ -1233,6 +1336,8 @@ async def run_chat_pipeline(
     background_tasks: BackgroundTasks,
     image: tuple[bytes, str] | None = None,
     file: tuple[bytes, str, str] | None = None,
+    rag_document_id: int | None = None,
+    rag_document_title: str | None = None,
     stream: bool = False,
 ) -> ChatPipelineResult:
     """Core DejaQ pipeline: enrich → normalize → cache → validate → adjust/generate → store.
@@ -1252,6 +1357,17 @@ async def run_chat_pipeline(
     channel that gates the hit. Running a 40-page document through the normalizer
     would produce a useless key and an enormous embedding.
 
+    `rag_document_id` is an explicit `@`-reference to one knowledge-base
+    document (already validated to exist in this workspace by the caller);
+    `rag_document_title` is that document's title, resolved by the caller at
+    the same time so this function never has to re-query for it. Retrieval
+    fetches that document's own chunks by id (rag_service.retrieve_by_document)
+    instead of running the normal nearest-neighbour search, and gates cache
+    hits on an EXACT id match — same shape as the file gate, for the same
+    reason: two different referenced documents asking the same question must
+    not collide, and an answer grounded in one must never be served to a
+    request that did not reference it.
+
     Raises PipelineError for HTTP-level failures (400, 402, 422, 429, 500, 502).
     """
     image_bytes, image_mime = image if image else (None, None)
@@ -1261,6 +1377,9 @@ async def run_chat_pipeline(
     file_bytes, file_mime, file_name = file if file else (None, None, None)
     _request_has_file = file_bytes is not None and CACHE_FILE_ENABLED
     file_doc: FileText | None = None
+    # An explicit `@`-reference to one knowledge-base document. The caller
+    # (openai_responses.py) has already validated it exists in this workspace.
+    _request_has_rag_ref = rag_document_id is not None
     _t0 = time.monotonic()
     trace = PipelineTrace()
     cache_namespace: str = getattr(raw_request.state, "cache_namespace", "dejaq_default")
@@ -1356,6 +1475,7 @@ async def run_chat_pipeline(
         _image_anchored = False  # the gate accepted: this hit is pinned to one image
         _file_gate_logged = False
         _file_anchored = False   # the gate accepted: this hit is pinned to one file
+        _rag_anchored = False    # the gate accepted: this hit is pinned to one referenced document
         if _request_has_image:
             if CACHE_IMAGE_OCR_ENABLED:
                 try:
@@ -1444,11 +1564,16 @@ async def run_chat_pipeline(
         # discard the context adjuster on exactly the turns that exist to
         # change how an answer reads. It is the same `not history` rule
         # ADJUSTER_SKIP_DISTANCE is gated on, for the same reason.
+        #
+        # Never on an explicit `@`-reference either, for the reason attachments
+        # are excluded: the reference is what makes the hit correct, and a
+        # second draft would be a second answer offered without it.
         _want_drafts = bool(
             llm_config.drafts_enabled
             and not history
             and not _request_has_image
             and not _request_has_file
+            and not _request_has_rag_ref
         )
         # Every candidate that cleared both gates, best first. Element 0 is the
         # served answer (the prior single-winner contract); a second element, when
@@ -1466,6 +1591,7 @@ async def run_chat_pipeline(
             _cand_passed = True
             _cand_image_anchored = False
             _cand_file_anchored = False
+            _cand_rag_anchored = False
 
             # Image gate. Kinds must agree (a photo never matches a document
             # entry, and a text request never matches either), then the
@@ -1541,15 +1667,72 @@ async def run_chat_pipeline(
                 else:
                     _cand_file_anchored = True
 
+            # Explicit `@`-reference gate. Exact id equality, same shape as the
+            # file gate above and for the same reason: it runs whenever EITHER
+            # side carries a reference, so an answer grounded in one document
+            # is never served to a request that didn't reference it (and a
+            # request that DID reference one never gets an unreferenced,
+            # possibly-wrong-document answer either).
+            if _cand_passed and (_request_has_rag_ref or _candidate.rag_document_id):
+                verdict = rag_document_id == _candidate.rag_document_id
+                logger.info(
+                    "rag_ref_gate %s — this=%s cached=%s | text_distance=%.4f "
+                    "matched_prompt=%s entry=%s",
+                    "ACCEPT" if verdict else "REJECT",
+                    rag_document_id if _request_has_rag_ref else "none",
+                    _candidate.rag_document_id or "none",
+                    float(_candidate.distance or 0.0),
+                    _diagnostic_prompt(_candidate.matched_query) or "",
+                    _candidate.entry_id or "?",
+                )
+                if not verdict:
+                    _cand_passed = False
+                else:
+                    _cand_rag_anchored = True
+
+            # Language gate. The candidate's stored answer must be written
+            # in the same script as the question, so a Hebrew question is
+            # never served a cached English (or other cross-script) answer
+            # verbatim - see services/language_gate.py for why this is a
+            # cheap Unicode script check rather than a model call. It runs
+            # here, in the per-candidate gate loop, so it also covers the
+            # trusted-tier fast path (VALIDATOR_SKIP_DISTANCE) and the
+            # near-identical fast path (ADJUSTER_SKIP_DISTANCE) below -
+            # both of which serve the cached answer without ever reaching
+            # the validator or the adjuster, so a check placed in either of
+            # those would miss exactly the closest, most "trusted" matches.
+            # A REJECT falls through to the next pool candidate exactly
+            # like an image/file/rag REJECT above; if nothing survives,
+            # this becomes a normal cache miss and the question is
+            # answered fresh, in its own language.
+            if _cand_passed and _candidate.generalized_answer:
+                _lang_conflict = scripts_conflict(user_query, _candidate.generalized_answer)
+                logger.info(
+                    "language_gate %s - query_script=%s answer_script=%s | text_distance=%.4f "
+                    "matched_prompt=%s entry=%s",
+                    "REJECT" if _lang_conflict else "ACCEPT",
+                    dominant_script(user_query),
+                    dominant_script(_candidate.generalized_answer),
+                    float(_candidate.distance or 0.0),
+                    _diagnostic_prompt(_candidate.matched_query) or "",
+                    _candidate.entry_id or "?",
+                )
+                if _lang_conflict:
+                    _cand_passed = False
+
             if _cand_passed:
                 if not _gate_passed:
                     # The first passer is the served answer, and everything
                     # downstream (validation, adjustment, the response id) reads
                     # these — so they are fixed here and never touched again,
-                    # however far the scan below continues.
+                    # however far the scan below continues. _rag_anchored belongs
+                    # inside this guard for the same reason as the other two: it
+                    # describes the SERVED entry, and a later scanned candidate
+                    # must never restate its anchoring as if it were the answer.
                     cache_lookup = _candidate
                     _image_anchored = _cand_image_anchored
                     _file_anchored = _cand_file_anchored
+                    _rag_anchored = _cand_rag_anchored
                 _gate_passed.append(_candidate)
                 # One passer is enough unless the tie-breaker might want a
                 # runner-up. When it might, keep going a little: the pool is
@@ -1618,11 +1801,12 @@ async def run_chat_pipeline(
                 _file_side(file_doc), _detail, _note, hide_content(user_query),
             )
 
-        # Both gates lead to the same serving rules: the validator compares the two
-        # QUESTIONS rather than the answer, and the context adjuster is skipped.
-        # Every model downstream is blind to the attachment, so an answer about one
-        # is only reusable once the attachment itself has been proven identical.
-        _attachment_anchored = _image_anchored or _file_anchored
+        # All three gates lead to the same serving rules: the validator compares
+        # the two QUESTIONS rather than the answer, and the context adjuster is
+        # skipped. Every model downstream is blind to the attachment/reference,
+        # so an answer about one is only reusable once it has been proven
+        # identical (image/file: fingerprint or hash; RAG: the same doc id).
+        _attachment_anchored = _image_anchored or _file_anchored or _rag_anchored
         # Set on an entry a person wrote through Edit & Save. Read here for the
         # adjuster skip below and reported on the response so a client can mark
         # the answer as human-verified.
@@ -1642,7 +1826,24 @@ async def run_chat_pipeline(
             # the question. Calling the validator here would only burn latency and risk
             # an over-rejection on a clearly correct hit. Band hits (requires_validation)
             # never skip: they are only trustworthy once the validator accepts them.
-            _skip_validation = (not _requires_validation) and _cache_distance <= VALIDATOR_SKIP_DISTANCE
+            #
+            # `lexically_exact` is also required — the distance floor alone was
+            # falsified live: "מה בירת אוסטריה?"/"מה בירת אוסטרליה?" (Austria/
+            # Australia) measured distance 0.0023, *below* the smallest
+            # non-match distance (~0.0036) the skip threshold was calibrated
+            # against, and skipped straight to a wrong answer. align()'s fuzzy
+            # matching calls the two words "aligned" (0.93 letter-similarity)
+            # despite them naming different countries, so `not mismatches`
+            # alone doesn't catch it either - `lexically_exact` only allows
+            # the skip when the two queries are the literal same words (see
+            # lexical_match.AlignResult.exact), never a fuzzy-resolved "close
+            # enough". A close-but-not-exact match still gets served - just
+            # through the validator below, same as any band hit.
+            _skip_validation = (
+                not _requires_validation
+                and _cache_distance <= VALIDATOR_SKIP_DISTANCE
+                and bool(getattr(cache_lookup, "lexically_exact", True))
+            )
             if not _skip_validation:
                 # Word-swap hint from the lexical gate ("'list' vs 'string'") —
                 # sharpens the validator on near-identical sibling questions.
@@ -1839,7 +2040,7 @@ async def run_chat_pipeline(
                     "x-dejaq-tier": "cache",
                     "x-dejaq-response-id": response_id,
                     "x-dejaq-cache-distance": f"{_cache_distance:.4f}",
-                    "x-dejaq-cache-matched-query": _cache_matched_query,
+                    "x-dejaq-cache-matched-query": _encode_header_text(_cache_matched_query),
                     "x-dejaq-validator-verdict": "valid",
                 })
                 if _human_authored:
@@ -1871,6 +2072,15 @@ async def run_chat_pipeline(
                     ]
                     hit_headers["x-dejaq-drafts"] = str(len(_drafts))
 
+                if _rag_anchored:
+                    # A deterministic reason to be grounded: the gate above
+                    # proved this entry was pinned to the SAME referenced
+                    # document, not matched by distance. Minimal and
+                    # self-contained — see the miss-path header below for why
+                    # this doesn't reuse x-dejaq-rag-chunks.
+                    hit_headers["x-dejaq-rag-document-id"] = str(rag_document_id)
+                    if rag_document_title:
+                        hit_headers["x-dejaq-rag-document-title"] = rag_document_title
                 hit_headers.update(_nearest_headers(cache_lookup))
                 hit_headers.update(_enriched_headers(user_query, enriched, enrich_succeeded))
                 return ChatPipelineResult(
@@ -1973,6 +2183,17 @@ async def run_chat_pipeline(
             _file_usable_locally = (
                 file_doc is not None and file_doc.readable and _file_fits_locally
             )
+            # Whether the workspace's configured external model can even take a
+            # PDF as input at all - checked once here (not inside
+            # litellm_transport, which only raises once a call is already
+            # committed to going external) so an unreadable-locally PDF can
+            # decide up front whether attempting external is worth it, or
+            # whether to fall back locally instead (see the two elif branches
+            # below). False with no external_model configured at all - no
+            # credential is no more "PDF capable" than an incapable one.
+            _external_pdf_capable = bool(
+                llm_config.external_model
+            ) and external_supports_pdf(llm_config.external_model)
             if _file_usable_locally and routing_mode != ROUTING_MODE_HARD_EXTERNAL:
                 # File fits the local context window - but "fits" isn't "easy".
                 # Judge on the same inlined text generation would see (reusing
@@ -2001,6 +2222,49 @@ async def run_chat_pipeline(
                     max(_file_ctx_budget, 0), llm_config.ollama_num_ctx, _max_tokens,
                     _LOCAL_FILE_PROMPT_RESERVE_TOKENS, llm_config.local_attachment_max_tokens,
                 )
+            elif (
+                file_doc is not None
+                and file_doc.kind == "pdf"
+                and not file_doc.readable
+                and file_doc.image_bytes is not None
+                and routing_mode != ROUTING_MODE_HARD_EXTERNAL
+                and ollama_catalog.supports_vision(llm_config.local_model)
+                and not _external_pdf_capable
+            ):
+                # No text layer (a scanned page), but file_text.py rescued the
+                # page's own embedded image without needing a rasterization
+                # engine - the local vision model can look at it directly
+                # instead of this being forced external with nothing to send.
+                # That used to hit the external model's PDF capability gate
+                # and 422 with no answer at all (dejaq-200-test-fixes defect
+                # #2 - caused by the external model swap to one with
+                # supports_pdf_input=None). Gated on `not _external_pdf_capable`:
+                # a workspace with a genuinely document-capable external model
+                # configured keeps routing there instead - its native document
+                # part can read the scan directly and, unlike pypdf, isn't
+                # limited to the first page's first embedded image. This is a
+                # fallback for when external is a guaranteed dead end for
+                # PDFs, not a general preference for local over external.
+                # Unconditionally "easy": there is no extracted text to run
+                # the hard-content judge on, and this is already the degraded
+                # path - the alternative is no answer whatsoever.
+                classification = {"complexity": "easy", "score": 0.0, "task_type": "file_local_vision_rescue"}
+            elif (
+                file_doc is not None
+                and file_doc.kind == "pdf"
+                and not file_doc.readable
+                and routing_mode != ROUTING_MODE_HARD_EXTERNAL
+                and not _external_pdf_capable
+            ):
+                # Nothing to show ANY model - not even pixels (pypdf could not
+                # even parse the file, or parsed it but found no page image to
+                # rescue either) - AND the workspace's external model cannot
+                # read PDFs anyway, so routing there would just trade the
+                # image-rescue dead end for the capability-gate one. Answered
+                # locally with an honest "I couldn't read this" instead
+                # (local_gen_query below), never a bare 422 - see
+                # dejaq-200-test-fixes defect #2.
+                classification = {"complexity": "easy", "score": 0.0, "task_type": "file_unreadable_no_rescue"}
             else:
                 classification = {"complexity": "hard", "score": 1.0, "task_type": "file_external"}
         elif routing_mode == ROUTING_MODE_EASY_LOCAL:
@@ -2008,44 +2272,74 @@ async def run_chat_pipeline(
         elif routing_mode == ROUTING_MODE_HARD_EXTERNAL:
             classification = {"complexity": "hard", "score": 1.0, "task_type": "forced_external"}
         else:
+            # Which classifier decides the score is a per-workspace pick
+            # (llm_config.classifier_choice, dashboard Pipeline page) between
+            # LaBSE (shipped default - trained on labelled Hebrew directly,
+            # replaced the old NVIDIA classifier and the Hebrew-specific
+            # judge, see fm/dejaq-classifier-wire-in) and the legacy NVIDIA
+            # classifier (kept for staging/rollback). The easy/hard cut is
+            # ALWAYS that same classifier's own threshold
+            # (active_routing_threshold) - the two score on completely
+            # different scales and must never be compared against the
+            # other's cut (see LEGACY_ROUTING_THRESHOLD in app/config.py).
+            active_classifier = _classifier_for_choice(llm_config.classifier_choice)
             try:
                 with trace.step("classify"):
-                    classification = _classifier.predict_complexity(user_query)
+                    # enriched, not user_query: a bare follow-up turn
+                    # ("give me the short version") is not a question, and
+                    # scoring it as one under-fires on hard follow-ups (see
+                    # dejaq-difficulty-definition/report.md section 3(b)).
+                    classification = active_classifier.predict_complexity(enriched)
             except Exception:
-                logger.exception("Classifier failed")
+                logger.exception("Difficulty classifier (%s) failed", llm_config.classifier_choice)
                 classification = {"complexity": "easy", "score": 0.0, "task_type": "Unknown"}
             else:
-                score = float(classification.get("score", 0.0))
+                threshold = llm_config.active_routing_threshold
                 classification = {
                     **classification,
-                    "complexity": "hard" if score >= llm_config.routing_threshold else "easy",
+                    "complexity": "hard" if classification["score"] >= threshold else "easy",
                 }
+                logger.info(
+                    "Routing classify: workspace=%s classifier=%s score=%.4f threshold=%.4f -> %s",
+                    workspace_slug,
+                    llm_config.classifier_choice,
+                    classification["score"],
+                    threshold,
+                    classification["complexity"],
+                )
 
         complexity = classification["complexity"]
         route = "external" if complexity == "hard" else "local"
 
-        # RAG (Rug): on a genuine cache miss, ground the answer in the workspace's
-        # curated knowledge base. Retrieval sees the normalized query; retrieved
-        # chunks are injected into the generation prompt as fenced DATA and NEVER
-        # enter the cache key (same side-channel rule attachments follow). Skipped
-        # for attachment requests - not because they route external (they may
-        # well route local, per the hard-content judge above), but because they
-        # already carry their own content as context; injecting a second,
-        # unrelated context on top of an attached file or image would just
-        # dilute the prompt. See services/rag_service.py.
+        # RAG: on a genuine cache miss, ground the answer in the workspace's
+        # curated knowledge base — but ONLY for a document the user actually
+        # chose. There is no guess-which-document path any more: the system
+        # never grounds an answer in a document nobody picked. What still
+        # exists is a VISIBLE, dismissible suggestion in the chat composer
+        # (POST /rag-suggest) that, if accepted, becomes exactly the explicit
+        # reference this branch handles — see docs/rag-layer.md.
+        #
+        # Retrieval is `retrieve_by_document` (a Chroma metadata filter on the
+        # referenced document's own id, never the whole-collection nearest-
+        # neighbour search), so it cannot be crowded out by an unrelated
+        # document. It runs regardless of an attachment, since the user asked
+        # for this specific document by name. Retrieved chunks are injected
+        # into the generation prompt as fenced DATA and NEVER enter the cache
+        # key (same side-channel rule attachments follow). See
+        # services/rag_service.py.
         rag_context: list = []
-        if RAG_ENABLED and not _request_has_image and not _request_has_file:
+        if _request_has_rag_ref:
             try:
                 with trace.step("rag"):
                     rag_context = await run_in_threadpool(
-                        rag_service.retrieve,
+                        rag_service.retrieve_by_document,
                         rag_service.rag_namespace(workspace_slug),
+                        rag_document_id,
                         clean_query,
                         RAG_TOP_K,
-                        RAG_MAX_DISTANCE,
                     )
             except Exception:
-                logger.exception("RAG retrieval failed; answering without it")
+                logger.exception("RAG explicit-reference retrieval failed; answering without it")
         # Optionally send grounded requests to the long-context external provider
         # instead of the local model. Off by default — the local model still
         # receives the same injected knowledge, so routing stays stable.
@@ -2055,18 +2349,46 @@ async def run_chat_pipeline(
             classification = {**classification, "complexity": "hard", "task_type": "rag_external"}
         # The prompt actually sent to whichever model runs, grounded if RAG hit.
         gen_query = _query_with_rag_context(user_query, rag_context)
-        # Local generation has no native document part, so it needs the file's
-        # text folded into the prompt the same way the external branch already
-        # does for non-PDF kinds. A no-op when there is no file (or no usable
-        # text), same helper the external branch uses - the untrusted-input
-        # fencing applies here too.
-        local_gen_query = _query_with_inlined_file(gen_query, file_doc)
-        # Ollama's own images field, same base64 bytes the external branch sends
-        # as image_b64 below - only ever populated when the classification step
-        # above just decided the local model can see it.
-        local_images = (
-            [base64.b64encode(image_bytes).decode("ascii")] if _request_has_image else None
+        # Grounding provenance for the cache entry this answer may become —
+        # see store_interaction's rag_document_ids param. None when there was
+        # no RAG hit (also true for every image/file request, since retrieval
+        # above is skipped for those).
+        _rag_document_ids = (
+            ",".join(str(i) for i in sorted({c.rag_document_id for c in rag_context}))
+            if rag_context else None
         )
+        _file_task_type = classification.get("task_type")
+        if _file_task_type == "file_unreadable_no_rescue":
+            # Nothing extracted, nothing to inline - tell the model plainly so
+            # it relays that honestly instead of silently answering as if no
+            # file were attached. Answered locally, never a bare 422 (see the
+            # classification branch above).
+            local_gen_query = (
+                f"{gen_query}\n\n"
+                "[The user attached a PDF that could not be read - it has no "
+                "extractable text and no page image could be recovered either, "
+                "which usually means it is corrupted, empty, or the upload was "
+                "incomplete. Tell the user plainly that you could not read the "
+                "file and ask them to try re-uploading it or converting it to a "
+                "different format. Do not guess at what the file might contain.]"
+            )
+        else:
+            # Local generation has no native document part, so it needs the file's
+            # text folded into the prompt the same way the external branch already
+            # does for non-PDF kinds. A no-op when there is no file (or no usable
+            # text), same helper the external branch uses - the untrusted-input
+            # fencing applies here too.
+            local_gen_query = _query_with_inlined_file(gen_query, file_doc)
+        # Ollama's own images field, same base64 bytes the external branch sends
+        # as image_b64 below - populated when the classification step above
+        # decided the local model can see an image, whether that's a real
+        # attached image or a scanned PDF page rescued by file_text.py.
+        if _request_has_image:
+            local_images = [base64.b64encode(image_bytes).decode("ascii")]
+        elif _file_task_type == "file_local_vision_rescue" and file_doc is not None and file_doc.image_bytes:
+            local_images = [base64.b64encode(file_doc.image_bytes).decode("ascii")]
+        else:
+            local_images = None
 
         # Provider + credential resolution happens HERE, not inside the generation
         # step, and that placement is load-bearing: every failure below is an HTTP
@@ -2138,7 +2460,7 @@ async def run_chat_pipeline(
             with trace.step("filter"):
                 will_cache, _ = cache_filter.should_cache(
                     enriched, clean_query,
-                    has_attachment=_request_has_image or _request_has_file,
+                    has_attachment=_request_has_image or _request_has_file or _request_has_rag_ref,
                 )
         except Exception:
             logger.exception("Cache filter failed")
@@ -2186,7 +2508,8 @@ async def run_chat_pipeline(
         _planned_response_id: str | None = None
         if will_cache:
             _planned_response_id = f"{cache_namespace}:" + _doc_id(
-                clean_query, _file_sha, image_text=_img_text, image_dhash=_img_dhash
+                clean_query, _file_sha, image_text=_img_text, image_dhash=_img_dhash,
+                rag_document_id=rag_document_id,
             )
 
         # Mutated by the generation step below, which runs inside an async
@@ -2355,6 +2678,41 @@ async def run_chat_pipeline(
                 logger.exception("ExternalLLMService failed")
                 yield _GENERATION_FAILED_MESSAGE
                 gen.update(model_used="error", route="error")
+            except ExternalAttachmentUnsupportedError as exc:
+                # Proactive twin of the ExternalLLMError 400 branch above:
+                # caught before the request ever reaches the provider (see
+                # litellm_transport._confirmed_incapable), so the caller gets
+                # a specific, actionable reason instead of the provider's own
+                # generic rejection - e.g. Groq's `openai/gpt-oss-120b` on an
+                # attachment: "The model or its parameters may not be
+                # supported." with no hint that the model is simply text-only.
+                detail = (
+                    f"The workspace's external model ({exc.model_name}) does not support "
+                    f"{exc.kind} attachments. Configure an external model with {exc.kind} "
+                    "support for this workspace, or remove the attachment and ask as plain text."
+                )
+                if not stream:
+                    logger.warning("External model attachment capability check failed: %s", exc)
+                    raise PipelineError(422, detail) from exc
+                logger.warning("External model attachment capability check failed: %s", exc)
+                gen.update(model_used="error", route="error", failed=True, error_detail=detail)
+            except ExternalAttachmentTooLargeError as exc:
+                # Proactive twin of the ExternalLLMError 400 branch above, for
+                # size rather than modality: caught before the request reaches
+                # the provider (see litellm_transport._confirmed_context_budget),
+                # so the caller gets the real reason instead of the provider's
+                # own generic rejection of an oversized prompt.
+                detail = (
+                    f"This request is too large for the workspace's external model "
+                    f"({exc.model_name}): estimated ~{exc.estimated_tokens} tokens against its "
+                    f"~{exc.budget_tokens}-token input limit. Attach a smaller file, or ask as "
+                    "plain text without it."
+                )
+                if not stream:
+                    logger.warning("External model context budget check failed: %s", exc)
+                    raise PipelineError(422, detail) from exc
+                logger.warning("External model context budget check failed: %s", exc)
+                gen.update(model_used="error", route="error", failed=True, error_detail=detail)
             except LocalVisionUnsupportedError as exc:
                 # The safety net named in section 5 of the plan: the capability
                 # check above said this model could see, but Ollama disagrees at
@@ -2470,7 +2828,10 @@ async def run_chat_pipeline(
                             _apply_kwargs: dict = {
                                 "headers": {"dejaq_model_profile": model_profile},
                                 "ignore_result": True,
-                                "kwargs": {"workspace_slug": workspace_slug},
+                                "kwargs": {
+                                    "workspace_slug": workspace_slug,
+                                    "rag_document_ids": _rag_document_ids,
+                                },
                             }
                             if _request_has_image:
                                 _apply_kwargs["kwargs"].update({
@@ -2480,6 +2841,14 @@ async def run_chat_pipeline(
                             elif _request_has_file:
                                 _apply_kwargs["kwargs"].update({
                                     "file_sha": _file_sha, "file_kind": _file_kind,
+                                })
+                            if _request_has_rag_ref:
+                                # Independent of image/file above (not elif) - a
+                                # referenced document can in principle accompany
+                                # either. Without this the entry loses its
+                                # identity the same way a dropped file_sha would.
+                                _apply_kwargs["kwargs"].update({
+                                    "rag_document_id": rag_document_id,
                                 })
                             generalize_and_store_task.apply_async(
                                 args=(clean_query, answer, user_query, workspace_slug, cache_namespace),
@@ -2510,6 +2879,8 @@ async def run_chat_pipeline(
                                 image_text=_img_text,
                                 file_sha=_file_sha,
                                 file_kind=_file_kind,
+                                rag_document_ids=_rag_document_ids,
+                                rag_document_id=rag_document_id,
                             )
                             store_status = "background-fallback"
                     else:
@@ -2527,6 +2898,8 @@ async def run_chat_pipeline(
                             image_text=_img_text,
                             file_sha=_file_sha,
                             file_kind=_file_kind,
+                            rag_document_ids=_rag_document_ids,
+                            rag_document_id=rag_document_id,
                         )
                         store_status = "background"
 
@@ -2588,6 +2961,15 @@ async def run_chat_pipeline(
             headers.update(_enriched_headers(user_query, enriched, enrich_succeeded))
             if rag_context:
                 headers["x-dejaq-rag-chunks"] = str(len(rag_context))
+            if _request_has_rag_ref:
+                # A deterministic reason to be grounded: this document was
+                # fetched by id, not matched by distance. Separate from
+                # x-dejaq-rag-chunks (which also fires for automatic
+                # grounding) so the client can tell the two apart without
+                # depending on how that chunk count is wired through.
+                headers["x-dejaq-rag-document-id"] = str(rag_document_id)
+                if rag_document_title:
+                    headers["x-dejaq-rag-document-title"] = rag_document_title
             if response_id:
                 headers["x-dejaq-response-id"] = response_id
             if _validator_verdict is not None:

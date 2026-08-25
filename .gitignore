@@ -11,6 +11,7 @@ validator-test/
 .agent/
 .agents/
 .codex/
+.opencode/
 .claude/scheduled_tasks.lock
 server/celerybeat-schedule*
 docs/dejaq-presentation-brief.md
@@ -34,4 +35,3 @@ venv/
 
 # VS Code
 .vscode/
-docs/typo-resilience-report.md

@@ -100,7 +100,7 @@ def _setup_hard_route(monkeypatch, external, model="claude-sonnet-5"):
 def _ask_hard_question(temperature=None):
     body = {
         "model": "gpt-4o-mini",
-        "messages": [{"role": "user", "content": "Explain a hard thing."}],
+        "messages": [{"role": "user", "content": "Prove that there are infinitely many prime numbers."}],
         "stream": False,
     }
     if temperature is not None:

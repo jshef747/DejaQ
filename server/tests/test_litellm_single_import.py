@@ -32,7 +32,10 @@ def _imports_litellm(path: Path) -> bool:
 
 def test_litellm_is_imported_in_exactly_the_allowed_modules() -> None:
     importers = {
-        str(path.relative_to(_APP_ROOT.parent))
+        # as_posix(), not str(): on Windows str() yields backslashes and every
+        # entry misses the forward-slash allowlist above, so the test reports
+        # three violations that are in fact the three allowed modules.
+        path.relative_to(_APP_ROOT.parent).as_posix()
         for path in _APP_ROOT.rglob("*.py")
         if _imports_litellm(path)
     }

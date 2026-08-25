@@ -98,6 +98,8 @@ MODEL_RUNTIME_SPECS: dict[str, ModelRuntimeSpec] = {
     "gemma_e2b": ModelRuntimeSpec(ollama_model="gemma4:e2b"),
     "gemma_local": ModelRuntimeSpec(ollama_model="gemma4:e4b"),
     "phi_generalizer": ModelRuntimeSpec(ollama_model="phi3.5:latest"),
+    "granite4_1_3b": ModelRuntimeSpec(ollama_model="granite4.1:3b"),
+    "phi4_mini_3_8b": ModelRuntimeSpec(ollama_model="phi4-mini:3.8b"),
 }
 
 

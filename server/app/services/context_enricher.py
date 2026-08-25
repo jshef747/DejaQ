@@ -14,7 +14,9 @@ DEFAULT_SYSTEM_PROMPT = (
     "You are a query rewriter. Given a conversation history and a follow-up message, "
     "rewrite the follow-up into a standalone question that includes all necessary "
     "context. Output ONLY the rewritten question. If the message is already "
-    "standalone, return it unchanged."
+    "standalone, return it unchanged. Keep the rewritten question in the same "
+    "language the FOLLOW-UP is written in - never translate it, even if the "
+    "HISTORY is in a different language."
 )
 
 

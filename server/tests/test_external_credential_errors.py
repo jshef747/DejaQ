@@ -76,7 +76,7 @@ def _ask_hard_question():
         "/v1/chat/completions",
         json={
             "model": "gpt-4o-mini",
-            "messages": [{"role": "user", "content": "Explain a hard thing."}],
+            "messages": [{"role": "user", "content": "Prove that there are infinitely many prime numbers."}],
             "stream": False,
         },
     )

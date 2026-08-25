@@ -813,6 +813,58 @@ def test_llm_config_update_rejects_a_context_window_past_the_smallest_model_maxi
     assert "qwen2.5:1.5b" in message
 
 
+def test_llm_config_classifier_choice_defaults_to_labse(isolated_org_db):
+    from app.config import DEFAULT_CLASSIFIER_CHOICE, LEGACY_ROUTING_THRESHOLD, ROUTING_THRESHOLD
+    from app.services.llm_config_service import read_for_workspace
+
+    _create_workspace()
+
+    result = read_for_workspace("acme")
+
+    assert result.classifier_choice == DEFAULT_CLASSIFIER_CHOICE == "labse"
+    assert result.routing_threshold == ROUTING_THRESHOLD
+    assert result.legacy_routing_threshold == LEGACY_ROUTING_THRESHOLD
+    assert result.overrides == {}
+
+
+def test_llm_config_update_rejects_unknown_classifier_choice(isolated_org_db):
+    from app.services.llm_config_service import InvalidLlmConfigUpdate, update_for_workspace
+
+    _create_workspace()
+
+    with pytest.raises(InvalidLlmConfigUpdate) as exc_info:
+        update_for_workspace("acme", {"classifier_choice": "nvidia"}, {"classifier_choice"})
+
+    assert "classifier_choice" in str(exc_info.value)
+
+
+def test_llm_config_classifier_thresholds_are_independent_of_each_other(isolated_org_db):
+    """Switching classifier_choice must never lose or overwrite the other
+    classifier's own stored threshold - each is its own column, see
+    workspace_llm_configs.classifier_choice / legacy_routing_threshold."""
+    from app.services.llm_config_service import update_for_workspace
+
+    _create_workspace()
+
+    result = update_for_workspace("acme", {"legacy_routing_threshold": 0.9}, {"legacy_routing_threshold"})
+    assert result.legacy_routing_threshold == 0.9
+    assert result.routing_threshold == 0.50  # untouched
+
+    result = update_for_workspace(
+        "acme",
+        {"classifier_choice": "labse", "routing_threshold": 0.2},
+        {"classifier_choice", "routing_threshold"},
+    )
+    assert result.classifier_choice == "labse"
+    assert result.routing_threshold == 0.2
+    assert result.legacy_routing_threshold == 0.9  # survived the switch
+
+    result = update_for_workspace("acme", {"classifier_choice": "legacy"}, {"classifier_choice"})
+    assert result.classifier_choice == "legacy"
+    assert result.legacy_routing_threshold == 0.9  # still there
+    assert result.routing_threshold == 0.2  # also survived
+
+
 # --- Alternative drafts (the semantic tie-breaker) --------------------------
 #
 # Same shape as the token-budget rules above: the RELATIONSHIP between the two

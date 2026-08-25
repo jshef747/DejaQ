@@ -1,4 +1,4 @@
-"""Normalizer v22: opinion-gated LLM rewrite + raw passthrough + bge-small embedding.
+"""Normalizer v22: opinion-gated LLM rewrite + raw passthrough + shared text embedding.
 
 Non-opinion queries: lowercase passthrough (no LLM).
 Opinion queries: Gemma 4 E2B rewrites to "best <noun>" via regex-gated few-shot prompt.

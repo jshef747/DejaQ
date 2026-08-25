@@ -10,7 +10,7 @@ celery_app = Celery(
 
 celery_app.conf.update(
     # Task autodiscovery
-    include=["app.tasks.cache_tasks"],
+    include=["app.tasks.cache_tasks", "app.tasks.rag_tasks"],
 
     # Periodic tasks (requires celery beat worker)
     beat_schedule={
@@ -23,6 +23,7 @@ celery_app.conf.update(
     # Queue routing
     task_routes={
         "app.tasks.cache_tasks.generalize_and_store_task": {"queue": "background"},
+        "app.tasks.rag_tasks.ingest_rag_document_task": {"queue": "background"},
     },
 
     # Concurrency control — don't prefetch extra tasks during slow inference

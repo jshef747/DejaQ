@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -29,6 +30,9 @@ class LlmConfigResponse(BaseModel):
     enricher_model: str
     normalizer_model: str
     validator_model: str
+    # Which difficulty classifier is currently active for this workspace -
+    # "legacy" (NVIDIA DeBERTa) or "labse" (LaBSE, the shipped default).
+    classifier_choice: Literal["legacy", "labse"]
     enricher_system_prompt: str
     normalizer_system_prompt: str
     validator_system_prompt: str
@@ -37,6 +41,10 @@ class LlmConfigResponse(BaseModel):
     generalizer_system_prompt: str
     local_model_system_prompt: str
     routing_threshold: float
+    # The legacy classifier's own threshold - kept separate from
+    # routing_threshold (LaBSE's) since the two classifiers score on
+    # different scales and must never share one cut.
+    legacy_routing_threshold: float
     default_max_tokens: int
     rewrite_max_tokens: int
     ollama_num_ctx: int
@@ -73,6 +81,8 @@ class LlmConfigUpdate(BaseModel):
     generalizer_system_prompt: str | None = None
     local_model_system_prompt: str | None = None
     routing_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    classifier_choice: Literal["legacy", "labse"] | None = None
+    legacy_routing_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     # Per-field bounds only - necessary but not sufficient. The relationship
     # between all three (rewrite must clear answer, context must clear
     # rewrite, and ollama_num_ctx's own ceiling) is enforced in

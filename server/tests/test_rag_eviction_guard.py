@@ -1,4 +1,4 @@
-"""The score-floor eviction beat task must never touch RAG (Rug) collections.
+"""The score-floor eviction beat task must never touch RAG collections.
 
 RAG chunks are admin-curated, carry no score, and live in "{workspace}__rag_kb"
 collections precisely so they are not swept like the volatile Q→A cache. The beat

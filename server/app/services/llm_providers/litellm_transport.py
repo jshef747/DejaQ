@@ -8,8 +8,20 @@ import openai
 
 from app.schemas.chat import ExternalLLMRequest, ExternalLLMResponse, ExternalStreamChunk
 from app.services.llm_providers._litellm_config import DEFAULT_CALL_KWARGS
-from app.services.llm_providers.common import elapsed_ms, ensure_query, normalize_finish_reason, redact_api_key
-from app.utils.exceptions import ExternalLLMAuthError, ExternalLLMError, ExternalLLMTimeoutError
+from app.services.llm_providers.common import (
+    elapsed_ms,
+    ensure_query,
+    estimate_tokens,
+    normalize_finish_reason,
+    redact_api_key,
+)
+from app.utils.exceptions import (
+    ExternalAttachmentTooLargeError,
+    ExternalAttachmentUnsupportedError,
+    ExternalLLMAuthError,
+    ExternalLLMError,
+    ExternalLLMTimeoutError,
+)
 
 logger = logging.getLogger("dejaq.services.llm_providers.litellm_transport")
 
@@ -43,10 +55,61 @@ def _litellm_key(provider: str) -> str:
     return _LITELLM_PROVIDER_KEYS.get(provider, provider)
 
 
+def _confirmed_incapable(model: str, capability_field: str) -> bool:
+    """True only when LiteLLM's own catalog affirmatively lacks `capability_field`
+    for `model` (e.g. "supports_vision", "supports_pdf_input").
+
+    False both when the model has the capability AND when LiteLLM has no
+    catalog entry for it at all (`get_model_info` raises for an id it
+    doesn't recognise, which is a data gap, not proof of incapability) - a
+    model this returns False for is left to reach the provider exactly as
+    before this check existed, so an unmapped-but-real vision/document model
+    is never blocked.
+    """
+    try:
+        info = litellm.get_model_info(model)
+    except Exception:
+        return False
+    return not info.get(capability_field)
+
+
+def external_supports_pdf(model: str) -> bool:
+    """True unless LiteLLM's catalog affirmatively says `model` lacks PDF support.
+
+    Same conservative bias as `_confirmed_incapable`: an uncatalogued model
+    reads as "can't rule it out, let it try" rather than "assume no". Exposed
+    publicly (unlike `_confirmed_incapable` itself) so the router can decide
+    file ROUTING before a request ever reaches this module - whether to even
+    attempt the external native-document-part path for an unreadable-locally
+    PDF, or fall back to a local vision attempt when this workspace's
+    external model has no PDF capability at all (see openai_compat.py's file
+    classification branch, dejaq-200-test-fixes defect #2).
+    """
+    return not _confirmed_incapable(model, "supports_pdf_input")
+
+
+def _confirmed_context_budget(model: str) -> int | None:
+    """The model's own max input-token budget, per LiteLLM's catalog, or
+    None when the catalog has no entry for it.
+
+    None is deliberately "unknown, don't block" (the same conservative bias
+    `_confirmed_incapable` uses) rather than falling back to a hardcoded
+    guess - an uncatalogued model reaches the provider exactly as it did
+    before this check existed.
+    """
+    try:
+        info = litellm.get_model_info(model)
+    except Exception:
+        return None
+    return info.get("max_input_tokens") or info.get("max_tokens")
+
+
 def _build_messages(request: ExternalLLMRequest) -> list[dict]:
     messages = [{"role": "system", "content": request.system_prompt}]
     messages.extend(request.history)
     if request.image_b64:
+        if _confirmed_incapable(request.model, "supports_vision"):
+            raise ExternalAttachmentUnsupportedError(request.model, "image")
         user_content = [
             {"type": "text", "text": request.query},
             {"type": "image_url", "image_url": {
@@ -54,6 +117,8 @@ def _build_messages(request: ExternalLLMRequest) -> list[dict]:
             }},
         ]
     elif request.file_b64:
+        if _confirmed_incapable(request.model, "supports_pdf_input"):
+            raise ExternalAttachmentUnsupportedError(request.model, "document")
         user_content = [
             {"type": "text", "text": request.query},
             {"type": "file", "file": {
@@ -62,6 +127,22 @@ def _build_messages(request: ExternalLLMRequest) -> list[dict]:
             }},
         ]
     else:
+        # No native attachment part on this branch - a plain query, or a
+        # text/Markdown/code attachment already inlined into request.query
+        # by _query_with_inlined_file. Nothing bounds that text against the
+        # model's own context window before it reaches the wire, unlike the
+        # local path's local_attachment_max_tokens - so check it here, the
+        # one place both generate_response and stream_response route
+        # through, rather than in every caller.
+        budget = _confirmed_context_budget(request.model)
+        if budget is not None:
+            history_chars = sum(
+                len(m.get("content", "")) for m in request.history if isinstance(m.get("content"), str)
+            )
+            estimated_tokens = estimate_tokens(request.system_prompt) + estimate_tokens(request.query)
+            estimated_tokens += history_chars // 3
+            if estimated_tokens + request.max_tokens > budget:
+                raise ExternalAttachmentTooLargeError(request.model, estimated_tokens, budget)
         user_content = request.query
     messages.append({"role": "user", "content": user_content})
     return messages
@@ -172,8 +253,9 @@ class LiteLLMTransportClient:
             self._provider, request.model, len(request.history),
         )
         start = time.perf_counter()
+        extra_kwargs = {"reasoning_format": "hidden"} if self._provider == "groq" else {}
         with _mapped_errors(api_key, self._provider):
-            response = await _complete_with_temperature_retry(request, messages, model, api_key)
+            response = await _complete_with_temperature_retry(request, messages, model, api_key, **extra_kwargs)
 
         latency_ms = elapsed_ms(start)
         usage = response.usage
@@ -219,10 +301,11 @@ class LiteLLMTransportClient:
         text = ""
         prompt_tokens = completion_tokens = 0
         finish_reason = None
+        extra_kwargs = {"reasoning_format": "hidden"} if self._provider == "groq" else {}
         with _mapped_errors(api_key, self._provider):
             stream = await _complete_with_temperature_retry(
                 request, messages, model, api_key,
-                stream=True, stream_options={"include_usage": True},
+                stream=True, stream_options={"include_usage": True}, **extra_kwargs,
             )
         async with aclosing(stream):
             async for chunk in stream:

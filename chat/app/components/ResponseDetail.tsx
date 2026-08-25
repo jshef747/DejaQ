@@ -5,6 +5,7 @@ import type { AppMessage } from "./ChatMessage";
 import { copyText } from "./copy-text";
 import { cacheComparison, classifyRoute, formatLatency, formatMultiplier, routeStyle } from "./provenance";
 import { RouteIcon } from "./RouteMarker";
+import { textDirection } from "./text-direction";
 import { diffQueries, isLossyHeaderText } from "./word-diff";
 
 // Server-side cache-tier thresholds (DEJAQ_CACHE_TRUST_DISTANCE,
@@ -225,6 +226,16 @@ export default function ResponseDetail({
               <MonoValue>{deptSlug}</MonoValue>
             </Row>
           )}
+          {message?.ragDocumentTitle && (
+            // The only remaining grounding source: an explicit `@`-reference,
+            // or a suggestion the user accepted (which sets the exact same
+            // state) — never a silent distance guess, so this is shown even
+            // on a cache hit. `ragChunks` alone (no title) can no longer
+            // happen now that automatic, unreferenced grounding is gone.
+            <Row label="Knowledge base">
+              <MonoValue note="explicitly referenced">grounded in <bdi>{message.ragDocumentTitle}</bdi></MonoValue>
+            </Row>
+          )}
         </Section>
 
         <Divider />
@@ -360,7 +371,7 @@ function WhyItMatched({ typedQuery, message }: { typedQuery: string | null; mess
     );
   }
 
-  const lossy = isLossyHeaderText(stored, typedQuery);
+  const lossy = isLossyHeaderText(stored);
   const diff = typedQuery && !lossy ? diffQueries(typedQuery, stored) : null;
   const tier = distance <= TRUST_DISTANCE ? "Trusted" : distance <= BAND_MAX_DISTANCE ? "Band" : "Rescue";
   const validatorNeeded = distance > VALIDATOR_SKIP_DISTANCE;
@@ -376,7 +387,7 @@ function WhyItMatched({ typedQuery, message }: { typedQuery: string | null; mess
       {diff && (
         <>
           <div style={{ color: "var(--fg-dimmer)", fontSize: "11.5px" }}>You asked</div>
-          <div style={{ color: "var(--fg-dim)", fontFamily: "var(--font-serif)", fontSize: "14px", lineHeight: "21px", marginTop: "3px" }}>
+          <div dir={textDirection(typedQuery ?? "")} style={{ color: "var(--fg-dim)", fontFamily: "var(--font-serif)", fontSize: "14px", lineHeight: "21px", marginTop: "3px" }}>
             &ldquo;
             {diff.typed.map((w, i) => (
               <span key={i}>
@@ -390,7 +401,7 @@ function WhyItMatched({ typedQuery, message }: { typedQuery: string | null; mess
           </div>
           {enriched && <SearchedAsRow enriched={enriched} />}
           <div style={{ color: "var(--fg-dimmer)", fontSize: "11.5px", marginTop: "11px" }}>Stored answer for</div>
-          <div style={{ color: "var(--fg)", fontFamily: "var(--font-serif)", fontSize: "14px", lineHeight: "21px", marginTop: "3px" }}>
+          <div dir={textDirection(stored)} style={{ color: "var(--fg)", fontFamily: "var(--font-serif)", fontSize: "14px", lineHeight: "21px", marginTop: "3px" }}>
             &ldquo;
             {diff.stored.map((w, i) => (
               <span key={i}>
@@ -408,14 +419,13 @@ function WhyItMatched({ typedQuery, message }: { typedQuery: string | null; mess
           <div style={{ color: "var(--fg-dimmer)", fontSize: "11.5px", marginTop: enriched ? "11px" : 0 }}>
             Stored answer for
           </div>
-          <div style={{ color: "var(--fg)", fontFamily: "var(--font-serif)", fontSize: "14px", lineHeight: "21px", marginTop: "3px" }}>
+          <div dir={textDirection(stored)} style={{ color: "var(--fg)", fontFamily: "var(--font-serif)", fontSize: "14px", lineHeight: "21px", marginTop: "3px" }}>
             &ldquo;{stored}&rdquo;
           </div>
           {lossy && (
             <div style={{ color: "var(--fg-dimmer)", fontSize: "11.5px", lineHeight: "17px", marginTop: "7px" }}>
-              Shown as the server reported it. This diagnostic value may be shortened, or carry
-              replacements for characters the header cannot hold, so it is not compared word by
-              word.
+              Shown as the server reported it. This diagnostic value is truncated at 200
+              characters, so it is not compared word by word.
             </div>
           )}
         </>
@@ -495,7 +505,7 @@ function SearchedAsRow({ enriched, topMargin = 11 }: { enriched: string; topMarg
       <div style={{ color: "var(--fg-dimmer)", fontSize: "11.5px", marginTop: `${topMargin}px` }}>
         Searched as
       </div>
-      <div style={{ color: "var(--fg-dim)", fontFamily: "var(--font-serif)", fontSize: "14px", lineHeight: "21px", marginTop: "3px" }}>
+      <div dir={textDirection(enriched)} style={{ color: "var(--fg-dim)", fontFamily: "var(--font-serif)", fontSize: "14px", lineHeight: "21px", marginTop: "3px" }}>
         &ldquo;{enriched}&rdquo;
       </div>
     </>

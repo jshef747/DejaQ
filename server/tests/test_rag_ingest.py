@@ -1,4 +1,4 @@
-"""RAG (Rug) ingestion: text, file/upload, image OCR, scanned PDF, URL.
+"""RAG ingestion: text, file/upload, image OCR, scanned PDF, URL.
 
 Extraction is delegated to file_text / image_text / httpx, all mocked here so the
 tests stay offline and fast. What is asserted is rag_ingest's own logic: kind and

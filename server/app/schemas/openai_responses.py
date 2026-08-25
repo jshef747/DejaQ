@@ -32,6 +32,10 @@ class OAIResponsesRequest(BaseModel):
     stream: bool = False
     temperature: Optional[float] = None
     max_output_tokens: Optional[int] = None
+    # Explicit `@`-reference to one knowledge-base document (its catalog id).
+    # When set, retrieval fetches THAT document's own chunks by id instead of
+    # running the normal nearest-neighbour search — see openai_compat.py.
+    rag_document_id: Optional[int] = None
 
     @model_validator(mode="before")
     @classmethod

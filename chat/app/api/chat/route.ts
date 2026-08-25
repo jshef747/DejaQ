@@ -25,6 +25,9 @@ const SSE_HEADERS_TO_FORWARD = [
   "x-dejaq-cache-matched-query",
   "x-dejaq-answer-authored",
   "x-dejaq-enriched-query",
+  "x-dejaq-rag-chunks",
+  "x-dejaq-rag-document-id",
+  "x-dejaq-rag-document-title",
   // "2" when the semantic tie-breaker fired. The drafts themselves ride the
   // terminal SSE chunk; this lets the client know a choice is coming before
   // it has read a byte of the body.
@@ -48,12 +51,14 @@ interface Attachment {
 // file (a data: URL) to the most recent user message. Images go as an
 // input_image part; every other kind (PDF, DOCX, Markdown/text/code) goes as
 // an input_file part — the server tells them apart by content, this route
-// doesn't need to.
-function buildResponsesInput(messages: ChatMsg[], attachment: Attachment) {
+// doesn't need to. `attachment` is null for a plain `@`-reference request with
+// no file/image — the items carry text parts only.
+function buildResponsesInput(messages: ChatMsg[], attachment: Attachment | null) {
   const items = messages.map((m) => ({
     role: m.role,
     content: [{ type: "input_text", text: m.content }] as Array<Record<string, string>>,
   }));
+  if (!attachment) return items;
   const part: Record<string, string> =
     attachment.kind === "image"
       ? { type: "input_image", image_url: attachment.dataUrl }
@@ -90,15 +95,15 @@ export async function POST(request: NextRequest) {
 
   const body = await request.json();
   const attachment = parseAttachment(body.attachment);
+  const ragDocumentId = typeof body.ragDocumentId === "number" ? body.ragDocumentId : null;
 
-  // Attachment requests must use the Responses API — it's the only endpoint that
-  // accepts images and files, and the only one that runs the fingerprint gates.
-  // Text-only requests stay on chat/completions. Both stream SSE; the client
-  // parser handles both.
-  const endpoint = attachment ? "/v1/responses" : "/v1/chat/completions";
-  const payload = attachment
-    ? { model: "default", input: buildResponsesInput(body.messages, attachment), stream: true }
-    : { model: "default", messages: body.messages, stream: true };
+  const endpoint = "/v1/responses";
+  const payload = {
+    model: "default",
+    input: buildResponsesInput(body.messages, attachment),
+    stream: true,
+    ...(ragDocumentId !== null ? { rag_document_id: ragDocumentId } : {}),
+  };
 
   let response: Response;
   const fetchStart = Date.now();

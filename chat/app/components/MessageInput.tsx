@@ -1,8 +1,22 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import { fetchRagSuggestion, type RagDocument, type RagSuggestion } from "./chat-api";
 import type { Attachment } from "./chat-store";
+import { textDirection } from "./text-direction";
+
+// Boring debounce: fire only after the user pauses, never on every keystroke,
+// and never gate the composer on a search that hasn't returned yet. 500ms
+// comfortably clears the exhaustive whole-collection scan's measured worst
+// case (~900ms p95 at ~5k chunks, firstmate/data/dejaq-rag-suggest/report.md)
+// before the next plausible typing pause, and retrieve() itself falls back to
+// the fast approximate index long before a knowledge base gets that large.
+const SUGGEST_DEBOUNCE_MS = 500;
+// Below this, a partial word isn't worth an embedding call — mirrors the
+// server's own floor (rag_documents_public._SUGGEST_MIN_QUERY_CHARS) so a
+// request that would come back empty anyway is never sent.
+const SUGGEST_MIN_CHARS = 3;
 
 // Reject files larger than this before base64-encoding — keeps the request body
 // and localStorage sane. Mirrors DEJAQ_MAX_ATTACHMENT_BYTES on the server, which
@@ -47,7 +61,33 @@ interface Props {
   // appears underneath it.
   isGenerating: boolean;
   onStop: () => void;
+  // The workspace's knowledge-base documents, for the `@` picker. Loaded once
+  // by the parent (ChatApp) rather than per-keystroke here.
+  ragDocuments: RagDocument[];
+  ragDocument: RagDocument | null;
+  onRagDocumentChange: (doc: RagDocument | null) => void;
 }
+
+// An active `@` mention: `start` is where the "@" sits in `value`, `query` is
+// whatever the user has typed since it (no whitespace — a space closes it).
+interface Mention {
+  start: number;
+  query: string;
+}
+
+// The "@" must start a mention, not appear mid-word ("user@host" is not one) —
+// so it must sit at the very start of the text or right after whitespace.
+function detectMention(text: string, cursor: number): Mention | null {
+  const upToCursor = text.slice(0, cursor);
+  const at = upToCursor.lastIndexOf("@");
+  if (at === -1) return null;
+  if (at > 0 && !/\s/.test(text[at - 1])) return null;
+  const query = upToCursor.slice(at + 1);
+  if (/\s/.test(query)) return null;
+  return { start: at, query };
+}
+
+const MAX_MENTION_RESULTS = 8;
 
 export default function MessageInput({
   value,
@@ -59,9 +99,44 @@ export default function MessageInput({
   onAttachmentError,
   isGenerating,
   onStop,
+  ragDocuments,
+  ragDocument,
+  onRagDocumentChange,
 }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [mention, setMention] = useState<Mention | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  // The guess-which-document suggestion. `suggestionDismissed` sticks for the
+  // rest of THIS message (reset only once the composer empties, on send or
+  // clear) — a dismiss must not reappear on the next keystroke.
+  const [suggestion, setSuggestion] = useState<RagSuggestion | null>(null);
+  const [suggestionDismissed, setSuggestionDismissed] = useState(false);
+  const suggestAbortRef = useRef<AbortController | null>(null);
+
+  const mentionResults = mention
+    ? ragDocuments
+        .filter((d) => d.title.toLowerCase().includes(mention.query.toLowerCase()))
+        .slice(0, MAX_MENTION_RESULTS)
+    : [];
+  const mentionOpen = mention !== null && mentionResults.length > 0;
+
+  function selectMention(doc: RagDocument) {
+    if (!mention) return;
+    const before = value.slice(0, mention.start);
+    const after = value.slice(mention.start + 1 + mention.query.length);
+    onChange(before + after);
+    onRagDocumentChange(doc);
+    setMention(null);
+    // The splice above only takes effect once React re-renders the controlled
+    // textarea; setting the caret now would be overwritten by that render.
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(before.length, before.length);
+    });
+  }
 
   // Auto-resize the textarea up to a reasonable max height.
   useEffect(() => {
@@ -70,6 +145,61 @@ export default function MessageInput({
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }, [value]);
+
+  // Ask the backend for a document suggestion after the user pauses typing.
+  // Never fires with a document already referenced, mid-`@`-pick, once
+  // dismissed for this message, or with an empty knowledge base — all of
+  // those mean there is nothing useful (or nothing new) to show.
+  useEffect(() => {
+    // Cancel whatever suggestion fetch might already be in flight — every
+    // dependency change (new text, a dismiss, an accept, a reference
+    // cleared) supersedes it. Without this, a fetch already in flight when
+    // the user dismisses can still resolve afterward and flash the
+    // suggestion back before the dismissal has a chance to hide it again.
+    suggestAbortRef.current?.abort();
+
+    if (ragDocument || suggestionDismissed || mentionOpen || ragDocuments.length === 0) {
+      setSuggestion(null);
+      return;
+    }
+    const trimmed = value.trim();
+    if (trimmed.length < SUGGEST_MIN_CHARS) {
+      setSuggestion(null);
+      return;
+    }
+    const timer = setTimeout(() => {
+      const controller = new AbortController();
+      suggestAbortRef.current = controller;
+      fetchRagSuggestion(trimmed, controller.signal).then((result) => {
+        if (!controller.signal.aborted) setSuggestion(result);
+      });
+    }, SUGGEST_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [value, ragDocument, suggestionDismissed, mentionOpen, ragDocuments.length]);
+
+  // An emptied composer (sent, or cleared by hand) starts the next message
+  // fresh — a dismissal from the last message must not carry over.
+  useEffect(() => {
+    if (value.trim().length === 0) {
+      setSuggestionDismissed(false);
+      setSuggestion(null);
+    }
+  }, [value]);
+
+  // Accepting sets EXACTLY the state an `@`-pick sets — the accepted guess
+  // becomes an ordinary explicit reference, inheriting the exact-id fetch,
+  // cache key, and provenance display already shipped for that path. No
+  // second grounding mechanism exists for a suggestion.
+  function acceptSuggestion() {
+    if (!suggestion) return;
+    onRagDocumentChange({ id: suggestion.documentId, title: suggestion.title, kind: "" });
+    setSuggestion(null);
+  }
+
+  function dismissSuggestion() {
+    setSuggestion(null);
+    setSuggestionDismissed(true);
+  }
 
   // A drop that lands outside the dropzone below hits the browser default:
   // navigate the tab to the file, wiping unsent input and any unsaved
@@ -85,7 +215,38 @@ export default function MessageInput({
     };
   }, []);
 
+  function handleChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
+    onChange(e.target.value);
+    const next = detectMention(e.target.value, e.target.selectionStart ?? e.target.value.length);
+    setMention(next);
+    setMentionIndex(0);
+  }
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    // While the `@` dropdown is open, arrow/Enter/Escape drive it instead of
+    // the textarea's own send/newline behavior.
+    if (mentionOpen) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setMentionIndex((i) => (i + 1) % mentionResults.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setMentionIndex((i) => (i - 1 + mentionResults.length) % mentionResults.length);
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        selectMention(mentionResults[mentionIndex]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setMention(null);
+        return;
+      }
+    }
     // Enter alone sends; Shift+Enter inserts a newline.
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -211,11 +372,11 @@ export default function MessageInput({
                         whiteSpace: "nowrap",
                       }}
                     >
-                      {attachment.kind === "image"
-                        ? pinned
-                          ? "Image pinned"
-                          : "Image attached"
-                        : attachment.name || "Document"}
+                      {attachment.kind === "image" ? (
+                        pinned ? "Image pinned" : "Image attached"
+                      ) : (
+                        <bdi>{attachment.name || "Document"}</bdi>
+                      )}
                     </span>
                   </div>
                   <div style={{ color: pinned ? "var(--fg-dim)" : "var(--fg-dimmer)", fontSize: "11px", marginTop: "2px" }}>
@@ -247,6 +408,137 @@ export default function MessageInput({
             </div>
           )}
 
+          {ragDocument && (
+            <div
+              style={{
+                alignItems: "center",
+                background: "var(--accent-bg)",
+                border: "1px solid var(--accent-border)",
+                borderRadius: "10px",
+                display: "flex",
+                gap: "8px",
+                marginBottom: "10px",
+                padding: "7px 11px",
+              }}
+            >
+              <span style={{ color: "var(--accent)", display: "flex", flexShrink: 0 }}>
+                <KnowledgeIcon />
+              </span>
+              <span
+                style={{
+                  color: "var(--accent)",
+                  flex: 1,
+                  fontSize: "12.5px",
+                  fontWeight: 600,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                Referencing <bdi>{ragDocument.title}</bdi>
+              </span>
+              <button
+                onClick={() => onRagDocumentChange(null)}
+                title="Clear reference"
+                aria-label="Clear knowledge-base reference"
+                style={{
+                  background: "transparent",
+                  border: "1px solid var(--accent-border)",
+                  borderRadius: "7px",
+                  color: "var(--accent)",
+                  cursor: "pointer",
+                  flexShrink: 0,
+                  fontSize: "12px",
+                  padding: "4px 10px",
+                }}
+              >
+                Clear
+              </button>
+            </div>
+          )}
+
+          {!ragDocument && suggestion && (
+            <div
+              style={{
+                alignItems: "center",
+                background: "var(--bg-2)",
+                border: "1px dashed var(--border-2)",
+                borderRadius: "10px",
+                display: "flex",
+                gap: "8px",
+                marginBottom: "10px",
+                padding: "7px 11px",
+              }}
+            >
+              <span style={{ color: "var(--fg-dim)", display: "flex", flexShrink: 0 }}>
+                <KnowledgeIcon />
+              </span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
+                  style={{
+                    color: "var(--fg)",
+                    fontSize: "12.5px",
+                    fontWeight: 500,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  Might be about <strong><bdi>{suggestion.title}</bdi></strong>
+                </div>
+                {suggestion.snippet && (
+                  <div
+                    dir={textDirection(suggestion.snippet)}
+                    style={{
+                      color: "var(--fg-dimmer)",
+                      fontSize: "11px",
+                      marginTop: "2px",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    &ldquo;{suggestion.snippet}&rdquo;
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={acceptSuggestion}
+                title="Reference this document"
+                style={{
+                  background: "transparent",
+                  border: "1px solid var(--accent-border)",
+                  borderRadius: "7px",
+                  color: "var(--accent)",
+                  cursor: "pointer",
+                  flexShrink: 0,
+                  fontSize: "12px",
+                  fontWeight: 600,
+                  padding: "4px 10px",
+                }}
+              >
+                Use
+              </button>
+              <button
+                onClick={dismissSuggestion}
+                title="Dismiss suggestion"
+                aria-label="Dismiss suggested document"
+                style={{
+                  background: "transparent",
+                  border: "1px solid var(--border-2)",
+                  borderRadius: "7px",
+                  color: "var(--fg-dim)",
+                  cursor: "pointer",
+                  flexShrink: 0,
+                  fontSize: "12px",
+                  padding: "4px 8px",
+                }}
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
           <div
             style={{
               alignItems: "flex-end",
@@ -257,6 +549,7 @@ export default function MessageInput({
               display: "flex",
               gap: "8px",
               padding: "8px 8px 8px 10px",
+              position: "relative",
               transition: "border-color var(--t-base)",
             }}
             onDragOver={(e) => e.preventDefault()}
@@ -264,6 +557,60 @@ export default function MessageInput({
             onFocusCapture={(e) => (e.currentTarget.style.borderColor = "var(--fg-dimmer)")}
             onBlurCapture={(e) => (e.currentTarget.style.borderColor = "var(--border-2)")}
           >
+            {mentionOpen && (
+              <div
+                role="listbox"
+                aria-label="Knowledge-base documents"
+                style={{
+                  background: "var(--bg-2)",
+                  border: "1px solid var(--border-2)",
+                  borderRadius: "10px",
+                  bottom: "calc(100% + 8px)",
+                  boxShadow: "var(--shadow)",
+                  left: 0,
+                  maxHeight: "240px",
+                  overflowY: "auto",
+                  position: "absolute",
+                  width: "min(320px, 100%)",
+                  zIndex: 20,
+                }}
+              >
+                {mentionResults.map((doc, i) => (
+                  <div
+                    key={doc.id}
+                    role="option"
+                    aria-selected={i === mentionIndex}
+                    // onMouseDown (not onClick) fires before the textarea's blur,
+                    // so the selection lands before focus would otherwise leave it.
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      selectMention(doc);
+                    }}
+                    onMouseEnter={() => setMentionIndex(i)}
+                    style={{
+                      alignItems: "center",
+                      background: i === mentionIndex ? "var(--accent-bg)" : "transparent",
+                      color: i === mentionIndex ? "var(--accent)" : "var(--fg)",
+                      cursor: "pointer",
+                      display: "flex",
+                      fontSize: "12.5px",
+                      gap: "8px",
+                      overflow: "hidden",
+                      padding: "8px 11px",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    <span style={{ display: "flex", flexShrink: 0 }}>
+                      <KnowledgeIcon />
+                    </span>
+                    <span dir={textDirection(doc.title)} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {doc.title}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
             <input
               ref={fileInputRef}
               type="file"
@@ -300,11 +647,16 @@ export default function MessageInput({
             <textarea
               ref={textareaRef}
               value={value}
-              onChange={(e) => onChange(e.target.value)}
+              onChange={handleChange}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
+              // The dropdown's own onMouseDown preempts this with preventDefault,
+              // so a click on an option never reaches here — only clicking away
+              // (or Escape, handled in onKeyDown) closes the mention this way.
+              onBlur={() => setMention(null)}
               disabled={disabled}
               placeholder={disabled ? "Waiting for response…" : "Ask anything"}
+              dir={textDirection(value)}
               rows={1}
               style={{
                 background: "transparent",
@@ -381,7 +733,7 @@ export default function MessageInput({
 
           <div style={{ alignItems: "center", display: "flex", margin: "9px 4px 0" }}>
             <div style={{ color: "var(--fg-dimmer)", fontSize: "11px" }}>
-              Enter to send · Shift + Enter for a new line · drop a file to attach
+              Enter to send · Shift + Enter for a new line · drop a file to attach · @ to reference a document
             </div>
             <div style={{ flex: 1 }} />
             <div style={{ color: "var(--fg-dimmer)", fontSize: "11px" }}>
@@ -391,6 +743,15 @@ export default function MessageInput({
         </div>
       </div>
     </div>
+  );
+}
+
+function KnowledgeIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
+      <path d="M3.5 2.5h6L12 5.5v8a1 1 0 0 1-1 1h-7.5a1 1 0 0 1-1-1v-10a1 1 0 0 1 1-1z" strokeLinejoin="round" />
+      <path d="M5.5 7h5M5.5 9.5h5M5.5 12h3" strokeLinecap="round" />
+    </svg>
   );
 }
 

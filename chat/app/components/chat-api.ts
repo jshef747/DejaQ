@@ -19,6 +19,20 @@ function dejaqHeaders(overrides?: { server?: string; apiKey?: string }): Record<
   return headers;
 }
 
+// x-dejaq-cache-matched-query / -enriched-query / -nearest-cache-prompt carry
+// free user text (any script, em-dashes, curly quotes) percent-encoded by the
+// server (openai_compat.py `_encode_header_text`) since HTTP headers are
+// Latin-1 only. Malformed input can't actually reach here - the server always
+// encodes - but a raw fallback is cheap insurance against a future drift.
+function decodeHeaderText(value: string | null): string | null {
+  if (value === null) return null;
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 /** One of two cached answers the semantic tie-breaker could not separate.
  *
  * Draft A is always the answer that was actually served and streamed, so a
@@ -63,6 +77,13 @@ export interface ChatSuccess {
   // before searching the cache. Null both when there was nothing to rewrite
   // (enrich() returned the message unchanged) and on any non-cache answer.
   cacheEnrichedQuery: string | null;
+  // Count of knowledge-base passages RAG injected on a miss it grounded.
+  // Null on a cache hit or when nothing was retrieved.
+  ragChunks: number | null;
+  // Title of the knowledge-base document this answer was explicitly grounded
+  // in, when the message referenced one with `@`. Null otherwise — including
+  // when a reference was sent but the server has no title to report.
+  ragDocumentTitle: string | null;
   // Set when the SSE body broke part-way through the answer: `text` is
   // whatever arrived before the break, not a finished reply. The caller shows
   // it AND says so, because a silently truncated answer reads as a complete
@@ -130,6 +151,10 @@ export async function sendChatMessage(
   modelProfile: ModelProfile = "default",
   routingMode: RoutingMode = "auto",
   attachment: Attachment | null = null,
+  // Catalog id of a knowledge-base document explicitly picked with `@`. Fetched
+  // by exact id server-side — see CLAUDE.md's file-gate note for why exact
+  // identity, not search, is the point.
+  ragDocumentId: number | null = null,
   onDelta?: (chunk: string) => void,
   onMeta?: (meta: ChatMeta) => void,
   // Stop's client-side abort path. Aborting mid-fetch rejects the fetch()
@@ -150,7 +175,7 @@ export async function sendChatMessage(
     response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...dejaqHeaders() },
-      body: JSON.stringify({ messages, deptSlug, modelProfile, routingMode, attachment }),
+      body: JSON.stringify({ messages, deptSlug, modelProfile, routingMode, attachment, ragDocumentId }),
       signal,
     });
   } catch (err) {
@@ -175,9 +200,12 @@ export async function sendChatMessage(
   const promptDifficulty = response.headers.get("x-dejaq-prompt-difficulty") ?? null;
   const rawDistance = response.headers.get("x-dejaq-cache-distance");
   const cacheDistance = rawDistance !== null ? Number(rawDistance) : null;
-  const cacheMatchedQuery = response.headers.get("x-dejaq-cache-matched-query") ?? null;
+  const cacheMatchedQuery = decodeHeaderText(response.headers.get("x-dejaq-cache-matched-query"));
   const answerAuthored = response.headers.get("x-dejaq-answer-authored") ?? null;
-  const cacheEnrichedQuery = response.headers.get("x-dejaq-enriched-query") ?? null;
+  const cacheEnrichedQuery = decodeHeaderText(response.headers.get("x-dejaq-enriched-query"));
+  const rawRagChunks = response.headers.get("x-dejaq-rag-chunks");
+  const ragChunks = rawRagChunks !== null ? Number(rawRagChunks) : null;
+  const ragDocumentTitle = response.headers.get("x-dejaq-rag-document-title") ?? null;
 
   onMeta?.({ modelUsed, tier });
 
@@ -293,6 +321,8 @@ export async function sendChatMessage(
     cacheMatchedQuery,
     answerAuthored,
     cacheEnrichedQuery,
+    ragChunks,
+    ragDocumentTitle,
     // A stream that broke part-way never reached the terminal chunk, so a
     // half-read answer is never presented as a choice.
     drafts: streamError ? null : drafts,
@@ -341,7 +371,7 @@ export interface EditSuccess {
 
 export type EditResult = EditSuccess | ApiError;
 
-export async function sendFeedback(
+async function postFeedback(
   responseId: string | null,
   interactionId: string | null,
   messages: ChatApiMessage[] | null,
@@ -373,6 +403,45 @@ export async function sendFeedback(
     escalatedResponse: data.escalatedResponse ?? null,
     escalationStatus: data.escalationStatus ?? null,
   };
+}
+
+// The answer is stored to the cache in the background (generalize_and_store_task),
+// after the response already reached the client - so a response_id the user is
+// looking at right now can 404 for a second or two with no row to attach
+// feedback to yet. The server's own /v1/feedback retries internally for ~1.7s
+// (feedback_service._FEEDBACK_RETRY_DELAYS_SECONDS) before giving up; measured
+// against a real running stack, the store itself can still land a few seconds
+// after that - so the client retries the whole call again on top, on the same
+// backoff shape, for a further ~10s before treating a 404 as real. A
+// response_id that will never exist just pays this same wait and then still
+// 404s - correctly, and with an honest message instead of the raw backend text.
+const FEEDBACK_NOT_FOUND_RETRY_DELAYS_MS = [1000, 2000, 3000, 4000];
+
+const FEEDBACK_STILL_NOT_FOUND_MESSAGE =
+  "Couldn't find this answer in the cache yet. It may still be saving - wait a moment and try again.";
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function sendFeedback(
+  responseId: string | null,
+  interactionId: string | null,
+  messages: ChatApiMessage[] | null,
+  rating: FeedbackRating,
+  comment: string,
+  deptSlug: string,
+): Promise<FeedbackResult> {
+  for (let attempt = 0; ; attempt++) {
+    const result = await postFeedback(responseId, interactionId, messages, rating, comment, deptSlug);
+    // Only a 404 is the not-yet-stored race; every other error (network, 422,
+    // 401, 5xx...) is real and must surface immediately, unretried.
+    if (!isApiError(result) || result.status !== 404) return result;
+    if (attempt >= FEEDBACK_NOT_FOUND_RETRY_DELAYS_MS.length) {
+      return { kind: "error", status: 404, message: FEEDBACK_STILL_NOT_FOUND_MESSAGE };
+    }
+    await sleep(FEEDBACK_NOT_FOUND_RETRY_DELAYS_MS[attempt]);
+  }
 }
 
 /** Save a human-edited answer. This IS the thumbs-up: one request carries the
@@ -505,6 +574,75 @@ export async function fetchDepartments(
     return (await response.json()) as Department[];
   } catch {
     return { kind: "error", status: 0, message: "Network error. Could not load departments." };
+  }
+}
+
+// One knowledge-base document, as much as the `@` picker needs — never
+// content. Mirrors Department above; GET /rag-documents is the same shape as
+// GET /departments, same auth, same reason (the admin catalog is
+// loopback-only and the chat app needs its own read of it).
+export interface RagDocument {
+  id: number;
+  title: string;
+  kind: string;
+}
+
+export type RagDocumentsResult = RagDocument[] | ApiError;
+
+export async function fetchRagDocuments(
+  overrides?: { server?: string; apiKey?: string },
+): Promise<RagDocumentsResult> {
+  try {
+    const response = await fetch("/api/rag-documents", {
+      headers: dejaqHeaders(overrides),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      const detail = await parseErrorDetail(response);
+      return { kind: "error", status: response.status, message: userFacingError(response.status, detail) };
+    }
+    return (await response.json()) as RagDocument[];
+  } catch {
+    return { kind: "error", status: 0, message: "Network error. Could not load knowledge-base documents." };
+  }
+}
+
+// A visible, dismissible guess at which knowledge-base document a question is
+// about — POST /rag-suggest. Never grounds anything by itself; accepting one
+// in the composer sets the same RagDocument state the `@` picker sets.
+export interface RagSuggestion {
+  documentId: number;
+  title: string;
+  snippet: string | null;
+  distance: number | null;
+}
+
+// Failures (network, timeout, disabled) are indistinguishable from "no
+// suggestion" here on purpose — a missed suggestion degrades to silence, the
+// same as an unmatched question. Nothing about sending the message depends
+// on this call ever succeeding.
+export async function fetchRagSuggestion(
+  query: string,
+  signal?: AbortSignal,
+): Promise<RagSuggestion | null> {
+  try {
+    const response = await fetch("/api/rag-suggest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...dejaqHeaders() },
+      body: JSON.stringify({ query }),
+      signal,
+    });
+    if (!response.ok) return null;
+    const body = await response.json();
+    if (typeof body?.document_id !== "number") return null;
+    return {
+      documentId: body.document_id,
+      title: typeof body.title === "string" ? body.title : "",
+      snippet: typeof body.snippet === "string" ? body.snippet : null,
+      distance: typeof body.distance === "number" ? body.distance : null,
+    };
+  } catch {
+    return null;
   }
 }
 

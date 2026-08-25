@@ -8,10 +8,12 @@ from app.config import (
     CACHE_DRAFTS_MAX_DELTA,
     CACHE_DRAFTS_MAX_DISTANCE,
     CONTEXT_ADJUSTER_MODEL_NAME,
+    DEFAULT_CLASSIFIER_CHOICE,
     DEFAULT_MAX_TOKENS,
     ENRICHER_MODEL_NAME,
     EXTERNAL_MODEL_NAME,
     GENERALIZER_MODEL_NAME,
+    LEGACY_ROUTING_THRESHOLD,
     LOCAL_ATTACHMENT_MAX_TOKENS,
     LOCAL_LLM_MODEL_NAME,
     NORMALIZER_MODEL_NAME,
@@ -66,6 +68,8 @@ _PROMPT_FIELDS = {
     "generalizer_system_prompt",
     "local_model_system_prompt",
 }
+
+_CLASSIFIER_CHOICES = {"legacy", "labse"}
 
 # Token budget override fields - each mirrors a global default in
 # app/config.py (DEFAULT_MAX_TOKENS, REWRITE_MAX_TOKENS, OLLAMA_NUM_CTX).
@@ -152,6 +156,12 @@ class LlmConfigResult(BaseModel):
     generalizer_system_prompt: str
     local_model_system_prompt: str
     routing_threshold: float
+    # "legacy" or "labse" - which classifier this workspace routes on.
+    classifier_choice: str
+    # The legacy classifier's own threshold, kept separate from
+    # routing_threshold (LaBSE's) because the two classifiers score on
+    # different scales - see app/config.py's LEGACY_ROUTING_THRESHOLD.
+    legacy_routing_threshold: float
     default_max_tokens: int
     rewrite_max_tokens: int
     ollama_num_ctx: int
@@ -260,6 +270,14 @@ def _effective(row, credentials_configured: list[str] | None = None) -> LlmConfi
             if row and row.routing_threshold is not None
             else ROUTING_THRESHOLD
         ),
+        "classifier_choice": (
+            row.classifier_choice if row and row.classifier_choice is not None else DEFAULT_CLASSIFIER_CHOICE
+        ),
+        "legacy_routing_threshold": (
+            row.legacy_routing_threshold
+            if row and row.legacy_routing_threshold is not None
+            else LEGACY_ROUTING_THRESHOLD
+        ),
         "default_max_tokens": (
             row.default_max_tokens if row and row.default_max_tokens is not None else DEFAULT_MAX_TOKENS
         ),
@@ -303,6 +321,8 @@ def _effective(row, credentials_configured: list[str] | None = None) -> LlmConfi
             "generalizer_system_prompt",
             "local_model_system_prompt",
             "routing_threshold",
+            "classifier_choice",
+            "legacy_routing_threshold",
             "default_max_tokens",
             "rewrite_max_tokens",
             "ollama_num_ctx",
@@ -376,6 +396,23 @@ def _validate_prompt_overrides(payload: dict[str, Any], fields_set: set[str]) ->
             raise InvalidLlmConfigUpdate(
                 f"{field}: prompt cannot be empty - reset to null to use the shipped default."
             )
+
+
+def _validate_classifier_choice(payload: dict[str, Any], fields_set: set[str]) -> None:
+    """Reject a classifier_choice that isn't one of the two supported classifiers.
+
+    Null (reset-to-default) is always accepted - it restores
+    config.DEFAULT_CLASSIFIER_CHOICE. Mirrors the schema-level Literal check
+    in schemas/admin/llm_config.py so a direct update_for_workspace() call
+    (as the test suite makes) gets the same guarantee.
+    """
+    if "classifier_choice" not in fields_set:
+        return
+    value = payload.get("classifier_choice")
+    if value is not None and value not in _CLASSIFIER_CHOICES:
+        raise InvalidLlmConfigUpdate(
+            f"classifier_choice: '{value}' must be one of {sorted(_CLASSIFIER_CHOICES)} (or null for the default)."
+        )
 
 
 def _effective_token_value(
@@ -733,6 +770,7 @@ def update_for_workspace(
 
     _validate_ollama_overrides(payload, fields_set)
     _validate_prompt_overrides(payload, fields_set)
+    _validate_classifier_choice(payload, fields_set)
     derived = _validate_and_resolve_external_model(payload, fields_set)
     if derived:
         payload = {**payload, **derived}

@@ -19,6 +19,18 @@ def elapsed_ms(start: float) -> float:
     return (time.perf_counter() - start) * 1000
 
 
+def estimate_tokens(text: str) -> int:
+    """Deliberately conservative (over-)estimate, for a safety check only.
+
+    Same formula as `openai_compat._estimate_tokens` (real English text
+    tokenizes at roughly 4 chars/token; dividing by 3 errs toward counting
+    MORE tokens than a real tokenizer would) - not imported from there to
+    avoid a router->service import, duplicated as one line rather than
+    factored into a shared module neither side otherwise needs.
+    """
+    return len(text) // 3
+
+
 # Each provider names "the token budget cut this off" differently (Anthropic
 # "max_tokens", OpenAI "length", Google "MAX_TOKENS"/FinishReason.MAX_TOKENS)
 # and every other reason (safety filters, tool calls, natural completion)

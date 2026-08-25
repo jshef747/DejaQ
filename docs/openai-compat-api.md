@@ -125,13 +125,13 @@ Gateway headers:
 | `x-dejaq-interaction-id` | Interaction id for feedback / escalation |
 | `x-dejaq-tier` | Serving tier: `cache`, `local`, or `external` |
 | `x-dejaq-response-id` | Cache entry response id when feedback can be submitted. On a **streaming** miss the header goes out before the answer exists, so it names the entry the request *intends* to store - see [Feedback](#feedback) |
-| `x-dejaq-rag-chunks` | Present on a cache miss when the answer was **grounded** in the workspace knowledge base (Rug); value is the number of injected chunks. Absent when nothing was retrieved |
+| `x-dejaq-rag-chunks` | Present on a cache miss when the answer was **grounded** in the workspace knowledge base (RAG); value is the number of injected chunks. Absent when nothing was retrieved |
 | `x-dejaq-answer-authored` | `human` when the served cache entry holds an answer a person wrote through [Edit & Save](#edit--save). Only ever set on a hit - a miss is by definition an answer nobody has corrected yet |
 
 > `POST /v1/responses` (OpenAI Responses API, newer format) shares the same auth, headers, and
 > pipeline. It is stateless: `previous_response_id` / `conversation` are rejected with HTTP 400.
 
-> **Knowledge grounding (Rug):** on a cache miss, DejaQ retrieves relevant chunks from the
+> **Knowledge grounding (RAG):** on a cache miss, DejaQ retrieves relevant chunks from the
 > workspace's admin-curated knowledge base and injects them into the prompt before the model
 > answers — the request/response contract is unchanged (no new fields; the grounding is a
 > server-side side channel, flagged only by `x-dejaq-rag-chunks`). Admins manage the knowledge

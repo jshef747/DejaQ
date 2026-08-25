@@ -406,12 +406,12 @@ def stats_cmd() -> None:
 
 
 # ---------------------------------------------------------------------------
-# rag (Rug) commands — per-workspace knowledge base
+# rag (RAG) commands — per-workspace knowledge base
 # ---------------------------------------------------------------------------
 
 @cli.group()
 def rag() -> None:
-    """Manage a workspace's RAG (Rug) knowledge base."""
+    """Manage a workspace's RAG knowledge base."""
 
 
 def _rag_service():
@@ -446,7 +446,7 @@ def rag_list(workspace_slug: str) -> None:
         sys.exit(1)
     print_table(
         f"Knowledge Base — {workspace_slug}",
-        ["ID", "Title", "Kind", "Source", "Chars", "Chunks", "Created"],
+        ["ID", "Title", "Kind", "Source", "Chars", "Chunks", "Status", "Created"],
         [
             [
                 str(d.id),
@@ -455,6 +455,11 @@ def rag_list(workspace_slug: str) -> None:
                 d.source,
                 f"{d.char_count:,}",
                 str(d.chunk_count),
+                (
+                    f"processing ({d.progress_current}/{d.progress_total})"
+                    if d.status == "processing"
+                    else d.status
+                ),
                 d.created_at.strftime("%Y-%m-%d %H:%M"),
             ]
             for d in docs

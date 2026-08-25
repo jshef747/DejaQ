@@ -32,6 +32,15 @@ class WorkspaceLlmConfig(Base):
     generalizer_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     local_model_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     routing_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Which difficulty classifier this workspace routes on: "legacy" (NVIDIA
+    # DeBERTa) or "labse" (LaBSE). NULL falls back to config.py's
+    # DEFAULT_CLASSIFIER_CHOICE ("labse" - unchanged behaviour on upgrade).
+    # `routing_threshold` above is LaBSE's own threshold; the two classifiers
+    # score on different scales (legacy tops out ~0.30, LaBSE crosses ~0.50),
+    # so a separate column below holds the legacy classifier's own threshold
+    # rather than sharing this one - see llm_config_service.py.
+    classifier_choice: Mapped[str | None] = mapped_column(String, nullable=True)
+    legacy_routing_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
     # Per-workspace token budget overrides - each mirrors the global default
     # of the same name (lowercased) in app/config.py; NULL falls back to it.
     # See services/llm_config_service.py for the relationship validation
@@ -47,10 +56,10 @@ class WorkspaceLlmConfig(Base):
     # Alternative drafts (the semantic tie-breaker) - each mirrors the global
     # default of the same name in app/config.py (CACHE_DRAFTS_*); NULL falls
     # back to it. drafts_max_delta must not exceed drafts_max_distance, and
-    # drafts_max_distance is capped at CACHE_TRUST_DISTANCE - drafts are served
-    # without a validator call, so a window past the trusted ceiling would
-    # offer a candidate the pipeline would never serve unguarded. Enforced in
-    # services/llm_config_service.py.
+    # drafts_max_distance is capped at VALIDATOR_SKIP_DISTANCE - drafts are
+    # served without a validator call, so a window past the distance at which
+    # the embedding alone is trusted would offer a candidate the pipeline would
+    # never serve unguarded. Enforced in services/llm_config_service.py.
     drafts_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     drafts_max_distance: Mapped[float | None] = mapped_column(Float, nullable=True)
     drafts_max_delta: Mapped[float | None] = mapped_column(Float, nullable=True)

@@ -63,6 +63,11 @@ class IngestResult:
     text: str = ""
     sha: str = ""
     char_count: int = 0
+    # Size in bytes of the raw input as given to us (pasted text's UTF-8
+    # encoding, the uploaded file's bytes, or the fetched page's bytes) - what
+    # the dashboard shows as "file size". Distinct from char_count, which is
+    # extracted-text length and can differ a lot for PDF/DOCX.
+    byte_size: int = 0
     reason: str = ""
 
 
@@ -70,7 +75,9 @@ def _normalize(text: str) -> str:
     return _WHITESPACE_RE.sub(" ", text).strip()
 
 
-def _finalize(*, title: str, kind: str, source: str, source_ref: str | None, text: str) -> IngestResult:
+def _finalize(
+    *, title: str, kind: str, source: str, source_ref: str | None, text: str, byte_size: int
+) -> IngestResult:
     normalized = _normalize(text)
     if not normalized:
         return IngestResult(ok=False, kind=kind, source=source, reason="no readable text found")
@@ -83,11 +90,15 @@ def _finalize(*, title: str, kind: str, source: str, source_ref: str | None, tex
         text=text,
         sha=hashlib.sha256(normalized.encode("utf-8")).hexdigest(),
         char_count=len(normalized),
+        byte_size=byte_size,
     )
 
 
 def from_text(title: str, content: str) -> IngestResult:
-    return _finalize(title=title, kind="text", source="paste", source_ref=None, text=content)
+    return _finalize(
+        title=title, kind="text", source="paste", source_ref=None, text=content,
+        byte_size=len(content.encode("utf-8")),
+    )
 
 
 def from_upload(
@@ -108,7 +119,8 @@ def from_upload(
     # 1. A file with a real text layer (PDF/DOCX/Markdown/code) — the common case.
     if ft.ok and ft.text.strip():
         return _finalize(
-            title=display, kind=ft.kind, source="upload", source_ref=filename, text=ft.text
+            title=display, kind=ft.kind, source="upload", source_ref=filename, text=ft.text,
+            byte_size=len(data),
         )
 
     # 2. An image upload — OCR it. file_text.kind_for returns "" for images.
@@ -117,13 +129,15 @@ def from_upload(
         if not text.strip():
             return IngestResult(ok=False, kind="image", source="ocr",
                                 reason="OCR found no readable text in the image")
-        return _finalize(title=display, kind="image", source="ocr", source_ref=filename, text=text)
+        return _finalize(title=display, kind="image", source="ocr", source_ref=filename, text=text,
+                          byte_size=len(data))
 
     # 3. A PDF with no text layer (a scan) — OCR its embedded page images.
     if ft.kind == "pdf":
         text = _ocr_scanned_pdf(data)
         if text.strip():
-            return _finalize(title=display, kind="pdf", source="ocr", source_ref=filename, text=text)
+            return _finalize(title=display, kind="pdf", source="ocr", source_ref=filename, text=text,
+                              byte_size=len(data))
         return IngestResult(ok=False, kind="pdf", source="ocr",
                             reason="scanned PDF: no text layer and OCR found nothing")
 
@@ -277,4 +291,5 @@ def from_url(url: str, title: str | None = None) -> IngestResult:
         tag.decompose()
     page_title = title or (soup.title.string.strip() if soup.title and soup.title.string else url)
     text = soup.get_text(separator="\n")
-    return _finalize(title=page_title, kind="url", source="url", source_ref=url, text=text)
+    return _finalize(title=page_title, kind="url", source="url", source_ref=url, text=text,
+                      byte_size=len(raw))

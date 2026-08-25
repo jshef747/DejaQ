@@ -37,7 +37,7 @@ workspace and generate an API key to start using the gateway.
 - Workspace provider credentials for Google, OpenAI, Anthropic, xAI, DeepSeek, and Groq
 - Per-workspace LLM config and provider test calls
 - Per-workspace pipeline stage models, system prompts, and token budgets (Pipeline page)
-- Per-workspace knowledge base (Rug/RAG documents)
+- Per-workspace knowledge base (RAG documents)
 - Request stats and cache feedback review
 
 Gateway requests (`/v1/*`) always use DejaQ workspace API keys, never the dashboard's own auth.
