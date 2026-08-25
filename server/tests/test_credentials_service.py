@@ -69,3 +69,38 @@ def test_credential_service_upsert_rejects_unsupported_provider(
 
         with pytest.raises(ValueError, match="Unsupported provider"):
             service.upsert(session, workspace_id, "invalid_provider", "ciphertext")
+
+
+def test_credential_unique_constraint_rejects_a_duplicate_provider(isolated_org_db):
+    """One credential per (workspace, provider), enforced by the database.
+
+    Worth its own test because this constraint was silently ABSENT for a while:
+    d1e2f3a4b5c6 dropped and recreated it inside a batch rebuild that did not
+    survive, and e5f6a7b8c9d0 restored it while rebuilding the table anyway.
+    Nothing else would notice it going missing again - a duplicate row just
+    means two encrypted keys where every reader expects one.
+    """
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError
+
+    from app.db.models.workspace import Workspace
+    from app.db.session import get_session
+
+    with get_session() as session:
+        ws = Workspace(name="Acme", slug="acme")
+        session.add(ws)
+        session.flush()
+        workspace_id = ws.id
+
+    insert = text(
+        "INSERT INTO workspace_provider_credentials "
+        "(workspace_id, provider, encrypted_key) VALUES (:workspace_id, :provider, :encrypted_key)"
+    )
+    row = {"workspace_id": workspace_id, "provider": "google", "encrypted_key": "ciphertext"}
+
+    with get_session() as session:
+        session.execute(insert, row)
+
+    with pytest.raises(IntegrityError):
+        with get_session() as session:
+            session.execute(insert, {**row, "encrypted_key": "second-ciphertext"})

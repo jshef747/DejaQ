@@ -151,13 +151,22 @@ fi
 if ! command -v uv &>/dev/null; then
   echo -e "${RED}uv not found. Install it: https://docs.astral.sh/uv/getting-started/installation/${NC}"; exit 1
 fi
-UV_SYNC_OUT="$(cd "$SERVER_DIR" && uv sync 2>&1)" || {
-  echo -e "${RED}Python dependency sync failed (cd server && uv sync). Output:${NC}"
-  echo "$UV_SYNC_OUT" >&2
-  exit 1
-}
-if grep -qE '^(Installed|Uninstalled) ' <<<"$UV_SYNC_OUT"; then
-  echo -e "${CYAN}Synced server/ Python dependencies (uv sync installed changes)${NC}"
+# ...except on a dry run, which must not touch the environment. `uv sync`
+# rewrites server/.venv, and a dry run is asked for precisely when nothing
+# should change - including from a test process that is itself RUNNING out of
+# that venv, where the rewrite fails outright ("cannot access the file because
+# it is being used by another process"). The `command -v uv` check above still
+# runs, and the venv-existence check below still names its own cause, so a dry
+# run keeps reporting a broken environment - it just stops repairing one.
+if [[ "$DRY_RUN" != "true" ]]; then
+  UV_SYNC_OUT="$(cd "$SERVER_DIR" && uv sync 2>&1)" || {
+    echo -e "${RED}Python dependency sync failed (cd server && uv sync). Output:${NC}"
+    echo "$UV_SYNC_OUT" >&2
+    exit 1
+  }
+  if grep -qE '^(Installed|Uninstalled) ' <<<"$UV_SYNC_OUT"; then
+    echo -e "${CYAN}Synced server/ Python dependencies (uv sync installed changes)${NC}"
+  fi
 fi
 
 # ── Platform detection ──────────────────────────────────────────────────────

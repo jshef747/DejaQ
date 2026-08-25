@@ -6,6 +6,13 @@ from pydantic import BaseModel
 
 
 class _FeedbackResult(BaseModel):
+    """Stand-in for services.feedback_service.FeedbackResult.
+
+    Must carry every field the ROUTER reads, not just the ones this test
+    asserts on: the router decides its response shape by inspecting them, so
+    a missing one is an AttributeError rather than a None.
+    """
+
     status: Literal["ok", "deleted"]
     new_score: float | None = None
     edit_status: str | None = None

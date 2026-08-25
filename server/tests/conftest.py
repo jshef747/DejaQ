@@ -41,6 +41,59 @@ class StreamingLocalRouterMixin:
         yield CompletionChunk(done_reason=done_reason)
 
 
+# Markers naming a model that is SERVED BY OLLAMA. `deberta` is deliberately
+# absent: the classifier runs in-process on torch, so it has nothing to do with
+# whether an Ollama host is up. Keep in step with [tool.pytest.ini_options]
+# markers in pyproject.toml.
+_OLLAMA_MARKERS = frozenset({"qwen", "qwen_1_5b", "phi", "gemma_e2b", "llama"})
+
+
+def _is_connection_failure(exc: BaseException | None) -> bool:
+    """Whether an exception chain bottoms out in "nothing answered"."""
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        name = type(exc).__name__
+        if name in {"ConnectError", "ConnectTimeout", "ConnectionError"}:
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_call(item):
+    """Turn "no Ollama running" into a skip instead of a failure.
+
+    Model-marked tests call a real model on purpose - that is what the markers
+    in pyproject.toml are for. With no Ollama up they do not report "no
+    Ollama", they report a wall of `httpx.ConnectError`, which reads as the
+    adjuster and the router being broken.
+
+    Judged on the ACTUAL exception rather than on the marker alone, because the
+    markers are coarser than the behaviour: the normalizer is
+    lowercase-and-strip with no model call except on opinion queries, so most
+    of its `gemma_e2b`-marked tests pass with nothing running and must keep
+    doing so. Both signals are required - a marked test AND a real connection
+    failure - so a test that deliberately asserts on a connection error is not
+    quietly skipped instead.
+    """
+    outcome = yield
+    if not (set(item.keywords) & _OLLAMA_MARKERS):
+        return
+    excinfo = outcome.excinfo
+    if excinfo is None or not _is_connection_failure(excinfo[1]):
+        return
+
+    from app.config import OLLAMA_URL
+
+    outcome.force_exception(
+        pytest.skip.Exception(
+            f"no Ollama at {OLLAMA_URL} - start it with `ollama serve` to run model tests",
+            _use_item_location=True,
+        )
+    )
+
+
 def _reset_backend() -> None:
     _sf._backend = None
     _service_pool.clear()

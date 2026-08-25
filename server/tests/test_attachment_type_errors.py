@@ -175,14 +175,24 @@ def test_untyped_markdown_upload_still_works_by_its_extension(monkeypatch):
     assert resp.status_code != 400
 
 
+# ids= is required here, not cosmetic. Without it pytest builds each id by
+# repr-ing every parameter, including the raw DOCX bytes - a real ZIP blob.
+# That id goes into PYTEST_CURRENT_TEST, and Windows caps an environment
+# variable at 32767 characters, so both docx cases died at SETUP with
+# "the environment variable is longer than 32767 characters" before the test
+# body ever ran.
+_UNCACHEABLE_CASES = [
+    ("scanned pdf (no text layer)", make_pdf(""), "application/pdf", "scan.pdf"),
+    ("corrupt pdf", b"%PDF-1.4 truncated garbage", "application/pdf", "broken.pdf"),
+    ("docx too short to identify", make_docx(["hi"]), DOCX_MIME, "short.docx"),
+    ("corrupt docx", b"PK\x03\x04 not really a docx", DOCX_MIME, "broken.docx"),
+]
+
+
 @pytest.mark.parametrize(
     "label,data,mime,filename",
-    [
-        ("scanned pdf (no text layer)", make_pdf(""), "application/pdf", "scan.pdf"),
-        ("corrupt pdf", b"%PDF-1.4 truncated garbage", "application/pdf", "broken.pdf"),
-        ("docx too short to identify", make_docx(["hi"]), DOCX_MIME, "short.docx"),
-        ("corrupt docx", b"PK\x03\x04 not really a docx", DOCX_MIME, "broken.docx"),
-    ],
+    _UNCACHEABLE_CASES,
+    ids=[case[0] for case in _UNCACHEABLE_CASES],
 )
 def test_recognised_but_uncacheable_files_are_answered_not_rejected(
     monkeypatch, label, data, mime, filename

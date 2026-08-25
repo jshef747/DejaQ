@@ -44,6 +44,13 @@ def test_env_var_absent_means_no_baked_in_default(monkeypatch):
     import app.config as config
 
     monkeypatch.delenv("DEJAQ_EXTERNAL_MODEL", raising=False)
+    # delenv alone is not enough: config.py calls load_dotenv() at import, and
+    # reloading it re-reads server/.env - which on a developer machine sets
+    # DEJAQ_EXTERNAL_MODEL and puts the value straight back. dotenv only fills
+    # what is ABSENT from the environment, so deleting the variable is exactly
+    # what hands control back to the file. Patched at the source module, not on
+    # `config`, because the reload re-binds the name from `dotenv` either way.
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: False)
     importlib.reload(config)
     try:
         assert config.EXTERNAL_MODEL_NAME is None
