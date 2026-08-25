@@ -896,22 +896,29 @@ def test_llm_config_read_returns_draft_defaults_when_no_row(isolated_org_db):
 
 
 def test_llm_config_update_stores_draft_overrides(isolated_org_db):
+    from app.config import CACHE_TRUST_DISTANCE
     from app.services.llm_config_service import update_for_workspace
 
     _create_workspace()
 
+    # Derived from the ceiling, not hardcoded: the ceiling has moved once
+    # already (VALIDATOR_SKIP_DISTANCE -> CACHE_TRUST_DISTANCE, once the
+    # alternate started being validated) and these broke silently when it did.
+    window = CACHE_TRUST_DISTANCE / 2
+    delta = window / 4
+
     result = update_for_workspace(
         "acme",
-        {"drafts_enabled": True, "drafts_max_distance": 0.04, "drafts_max_delta": 0.01},
+        {"drafts_enabled": True, "drafts_max_distance": window, "drafts_max_delta": delta},
         {"drafts_enabled", "drafts_max_distance", "drafts_max_delta"},
     )
 
     assert result.drafts_enabled is True
-    assert result.drafts_max_distance == 0.04
-    assert result.drafts_max_delta == 0.01
+    assert result.drafts_max_distance == window
+    assert result.drafts_max_delta == delta
     assert result.overrides["drafts_enabled"] is True
     # The defaults keep naming what a reset would restore, not the override.
-    assert result.draft_defaults["drafts_max_distance"] != 0.04
+    assert result.draft_defaults["drafts_max_distance"] != window
 
 
 def test_llm_config_update_rejects_a_delta_wider_than_its_window(isolated_org_db):
@@ -929,10 +936,11 @@ def test_llm_config_update_rejects_a_delta_wider_than_its_window(isolated_org_db
     assert "drafts_max_delta" in str(exc.value)
 
 
-def test_llm_config_update_rejects_a_window_past_the_validator_skip_distance(isolated_org_db):
-    """The alternate draft is shown without a validator call, so the window
-    cannot reach past the distance at which the embedding alone is trusted."""
-    from app.config import VALIDATOR_SKIP_DISTANCE
+def test_llm_config_update_rejects_a_window_past_the_trusted_distance(isolated_org_db):
+    """Past the trusted ceiling the embedding is not trusted for the SERVED
+    answer either, so a window that reaches into the validator-guarded band
+    would offer a candidate the pipeline does not serve unguarded."""
+    from app.config import CACHE_TRUST_DISTANCE
     from app.services.llm_config_service import InvalidLlmConfigUpdate, update_for_workspace
 
     _create_workspace()
@@ -940,61 +948,81 @@ def test_llm_config_update_rejects_a_window_past_the_validator_skip_distance(iso
     with pytest.raises(InvalidLlmConfigUpdate) as exc:
         update_for_workspace(
             "acme",
-            {"drafts_max_distance": VALIDATOR_SKIP_DISTANCE + 0.01},
-            {"drafts_max_distance"},
+            {
+                "drafts_max_distance": CACHE_TRUST_DISTANCE + 0.01,
+                "drafts_max_delta": CACHE_TRUST_DISTANCE / 4,
+            },
+            {"drafts_max_distance", "drafts_max_delta"},
         )
 
-    assert "VALIDATOR_SKIP_DISTANCE" in str(exc.value)
+    assert "CACHE_TRUST_DISTANCE" in str(exc.value)
 
 
-def test_llm_config_update_rejects_a_window_inside_the_trusted_zone_but_past_the_skip(isolated_org_db):
-    """The specific hole this ceiling closes: 0.10 is a perfectly ordinary
-    trusted-tier distance, and it is also where sibling questions live."""
-    from app.services.llm_config_service import InvalidLlmConfigUpdate, update_for_workspace
-
-    _create_workspace()
-
-    with pytest.raises(InvalidLlmConfigUpdate):
-        update_for_workspace("acme", {"drafts_max_distance": 0.10}, {"drafts_max_distance"})
-
-
-def test_llm_config_update_accepts_a_window_exactly_at_the_ceiling(isolated_org_db):
-    from app.config import VALIDATOR_SKIP_DISTANCE
+def test_llm_config_update_accepts_a_sibling_distance_window_now_the_alternate_is_validated(
+    isolated_org_db,
+):
+    """0.10 is where numbered-item siblings live ("solve part a" / "part b",
+    measured 0.0898). It was refused while the alternate was shown unchecked;
+    it is accepted now that the alternate goes through the validator, which is
+    the thing that separates a sibling from a paraphrase."""
     from app.services.llm_config_service import update_for_workspace
 
     _create_workspace()
 
     result = update_for_workspace(
-        "acme", {"drafts_max_distance": VALIDATOR_SKIP_DISTANCE}, {"drafts_max_distance"}
+        "acme",
+        {"drafts_max_distance": 0.10, "drafts_max_delta": 0.02},
+        {"drafts_max_distance", "drafts_max_delta"},
     )
 
-    assert result.drafts_max_distance == VALIDATOR_SKIP_DISTANCE
+    assert result.drafts_max_distance == 0.10
+
+
+def test_llm_config_update_accepts_a_window_exactly_at_the_ceiling(isolated_org_db):
+    from app.config import CACHE_TRUST_DISTANCE
+    from app.services.llm_config_service import update_for_workspace
+
+    _create_workspace()
+
+    result = update_for_workspace(
+        "acme", {"drafts_max_distance": CACHE_TRUST_DISTANCE}, {"drafts_max_distance"}
+    )
+
+    assert result.drafts_max_distance == CACHE_TRUST_DISTANCE
 
 
 def test_llm_config_update_validates_drafts_against_existing_stored_values(isolated_org_db):
     """The rule judges the resulting PAIR. Narrowing the window alone must be
     rejected when a previously stored delta is already wider than the new one."""
+    from app.config import CACHE_TRUST_DISTANCE
     from app.services.llm_config_service import InvalidLlmConfigUpdate, update_for_workspace
 
     _create_workspace()
     update_for_workspace(
         "acme",
-        {"drafts_max_distance": 0.05, "drafts_max_delta": 0.04},
+        {"drafts_max_distance": CACHE_TRUST_DISTANCE, "drafts_max_delta": CACHE_TRUST_DISTANCE / 2},
         {"drafts_max_distance", "drafts_max_delta"},
     )
 
+    # Narrowing the window alone leaves the STORED delta wider than it.
     with pytest.raises(InvalidLlmConfigUpdate):
-        update_for_workspace("acme", {"drafts_max_distance": 0.02}, {"drafts_max_distance"})
+        update_for_workspace(
+            "acme", {"drafts_max_distance": CACHE_TRUST_DISTANCE / 4}, {"drafts_max_distance"}
+        )
 
 
 def test_llm_config_update_reset_drafts_to_null_restores_defaults(isolated_org_db):
-    from app.config import CACHE_DRAFTS_MAX_DELTA, CACHE_DRAFTS_MAX_DISTANCE
+    from app.config import CACHE_DRAFTS_MAX_DELTA, CACHE_DRAFTS_MAX_DISTANCE, CACHE_TRUST_DISTANCE
     from app.services.llm_config_service import update_for_workspace
 
     _create_workspace()
     update_for_workspace(
         "acme",
-        {"drafts_enabled": True, "drafts_max_distance": 0.04, "drafts_max_delta": 0.01},
+        {
+            "drafts_enabled": True,
+            "drafts_max_distance": CACHE_TRUST_DISTANCE / 2,
+            "drafts_max_delta": CACHE_TRUST_DISTANCE / 8,
+        },
         {"drafts_enabled", "drafts_max_distance", "drafts_max_delta"},
     )
 
@@ -1062,3 +1090,73 @@ def test_llm_config_toggling_drafts_never_validates_thresholds_it_is_not_changin
     result = update_for_workspace("acme", {"drafts_enabled": True}, {"drafts_enabled"})
 
     assert result.drafts_enabled is True
+
+
+def test_llm_config_reset_drafts_to_null_works_even_from_a_tighter_stored_pair(isolated_org_db):
+    """Reset must never be a one-way door.
+
+    This was a permanent 422 while the cap was VALIDATOR_SKIP_DISTANCE (0.003
+    as staging ships it) and the SHIPPED DEFAULTS were 0.05 / 0.02: a workspace
+    that stored any compliant pair could no longer clear it, because clearing
+    it means "use the defaults" and the defaults themselves failed the ceiling.
+    Moving the cap to CACHE_TRUST_DISTANCE put the defaults legally inside it;
+    this pins that they stay there, whichever way the numbers move next.
+    """
+    from app.config import (
+        CACHE_DRAFTS_MAX_DELTA,
+        CACHE_DRAFTS_MAX_DISTANCE,
+        CACHE_TRUST_DISTANCE,
+    )
+    from app.services.llm_config_service import update_for_workspace
+
+    _create_workspace()
+    # The tightest legal pair there is - the far side of the defaults.
+    update_for_workspace(
+        "acme",
+        {"drafts_max_distance": CACHE_TRUST_DISTANCE / 50, "drafts_max_delta": CACHE_TRUST_DISTANCE / 100},
+        {"drafts_max_distance", "drafts_max_delta"},
+    )
+
+    result = update_for_workspace(
+        "acme",
+        {"drafts_max_distance": None, "drafts_max_delta": None},
+        {"drafts_max_distance", "drafts_max_delta"},
+    )
+
+    assert result.drafts_max_distance == CACHE_DRAFTS_MAX_DISTANCE
+    assert result.drafts_max_delta == CACHE_DRAFTS_MAX_DELTA
+    assert "drafts_max_distance" not in result.overrides
+    assert "drafts_max_delta" not in result.overrides
+
+
+def test_the_shipped_draft_defaults_are_inside_their_own_ceiling(isolated_org_db):
+    """The invariant behind the test above, asserted directly.
+
+    A default that violates the rule its own endpoint enforces is not merely a
+    failed PUT - it means the feature runs, when simply switched on, outside
+    the bound the cap exists to impose. `drafts_enabled` deliberately skips
+    threshold validation, so nothing else catches it.
+    """
+    from app.config import (
+        CACHE_DRAFTS_MAX_DELTA,
+        CACHE_DRAFTS_MAX_DISTANCE,
+        CACHE_TRUST_DISTANCE,
+    )
+    from app.services.llm_config_service import update_for_workspace
+
+    assert CACHE_DRAFTS_MAX_DISTANCE <= CACHE_TRUST_DISTANCE
+    assert CACHE_DRAFTS_MAX_DELTA <= CACHE_DRAFTS_MAX_DISTANCE
+
+    # And the endpoint agrees: setting them explicitly is accepted.
+    _create_workspace()
+    result = update_for_workspace(
+        "acme",
+        {
+            "drafts_max_distance": CACHE_DRAFTS_MAX_DISTANCE,
+            "drafts_max_delta": CACHE_DRAFTS_MAX_DELTA,
+        },
+        {"drafts_max_distance", "drafts_max_delta"},
+    )
+
+    assert result.drafts_max_distance == CACHE_DRAFTS_MAX_DISTANCE
+    assert result.drafts_max_delta == CACHE_DRAFTS_MAX_DELTA

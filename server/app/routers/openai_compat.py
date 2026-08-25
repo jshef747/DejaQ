@@ -1058,6 +1058,61 @@ def _cache_lookup(memory: object, clean_query: str) -> CacheLookupResult:
     return _legacy_cache_lookup(check_cache(clean_query))
 
 
+async def _call_validator(
+    validator,
+    *,
+    new_query: str,
+    cached_query: str,
+    cached_answer: str,
+    mismatch_hint: str | None,
+    attachment_anchored: bool,
+) -> tuple[bool, str]:
+    """Run the cache validator, tolerating a legacy signature.
+
+    One helper because there are now TWO validated things on the hit path: the
+    served answer, and — since the alternative-draft cap moved to
+    CACHE_TRUST_DISTANCE — the alternate draft as well. Duplicating the probe
+    below would let the two drift, and the drift would be silent.
+
+    The call shape is decided from the callable's own signature, never from a
+    TypeError raised while it runs: catching TypeError around the awaited call
+    would also swallow one raised *inside* a modern validator (e.g. a bad
+    payload deep in the Ollama backend), silently downgrading an
+    attachment-anchored validation to text mode with no log.
+    """
+    params = inspect.signature(validator.validate).parameters
+    accepts_modern_kwargs = "mismatch_hint" in params or any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()
+    )
+    if accepts_modern_kwargs:
+        return await validator.validate(
+            new_query,
+            cached_query,
+            cached_answer,
+            mismatch_hint=mismatch_hint,
+            **({"attachment_anchored": True} if attachment_anchored else {}),
+        )
+    # Legacy validator signature (predates mismatch_hint / attachment_anchored).
+    # Loud on purpose: an attachment-anchored hit loses question-to-question
+    # validation here.
+    if attachment_anchored:
+        logger.warning(
+            "Legacy validator signature in use for an attachment-anchored hit; "
+            "falling back to text-mode validation (no mismatch hint, no "
+            "attachment_anchored)."
+        )
+    return await validator.validate(new_query, cached_query, cached_answer)
+
+
+def _mismatch_hint(candidate) -> str | None:
+    """Word-swap hint from the lexical gate ("'list' vs 'string'") — sharpens
+    the validator on near-identical sibling questions."""
+    mismatches = getattr(candidate, "mismatches", None)
+    if not mismatches:
+        return None
+    return ", ".join(f"'{a}' vs '{b}'" for a, b in mismatches)
+
+
 def _cache_lookup_pool(
     memory: object, clean_query: str
 ) -> tuple[list[CacheLookupResult], float | None, str | None]:
@@ -1845,50 +1900,16 @@ async def run_chat_pipeline(
                 and bool(getattr(cache_lookup, "lexically_exact", True))
             )
             if not _skip_validation:
-                # Word-swap hint from the lexical gate ("'list' vs 'string'") —
-                # sharpens the validator on near-identical sibling questions.
-                _mismatches = getattr(cache_lookup, "mismatches", None)
-                _hint = (
-                    ", ".join(f"'{a}' vs '{b}'" for a, b in _mismatches)
-                    if _mismatches else None
-                )
                 try:
                     with trace.step("validate"):
-                        # Decide the call shape from the callable's own signature,
-                        # never from a TypeError raised while it runs — catching
-                        # TypeError around the awaited call would also swallow one
-                        # raised *inside* a modern validator (e.g. a bad payload
-                        # deep in the Ollama backend), silently downgrading an
-                        # attachment-anchored validation to text mode with no log.
-                        _validate_params = inspect.signature(services.validator.validate).parameters
-                        _accepts_modern_kwargs = "mismatch_hint" in _validate_params or any(
-                            p.kind is inspect.Parameter.VAR_KEYWORD
-                            for p in _validate_params.values()
+                        _validator_accepted, _validator_verdict = await _call_validator(
+                            services.validator,
+                            new_query=user_query,
+                            cached_query=cache_lookup.matched_query or "",
+                            cached_answer=cached_answer,
+                            mismatch_hint=_mismatch_hint(cache_lookup),
+                            attachment_anchored=_attachment_anchored,
                         )
-                        if _accepts_modern_kwargs:
-                            _validator_accepted, _validator_verdict = await services.validator.validate(
-                                user_query,
-                                cache_lookup.matched_query or "",
-                                cached_answer,
-                                mismatch_hint=_hint,
-                                **({"attachment_anchored": True} if _attachment_anchored else {}),
-                            )
-                        else:
-                            # Legacy validator signature (predates mismatch_hint /
-                            # attachment_anchored). Loud on purpose: an
-                            # attachment-anchored hit loses question-to-question
-                            # validation here.
-                            if _attachment_anchored:
-                                logger.warning(
-                                    "Legacy validator signature in use for an attachment-anchored "
-                                    "hit; falling back to text-mode validation (no mismatch hint, "
-                                    "no attachment_anchored)."
-                                )
-                            _validator_accepted, _validator_verdict = await services.validator.validate(
-                                user_query,
-                                cache_lookup.matched_query or "",
-                                cached_answer,
-                            )
                 except Exception:
                     logger.exception("Validator failed; treating as cache miss (fail-safe)")
                     _validator_accepted = False
@@ -1923,12 +1944,10 @@ async def run_chat_pipeline(
                 # THIS request rather than on the pair, which is why they live
                 # here and not in the selector:
                 #
-                # - trusted tier on both sides. A band or rescue alternate is
-                #   only servable once the validator accepts it, and that is a
-                #   second validator call (~600ms measured) on the synchronous
-                #   serve path. The admin ceiling in llm_config_service caps the
-                #   configured window at CACHE_TRUST_DISTANCE so this cannot be
-                #   configured around, but the tier flag is the real authority.
+                # - trusted tier on both sides. The admin ceiling in
+                #   llm_config_service caps the configured window at
+                #   CACHE_TRUST_DISTANCE so this cannot be configured around,
+                #   but the tier flag is the real authority.
                 # - never an attachment hit (already excluded by _want_drafts,
                 #   restated here so the rule survives a change to that flag).
                 # - never a human-authored entry on either side. A person
@@ -1953,6 +1972,58 @@ async def run_chat_pipeline(
                         max_delta=llm_config.drafts_max_delta,
                         max_score_gap=CACHE_DRAFTS_MAX_SCORE_GAP,
                     )
+
+                # The alternate is checked on its own merit before it is
+                # offered. The served answer has always been validated — either
+                # by the block above or by being inside VALIDATOR_SKIP_DISTANCE,
+                # where the embedding alone is the guarantee. The alternate had
+                # neither: it is a DIFFERENT entry matched by a different stored
+                # question, and until this ran, its only qualification was
+                # sitting near the primary. That gap is the whole reason the
+                # configured window used to be capped at VALIDATOR_SKIP_DISTANCE
+                # (0.003 as staging ships it) rather than at the trusted ceiling.
+                # Closing it is what lets the cap move to CACHE_TRUST_DISTANCE.
+                #
+                # A rejected alternate is not an error and not a miss: the
+                # primary is still a perfectly good validated hit, so the turn
+                # degrades to the ordinary single-answer path — no chooser, no
+                # header, nothing for a client to handle. Same for a validator
+                # that throws; fail-safe here means "no second opinion", not
+                # "no answer".
+                #
+                # Only ever one extra call, and only when a tie actually fires,
+                # which the reachability measurement says is rare (ordinary
+                # sequential traffic never produces the pair at all — it takes
+                # concurrent misses of one question).
+                if _draft_pair is not None:
+                    _alternate = _draft_pair.alternate
+                    try:
+                        with trace.step("validate_alt"):
+                            _alt_accepted, _alt_verdict = await _call_validator(
+                                services.validator,
+                                new_query=user_query,
+                                cached_query=_alternate.matched_query or "",
+                                cached_answer=_alternate.generalized_answer or "",
+                                mismatch_hint=_mismatch_hint(_alternate),
+                                attachment_anchored=False,
+                            )
+                    except Exception:
+                        logger.exception(
+                            "Alternate-draft validator failed; offering the served "
+                            "answer alone (fail-safe)"
+                        )
+                        _alt_accepted, _alt_verdict = False, "ERROR"
+                    logger.info(
+                        "draft_alternate_validation %s — verdict=%s distance=%.4f "
+                        "matched_prompt=%r entry=%s",
+                        "ACCEPT" if _alt_accepted else "REJECT",
+                        _alt_verdict,
+                        float(_alternate.distance or 0.0),
+                        _diagnostic_prompt(_alternate.matched_query) or "",
+                        _alternate.entry_id or "?",
+                    )
+                    if not _alt_accepted:
+                        _draft_pair = None
 
                 if _draft_pair is not None:
                     # Both drafts are served verbatim. Running adjust() twice

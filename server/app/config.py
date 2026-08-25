@@ -191,22 +191,27 @@ CACHE_DRAFTS_ENABLED = _get_bool("DEJAQ_CACHE_DRAFTS_ENABLED", False)
 # floor because lower is better in cosine space - the same units the rest of the
 # lookup uses.
 #
-# Capped at VALIDATOR_SKIP_DISTANCE (0.05), NOT at CACHE_TRUST_DISTANCE (0.15),
-# and the difference is load-bearing. The SERVED answer goes through the
-# validator on merit like any other hit; the ALTERNATE never does, because a
-# second validate() call would land on the synchronous serve path and roughly
-# double the hit latency this product exists to keep low.
-# VALIDATOR_SKIP_DISTANCE is exactly the line the pipeline already draws for
-# "close enough that the embedding alone guarantees the cached answer covers
-# the question" (see its own comment below), so it is the only distance at
-# which showing an unvalidated answer is defensible. At 0.15 it is not:
-# numbered-item siblings ("solve part a" / "part b") measure 0.0898 - inside a
-# 0.15 window - and those are precisely what the validator exists to reject
-# (docs/image-gate.md).
+# Capped at CACHE_TRUST_DISTANCE (0.15) - the trusted-zone ceiling - because
+# BOTH drafts are validated on merit. The served answer goes through the
+# validator like any other hit; the alternate goes through its own call on the
+# tie path (openai_compat.py, the `validate_alt` step), which is a different
+# entry matched by a different stored question and so needs checking in its own
+# right.
 #
-# The cost is recall, knowingly: a genuine tie between two entries at 0.09
-# goes unoffered. Widening this without also validating the alternate would
-# buy that recall with a wrong answer.
+# It was capped at VALIDATOR_SKIP_DISTANCE while the alternate was shown
+# unchecked, and that was the correct bound for that design: numbered-item
+# siblings ("solve part a" / "part b") measure 0.0898 - inside a 0.15 window -
+# and those are exactly what the validator exists to reject (docs/image-gate.md).
+# Validating the alternate is what removed the argument, so the cap moved to the
+# line the pipeline already draws for a servable cached answer. It stops there
+# and not higher: past 0.15 the embedding is no longer trusted for the SERVED
+# answer either.
+#
+# The cost is one extra validate() call, and only on a turn where a tie actually
+# fires - which the reachability measurement says is rare, since ordinary
+# sequential traffic never accumulates the pair at all (it takes concurrent
+# misses of one question). A rejected alternate is not an error: the turn
+# degrades to the ordinary single-answer hit.
 CACHE_DRAFTS_MAX_DISTANCE = _get_float("DEJAQ_CACHE_DRAFTS_MAX_DISTANCE", 0.05)
 
 # Semantic proximity: how close the two distances must be to count as a tie.

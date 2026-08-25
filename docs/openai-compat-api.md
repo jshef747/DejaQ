@@ -316,13 +316,21 @@ All of these, or the response is an ordinary single answer:
 | Single-turn request | A follow-up turn needs the context adjuster, and drafts are served verbatim |
 | Answers genuinely differ | Not an alias of one root (an alias holds a byte-copy), not a near-duplicate |
 
-`drafts_max_distance` is capped at `DEJAQ_VALIDATOR_SKIP_DISTANCE`, **not** at the trusted-zone
-ceiling. The served answer goes through the validator on merit like any other hit; the *alternate*
-never does, because a second `validate()` call would land on the synchronous serve path. That is
-only defensible inside the distance where the embedding alone already guarantees a cached answer
-covers the question. Above it the validator is what separates a paraphrase from a sibling question
-— `solve part a` / `part b` measures 0.0898, comfortably inside the trusted zone. The cost is
-recall, knowingly.
+**Both drafts are validated.** The served answer goes through the validator on merit like any
+other hit. The *alternate* goes through its own `validate()` call on the tie path — it is a
+different entry matched by a different stored question, so sitting near the primary is not a
+qualification. A rejected alternate is **not** an error and not a miss: the turn degrades to the
+ordinary single-answer response, with no `dejaq_drafts` array and no `x-dejaq-drafts` header, so a
+client has nothing new to handle. The same is true if the validator itself fails.
+
+`drafts_max_distance` is therefore capped at `DEJAQ_CACHE_TRUST_DISTANCE` (0.15), the trusted-zone
+ceiling. It was capped at `DEJAQ_VALIDATOR_SKIP_DISTANCE` while the alternate was shown unchecked,
+and that was the right bound for that design — numbered-item siblings (`solve part a` / `part b`)
+measure 0.0898, comfortably inside the trusted zone, and those are exactly what the validator
+exists to reject. The cap stops at the trusted ceiling and not higher: past it the embedding is no
+longer trusted for the served answer either.
+
+The cost is one extra validator call, and only on a turn where a tie actually fires.
 
 Both drafts are served **verbatim**: the context adjuster is skipped, because the text a person
 picks has to be the text that gets the point.

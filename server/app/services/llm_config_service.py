@@ -7,6 +7,7 @@ from app.config import (
     CACHE_DRAFTS_ENABLED,
     CACHE_DRAFTS_MAX_DELTA,
     CACHE_DRAFTS_MAX_DISTANCE,
+    CACHE_TRUST_DISTANCE,
     CONTEXT_ADJUSTER_MODEL_NAME,
     DEFAULT_CLASSIFIER_CHOICE,
     DEFAULT_MAX_TOKENS,
@@ -21,7 +22,6 @@ from app.config import (
     REWRITE_MAX_TOKENS,
     ROUTING_THRESHOLD,
     VALIDATOR_MODEL_NAME,
-    VALIDATOR_SKIP_DISTANCE,
 )
 from app.db import credential_repo, llm_config_repo
 from app.db.models.workspace import Workspace
@@ -696,15 +696,18 @@ def _validate_draft_overrides(payload: dict[str, Any], fields_set: set[str], row
       wider than the window it operates inside is incoherent - every pair
       inside the window would count as tied, which is not a tie-breaker, it is
       an always-on second answer.
-    - `drafts_max_distance` is capped at VALIDATOR_SKIP_DISTANCE, not at the
-      trusted-zone ceiling. The SERVED answer is validated on merit like any
-      other hit; the ALTERNATE never is, because a second validate() call would
-      land on the synchronous serve path. VALIDATOR_SKIP_DISTANCE is exactly the
-      line the pipeline already draws for "close enough that the embedding alone
-      guarantees the cached answer covers the question", so it is the only
-      distance at which showing an unvalidated answer is defensible. The trusted
-      ceiling is not: numbered-item siblings ("solve part a" / "part b") measure
-      0.0898, well inside it, and those are what the validator exists to reject.
+    - `drafts_max_distance` is capped at CACHE_TRUST_DISTANCE, the trusted-zone
+      ceiling. BOTH drafts are validated on merit: the served answer like any
+      other hit, and the alternate by its own validate() call on the tie path
+      (openai_compat.py, `validate_alt`), added precisely so this cap could be
+      the trusted ceiling rather than VALIDATOR_SKIP_DISTANCE. The earlier,
+      much tighter cap existed only because the alternate was shown unchecked -
+      which is what made numbered-item siblings ("solve part a" / "part b",
+      measured 0.0898) dangerous inside the trusted zone. The validator is what
+      separates those from a real paraphrase, and it now runs on the alternate,
+      so the trusted ceiling is the right bound. Above it the embedding is no
+      longer trusted for the SERVED answer either, which is why the cap stops
+      there and not higher.
 
     Only reachable when this update actually touches one of the draft fields.
     """
@@ -733,15 +736,15 @@ def _validate_draft_overrides(payload: dict[str, Any], fields_set: set[str], row
             "window it operates inside makes every candidate in that window count as "
             "tied, which is an always-on second answer rather than a tie-breaker."
         )
-    if max_distance > VALIDATOR_SKIP_DISTANCE:
+    if max_distance > CACHE_TRUST_DISTANCE:
         raise InvalidLlmConfigUpdate(
             f"drafts_max_distance: {max_distance} exceeds the ceiling of "
-            f"{VALIDATOR_SKIP_DISTANCE} (VALIDATOR_SKIP_DISTANCE). The alternative "
-            "draft is shown WITHOUT a validator call - a second one would land on the "
-            "synchronous serve path - and that is only defensible inside the distance "
-            "at which the embedding alone already guarantees a cached answer covers "
-            "the question. Above it the validator is what separates a paraphrase from "
-            "a sibling question ('solve part a' / 'part b' measures 0.0898)."
+            f"{CACHE_TRUST_DISTANCE} (CACHE_TRUST_DISTANCE). Both drafts are "
+            "validated - the served answer like any other hit, the alternate by its "
+            "own validator call on the tie path - so the bound is the trusted zone "
+            "itself. Past it the embedding is no longer trusted for the SERVED "
+            "answer either, and a window that reaches into the validator-guarded "
+            "band would offer a candidate the pipeline does not serve unguarded."
         )
 
 

@@ -5,10 +5,12 @@ here is everything the ROUTER decides: which candidates are eligible at all,
 that the served answer and the response body stay exactly what they were when
 no tie fires, and that the drafts ride the wire where a client can find them.
 
-Distances sit inside CACHE_DRAFTS_MAX_DISTANCE, which is VALIDATOR_SKIP_DISTANCE
-(0.05) - the alternate is shown without a validator call, so the window cannot
-reach further. Every request here is single-turn, because drafts never fire on a
-follow-up turn.
+Distances sit inside CACHE_DRAFTS_MAX_DISTANCE, which is capped at
+CACHE_TRUST_DISTANCE (0.15). Both drafts are validated - the served answer like
+any other hit, the alternate by its own call on the tie path - which is what
+lets the window reach the trusted ceiling rather than stopping at
+VALIDATOR_SKIP_DISTANCE. Every request here is single-turn, because drafts never
+fire on a follow-up turn.
 """
 import json
 
@@ -73,10 +75,11 @@ class _AcceptingValidator:
         return True, "VALID"
 
 
-def _patch_pipeline(monkeypatch, memory, drafts_enabled=True):
+def _patch_pipeline(monkeypatch, memory, drafts_enabled=True, validator=None):
     async def _noop_log(*a, **k):
         return None
 
+    validator = validator or _AcceptingValidator()
     monkeypatch.setattr(
         openai_compat,
         "_services_for_model_profile",
@@ -85,7 +88,7 @@ def _patch_pipeline(monkeypatch, memory, drafts_enabled=True):
             llm_router=None,
             adjuster=MarkerAdjuster(),
             enricher=StubEnricher(),
-            validator=_AcceptingValidator(),
+            validator=validator,
         ),
     )
     monkeypatch.setattr(openai_compat, "get_memory_service", lambda namespace: memory)
@@ -294,3 +297,98 @@ def test_a_settled_tie_is_not_offered_again(monkeypatch):
     )
 
     assert "dejaq_drafts" not in _ask().json()
+
+
+# --- The alternate is validated on its own merit ----------------------------
+#
+# The served answer has always been validated - either by the validator or by
+# sitting inside VALIDATOR_SKIP_DISTANCE, where the embedding is the guarantee.
+# Until this ran, the alternate's only qualification was sitting near the
+# primary, and that gap is why the configured window used to stop at
+# VALIDATOR_SKIP_DISTANCE instead of the trusted ceiling.
+
+class _RejectingValidator:
+    """Accepts the served answer, refuses the alternate.
+
+    Keyed on the answer text, because both calls arrive on the same turn and
+    the point is that they are judged separately.
+    """
+
+    def __init__(self):
+        self.calls: list[tuple[str, str]] = []
+
+    async def validate(self, new_query, cached_query, cached_answer, **kwargs):
+        self.calls.append((cached_query, cached_answer))
+        return (cached_answer != ANSWER_B), "VALID" if cached_answer != ANSWER_B else "INVALID"
+
+
+class _ExplodingValidator:
+    """Accepts the served answer, then throws on the alternate."""
+
+    async def validate(self, new_query, cached_query, cached_answer, **kwargs):
+        if cached_answer == ANSWER_B:
+            raise RuntimeError("validator backend fell over")
+        return True, "VALID"
+
+
+def test_a_rejected_alternate_degrades_to_the_ordinary_single_answer(monkeypatch):
+    """Not an error and not a miss.
+
+    The primary is still a validated hit, so the turn must look exactly like a
+    turn where no tie fired: the served answer, no drafts array, no header. A
+    client has nothing new to handle.
+    """
+    validator = _RejectingValidator()
+    _patch_pipeline(monkeypatch, _tied_pool(), validator=validator)
+
+    response = _ask()
+    body = response.json()
+
+    assert response.status_code == 200
+    assert "dejaq_drafts" not in body
+    assert "x-dejaq-drafts" not in response.headers
+    # Still a cache hit, still the served answer - just alone.
+    assert response.headers["x-dejaq-tier"] == "cache"
+    assert ANSWER_A in body["choices"][0]["message"]["content"]
+
+
+def test_the_alternate_is_judged_on_its_own_question_and_answer(monkeypatch):
+    """Not the primary's. Sitting near the primary is not a qualification -
+    the alternate is a different entry matched by a different stored query."""
+    validator = _RejectingValidator()
+    _patch_pipeline(monkeypatch, _tied_pool(), validator=validator)
+
+    _ask()
+
+    assert ("query for doc-b", ANSWER_B) in validator.calls
+
+
+def test_a_validator_that_throws_on_the_alternate_still_serves_the_answer(monkeypatch):
+    """Fail-safe here means 'no second opinion', not 'no answer'."""
+    _patch_pipeline(monkeypatch, _tied_pool(), validator=_ExplodingValidator())
+
+    response = _ask()
+    body = response.json()
+
+    assert response.status_code == 200
+    assert "dejaq_drafts" not in body
+    assert response.headers["x-dejaq-tier"] == "cache"
+    assert ANSWER_A in body["choices"][0]["message"]["content"]
+
+
+def test_an_accepted_alternate_is_still_offered(monkeypatch):
+    """The control: the same pool, with a validator that accepts both."""
+    _patch_pipeline(monkeypatch, _tied_pool())
+
+    response = _ask()
+
+    assert response.headers["x-dejaq-drafts"] == "2"
+    assert len(response.json()["dejaq_drafts"]) == 2
+
+
+def test_a_rejected_alternate_leaves_the_stream_exactly_as_a_normal_hit(monkeypatch):
+    _patch_pipeline(monkeypatch, _tied_pool(), validator=_RejectingValidator())
+
+    response = _ask(stream=True)
+
+    assert "dejaq_drafts" not in response.text

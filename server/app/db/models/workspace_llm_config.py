@@ -56,10 +56,11 @@ class WorkspaceLlmConfig(Base):
     # Alternative drafts (the semantic tie-breaker) - each mirrors the global
     # default of the same name in app/config.py (CACHE_DRAFTS_*); NULL falls
     # back to it. drafts_max_delta must not exceed drafts_max_distance, and
-    # drafts_max_distance is capped at VALIDATOR_SKIP_DISTANCE - drafts are
-    # served without a validator call, so a window past the distance at which
-    # the embedding alone is trusted would offer a candidate the pipeline would
-    # never serve unguarded. Enforced in services/llm_config_service.py.
+    # drafts_max_distance is capped at CACHE_TRUST_DISTANCE - both drafts are
+    # validated (the served answer like any other hit, the alternate by its own
+    # validator call on the tie path), so the trusted zone is the right bound; a
+    # window past it would offer a candidate the pipeline does not serve
+    # unguarded either. Enforced in services/llm_config_service.py.
     drafts_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     drafts_max_distance: Mapped[float | None] = mapped_column(Float, nullable=True)
     drafts_max_delta: Mapped[float | None] = mapped_column(Float, nullable=True)
