@@ -254,3 +254,79 @@ def test_two_documents_asked_the_same_question_get_two_entries():
     id_b = derive_doc_id(q, rag_document_id=DOC_B_ID)
     id_none = derive_doc_id(q)
     assert len({id_a, id_b, id_none}) == 3
+
+
+class ReferencePoolMemory(ReferenceHitMemory):
+    """A pool whose FIRST passer is the anchored entry and whose second is an
+    ordinary text entry - the shape the candidate-gate loop scans when the
+    alternative-drafts tie-breaker is on."""
+
+    def lookup_cache_pool(self, clean_query: str):
+        return (
+            [
+                self.lookup_cache(clean_query),
+                CacheLookupResult(
+                    hit=True,
+                    generalized_answer="An unrelated cached answer.",
+                    entry_id="doc-plain",
+                    distance=0.185,
+                    matched_query="something else entirely",
+                    requires_validation=True,
+                ),
+            ],
+            0.18,
+            ORIGINAL_QUESTION,
+        )
+
+
+def test_the_reported_anchoring_is_the_served_entrys_own(monkeypatch):
+    """A referenced request reports its OWN document, and is never offered a
+    second answer - with the alternative-drafts tie-breaker switched on.
+
+    Merging staging's reference anchoring into this branch's restructured
+    candidate loop (which collects several passers instead of breaking on the
+    first) puts `_rag_anchored` inside the `if not _gate_passed:` guard, exactly
+    like _image_anchored/_file_anchored, so it always describes the SERVED
+    entry. Note what the loop makes of that: when the request carries a
+    reference, a candidate either matches its document id (and is anchored) or
+    is rejected by the gate, so a non-anchored second passer cannot exist and
+    the mis-fold is unreachable rather than merely unlikely. The assignment
+    stays inside the guard because that is the rule the other two follow and it
+    must survive a future change to the gate - not because this test could tell
+    the two apart.
+
+    What this DOES pin is the pair of outcomes: the header names DOC_A even
+    with a second pool candidate present, and `not _request_has_rag_ref` in
+    `_want_drafts` keeps a chooser off a request whose correctness rests on the
+    reference it carried.
+    """
+    validator = RecordingValidator(accept=True)
+    _patch_pipeline(
+        monkeypatch,
+        validator=validator,
+        adjuster=TrackingAdjuster(),
+        memory=ReferencePoolMemory(),
+    )
+    # Drafts ON, which is what makes the loop scan past the first passer at
+    # all - with the feature off the whole hazard is unreachable and the test
+    # would be vacuous.
+    monkeypatch.setattr(
+        openai_compat,
+        "_read_effective_llm_config",
+        lambda slug, wid: openai_compat.EffectiveLlmConfig(
+            external_model="gemini-2.5-flash",
+            routing_threshold=0.3,
+            drafts_enabled=True,
+        ),
+    )
+
+    resp = _post(PARAPHRASE_QUESTION, rag_document_id=DOC_A_ID)
+
+    assert resp.status_code == 200
+    assert resp.json()["output_text"] == CACHED_ANSWER
+    # The served entry is the anchored one, and the header names ITS document.
+    assert resp.headers["x-dejaq-rag-document-id"] == str(DOC_A_ID)
+    # And no second answer was offered for a request whose correctness rests on
+    # the reference it carried.
+    assert "x-dejaq-drafts" not in resp.headers
+    assert "dejaq_drafts" not in resp.json()
