@@ -357,3 +357,76 @@ def test_retrieve_by_documents_with_no_ids_returns_nothing(fake_filtered_collect
     # whole collection - that is exactly the crowd-out this path avoids.
     assert rag_service.retrieve_by_documents("acme__rag", [], "q", top_k=4) == []
     assert fake_filtered_collection.last_where is None
+
+# --- code-aware chunking (Python) ---------------------------------------------
+
+_SAMPLE = '''"""Module docstring."""
+import os
+
+
+def short_one():
+    return 1
+
+
+# A comment that ast cannot see, between two functions.
+@decorated
+def short_two(a, b):
+    """Doc."""
+    return a + b
+
+
+class Holder:
+    def method(self):
+        return "x"
+'''
+
+
+def test_chunk_document_uses_prose_chunking_for_everything_but_python():
+    # Same text, three origins: only the .py one is parsed as code.
+    assert rag_service.chunk_document(_SAMPLE, "notes.md") == rag_service.chunk_text(_SAMPLE)
+    assert rag_service.chunk_document(_SAMPLE, None) == rag_service.chunk_text(_SAMPLE)
+    assert rag_service.chunk_document("x = 1\n" * 400, "a.js") == rag_service.chunk_text("x = 1\n" * 400)
+
+
+def test_chunk_document_keeps_whole_functions_and_their_decorators_and_comments():
+    chunks = rag_service.chunk_document(_SAMPLE, "https://github.com/o/r/blob/main/pkg/mod.py")
+    joined = "\n".join(chunks)
+    for unit in ("def short_one():\n    return 1",
+                 "@decorated\ndef short_two(a, b):",
+                 "class Holder:\n    def method(self):"):
+        assert any(unit in c for c in chunks), unit
+    # ast has no line span for a bare comment; tiling the file is what keeps it.
+    assert "# A comment that ast cannot see" in joined
+
+
+def test_chunk_document_falls_back_to_prose_when_python_will_not_parse():
+    broken = "def f(:\n  pass\n" + "# filler\n" * 200
+    assert rag_service.chunk_document(broken, "broken.py") == rag_service.chunk_text(broken)
+
+
+def test_oversized_function_splits_at_statement_boundaries_and_keeps_its_name(monkeypatch):
+    monkeypatch.setattr(rag_service, "RAG_CHUNK_CHARS", 200)
+    body = "\n".join(f"    value_{i} = compute_{i}(argument_{i}, keyword_{i}=True)" for i in range(40))
+    source = f"def enormous(argument):\n{body}\n    return value_39\n"
+    chunks = rag_service.chunk_document(source, "mod.py")
+
+    assert len(chunks) > 1, "a function far over budget must still be bounded"
+    # Every piece names the function it came from, or the answer line is
+    # unreachable by a question that names the function (the super_len case).
+    assert all("def enormous(argument):" in c for c in chunks)
+    # ...and every piece after the first says so as a COMMENT, so the answering
+    # model reads four fragments of one function, not four implementations.
+    assert chunks[0].startswith("def enormous(argument):")
+    assert all(c.startswith("# fragment of:\n# def enormous(argument):") for c in chunks[1:])
+    # No statement is cut in half: every original line survives verbatim.
+    for line in source.splitlines():
+        if line.strip():
+            assert any(line in c for c in chunks), line
+    # The tail — where a return value lives — is present and attributed.
+    tail = [c for c in chunks if "return value_39" in c]
+    assert len(tail) == 1 and "def enormous(argument):" in tail[0]
+
+
+def test_chunking_is_deterministic_so_a_reimport_is_byte_identical():
+    ref = "https://github.com/o/r/blob/main/pkg/mod.py"
+    assert rag_service.chunk_document(_SAMPLE, ref) == rag_service.chunk_document(_SAMPLE, ref)

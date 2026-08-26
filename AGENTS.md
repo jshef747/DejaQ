@@ -243,13 +243,38 @@ picker's expandable repository entry (`chat/app/components/rag-mention.ts`), the
 rows and their status machine stay per-document everywhere below the presentation
 layer - the group is derived, never stored as its own row.
 
-Measured, and the reason not to trust code retrieval yet: `rag_service.chunk_text`
-splits on sentence/paragraph boundaries (prose logic) and therefore cuts through the
-middle of a function. `requests`' `super_len` lands across chunks 5-8 of
-`src/requests/utils.py`, top-4 retrieval returned 5/6/44/7, and the `return` line in
-chunk 8 was never retrieved - the answer was wrong. Markdown questions answer well,
-and nothing was invented for an unanswerable question. A code-aware chunker is the
-obvious fix and is deliberately unbuilt; measure it against that same battery first.
+`_REPO_MAX_FILES = 400` is a HARD cap applied in tar order (alphabetical) and it
+truncates SILENTLY - dropped files land in the response's `skipped_files` count with
+no reason attached, indistinguishable from a lockfile. Importing `jshef747/DejaQ`
+itself measured 654 candidate files and dropped 244, which is every one of the 241
+files under `server/`, because `server/` sorts last. An import of a repository near
+or above that many files answers questions about the wrong half of it. Raise the cap,
+or report per-reason skip counts, before trusting an import of anything repo-sized.
+
+## The knowledge-base chunker is code-aware for Python only
+
+`rag_service.chunk_document(text, source_ref)` is the single entry point ingestion
+uses (`rag_admin_service.begin_ingest`). It picks the strategy from the file
+extension in `source_ref`: `.py`/`.pyi` go through `chunk_python` (an `ast` walk that
+keeps a function, method or class whole, splits an over-budget one at its own inner
+statement boundaries, and heads each later fragment with a `# fragment of:` comment
+naming the enclosing declarations); everything else - Markdown, JS, JSON, plain text,
+and any Python that will not parse - falls through to the prose `chunk_text`
+unchanged. Deliberately no language registry and no tree-sitter dependency: one `if`,
+because one language is what the battery measures. Chunking is a pure function of
+(text, source_ref), which is what makes a re-import of an unchanged file
+byte-identical - verified live, 884 chunks, 0 changed.
+
+Measured on the battery `c45c8f3` established (`RichardLitt/standard-readme` +
+`psf/requests`, 28 questions through `/rag-suggest` + `/v1/responses`, 25 of them
+with a specific answer line): prose chunking retrieved the answer line for 13,
+code-aware for 25, zero regressions. `psf/requests` grew 840 -> 897 chunks (+6.8%);
+Markdown documents are byte-identical. Ranking was NOT touched and moved anyway -
+`/rag-suggest`'s top pick for the 23 `requests` code questions went from 11 test
+files / 4 correct source modules to 2 / 15, because an implementation chunk that
+starts at `def` competes with a test file's prose-like assertions and a mid-function
+fragment did not. Full numbers, including the DejaQ secondary run:
+[docs/rag-layer.md](docs/rag-layer.md#chunking).
 
 ## Maintaining this file
 

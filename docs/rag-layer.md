@@ -43,11 +43,60 @@ retrieval distances are comparable to cache distances.
 ```
 admin adds text / file / URL / image
    → extract readable text   (services/rag_ingest.py)
-   → chunk (~1000 chars, 150 overlap)   (services/rag_service.chunk_text)
+   → chunk   (services/rag_service.chunk_document)
+        Python (.py/.pyi): on the file's own structure, functions kept whole
+        everything else: ~1000 chars, 150 overlap, prose boundaries
    → embed each chunk (BGE)   (rag_service.embed_chunks) — before the DB session opens
    → write a catalog row into SQLite  rag_documents  (title, kind, sha, chunk_count…)
    → upsert the chunks into "{workspace}__rag_kb"   (rag_service.index_document)
 ```
+
+### Chunking
+
+`rag_service.chunk_document(text, source_ref)` is the only chunker ingestion
+calls. It picks one of two strategies from the file extension in `source_ref` —
+the GitHub blob URL for a repository import, the filename for an upload, and
+absent for pasted text, which is therefore never code:
+
+- **`.py` / `.pyi` → `chunk_python`.** An `ast` walk over the file. Every
+  statement gets a line span, spans are *tiled* so they touch (comments and blank
+  lines sit between statements and `ast` cannot see them — tiling is what keeps
+  them in the document), and whole statements are packed into chunks up to
+  `RAG_CHUNK_CHARS`. A function, method or class therefore stays in one chunk
+  unless it is over the budget by itself; then it is split at *its own* inner
+  statement boundaries, never mid-expression, recursing while there is structure
+  left. Each fragment after the first carries a `# fragment of:` comment naming
+  the enclosing declarations. Only a single statement that is over budget and has
+  nothing inside it — a 2,000-character dict literal — falls back to the prose
+  splitter.
+- **everything else → `chunk_text`, unchanged.** Markdown, plain text, JS, JSON,
+  YAML, and any Python that will not parse (a syntax error, or syntax from a
+  newer Python than the server runs). `chunk_python` returns `None` rather than
+  raising, and `None` is the signal to fall back.
+
+Why Python and nothing else: `ast` is in the standard library and gives exact
+line spans, so the whole language test is `_PYTHON_SUFFIXES` and one `if`. A
+`tree-sitter` dependency would buy the other languages and nothing in the
+measured battery justifies one yet. There is deliberately no plugin registry and
+no configurable policy layer.
+
+Two properties this design is load-bearing on:
+
+- **A chunk never spans two files.** Chunking is per-document and ids stay
+  `"{rag_document_id}:{index}"`.
+- **Chunking is a pure function of `(text, source_ref)`.** That is what makes a
+  re-import of an unchanged file produce byte-identical chunks, which is what the
+  `(workspace_id, sha)` identity below depends on. Verified live: re-importing
+  both battery repositories unchanged produced 884 chunks with 0 added, 0 removed
+  and 0 changed.
+
+Two costs, stated rather than hidden. Code chunks do not overlap the way prose
+chunks do (`RAG_CHUNK_OVERLAP` is a prose setting) — a unit is self-contained and
+the breadcrumb carries the context instead. And the breadcrumb is prepended after
+the budget is spent in the prose-fallback path, so a small number of chunks run
+over `RAG_CHUNK_CHARS`: measured 13 of 584 on `psf/requests`, by at most 78
+characters. Units above roughly 900 characters can also split once the breadcrumb
+is charged against the budget; measured 4 of 691 on `psf/requests`.
 
 Embedding runs *outside* the transaction on purpose: it is the slow step, SQLite
 serialises writers, and holding the write lock for the length of a large document
@@ -417,31 +466,146 @@ manual operator action.
 #### Measured retrieval quality (what this is good and bad at)
 
 Measured end to end against two real repositories
-(`RichardLitt/standard-readme`, 13 files/45 chunks; `psf/requests`, 94 files/840
-chunks), asking through `/rag-suggest` + `/v1/responses`:
+(`RichardLitt/standard-readme`, 13 files/44 chunks; `psf/requests`, 94 files/840
+chunks), asking through `/rag-suggest` + `/v1/responses`, first with the prose
+chunker and then with the code-aware one (`chunk_document`, below). 28 questions,
+25 of them with a specific answer LINE that retrieval either returns or does not;
+the other 3 are prose/refusal questions graded on the answer text.
 
-- **Markdown answers well.** "What sections are required in a standard readme, and
-  in what order?" retrieved `spec.md` chunks 0/1/2 and answered correctly.
-- **Code sometimes works and sometimes does not, and the failure mode is chunking.**
-  `chunk_text` splits on sentence/paragraph boundaries — prose logic — so it cuts
-  through the middle of a function. In `src/requests/utils.py`, `super_len` is split
-  across chunks 5–8; chunk 5 also carries the tail of `proxy_bypass` and all of
-  `dict_to_sequence`. Asked what `super_len` returns for a partially-read file, top-4
-  retrieval returned chunks 5, 6, 44 and 7 — the `return max(0, total_length -
-  current_position)` line is in chunk **8**, and the answer was wrong. The same repo
-  answered a `rebuild_auth` question correctly, because that function happened to fit
-  inside one chunk.
-- **It does not invent answers.** "How much does the requests library's commercial
-  enterprise support plan cost?" was answered "the provided workspace knowledge does
-  not contain information about…".
-- **The suggestion picks the wrong file for code questions.** `/rag-suggest` chose
-  `tests/test_requests.py` and `tests/test_utils.py` over the source modules for both
-  code questions — test files restate the API in prose-like assertions and embed
-  closer to a natural-language question than an implementation does.
+**Prose chunking retrieved the answer line for 13 of 25. Code-aware chunking
+retrieved it for 25 of 25, with no question going the other way.**
 
-A code-aware chunker (split on top-level `def`/`class`, keep a function whole) is the
-obvious next step and is deliberately **not** built here: measure it against this
-same battery before adding it.
+- **Markdown answers well, and did not move.** "What sections are required in a
+  standard readme, and in what order?" retrieved `spec.md` chunks 1/4/0/2 before
+  and after — byte-identical chunks, since Markdown never enters the code path.
+- **The named failure is fixed.** In `src/requests/utils.py`, `super_len` (2,688
+  characters, over the chunk budget on its own) used to be cut on prose
+  boundaries: it landed across chunks 5–8, chunk 5 opening with the tail of
+  `proxy_bypass` and all of `dict_to_sequence`. Top-4 retrieval returned 5, 6, 44
+  and 7 — the `return max(0, total_length - current_position)` line lives in chunk
+  8, was never retrieved, and the answer was wrong (it described the `OSError`
+  branch instead). Code-aware, the same question returns chunks 9, 8, 6, 7; the
+  answer line is in chunk 9 and the answer quotes it.
+- **The previously-correct answers stayed correct.** `rebuild_auth` still answers
+  correctly (`src/requests/sessions.py` chunks 6/14/15/16, and it now retrieves
+  the `del headers["Authorization"]` line itself rather than only
+  `should_strip_auth`).
+- **It still does not invent answers.** "How much does the requests commercial
+  enterprise support plan cost?" is still declined — "the provided workspace
+  knowledge does not contain information about…" — both before and after.
+- **The suggestion now picks the source module, not the test file.** This is the
+  one thing the earlier measurement flagged that changed on its own. Over the 23
+  `psf/requests` code questions, `/rag-suggest`'s top-1 moved from `tests/` files
+  (11 of 23) to `src/requests/` modules (15 of 23, all of them the right module —
+  up from 4). Nothing in ranking was touched: a test file used to win because it
+  restates the API in prose-like assertions while an implementation chunk was a
+  mid-function fragment carrying the tail of the previous function. Give the
+  implementation a chunk that starts at `def` and it competes. Two questions still
+  land on a test file and six on a `docs/` page.
+
+Per question (28 asked; "answer line" is a specific line of the source that has
+to come back in the top-4; `n/a` marks the three graded on the answer text):
+
+| question | shape | document | answer line before | after | chunks before | chunks after |
+|---|---|---|---|---|---|---|
+| N1-super_len | named/long-fn | `src/requests/utils.py` | no | **yes** | [5, 6, 44, 7] | [9, 8, 6, 7] |
+| N2-rebuild_auth | named/in-class | `src/requests/sessions.py` | no | **yes** | [6, 17, 14, 8] | [6, 14, 15, 16] |
+| N3-readme-sections | named/prose | `spec.md` | **yes** | **yes** | [1, 4, 0, 2] | [1, 4, 0, 2] |
+| N4-unanswerable | named/refusal | `src/requests/utils.py` | n/a | n/a | [0, 1, 2, 44] | [0, 1, 40, 2] |
+| Q01-get_adapter | short-fn | `src/requests/sessions.py` | **yes** | **yes** | [42, 41, 1, 18] | [43, 44, 20, 19] |
+| Q02-mount | short-fn/in-class | `src/requests/sessions.py` | **yes** | **yes** | [42, 43, 2, 0] | [44, 43, 20, 19] |
+| Q03-dispatch_hook | short-fn | `src/requests/hooks.py` | **yes** | **yes** | [0, 1] | [1, 0] |
+| Q04-default_hooks | short-fn | `src/requests/hooks.py` | **yes** | **yes** | [0, 1] | [0, 1] |
+| Q05-prepare_headers | short-fn/in-class | `src/requests/models.py` | no | **yes** | [14, 16, 11, 31] | [25, 14, 35, 16] |
+| Q06-ci_getitem | short-fn/in-class | `src/requests/structures.py` | **yes** | **yes** | [0, 3, 1, 2] | [1, 3, 2, 0] |
+| Q07-apparent_encoding | decorated/property | `src/requests/models.py` | no | **yes** | [31, 32, 3, 2] | [51, 43, 52, 53] |
+| Q08-text-property | decorated/property | `src/requests/models.py` | no | **yes** | [31, 33, 32, 47] | [51, 52, 43, 37] |
+| Q09-to_key_val_list | decorated/overload | `src/requests/utils.py` | **yes** | **yes** | [14, 15, 13, 16] | [16, 15, 18, 17] |
+| Q10-resolve_redirects | long-fn/in-class | `src/requests/sessions.py` | no | **yes** | [4, 8, 1, 18] | [4, 23, 9, 8] |
+| Q11-adapter_send | long-fn/in-class | `src/requests/adapters.py` | no | **yes** | [5, 0, 15, 4] | [37, 40, 39, 38] |
+| Q12-build_digest_header | long-fn/in-class | `src/requests/auth.py` | no | **yes** | [4, 10, 6, 11] | [7, 10, 11, 12] |
+| Q13-prepare_body | long-fn/in-class | `src/requests/models.py` | no | **yes** | [26, 14, 16, 22] | [31, 30, 29, 27] |
+| Q14-encode_files | long-fn/in-class | `src/requests/models.py` | no | **yes** | [5, 3, 4, 22] | [6, 7, 8, 9] |
+| Q15-should_bypass_proxies | long-fn | `src/requests/utils.py` | **yes** | **yes** | [31, 34, 32, 4] | [37, 34, 36, 35] |
+| Q16-cert_verify | long-fn/in-class | `src/requests/adapters.py` | **yes** | **yes** | [13, 12, 18, 19] | [15, 14, 16, 21] |
+| Q17-iter_content_generate | nested-fn | `src/requests/models.py` | no | **yes** | [39, 43, 36, 38] | [44, 45, 43, 48] |
+| Q18-rebuild_proxies | in-class/nested-branch | `src/requests/sessions.py` | **yes** | **yes** | [15, 17, 16, 14] | [16, 17, 15, 12] |
+| Q19-raise_for_status | in-class | `src/requests/models.py` | no | **yes** | [37, 36, 35, 2] | [56, 57, 41, 40] |
+| Q20-get_dict | in-class | `src/requests/cookies.py` | **yes** | **yes** | [7, 8, 14, 12] | [15, 8, 13, 16] |
+| Q21-readme-badge | prose | `spec.md` | **yes** | **yes** | [3, 4, 2, 0] | [3, 4, 2, 0] |
+| Q22-readme-install | prose | `spec.md` | **yes** | **yes** | [7, 8, 2, 3] | [7, 8, 2, 3] |
+| Q23-readme-maximal | prose | `example-readmes/maximal-readme.md` | n/a | n/a | [0, 1] | [0, 1] |
+| Q24-readme-license | prose | `spec.md` | n/a | n/a | [4, 0, 2, 3] | [4, 0, 2, 3] |
+
+Shapes covered: short functions, functions well over the chunk budget, decorated
+functions and `@property`, `@overload` groups, methods inside classes, a function
+nested inside a method, and prose Markdown. Every question that changed, changed
+in the same direction.
+
+One caveat on provenance, because it changes what the table above proves. The
+battery ran against the chunker as it stood when the retrieval work finished. One
+change landed afterwards and was NOT re-measured end to end: the breadcrumb on a
+split fragment is now written as a `# fragment of:` comment rather than as the
+declaration lines themselves. That change has its own evidence — with bare
+declaration lines repeated on four fragments of `super_len`, the answering model
+reported "several different implementations of `super_len`" and hedged, while
+still quoting the right line; the same happened on `_encode_files`. Commented
+out, nothing looks like a second definition. It moves `psf/requests` from 889 to
+897 chunks. Retrieval was not re-run over it; a confirming run is one re-import
+plus one battery pass.
+
+Chunk-count and ingest cost, measured live on the same machine:
+
+| Repository | chunks (prose) | chunks (code-aware) | Δ | ingest (prose) | ingest (code-aware) |
+|---|---|---|---|---|---|
+| `RichardLitt/standard-readme` (13 files) | 44 | 44 | 0% | 8.8 s | 15.8 s |
+| `psf/requests` (94 files, 36 Python) | 840 | 897 | +6.8% | 113.7 s | 107.8 s |
+
+Chunk counts are exact — chunking is deterministic, so the code-aware column is
+computed directly from the committed chunker over the same file set. The timed
+imports ran at the revision before the breadcrumb became a comment and produced
+889 rather than 897 for `psf/requests`; the eight-chunk difference is the comment
+lines. Ingest seconds are wall-clock on a laptop, dominated by embedding one chunk
+at a time, and the machine was not otherwise idle throughout — treat the
+difference as noise, not signal. The honest statement is that cost tracks chunk
+count, and chunk count is up ~7% on a Python repository and unchanged on a prose
+one. That matters for every existing workspace: a re-import of a Python-heavy
+knowledge base costs ~7% more embedding calls and ~7% more rows in Chroma.
+
+#### Secondary run: DejaQ's own repository, and a hard cap that hides half of it
+
+`jshef747/DejaQ` was imported as a third repository — a large Python codebase with
+long FastAPI handlers, the adversarial case for a chunker. Two findings, neither
+of which changed the chunker:
+
+**The importer silently drops the tail of a large repository.**
+`rag_ingest._REPO_MAX_FILES` is 400, applied in tar order, which is alphabetical.
+DejaQ has 654 candidate files after `_repo_skip_reason`, so 244 are dropped — and
+because `server/` sorts last, that is every one of the 241 files under `server/`.
+The whole backend. The import reports `indexed_files: 367, skipped_files: 287`
+and nothing distinguishes "dropped by the cap" from "is a lockfile". A knowledge
+base built this way answers questions about the wrong half of the repository, and
+an operator has no way to see it. Not fixed here — this is the chunker's task —
+but it should be, either by raising the cap or by reporting per-reason skip
+counts. Measurement below therefore ran with the cap lifted, identically on both
+sides of the comparison.
+
+**The chunker holds on it, and retrieval improves less.** 16 questions (six with
+answers known in advance, ten written against code this work had to read): the
+answer line was retrieved for 5 of 16 with prose chunking and 7 of 16 code-aware,
+again with zero regressions. That is a much weaker result than the small
+repositories and the reason is visible in the data: the questions that still miss
+are the ones aimed at `openai_compat.py`, which is 186 chunks before and 214
+after. Retrieval is top-4 over a 6,000-chunk collection; a correct chunk that is
+one of 214 in a single file is a ranking problem, not a chunking one. Chunking
+put the answer in a self-contained chunk; it did not make that chunk win.
+
+Structural checks over all 329 Python files in that repository, run offline:
+no source line lost (0 missing words after whitespace normalisation), 0 parse
+failures, and 2,639 of 2,642 functions/methods/classes that fit the budget kept
+whole in a single chunk. The three exceptions are 903–997 characters — units
+close enough to the 1,000-character budget that the breadcrumb comment tips them
+over — and they split at an inner statement boundary, as designed.
 
 ---
 

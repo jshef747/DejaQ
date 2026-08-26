@@ -34,7 +34,9 @@ def mock_vectors(monkeypatch):
     """
     calls = {"indexed": [], "deleted": [], "order": [], "embeddings": [], "store": {}}
     store = calls["store"]
-    monkeypatch.setattr(rag_service, "chunk_text", lambda text: ["chunk-a", "chunk-b"])
+    monkeypatch.setattr(
+        rag_service, "chunk_document", lambda text, source_ref=None: ["chunk-a", "chunk-b"]
+    )
     monkeypatch.setattr(
         rag_service, "embed_chunks",
         lambda chunks, on_progress=None: [[0.5]] * len(chunks),
@@ -147,7 +149,9 @@ def test_a_shorter_rewrite_drops_only_the_stale_tail(workspace, mock_vectors, mo
 
     # Same sha (sha is over the NORMALISED text) but a shorter chunking, so the
     # previous version's last chunk is no longer part of the document.
-    monkeypatch.setattr(rag_service, "chunk_text", lambda text: ["chunk-a"])
+    monkeypatch.setattr(
+        rag_service, "chunk_document", lambda text, source_ref=None: ["chunk-a"]
+    )
     second = rag_admin_service.add_text(workspace, "Policy", "Same  body.")
 
     assert second.id == first.id and second.chunk_count == 1

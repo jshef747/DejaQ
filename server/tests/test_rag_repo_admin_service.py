@@ -36,8 +36,10 @@ def mock_vectors(monkeypatch):
     missing key rather than as a call that looks plausible."""
     store: dict[str, str] = {}
     monkeypatch.setattr(
-        rag_service, "chunk_text",
-        lambda text: [text[i:i + 40] for i in range(0, len(text), 40)] if text.strip() else [],
+        rag_service, "chunk_document",
+        lambda text, source_ref=None: (
+            [text[i:i + 40] for i in range(0, len(text), 40)] if text.strip() else []
+        ),
     )
     monkeypatch.setattr(
         rag_service, "embed_chunks", lambda chunks, on_progress=None: [[0.5]] * len(chunks)

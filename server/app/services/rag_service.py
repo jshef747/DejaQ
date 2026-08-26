@@ -20,6 +20,7 @@ Design notes:
 """
 from __future__ import annotations
 
+import ast
 import logging
 import time
 from dataclasses import dataclass
@@ -144,6 +145,312 @@ def chunk_text(text: str) -> list[str]:
             break
         start = max(end - overlap, start + 1)
     return chunks
+
+
+# --- Code-aware chunking (Python) ---------------------------------------------
+#
+# `chunk_text` above splits on prose boundaries - paragraphs, then sentences,
+# then any space. On source code that reliably cuts through the middle of a
+# function: measured on psf/requests, `super_len` (2,688 chars, over the
+# RAG_CHUNK_CHARS budget on its own) spread across four chunks whose first one
+# opened with the tail of the PREVIOUS function, and the chunk holding the
+# `return` line was never retrieved for a question about what it returns.
+#
+# The fix is to cut on the file's own structure instead. Python needs no new
+# dependency for that: `ast` gives an exact line span for every statement,
+# including decorators, so a function or class can be kept whole and an
+# oversized one can be split at its own inner statement boundaries rather than
+# mid-expression. Only Python gets this - `_PYTHON_SUFFIXES` is the whole
+# language test, and every other file (Markdown, JS, JSON, YAML, plain text)
+# falls through to `chunk_text` untouched. A tree-sitter dependency would buy
+# the other languages, and nothing in the measured battery justifies it yet.
+
+_PYTHON_SUFFIXES = (".py", ".pyi")
+
+
+def _is_python_source(source_ref: str | None) -> bool:
+    """True when a document's origin names a Python file.
+
+    `source_ref` is a GitHub blob URL for a repo import and the uploaded
+    filename for an upload; a pasted document has none and is never code.
+    A query string or fragment is stripped first so a URL still resolves.
+    """
+    if not source_ref:
+        return False
+    path = source_ref.split("?", 1)[0].split("#", 1)[0]
+    return path.lower().endswith(_PYTHON_SUFFIXES)
+
+
+def _child_statements(node) -> list:
+    """Every statement directly inside `node`, in source order.
+
+    Walks the node's own children rather than `node.body` so a `try` keeps its
+    handlers and an `if` keeps its `else` - both live outside `.body` and
+    would otherwise be dropped from the split.
+    """
+    kids = [
+        child
+        for child in ast.iter_child_nodes(node)
+        if isinstance(child, (ast.stmt, ast.excepthandler))
+    ]
+    kids.sort(key=lambda c: (c.lineno, c.col_offset))
+    return kids
+
+
+def _statement_start(node) -> int:
+    """First line of a statement, counting its decorators.
+
+    `node.lineno` points at the `def`/`class` keyword, so a decorated function
+    would otherwise lose its decorators to the preceding chunk.
+    """
+    decorators = getattr(node, "decorator_list", None) or []
+    return min([d.lineno for d in decorators] + [node.lineno])
+
+
+def _tile(statements: list, first_line: int, last_line: int) -> list[tuple[int, int, object]]:
+    """Cover [first_line, last_line] with one span per statement, no gaps.
+
+    Spans are stretched to touch rather than tracking each statement's exact
+    extent, because `ast` cannot see comments or blank lines: slicing a
+    statement's own line span alone would silently drop every comment between
+    two functions from the document. Tiling keeps the file whole - concatenate
+    the spans and you get the source back.
+    """
+    spans: list[tuple[int, int, object]] = []
+    cursor = first_line
+    for i, stmt in enumerate(statements):
+        end = last_line if i == len(statements) - 1 else stmt.end_lineno
+        spans.append((cursor, max(end, cursor), stmt))
+        cursor = max(end, cursor) + 1
+    return spans
+
+
+def _span_text(lines: list[str], first_line: int, last_line: int) -> str:
+    return "\n".join(lines[first_line - 1:last_line])
+
+
+def _clean(chunk: str) -> str:
+    """Trim blank edges without touching the first line's indentation.
+
+    A plain `.strip()` would eat the leading spaces that say which block a
+    fragment of a method body came from.
+    """
+    return chunk.strip("\n").rstrip()
+
+
+def _peel_oversized_leads(
+    spans: list[tuple[int, int, object]],
+    lines: list[str],
+    header: str,
+    budget: int,
+) -> list[tuple[int, int, object]]:
+    """Split "leading comments + statement" spans that only overflow together."""
+    out: list[tuple[int, int, object]] = []
+    for first_line, last_line, node in spans:
+        start = _statement_start(node) if node is not None else first_line
+        if (
+            start > first_line
+            and _header_cost(header) + len(_span_text(lines, first_line, last_line)) > budget
+            and _header_cost(header) + len(_span_text(lines, start, last_line)) <= budget
+        ):
+            out.append((first_line, start - 1, None))
+            out.append((start, last_line, node))
+        else:
+            out.append((first_line, last_line, node))
+    return out
+
+
+def _header_cost(header: str) -> int:
+    """Worst-case rendered size of a breadcrumb, for budget arithmetic."""
+    return len(_breadcrumb_comment(header, ""))
+
+
+def _breadcrumb_comment(header: str, body: str) -> str:
+    """Render the enclosing declarations as a COMMENT above a fragment.
+
+    Written as comments rather than as the declaration lines themselves for a
+    measured reason: repeating `def super_len(o: Any) -> int:` verbatim on four
+    fragments of one function made the answering model report "several
+    different implementations of super_len" and hedge, even though it had the
+    right line in front of it. Commented out, the same identifiers are still
+    there for the embedder and for the reader, and nothing looks like a second
+    definition.
+
+    The innermost line is dropped when the fragment already contains the
+    declaration itself - the first piece of a split needs no "fragment of"
+    banner - while the outer chain (the class a method sits in) still applies.
+    """
+    lines = [line for line in header.split("\n") if line.strip()]
+    if lines and lines[-1] in body:
+        lines = lines[:-1]
+    if not lines:
+        return ""
+    return "# fragment of:\n" + "\n".join(f"# {line}" for line in lines) + "\n"
+
+
+def _pack(
+    spans: list[tuple[int, int, object]],
+    lines: list[str],
+    header: str,
+    budget: int,
+    out: list[str],
+) -> None:
+    """Fill chunks with whole statements, splitting only what cannot fit.
+
+    `header` is a breadcrumb of the enclosing declaration lines - "class
+    Session:" then "    def request(" - carried onto every chunk carved out of
+    one over-budget unit, so a fragment of a long method still names the method
+    and the class it sits in. Without it the tail of a split function mentions
+    that function nowhere, and a question naming it cannot match the piece that
+    answers it - which is the measured `super_len` failure.
+    """
+    # A comment block sitting above a function belongs with it - that is why
+    # `_tile` stretches the span back over it - but only while the pair still
+    # fits. When it does not and the function alone would, the comment is peeled
+    # off into its own span instead, so an unrelated note above a function does
+    # not get the function split (measured: DejaQ's `image_fingerprint.dhash`,
+    # 555 chars, split by a 460-char rejected-design comment above it).
+    spans = _peel_oversized_leads(spans, lines, header, budget)
+    current: list[str] = []
+
+    def flush() -> None:
+        if not current:
+            return
+        body = "\n".join(current)
+        lead = _breadcrumb_comment(header, body)
+        chunk = _clean(lead + body)
+        if chunk:
+            out.append(chunk)
+        current.clear()
+
+    for first_line, last_line, node in spans:
+        text = _span_text(lines, first_line, last_line)
+        if not text.strip():
+            continue
+        if _header_cost(header) + len(text) > budget:
+            flush()
+            _split(node, first_line, last_line, lines, header, budget, out)
+            continue
+        used = _header_cost(header) + sum(len(part) + 1 for part in current)
+        if current and used + len(text) > budget:
+            flush()
+        current.append(text)
+    flush()
+
+
+def _declaration_line(node, lines: list[str]) -> str:
+    """The node's own `def`/`class`/`if` line, for use as a breadcrumb.
+
+    One line, taken verbatim - never the whole signature. A long signature can
+    run to dozens of lines, and repeating it on every chunk of a long method
+    would spend the budget on punctuation.
+    """
+    if node is None:
+        return ""
+    return lines[node.lineno - 1].rstrip()
+
+
+def _split(
+    node,
+    first_line: int,
+    last_line: int,
+    lines: list[str],
+    header: str,
+    budget: int,
+    out: list[str],
+) -> None:
+    """Break one over-budget statement at the boundaries inside it.
+
+    The decorators and signature become the first span in their own right, so
+    nothing is dropped and no outer-scope line ends up filed under an inner
+    scope's breadcrumb. Each level down is strictly smaller than the one above,
+    so this terminates.
+    A statement that still does not fit and has nothing inside it - a
+    2,000-character dict literal - is the one case with no structural boundary
+    left, and only that case falls back to the prose splitter.
+    """
+    children = _child_statements(node) if node is not None else []
+    if children:
+        body_start = _statement_start(children[0])
+        spans = _tile(children, max(body_start, first_line), last_line)
+        if body_start > first_line:
+            # Decorators and the signature are content in their own right, and
+            # they belong to THIS node - not to whatever the recursion below
+            # descends into. Stretching the first child back over them would
+            # put an outer scope's lines under an inner scope's breadcrumb.
+            spans.insert(0, (first_line, body_start - 1, None))
+        breadcrumb = _declaration_line(node, lines)
+        sub_header = f"{header}{breadcrumb}\n" if breadcrumb.strip() else header
+        # Keep the innermost few levels; a deep nest would otherwise spend the
+        # whole budget on breadcrumbs.
+        crumbs = sub_header.split("\n")
+        if len(crumbs) > 4:
+            sub_header = "\n".join(crumbs[-4:])
+        _pack(spans, lines, sub_header, budget, out)
+        return
+    out.extend(
+        _clean(_breadcrumb_comment(header, part) + part)
+        for part in chunk_text(_span_text(lines, first_line, last_line))
+    )
+
+
+def _merge_adjacent(chunks: list[str], budget: int) -> list[str]:
+    """Glue neighbouring chunks back together while they still fit the budget.
+
+    Splitting is depth-first, so it leaves small offcuts behind: the piece
+    before an over-budget sibling gets flushed early, and the tail of a split
+    is whatever was left. Measured on `super_len`, that produced seven pieces,
+    two of them under 120 characters and carrying little but their breadcrumb -
+    a chunk that short wins a top-k slot without answering anything. Chunks are
+    emitted in source order, so merging neighbours only ever restores text that
+    was adjacent in the file.
+    """
+    merged: list[str] = []
+    for chunk in chunks:
+        if merged and len(merged[-1]) + 1 + len(chunk) <= budget:
+            merged[-1] = f"{merged[-1]}\n{chunk}"
+        else:
+            merged.append(chunk)
+    return merged
+
+
+def chunk_python(text: str) -> list[str] | None:
+    """Chunk Python source on its own structure, or None if it will not parse.
+
+    None (not an exception, not a partial result) is the signal to fall back to
+    `chunk_text`: a file with a syntax error, or written for a newer Python
+    than this interpreter, still belongs in the knowledge base - just chunked
+    as prose, exactly as it was before this existed.
+    """
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError, RecursionError):
+        return None
+    lines = text.splitlines()
+    if not lines:
+        return []
+    budget = max(1, RAG_CHUNK_CHARS)
+    out: list[str] = []
+    _pack(
+        _tile(tree.body, 1, len(lines)) if tree.body else [(1, len(lines), None)],
+        lines, "", budget, out,
+    )
+    return _merge_adjacent(out, budget)
+
+
+def chunk_document(text: str, source_ref: str | None = None) -> list[str]:
+    """The one entry point ingestion uses: code-aware for Python, prose otherwise.
+
+    Deliberately not a registry or a policy layer - one `if`, because one
+    language is what the measurement covers. Chunking stays a pure function of
+    (text, source_ref), which is what keeps a re-import of an unchanged file
+    byte-identical to the last one.
+    """
+    if _is_python_source(source_ref):
+        chunks = chunk_python(text)
+        if chunks is not None:
+            return [c for c in chunks if c.strip()]
+    return chunk_text(text)
 
 
 # --- Indexing / retrieval / deletion ------------------------------------------

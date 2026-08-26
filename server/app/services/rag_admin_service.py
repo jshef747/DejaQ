@@ -105,7 +105,7 @@ def begin_ingest(
     """
     if not ingest.ok:
         raise RagIngestError(ingest.reason or "could not extract text")
-    chunks = rag_service.chunk_text(ingest.text)
+    chunks = rag_service.chunk_document(ingest.text, ingest.source_ref)
     if not chunks:
         raise RagIngestError("document produced no chunks")
 
