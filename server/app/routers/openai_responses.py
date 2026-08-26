@@ -293,12 +293,22 @@ async def responses(
     resolved_workspace: ResolvedWorkspace = Depends(require_org_key),
 ):
     rag_document_title: str | None = None
-    if oai_request.rag_document_id is not None:
+    rag_group_document_ids: list[int] | None = None
+    if oai_request.rag_document_id is not None and oai_request.rag_group_key is not None:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "detail": "Send either rag_document_id (one file) or rag_group_key "
+                "(a whole imported repository), not both."
+            },
+        )
+    if oai_request.rag_document_id is not None or oai_request.rag_group_key is not None:
         if not RAG_ENABLED:
             return JSONResponse(
                 status_code=400,
                 content={"detail": "RAG is disabled on this server (DEJAQ_RAG_ENABLED=false)."},
             )
+    if oai_request.rag_document_id is not None:
         with get_session() as session:
             rag_doc = rag_document_repo.get(
                 session, resolved_workspace.workspace_id, oai_request.rag_document_id
@@ -312,6 +322,25 @@ async def responses(
                     },
                 )
             rag_document_title = rag_doc.title
+    elif oai_request.rag_group_key is not None:
+        # Resolved here for the same reason the single-document title is: the
+        # pipeline never re-queries the catalog. An empty group is a 400 rather
+        # than a silent ungrounded answer — the client is referencing something
+        # that no longer exists (deleted, or a stale picker list).
+        with get_session() as session:
+            group_docs = rag_document_repo.list_for_group(
+                session, resolved_workspace.workspace_id, oai_request.rag_group_key
+            )
+            if not group_docs:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "detail": f"rag_group_key {oai_request.rag_group_key!r} not found "
+                        "in this workspace."
+                    },
+                )
+            rag_group_document_ids = [d.id for d in group_docs]
+            rag_document_title = oai_request.rag_group_key.replace("github:", "", 1)
 
     try:
         messages, image, file = _responses_request_to_messages(oai_request)
@@ -325,6 +354,8 @@ async def responses(
             image=image,
             file=file,
             rag_document_id=oai_request.rag_document_id,
+            rag_group_key=oai_request.rag_group_key,
+            rag_group_document_ids=rag_group_document_ids,
             rag_document_title=rag_document_title,
             stream=bool(oai_request.stream),
         )

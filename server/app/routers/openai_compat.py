@@ -1073,11 +1073,12 @@ def _bg_generalize_and_store(
     file_kind: str | None = None,
     rag_document_ids: str | None = None,
     rag_document_id: int | None = None,
+    rag_group_key: str | None = None,
 ) -> None:
     start = time.perf_counter()
     doc_id = _doc_id(
         clean_query, file_sha, image_text=image_text, image_dhash=image_dhash,
-        rag_document_id=rag_document_id,
+        rag_document_id=rag_document_id, rag_group_key=rag_group_key,
     )
     try:
         # Same guard the Celery task carries: a person wrote this answer through
@@ -1095,7 +1096,7 @@ def _bg_generalize_and_store(
         # note in tasks/cache_tasks.py: generalization cannot see the image,
         # file, or referenced document and invents specifics, and the gate
         # already pins the answer to one attachment/document.
-        if image_kind or file_kind or rag_document_id is not None:
+        if image_kind or file_kind or rag_document_id is not None or rag_group_key:
             generalized = answer
         else:
             llm_config = _llm_config_for_workspace_slug(tenant_id)
@@ -1119,6 +1120,7 @@ def _bg_generalize_and_store(
             file_sha=file_sha, file_kind=file_kind,
             rag_document_ids=rag_document_ids,
             rag_document_id=rag_document_id,
+            rag_group_key=rag_group_key,
         )
         latency_ms = int((time.perf_counter() - start) * 1000)
         query = content_snippet(clean_query)
@@ -1278,6 +1280,8 @@ async def run_chat_pipeline(
     image: tuple[bytes, str] | None = None,
     file: tuple[bytes, str, str] | None = None,
     rag_document_id: int | None = None,
+    rag_group_key: str | None = None,
+    rag_group_document_ids: list[int] | None = None,
     rag_document_title: str | None = None,
     stream: bool = False,
 ) -> ChatPipelineResult:
@@ -1309,6 +1313,15 @@ async def run_chat_pipeline(
     not collide, and an answer grounded in one must never be served to a
     request that did not reference it.
 
+    `rag_group_key` is the same reference at the GROUP level — an imported
+    GitHub repository, which is one catalog row per file sharing one
+    `group_key` ("github:{owner}/{repo}"). `rag_group_document_ids` is that
+    group's member ids, resolved by the caller alongside it, so retrieval can
+    filter to the whole set in one Chroma query. Everything else is identical
+    to the single-document case: the same exact-equality gate (on the group key
+    instead of the id), the same verbatim store, the same skipped adjuster.
+    The two are mutually exclusive — a reference is one file or the whole repo.
+
     Raises PipelineError for HTTP-level failures (400, 402, 422, 429, 500, 502).
     """
     image_bytes, image_mime = image if image else (None, None)
@@ -1320,7 +1333,7 @@ async def run_chat_pipeline(
     file_doc: FileText | None = None
     # An explicit `@`-reference to one knowledge-base document. The caller
     # (openai_responses.py) has already validated it exists in this workspace.
-    _request_has_rag_ref = rag_document_id is not None
+    _request_has_rag_ref = rag_document_id is not None or rag_group_key is not None
     _t0 = time.monotonic()
     trace = PipelineTrace()
     cache_namespace: str = getattr(raw_request.state, "cache_namespace", "dejaq_default")
@@ -1579,14 +1592,25 @@ async def run_chat_pipeline(
             # is never served to a request that didn't reference it (and a
             # request that DID reference one never gets an unreferenced,
             # possibly-wrong-document answer either).
-            if _cand_passed and (_request_has_rag_ref or _candidate.rag_document_id):
-                verdict = rag_document_id == _candidate.rag_document_id
+            # A group reference (a whole repository) is gated the same way, on
+            # its group_key: BOTH elements must match, so a repo-scoped answer
+            # is never served to a single-file reference into that same repo,
+            # and vice versa. They ask different questions of different text.
+            if _cand_passed and (
+                _request_has_rag_ref
+                or _candidate.rag_document_id
+                or _candidate.rag_group_key
+            ):
+                verdict = (
+                    rag_document_id == _candidate.rag_document_id
+                    and rag_group_key == _candidate.rag_group_key
+                )
                 logger.info(
                     "rag_ref_gate %s — this=%s cached=%s | text_distance=%.4f "
                     "matched_prompt=%s entry=%s",
                     "ACCEPT" if verdict else "REJECT",
-                    rag_document_id if _request_has_rag_ref else "none",
-                    _candidate.rag_document_id or "none",
+                    (rag_group_key or rag_document_id) if _request_has_rag_ref else "none",
+                    _candidate.rag_group_key or _candidate.rag_document_id or "none",
                     float(_candidate.distance or 0.0),
                     _diagnostic_prompt(_candidate.matched_query) or "",
                     _candidate.entry_id or "?",
@@ -1889,7 +1913,10 @@ async def run_chat_pipeline(
                     # document, not matched by distance. Minimal and
                     # self-contained — see the miss-path header below for why
                     # this doesn't reuse x-dejaq-rag-chunks.
-                    hit_headers["x-dejaq-rag-document-id"] = str(rag_document_id)
+                    if rag_group_key:
+                        hit_headers["x-dejaq-rag-group-key"] = rag_group_key
+                    else:
+                        hit_headers["x-dejaq-rag-document-id"] = str(rag_document_id)
                     if rag_document_title:
                         hit_headers["x-dejaq-rag-document-title"] = rag_document_title
                 hit_headers.update(_nearest_headers(cache_lookup))
@@ -2139,12 +2166,18 @@ async def run_chat_pipeline(
         # services/rag_service.py.
         rag_context: list = []
         if _request_has_rag_ref:
+            # One id for a single-file reference, the whole group's member ids
+            # for a repository reference — one Chroma call either way.
+            _rag_scope_ids = (
+                list(rag_group_document_ids or []) if rag_group_key is not None
+                else [rag_document_id]
+            )
             try:
                 with trace.step("rag"):
                     rag_context = await run_in_threadpool(
-                        rag_service.retrieve_by_document,
+                        rag_service.retrieve_by_documents,
                         rag_service.rag_namespace(workspace_slug),
-                        rag_document_id,
+                        _rag_scope_ids,
                         clean_query,
                         RAG_TOP_K,
                     )
@@ -2319,7 +2352,7 @@ async def run_chat_pipeline(
         if will_cache:
             _planned_response_id = f"{cache_namespace}:" + _doc_id(
                 clean_query, _file_sha, image_text=_img_text, image_dhash=_img_dhash,
-                rag_document_id=rag_document_id,
+                rag_document_id=rag_document_id, rag_group_key=rag_group_key,
             )
 
         # Mutated by the generation step below, which runs inside an async
@@ -2659,6 +2692,7 @@ async def run_chat_pipeline(
                                 # identity the same way a dropped file_sha would.
                                 _apply_kwargs["kwargs"].update({
                                     "rag_document_id": rag_document_id,
+                                    "rag_group_key": rag_group_key,
                                 })
                             generalize_and_store_task.apply_async(
                                 args=(clean_query, answer, user_query, workspace_slug, cache_namespace),
@@ -2691,6 +2725,7 @@ async def run_chat_pipeline(
                                 file_kind=_file_kind,
                                 rag_document_ids=_rag_document_ids,
                                 rag_document_id=rag_document_id,
+                                rag_group_key=rag_group_key,
                             )
                             store_status = "background-fallback"
                     else:
@@ -2710,6 +2745,7 @@ async def run_chat_pipeline(
                             file_kind=_file_kind,
                             rag_document_ids=_rag_document_ids,
                             rag_document_id=rag_document_id,
+                            rag_group_key=rag_group_key,
                         )
                         store_status = "background"
 
@@ -2777,7 +2813,10 @@ async def run_chat_pipeline(
                 # x-dejaq-rag-chunks (which also fires for automatic
                 # grounding) so the client can tell the two apart without
                 # depending on how that chunk count is wired through.
-                headers["x-dejaq-rag-document-id"] = str(rag_document_id)
+                if rag_group_key:
+                    headers["x-dejaq-rag-group-key"] = rag_group_key
+                else:
+                    headers["x-dejaq-rag-document-id"] = str(rag_document_id)
                 if rag_document_title:
                     headers["x-dejaq-rag-document-title"] = rag_document_title
             if response_id:

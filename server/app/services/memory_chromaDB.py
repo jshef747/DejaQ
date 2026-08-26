@@ -62,6 +62,7 @@ def derive_doc_id(
     image_text: str | None = None,
     image_dhash: str | None = None,
     rag_document_id: int | None = None,
+    rag_group_key: str | None = None,
 ) -> str:
     """The one place an entry id is computed. Import it, don't reimplement it.
 
@@ -83,6 +84,13 @@ def derive_doc_id(
     attachment in principle, and — same reasoning as file/image — two
     different referenced documents asking the same question must not collide.
 
+    `rag_group_key` is the same element for a reference to a whole imported
+    group (a GitHub repository — "github:{owner}/{repo}"), which pins a SET of
+    documents rather than one. The two are mutually exclusive in practice (a
+    reference is either one file or the whole repo) but appended independently,
+    so "explain the auth flow" against one repo can never collide with the same
+    question against another, or against the same question with no reference.
+
     Text entries keep their existing ids: a suffix is only added when the
     corresponding identity element is present. Existing image entries are not
     migrated — at worst one duplicate entry per query+image pair until the old
@@ -98,6 +106,8 @@ def derive_doc_id(
         source = normalized_query
     if rag_document_id is not None:
         source = f"{source}|rag:{rag_document_id}"
+    if rag_group_key:
+        source = f"{source}|rag-group:{rag_group_key}"
     return hashlib.sha256(source.encode()).hexdigest()[:16]
 
 
@@ -146,6 +156,9 @@ class CacheLookupResult:
     # the answer was grounded in one specific knowledge-base document by id,
     # never by search). Exact-equality gate, same shape as file_sha.
     rag_document_id: int | None = None
+    # Same, for an answer grounded in a whole referenced group (an imported
+    # repository). Mutually exclusive with rag_document_id above.
+    rag_group_key: str | None = None
     # "human" when a person wrote this answer through Edit & Save, absent
     # otherwise. The serve path reads it to skip the context adjuster: a human
     # answer had no tone stripped from it, so there is nothing to put back, and
@@ -296,6 +309,7 @@ class MemoryService:
                     file_sha=meta.get("file_sha"),
                     file_kind=meta.get("file_kind"),
                     rag_document_id=meta.get("rag_document_id"),
+                    rag_group_key=meta.get("rag_group_key"),
                     authored=meta.get("authored"),
                 ))
 
@@ -373,6 +387,7 @@ class MemoryService:
         file_sha: str | None = None,
         file_kind: str | None = None,
         rag_document_id: int | None = None,
+        rag_group_key: str | None = None,
         authored: str | None = None,
         rag_document_ids: str | None = None,
     ) -> str:
@@ -382,6 +397,7 @@ class MemoryService:
             image_text=image_text,
             image_dhash=image_dhash,
             rag_document_id=rag_document_id,
+            rag_group_key=rag_group_key,
         )
         embedding = _embed(normalized_query)
         metadata = {
@@ -412,6 +428,8 @@ class MemoryService:
         # equality gate on the serve path, same as file_sha above.
         if rag_document_id is not None:
             metadata["rag_document_id"] = rag_document_id
+        if rag_group_key:
+            metadata["rag_group_key"] = rag_group_key
         # Provenance, written only when a person authored the answer. Absent on
         # every model-generated entry, so this is additive — nothing reads it
         # except the protections in overwrite_answer, the store guards and the

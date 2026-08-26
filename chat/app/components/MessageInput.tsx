@@ -2,7 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { fetchRagSuggestion, type RagDocument, type RagSuggestion } from "./chat-api";
+import { ChevronRight, FolderGit2 } from "lucide-react";
+
+import {
+  fetchRagSuggestion, type RagDocument, type RagReference, type RagSuggestion,
+} from "./chat-api";
+import { buildMentionRows, type MentionRow } from "./rag-mention";
 import type { Attachment } from "./chat-store";
 import { textDirection } from "./text-direction";
 
@@ -64,8 +69,8 @@ interface Props {
   // The workspace's knowledge-base documents, for the `@` picker. Loaded once
   // by the parent (ChatApp) rather than per-keystroke here.
   ragDocuments: RagDocument[];
-  ragDocument: RagDocument | null;
-  onRagDocumentChange: (doc: RagDocument | null) => void;
+  ragReference: RagReference | null;
+  onRagReferenceChange: (reference: RagReference | null) => void;
 }
 
 // An active `@` mention: `start` is where the "@" sits in `value`, `query` is
@@ -87,8 +92,6 @@ function detectMention(text: string, cursor: number): Mention | null {
   return { start: at, query };
 }
 
-const MAX_MENTION_RESULTS = 8;
-
 export default function MessageInput({
   value,
   onChange,
@@ -100,13 +103,17 @@ export default function MessageInput({
   isGenerating,
   onStop,
   ragDocuments,
-  ragDocument,
-  onRagDocumentChange,
+  ragReference,
+  onRagReferenceChange,
 }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [mention, setMention] = useState<Mention | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
+  // Which repository rows are open in the `@` dropdown. Kept across mentions on
+  // purpose: a user browsing one repo's files shouldn't have to re-open it for
+  // every message.
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   // The guess-which-document suggestion. `suggestionDismissed` sticks for the
   // rest of THIS message (reset only once the composer empties, on send or
   // clear) — a dismiss must not reappear on the next keystroke.
@@ -114,19 +121,19 @@ export default function MessageInput({
   const [suggestionDismissed, setSuggestionDismissed] = useState(false);
   const suggestAbortRef = useRef<AbortController | null>(null);
 
-  const mentionResults = mention
-    ? ragDocuments
-        .filter((d) => d.title.toLowerCase().includes(mention.query.toLowerCase()))
-        .slice(0, MAX_MENTION_RESULTS)
-    : [];
-  const mentionOpen = mention !== null && mentionResults.length > 0;
+  const mentionRows = mention ? buildMentionRows(ragDocuments, mention.query, expandedGroups) : [];
+  const mentionOpen = mention !== null && mentionRows.length > 0;
 
-  function selectMention(doc: RagDocument) {
+  function selectMention(row: MentionRow) {
     if (!mention) return;
     const before = value.slice(0, mention.start);
     const after = value.slice(mention.start + 1 + mention.query.length);
     onChange(before + after);
-    onRagDocumentChange(doc);
+    onRagReferenceChange(
+      row.kind === "group"
+        ? { documentId: null, groupKey: row.key, title: row.label }
+        : { documentId: row.doc.id, groupKey: null, title: row.doc.title },
+    );
     setMention(null);
     // The splice above only takes effect once React re-renders the controlled
     // textarea; setting the caret now would be overwritten by that render.
@@ -135,6 +142,15 @@ export default function MessageInput({
       if (!el) return;
       el.focus();
       el.setSelectionRange(before.length, before.length);
+    });
+  }
+
+  function toggleGroup(key: string, open?: boolean) {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      const shouldOpen = open ?? !next.has(key);
+      if (shouldOpen) next.add(key); else next.delete(key);
+      return next;
     });
   }
 
@@ -158,7 +174,7 @@ export default function MessageInput({
     // suggestion back before the dismissal has a chance to hide it again.
     suggestAbortRef.current?.abort();
 
-    if (ragDocument || suggestionDismissed || mentionOpen || ragDocuments.length === 0) {
+    if (ragReference || suggestionDismissed || mentionOpen || ragDocuments.length === 0) {
       setSuggestion(null);
       return;
     }
@@ -175,7 +191,7 @@ export default function MessageInput({
       });
     }, SUGGEST_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [value, ragDocument, suggestionDismissed, mentionOpen, ragDocuments.length]);
+  }, [value, ragReference, suggestionDismissed, mentionOpen, ragDocuments.length]);
 
   // An emptied composer (sent, or cleared by hand) starts the next message
   // fresh — a dismissal from the last message must not carry over.
@@ -192,7 +208,7 @@ export default function MessageInput({
   // second grounding mechanism exists for a suggestion.
   function acceptSuggestion() {
     if (!suggestion) return;
-    onRagDocumentChange({ id: suggestion.documentId, title: suggestion.title, kind: "" });
+    onRagReferenceChange({ documentId: suggestion.documentId, groupKey: null, title: suggestion.title });
     setSuggestion(null);
   }
 
@@ -228,17 +244,25 @@ export default function MessageInput({
     if (mentionOpen) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        setMentionIndex((i) => (i + 1) % mentionResults.length);
+        setMentionIndex((i) => (i + 1) % mentionRows.length);
         return;
       }
       if (e.key === "ArrowUp") {
         e.preventDefault();
-        setMentionIndex((i) => (i - 1 + mentionResults.length) % mentionResults.length);
+        setMentionIndex((i) => (i - 1 + mentionRows.length) % mentionRows.length);
+        return;
+      }
+      // Left/Right open and close a repository row without selecting it —
+      // Enter on that row references the whole repository instead.
+      const row = mentionRows[mentionIndex];
+      if ((e.key === "ArrowRight" || e.key === "ArrowLeft") && row?.kind === "group") {
+        e.preventDefault();
+        toggleGroup(row.key, e.key === "ArrowRight");
         return;
       }
       if (e.key === "Enter" || e.key === "Tab") {
         e.preventDefault();
-        selectMention(mentionResults[mentionIndex]);
+        selectMention(mentionRows[mentionIndex]);
         return;
       }
       if (e.key === "Escape") {
@@ -408,7 +432,7 @@ export default function MessageInput({
             </div>
           )}
 
-          {ragDocument && (
+          {ragReference && (
             <div
               style={{
                 alignItems: "center",
@@ -435,10 +459,10 @@ export default function MessageInput({
                   whiteSpace: "nowrap",
                 }}
               >
-                Referencing <bdi>{ragDocument.title}</bdi>
+                Referencing <bdi>{ragReference.title}</bdi>
               </span>
               <button
-                onClick={() => onRagDocumentChange(null)}
+                onClick={() => onRagReferenceChange(null)}
                 title="Clear reference"
                 aria-label="Clear knowledge-base reference"
                 style={{
@@ -457,7 +481,7 @@ export default function MessageInput({
             </div>
           )}
 
-          {!ragDocument && suggestion && (
+          {!ragReference && suggestion && (
             <div
               style={{
                 alignItems: "center",
@@ -575,40 +599,72 @@ export default function MessageInput({
                   zIndex: 20,
                 }}
               >
-                {mentionResults.map((doc, i) => (
-                  <div
-                    key={doc.id}
-                    role="option"
-                    aria-selected={i === mentionIndex}
-                    // onMouseDown (not onClick) fires before the textarea's blur,
-                    // so the selection lands before focus would otherwise leave it.
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      selectMention(doc);
-                    }}
-                    onMouseEnter={() => setMentionIndex(i)}
-                    style={{
-                      alignItems: "center",
-                      background: i === mentionIndex ? "var(--accent-bg)" : "transparent",
-                      color: i === mentionIndex ? "var(--accent)" : "var(--fg)",
-                      cursor: "pointer",
-                      display: "flex",
-                      fontSize: "12.5px",
-                      gap: "8px",
-                      overflow: "hidden",
-                      padding: "8px 11px",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    <span style={{ display: "flex", flexShrink: 0 }}>
-                      <KnowledgeIcon />
-                    </span>
-                    <span dir={textDirection(doc.title)} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {doc.title}
-                    </span>
-                  </div>
-                ))}
+                {mentionRows.map((row, i) => {
+                  const isGroup = row.kind === "group";
+                  const label = isGroup ? row.label : row.doc.title;
+                  const open = row.kind === "group" && row.expanded;
+                  return (
+                    <div
+                      key={isGroup ? `group:${row.key}` : `doc:${row.doc.id}`}
+                      role="option"
+                      aria-selected={i === mentionIndex}
+                      aria-expanded={isGroup ? open : undefined}
+                      // onMouseDown (not onClick) fires before the textarea's blur,
+                      // so the selection lands before focus would otherwise leave it.
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        selectMention(row);
+                      }}
+                      onMouseEnter={() => setMentionIndex(i)}
+                      style={{
+                        alignItems: "center",
+                        background: i === mentionIndex ? "var(--accent-bg)" : "transparent",
+                        color: i === mentionIndex ? "var(--accent)" : "var(--fg)",
+                        cursor: "pointer",
+                        display: "flex",
+                        fontSize: "12.5px",
+                        gap: "8px",
+                        overflow: "hidden",
+                        padding: "8px 11px",
+                        paddingLeft: row.kind === "file" && row.nested ? "26px" : "11px",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {isGroup && (
+                        <span
+                          role="button"
+                          tabIndex={-1}
+                          aria-label={open ? `Collapse ${label}` : `Expand ${label}`}
+                          // Stops the row's own onMouseDown: the chevron opens the
+                          // repository, it does not reference it.
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            toggleGroup(row.key);
+                          }}
+                          style={{ display: "flex", flexShrink: 0 }}
+                        >
+                          <ChevronRight
+                            size={11}
+                            style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform 0.12s ease" }}
+                          />
+                        </span>
+                      )}
+                      <span style={{ display: "flex", flexShrink: 0 }}>
+                        {isGroup ? <FolderGit2 size={13} /> : <KnowledgeIcon />}
+                      </span>
+                      <span dir={textDirection(label)} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {label}
+                      </span>
+                      {isGroup && (
+                        <span style={{ color: "var(--fg-dimmer)", flexShrink: 0, fontSize: "11px", marginLeft: "auto" }}>
+                          {row.count} file{row.count === 1 ? "" : "s"}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
             <input

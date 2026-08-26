@@ -32,6 +32,12 @@ class OAIResponsesRequest(BaseModel):
     # When set, retrieval fetches THAT document's own chunks by id instead of
     # running the normal nearest-neighbour search — see openai_compat.py.
     rag_document_id: Optional[int] = None
+    # Explicit `@`-reference to a whole imported GROUP of documents — today the
+    # only one is a GitHub repository, "github:{owner}/{repo}", which is stored
+    # as one catalog row per file sharing this key. Retrieval then filters to
+    # every document in the group instead of one. Mutually exclusive with
+    # rag_document_id: sending both is a 400.
+    rag_group_key: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod

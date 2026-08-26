@@ -137,10 +137,11 @@ export async function sendChatMessage(
   modelProfile: ModelProfile = "default",
   routingMode: RoutingMode = "auto",
   attachment: Attachment | null = null,
-  // Catalog id of a knowledge-base document explicitly picked with `@`. Fetched
-  // by exact id server-side — see CLAUDE.md's file-gate note for why exact
-  // identity, not search, is the point.
-  ragDocumentId: number | null = null,
+  // What `@` picked: one knowledge-base document (by catalog id) or a whole
+  // imported repository (by group key). Fetched by exact id / exact group
+  // server-side — see CLAUDE.md's file-gate note for why exact identity, not
+  // search, is the point.
+  ragReference: RagReference | null = null,
   onDelta?: (chunk: string) => void,
   onMeta?: (meta: ChatMeta) => void,
   // Stop's client-side abort path. Aborting mid-fetch rejects the fetch()
@@ -161,7 +162,11 @@ export async function sendChatMessage(
     response = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...dejaqHeaders() },
-      body: JSON.stringify({ messages, deptSlug, modelProfile, routingMode, attachment, ragDocumentId }),
+      body: JSON.stringify({
+        messages, deptSlug, modelProfile, routingMode, attachment,
+        ragDocumentId: ragReference?.documentId ?? null,
+        ragGroupKey: ragReference?.groupKey ?? null,
+      }),
       signal,
     });
   } catch (err) {
@@ -495,6 +500,19 @@ export interface RagDocument {
   id: number;
   title: string;
   kind: string;
+  // Set on documents imported as one group — today only a GitHub repository
+  // ("github:{owner}/{repo}"), which is one document per file. The picker
+  // collapses a shared key into one expandable repository entry.
+  groupKey?: string | null;
+}
+
+// What the composer is actually referencing: either ONE document (by catalog
+// id) or a whole imported repository (by group key). Never both — the server
+// rejects that combination with a 400.
+export interface RagReference {
+  documentId: number | null;
+  groupKey: string | null;
+  title: string;
 }
 
 export type RagDocumentsResult = RagDocument[] | ApiError;
@@ -511,7 +529,10 @@ export async function fetchRagDocuments(
       const detail = await parseErrorDetail(response);
       return { kind: "error", status: response.status, message: userFacingError(response.status, detail) };
     }
-    return (await response.json()) as RagDocument[];
+    // group_key is snake_case on the wire (it is the same column the dashboard
+    // reads); everything else in this app is camelCase.
+    const raw = (await response.json()) as (RagDocument & { group_key?: string | null })[];
+    return raw.map((d) => ({ id: d.id, title: d.title, kind: d.kind, groupKey: d.group_key ?? null }));
   } catch {
     return { kind: "error", status: 0, message: "Network error. Could not load knowledge-base documents." };
   }

@@ -283,7 +283,10 @@ class _FakeFilteredCollection:
 
     def query(self, query_embeddings, n_results, where, include):
         self.last_where = where
-        doc_id = where["rag_document_id"]
+        target = where["rag_document_id"]
+        # A repository reference filters on a SET of ids ($in); a single-file
+        # reference on one. Both come back through the same shape.
+        doc_id = target["$in"][0] if isinstance(target, dict) else target
         # A document far outside the automatic search's max_distance would
         # still come back here — there is no distance gate on this path.
         return {
@@ -327,3 +330,30 @@ def test_retrieve_by_document_empty_collection_returns_nothing(monkeypatch):
     monkeypatch.setattr(rag_service, "get_rag_collection", lambda ns: _Empty())
     monkeypatch.setattr(rag_service, "embed_text", lambda text: [0.0])
     assert rag_service.retrieve_by_document("acme__rag", 7, "q", top_k=4) == []
+
+
+# --- retrieve_by_documents: the whole-repository reference path ---------------
+#
+# One imported repository is one catalog row PER FILE, so a reference to the
+# repository pins a SET of ids. Same filter, same absent distance gate - just
+# `$in` instead of equality.
+
+
+def test_retrieve_by_documents_filters_on_every_id_in_the_group(fake_filtered_collection):
+    chunks = rag_service.retrieve_by_documents("acme__rag", [11, 13, 12], "q", top_k=4)
+    assert fake_filtered_collection.last_where == {"rag_document_id": {"$in": [11, 12, 13]}}
+    assert len(chunks) == 2
+
+
+def test_retrieve_by_documents_uses_plain_equality_for_a_single_id(fake_filtered_collection):
+    # A one-element `$in` is the same query as equality, and Chroma is happier
+    # with the simple form - so a single-file reference is unchanged by this.
+    rag_service.retrieve_by_documents("acme__rag", [7, 7], "q", top_k=4)
+    assert fake_filtered_collection.last_where == {"rag_document_id": 7}
+
+
+def test_retrieve_by_documents_with_no_ids_returns_nothing(fake_filtered_collection):
+    # An emptied group (every file deleted) must not fall back to searching the
+    # whole collection - that is exactly the crowd-out this path avoids.
+    assert rag_service.retrieve_by_documents("acme__rag", [], "q", top_k=4) == []
+    assert fake_filtered_collection.last_where is None

@@ -132,20 +132,50 @@ export default function RagClient({ workspaceSlug, docs, error }: Props) {
   // A document still ingesting must not look done, and a document that just
   // finished must say so — this is the whole point of this page's redesign.
   // Detected by diffing each poll's statuses against the last one seen.
+  //
+  // A repository is ONE unit of progress here, not one per file: a 94-file
+  // import used to fire 94 toasts. The per-document rows and statuses are
+  // untouched (they are how the group is built, deduplicated and pruned) —
+  // only this surface aggregates them, and it reports the group once, when
+  // the last file settles. A partial failure is never rounded up to success:
+  // it says how many failed and the row expands to show which.
   useEffect(() => {
     const prev = prevStatusRef.current;
     const next = new Map<number, string>();
-    for (const doc of docs) {
-      const was = prev.get(doc.id);
-      if (was === "processing" && doc.status === "ready") {
-        const id = `${doc.id}-${doc.updated_at}`;
-        setToasts((t) => [
-          ...t,
-          { id, text: `"${doc.title}" is now searchable — ${formatBytes(doc.byte_size)} indexed.` },
-        ]);
-        setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 6000);
+    for (const doc of docs) next.set(doc.id, doc.status);
+
+    function toast(id: string, text: string, ms: number) {
+      setToasts((t) => (t.some((x) => x.id === id) ? t : [...t, { id, text }]));
+      setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), ms);
+    }
+
+    for (const entry of groupDocs(docs)) {
+      if (entry.kind === "group") {
+        // Only when this page actually watched it run — a group that was
+        // already finished on the first poll gets no toast.
+        const wasProcessing = entry.docs.some((d) => prev.get(d.id) === "processing");
+        const stillProcessing = entry.docs.some((d) => d.status === "processing");
+        if (!wasProcessing || stillProcessing) continue;
+        const failed = entry.docs.filter((d) => d.status === "failed").length;
+        const total = entry.docs.length;
+        toast(
+          `${entry.key}-${total}-${failed}-done`,
+          failed
+            ? `${entry.label} imported with errors — ${total - failed} of ${total} files indexed, `
+              + `${failed} failed. Expand the row to see which.`
+            : `${entry.label} is now searchable — ${total} file${total === 1 ? "" : "s"} indexed.`,
+          8000,
+        );
+        continue;
       }
-      next.set(doc.id, doc.status);
+      const doc = entry.doc;
+      if (prev.get(doc.id) === "processing" && doc.status === "ready") {
+        toast(
+          `${doc.id}-${doc.updated_at}`,
+          `"${doc.title}" is now searchable — ${formatBytes(doc.byte_size)} indexed.`,
+          6000,
+        );
+      }
     }
     prevStatusRef.current = next;
   }, [docs]);
@@ -458,7 +488,10 @@ export default function RagClient({ workspaceSlug, docs, error }: Props) {
                         {st.processing > 0 ? (
                           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                             <span className="ds-dim">
-                              {`indexing ${st.processing} of ${entry.docs.length} files`}
+                              {/* Files SETTLED, not files left - "indexing 94 of
+                                  94 files" read like it was nearly done the
+                                  moment it started. */}
+                              {`indexing — ${entry.docs.length - st.processing} of ${entry.docs.length} files done`}
                             </span>
                             <div style={{ height: 4, borderRadius: 2, background: "var(--border)", overflow: "hidden" }}>
                               <div
@@ -472,7 +505,18 @@ export default function RagClient({ workspaceSlug, docs, error }: Props) {
                             </div>
                           </div>
                         ) : st.failed > 0 ? (
-                          <Pill variant="err">{st.failed} failed</Pill>
+                          // Never a clean "ready" when part of the import
+                          // failed - the count says how many, and the row
+                          // expands to the per-file rows that say which and why.
+                          <button
+                            onClick={() => toggleGroup(entry.key)}
+                            title={`Show the ${st.failed} file${st.failed === 1 ? "" : "s"} that failed`}
+                            style={{ background: "none", border: "none", padding: 0, cursor: "pointer", font: "inherit" }}
+                          >
+                            <Pill variant="err">
+                              {st.failed} of {entry.docs.length} failed
+                            </Pill>
+                          </button>
                         ) : (
                           <Pill variant="neutral">ready</Pill>
                         )}

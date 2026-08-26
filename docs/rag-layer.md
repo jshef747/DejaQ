@@ -77,7 +77,8 @@ RAG hooks into the existing chat pipeline (`run_chat_pipeline` in
 user query → enrich → normalize → CACHE LOOKUP
    hit  → served as before (RAG not consulted, unless it's an @-reference hit — see below)
    miss → classify + route (local | external)
-          → [RAG] explicit @-reference set? (rag_document_id) → fetch THAT
+          → [RAG] explicit @-reference set? (rag_document_id, or
+            rag_group_key for a whole imported repo) → fetch THOSE
              document's own chunks by id (`retrieve_by_document`, a Chroma
              metadata filter) — the ONLY way an answer gets grounded
                   ↳ if any chunks come back, inject them into the prompt as
@@ -115,8 +116,9 @@ Key properties, by design:
   never for an ordinary, unreferenced question, hit or miss.
 - **The retrieved text never enters the cache key.** Like image/file attachments,
   it is a side channel that grounds generation; the cache key stays the bare
-  normalised question **plus the referenced document's id** for an explicit
-  reference (`"|rag:" + doc_id`, exactly the file gate's `"|file:" + sha`
+  normalised question **plus the reference's identity** for an explicit
+  reference (`"|rag:" + doc_id` for one document, `"|rag-group:" + group_key`
+  for a whole imported repository — exactly the file gate's `"|file:" + sha`
   pattern) — see the reference-gate note below. (Otherwise the Q→A cache would
   degrade, or a referenced and an unreferenced answer to the same question
   could collide.)
@@ -142,29 +144,39 @@ Key properties, by design:
 ### Explicit `@`-reference (exact id, not search)
 
 The chat app's `@` picker lets a user name one knowledge-base document
-directly (`MessageInput.tsx`; `GET /rag-documents` is the data-plane catalog
-read, mirroring `GET /departments`). The request carries `rag_document_id` on
-`/v1/responses`. This path is deliberately **not** the automatic search above:
+directly, **or a whole imported repository** (`MessageInput.tsx` +
+`rag-mention.ts`; `GET /rag-documents` is the data-plane catalog read,
+mirroring `GET /departments`). The request carries `rag_document_id` (one
+document) or `rag_group_key` (every document sharing that `group_key`) on
+`/v1/responses` — never both; sending both is a 400. This path is deliberately
+**not** the automatic search above:
 
-- Retrieval is `rag_service.retrieve_by_document(namespace, rag_document_id, query, top_k)`
-  — a Chroma `where={"rag_document_id": id}` metadata filter, ranking only
-  among that document's own chunks. It cannot be crowded out by an unrelated,
-  larger document the way the approximate nearest-neighbour search can (the
-  measured "crowded out" recall failure in the knowledge-base-review
-  investigation never applies here, because this path never looks at any
-  other document).
+- Retrieval is
+  `rag_service.retrieve_by_documents(namespace, ids, query, top_k)` — a Chroma
+  `where={"rag_document_id": id}` (one id) or `{"$in": [...]}` (a group)
+  metadata filter, ranking only among those documents' own chunks. It cannot
+  be crowded out by an unrelated, larger document the way the approximate
+  nearest-neighbour search can (the measured "crowded out" recall failure in
+  the knowledge-base-review investigation never applies here, because this
+  path never looks at any document outside the reference).
+- Ranking **within** the reference is ordinary vector distance, and a
+  repository gets the same `DEJAQ_RAG_TOP_K` budget one file does — so a
+  94-file repo contributes its best few chunks, not a chunk per file. That is
+  retrieval ranking, deliberately untouched by this path.
 - The cache entry is gated on the reference, mirroring the file gate exactly:
-  `derive_doc_id` appends `"|rag:" + doc_id"` to the id (so two different
-  referenced documents asked the same question get two entries, never one
-  overwriting the other), while the TEXT that gets embedded for similarity
-  search stays the bare question — the id never enters the vector, so a
-  paraphrase of an already-answered, same-document question still lands in
-  the trust/band tier and can hit. A per-candidate gate then checks
-  `rag_document_id` equality whenever either side carries a reference: an
-  unreferenced request is never served a reference-anchored answer, and a
-  request referencing document A is never served an answer anchored to
-  document B — same shape as the file gate at `openai_compat.py`'s candidate
-  loop, same reasoning.
+  `derive_doc_id` appends `"|rag:" + doc_id` (one document) or
+  `"|rag-group:" + group_key` (a repository) to the id, so two different
+  references asked the same question get two entries, never one overwriting
+  the other — while the TEXT that gets embedded for similarity search stays
+  the bare question. The id never enters the vector, so a paraphrase of an
+  already-answered, same-reference question still lands in the trust/band tier
+  and can hit. A per-candidate gate then checks **both** elements for equality
+  whenever either side carries a reference: an unreferenced request is never
+  served a reference-anchored answer, a request referencing document A is
+  never served an answer anchored to document B, and a repository-scoped
+  answer and a single-file answer *into that same repository* never reach each
+  other — they read different text and answer different questions. Same shape
+  as the file gate at `openai_compat.py`'s candidate loop, same reasoning.
 - Serving mirrors the file/image gate: the validator compares question-to-
   question (never trusting distance alone), the context adjuster is skipped,
   and the answer is stored verbatim (generalization cannot see the referenced
@@ -347,7 +359,10 @@ One row per file, rather than one per repository, is the load-bearing decision:
 
 - **Provenance.** An answer grounded in the repo names the *file* it came from, and
   an explicit `@`-reference can pin one file (`retrieve_by_document`), which a
-  single whole-repo document could not express.
+  single whole-repo document could not express. Referencing the **repository** is
+  not lost by this: the `@` picker offers the repo itself as one entry (keyed by
+  `group_key`) that expands to its files, and referencing it scopes retrieval to
+  every row in the group — see the `@`-reference section above.
 - **Re-import is an update, for free.** The existing `(workspace_id, sha)` identity
   already makes re-adding identical content a replace, so an unchanged file keeps
   its row, its id, and its chunks. A changed file hashes differently and becomes a
@@ -358,7 +373,19 @@ One row per file, rather than one per repository, is the load-bearing decision:
 
 Rows imported together share a nullable **`group_key`** (`github:{owner}/{repo}`,
 migration `a7b8c9d0e1f2`), which is what the dashboard collapses into one expandable
-entry and what the prune above queries by. Every other source leaves it null.
+entry, what the chat app's `@` picker collapses into one referenceable repository
+entry, what a `rag_group_key` reference resolves through, and what the prune above
+queries by. Every other source leaves it null. It is the one grouping concept —
+there is deliberately no second one.
+
+**Progress is reported per repository, not per file.** The per-document rows and
+their status machine are untouched (they are how the group is built, deduplicated
+and pruned, and `/admin/v1/.../rag-documents` still returns every one of them), but
+the dashboard's Knowledge Base page aggregates them: the group row appears when the
+import starts, shows `indexing — N of M files done` while it runs, and fires exactly
+one toast when the last file settles. A partial failure is never rounded up to
+success — the row reads `N of M failed` and expands to the per-file rows carrying
+each error. A 94-file import used to fire 94 toasts.
 
 **File selection** lives entirely in `rag_ingest._repo_skip_reason` and the constants
 above it — do not scatter new rules into the read loop. Defaults:
@@ -427,8 +454,8 @@ All settings live in `server/app/config.py` (env-overridable):
 | `DEJAQ_RAG_ENABLED` | `true` | Master switch for the whole layer. Off means no retrieval of ANY kind (explicit `@`-reference or a suggestion) **and** no ingestion: every add path (dashboard, API, CLI) is refused at `rag_admin_service`, so knowledge cannot accumulate that nothing will ever read. Listing and deleting stay available so existing documents can be cleaned up |
 | `DEJAQ_RAG_SUGGEST_ENABLED` | `true` | Whether the composer may offer a visible, dismissible document suggestion (`POST /rag-suggest`). Independent of `DEJAQ_RAG_ENABLED` above (both gate suggestions; either off is enough) and unrelated to the removed `DEJAQ_RAG_AUTO_RETRIEVE` flag — a suggestion never grounds anything by itself, so defaulting it on carries none of that flag's risk. See "Suggested reference" above |
 | `DEJAQ_RAG_SUGGEST_MAX_DISTANCE` | `0.45` | Cosine-distance ceiling to OFFER a suggestion — looser than `DEJAQ_RAG_MAX_DISTANCE` on purpose, since a wrong suggestion costs a dismiss, not a misleading answer. Measured tradeoff at this value: `evals/rag_suggest/`, `firstmate/data/dejaq-rag-suggest/report.md` |
-| `DEJAQ_RAG_TOP_K` | `4` | How many chunks to retrieve per query for an explicit `@`-reference (a suggestion always asks for 1 — it only needs to name the single best guess) |
-| `DEJAQ_RAG_MAX_DISTANCE` | `0.35` | Cosine-distance ceiling for a `retrieve()`-based grounding call. Not wired to any current call site — the explicit `@`-reference path (`retrieve_by_document`) has no distance gate at all (the document is already pinned by id) and the suggestion path uses its own, looser `DEJAQ_RAG_SUGGEST_MAX_DISTANCE`. Kept, per the retrieval machinery it belongs to, as the constant a future re-introduction of distance-gated grounding would use |
+| `DEJAQ_RAG_TOP_K` | `4` | How many chunks to retrieve per query for an explicit `@`-reference — the same budget whether the reference is one file or a whole repository (a suggestion always asks for 1 — it only needs to name the single best guess) |
+| `DEJAQ_RAG_MAX_DISTANCE` | `0.35` | Cosine-distance ceiling for a `retrieve()`-based grounding call. Not wired to any current call site — the explicit `@`-reference path (`retrieve_by_documents`) has no distance gate at all (the documents are already pinned by id) and the suggestion path uses its own, looser `DEJAQ_RAG_SUGGEST_MAX_DISTANCE`. Kept, per the retrieval machinery it belongs to, as the constant a future re-introduction of distance-gated grounding would use |
 | `DEJAQ_RAG_EXHAUSTIVE_MAX_CHUNKS` | `20,000` | Below this many total chunks in a workspace's collection, `retrieve()` scans exhaustively (exact cosine, via a NumPy matmul) instead of Chroma's approximate HNSW index — see below |
 | `DEJAQ_RAG_CHUNK_CHARS` | `1000` | Chunk window size when splitting a document |
 | `DEJAQ_RAG_CHUNK_OVERLAP` | `150` | Overlap between adjacent chunks |
@@ -542,7 +569,7 @@ initial layer.
 | Management API | `server/app/routers/admin/rag_documents.py`, `server/app/schemas/admin/rag_documents.py` |
 | Pipeline retrieval + injection (explicit reference only) | `server/app/routers/openai_compat.py` (`_query_with_rag_context`, retrieval step in `run_chat_pipeline`) |
 | `GET /rag-documents`, `POST /rag-suggest` (chat-app data plane) | `server/app/routers/rag_documents_public.py` |
-| Chat-app `@` picker + suggestion chip | `chat/app/components/MessageInput.tsx`, `chat/app/components/chat-api.ts` (`fetchRagDocuments`, `fetchRagSuggestion`), `chat/app/api/rag-documents/route.ts`, `chat/app/api/rag-suggest/route.ts` |
+| Chat-app `@` picker + suggestion chip | `chat/app/components/MessageInput.tsx`, `chat/app/components/rag-mention.ts` (repo/file row grouping), `chat/app/components/chat-api.ts` (`fetchRagDocuments`, `fetchRagSuggestion`, `RagReference`), `chat/app/api/rag-documents/route.ts`, `chat/app/api/rag-suggest/route.ts` |
 | Eviction guard | `server/app/tasks/cache_tasks.py` |
 | CLI | `server/cli/admin.py` (`rag` group) |
 | Dashboard UI | `dashboard/app/dashboard/rag/`, `dashboard/app/actions/rag.ts`, `dashboard/lib/api.ts` (`apiUpload`) |

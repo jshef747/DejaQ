@@ -351,27 +351,61 @@ def retrieve_by_document(
 ) -> list[RagChunk]:
     """Return the closest chunks to `query` FROM ONE DOCUMENT ONLY.
 
-    For an explicit `@`-reference: the caller already knows which document it
-    wants, so this is a `where={"rag_document_id": ...}` metadata filter, not a
-    nearest-neighbour search over the whole collection. It ranks only among
-    that document's own chunks and therefore cannot be crowded out by an
-    unrelated document the way `retrieve()` can (see docs — the measured
-    approximate-search recall bug this feature exists to sidestep). No
-    max_distance gate: the document is already pinned by id, not by distance,
-    so returning its top_k closest chunks regardless of distance is correct —
-    unlike `retrieve()`, there is no "wrong document" outcome to gate against.
-
-    Returns [] when the collection is empty or the document has no chunks
-    (deleted, or never indexed) — the caller then answers ungrounded, exactly
-    as `retrieve()`'s callers do on an empty result.
+    Thin wrapper over `retrieve_by_documents` for the one-document case — see
+    that function for why an explicit `@`-reference filters by id instead of
+    searching.
     """
+    return retrieve_by_documents(namespace, [rag_document_id], query, top_k)
+
+
+def retrieve_by_documents(
+    namespace: str,
+    rag_document_ids: list[int],
+    query: str,
+    top_k: int,
+) -> list[RagChunk]:
+    """Return the closest chunks to `query` FROM A FIXED SET OF DOCUMENTS ONLY.
+
+    For an explicit `@`-reference: the caller already knows which documents it
+    wants, so this is a `where={"rag_document_id": {"$in": [...]}}` metadata
+    filter, not a nearest-neighbour search over the whole collection. It ranks
+    only among those documents' own chunks and therefore cannot be crowded out
+    by an unrelated document the way `retrieve()` can (see docs — the measured
+    approximate-search recall bug this feature exists to sidestep).
+
+    One id is a single-file reference; many ids are a whole imported repository
+    (every row sharing one `group_key`), which is one catalog row per file.
+    Ranking WITHIN the set is ordinary vector distance — a repo reference gets
+    the same top_k budget a single file does, so a large repo returns its best
+    few chunks, not a chunk per file. That is retrieval ranking, deliberately
+    left alone here.
+
+    No max_distance gate: the documents are already pinned by id, not by
+    distance, so returning the top_k closest chunks regardless of distance is
+    correct — unlike `retrieve()`, there is no "wrong document" outcome to
+    gate against.
+
+    Returns [] when the collection is empty, the id set is empty, or none of
+    the documents have chunks (deleted, or never indexed) — the caller then
+    answers ungrounded, exactly as `retrieve()`'s callers do on an empty result.
+    """
+    if not rag_document_ids:
+        return []
     collection = get_rag_collection(namespace)
     if collection.count() == 0:
         return []
+    # Chroma rejects a bare scalar under `$in` and a one-element `$in` is the
+    # same query as equality, so both forms are spelled out rather than always
+    # sending a list.
+    ids = sorted(set(rag_document_ids))
+    where = (
+        {"rag_document_id": ids[0]} if len(ids) == 1
+        else {"rag_document_id": {"$in": ids}}
+    )
     results = collection.query(
         query_embeddings=[embed_text(query)],
         n_results=max(1, top_k),
-        where={"rag_document_id": rag_document_id},
+        where=where,
         include=["documents", "metadatas", "distances"],
     )
     if not (results["ids"] and results["ids"][0]):
@@ -391,7 +425,7 @@ def retrieve_by_document(
                 text=text,
                 title=str(meta.get("title", "")),
                 distance=float(dists[i]) if i < len(dists) else 1.0,
-                rag_document_id=int(meta.get("rag_document_id", rag_document_id)),
+                rag_document_id=int(meta.get("rag_document_id", ids[0])),
                 chunk_index=int(meta.get("chunk_index", i)),
             )
         )

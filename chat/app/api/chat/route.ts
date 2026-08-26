@@ -92,13 +92,20 @@ export async function POST(request: NextRequest) {
   const body = await request.json();
   const attachment = parseAttachment(body.attachment);
   const ragDocumentId = typeof body.ragDocumentId === "number" ? body.ragDocumentId : null;
+  const ragGroupKey = typeof body.ragGroupKey === "string" && body.ragGroupKey ? body.ragGroupKey : null;
 
   const endpoint = "/v1/responses";
   const payload = {
     model: "default",
     input: buildResponsesInput(body.messages, attachment),
     stream: true,
-    ...(ragDocumentId !== null ? { rag_document_id: ragDocumentId } : {}),
+    // Mutually exclusive upstream (400 if both are sent), so the group key
+    // wins here and the id is only forwarded when there is no group.
+    ...(ragGroupKey !== null
+      ? { rag_group_key: ragGroupKey }
+      : ragDocumentId !== null
+        ? { rag_document_id: ragDocumentId }
+        : {}),
   };
 
   let response: Response;

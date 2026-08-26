@@ -105,6 +105,7 @@ def generalize_and_store_task(
     file_kind: str | None = None,
     rag_document_ids: str | None = None,
     rag_document_id: int | None = None,
+    rag_group_key: str | None = None,
 ) -> dict:
     """Generalize an LLM answer (via Gemma 4 E2B) and store in ChromaDB cache.
 
@@ -118,12 +119,15 @@ def generalize_and_store_task(
     for text): photos carry dhash+clip, documents carry OCR tokens in image_text.
     The file_* args are the exact identity of an attached file (PDF, DOCX, or
     text/Markdown/code). rag_document_id is the catalog id of an explicitly
-    `@`-referenced knowledge-base document (None otherwise).
+    `@`-referenced knowledge-base document (None otherwise), and rag_group_key
+    the group key of an `@`-referenced whole group - an imported GitHub
+    repository ("github:{owner}/{repo}") - which pins a set of documents rather
+    than one. The two are mutually exclusive.
     """
     start = time.perf_counter()
     doc_id = _doc_id(
         clean_query, file_sha, image_text=image_text, image_dhash=image_dhash,
-        rag_document_id=rag_document_id,
+        rag_document_id=rag_document_id, rag_group_key=rag_group_key,
     )
     if _is_suppressed(clean_query):
         logger.info("cache_store status=suppressed namespace=%s doc_id=%s", cache_namespace, doc_id)
@@ -157,7 +161,7 @@ def generalize_and_store_task(
         # syllabus was stored as "Statistics or Data Analysis Course"). The gate
         # already guarantees the same attachment/document, so there is nothing to
         # generalize across and the rewrite is pure risk.
-        if image_kind or file_kind or rag_document_id is not None:
+        if image_kind or file_kind or rag_document_id is not None or rag_group_key:
             generalized = answer
         else:
             generalize_model_name, generalize_system_prompt, rewrite_max_tokens, num_ctx = (
@@ -188,6 +192,7 @@ def generalize_and_store_task(
             file_sha=file_sha, file_kind=file_kind,
             rag_document_ids=rag_document_ids,
             rag_document_id=rag_document_id,
+            rag_group_key=rag_group_key,
         )
         latency_ms = int((time.perf_counter() - start) * 1000)
         logger.info(

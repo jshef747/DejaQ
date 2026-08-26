@@ -9,6 +9,7 @@ import {
   isApiError,
   type FeedbackRating,
   type RagDocument,
+  type RagReference,
 } from "./chat-api";
 import { editLanded, editStatusNotice } from "./edit-draft";
 import {
@@ -142,7 +143,7 @@ export default function ChatApp() {
   // outliving the turn it was picked for would be a confusing way to keep
   // grounding answers in a document nobody mentioned again.
   const [ragDocuments, setRagDocuments] = useState<RagDocument[]>([]);
-  const [ragDocument, setRagDocument] = useState<RagDocument | null>(null);
+  const [ragReference, setRagReference] = useState<RagReference | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<ChatSettings>(DEFAULT_CHAT_SETTINGS);
   // Settings load from localStorage after mount. Until then, deptSlug is
@@ -441,9 +442,9 @@ export default function ChatApp() {
     setInput("");
     // Unlike the attachment, the reference is NOT pinned — it applies to this
     // one message and clears immediately, before the send even resolves.
-    const sentRagDocument = ragDocument;
-    setRagDocument(null);
-    await runSend(convId, messages, text, attachment, sentRagDocument);
+    const sentRagReference = ragReference;
+    setRagReference(null);
+    await runSend(convId, messages, text, attachment, sentRagReference);
   }
 
   // Re-run a turn that failed. The question is already in the transcript, so
@@ -472,7 +473,7 @@ export default function ChatApp() {
     priorMessages: AppMessage[],
     text: string,
     sentAttachment: Attachment | null,
-    sentRagDocument: RagDocument | null = null,
+    sentRagReference: RagReference | null = null,
   ) {
     const queryText =
       text ||
@@ -493,7 +494,7 @@ export default function ChatApp() {
       // re-sent it, so the transcript shows which is which.
       attachmentSticky: sentAttachment?.sticky ?? false,
       hadAttachment: sentAttachment !== null,
-      ragDocumentTitle: sentRagDocument?.title ?? null,
+      ragDocumentTitle: sentRagReference?.title ?? null,
     };
 
     // The transcript this send writes into: the history in front of the
@@ -544,7 +545,7 @@ export default function ChatApp() {
       settings.modelProfile,
       settings.routingMode,
       sentAttachment,
-      sentRagDocument?.id ?? null,
+      sentRagReference,
       (delta) => {
         if (send.cancelled) return;
         if (firstDelta) {
@@ -1101,8 +1102,8 @@ export default function ChatApp() {
               isGenerating={isGenerating}
               onStop={handleStop}
               ragDocuments={ragDocuments}
-              ragDocument={ragDocument}
-              onRagDocumentChange={setRagDocument}
+              ragReference={ragReference}
+              onRagReferenceChange={setRagReference}
             />
           </div>
         )}

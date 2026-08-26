@@ -235,6 +235,14 @@ rule lives in `rag_ingest._repo_skip_reason` and the constants above it; do not 
 new ones in the read loop. Full rationale, defaults, and measured retrieval numbers:
 [docs/rag-layer.md](docs/rag-layer.md#github-repository-import).
 
+`group_key` is the ONE grouping concept - do not add a second. Everything that treats
+an import as a unit keys off it: the dashboard's collapsed catalog row, the chat `@`
+picker's expandable repository entry (`chat/app/components/rag-mention.ts`), the
+`rag_group_key` reference on `/v1/responses` (whose member ids
+`rag_document_repo.list_for_group` resolves), and `begin_repo`'s prune. Per-document
+rows and their status machine stay per-document everywhere below the presentation
+layer - the group is derived, never stored as its own row.
+
 Measured, and the reason not to trust code retrieval yet: `rag_service.chunk_text`
 splits on sentence/paragraph boundaries (prose logic) and therefore cuts through the
 middle of a function. `requests`' `super_len` lands across chunks 5-8 of

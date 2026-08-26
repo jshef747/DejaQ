@@ -24,6 +24,12 @@ class RagDocumentPickerItem(BaseModel):
     id: int
     title: str
     kind: str
+    # Set on documents imported as part of one group — today only a GitHub
+    # repository ("github:{owner}/{repo}"), one row per file. The picker
+    # collapses a shared key into one expandable repository entry, and
+    # referencing that entry sends `rag_group_key` instead of an id. Null for
+    # every other source. Same field, same meaning, as the dashboard's.
+    group_key: str | None = None
 
 
 @router.get("/rag-documents", response_model=list[RagDocumentPickerItem])
@@ -35,7 +41,8 @@ def list_rag_documents(
     shape): the admin catalog lives behind loopback-only /admin/v1/*, and the
     chat app has no other way to see what documents exist.
 
-    Only what a picker needs — id, title, kind — never document content.
+    Only what a picker needs — id, title, kind, group_key — never document
+    content.
     """
     # Built INSIDE the session block: get_session() commits on exit, which
     # expires every loaded attribute (SQLAlchemy's expire_on_commit default),
@@ -43,7 +50,10 @@ def list_rag_documents(
     # column off `d` afterwards is a detached-instance error, not a cache hit.
     with get_session() as session:
         docs = rag_document_repo.list_for_workspace(session, workspace.workspace_id)
-        items = [RagDocumentPickerItem(id=d.id, title=d.title, kind=d.kind) for d in docs]
+        items = [
+            RagDocumentPickerItem(id=d.id, title=d.title, kind=d.kind, group_key=d.group_key)
+            for d in docs
+        ]
 
     logger.info("GET /rag-documents workspace=%s count=%d", workspace.workspace_slug, len(items))
     return items
