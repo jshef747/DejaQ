@@ -23,6 +23,7 @@ synchronous wrappers below, used by the CLI) or handed to a background job
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 from app.config import RAG_ENABLED
 from app.db import rag_document_repo
@@ -92,6 +93,7 @@ def list_documents(workspace_slug: str) -> list[RagDocumentItem]:
 def begin_ingest(
     workspace_slug: str,
     ingest: rag_ingest.IngestResult,
+    group_key: str | None = None,
 ) -> tuple[RagDocumentItem, list[str]]:
     """Fast phase, common to every add_*: validate, dedupe-by-sha, chunk, write
     a "processing" catalog row. Chunking is pure Python (no model call) so it
@@ -128,6 +130,7 @@ def begin_ingest(
                 char_count=ingest.char_count,
                 byte_size=ingest.byte_size,
                 progress_total=len(chunks),
+                group_key=group_key,
             )
         else:
             row = rag_document_repo.start_processing_new(
@@ -141,6 +144,7 @@ def begin_ingest(
                 char_count=ingest.char_count,
                 byte_size=ingest.byte_size,
                 progress_total=len(chunks),
+                group_key=group_key,
             )
         item = RagDocumentItem.model_validate(row)
     return item, chunks
@@ -267,6 +271,100 @@ def begin_upload(
 def begin_url(workspace_slug: str, url: str, title: str | None = None) -> tuple[RagDocumentItem, list[str]]:
     _assert_can_add(workspace_slug)
     return begin_ingest(workspace_slug, rag_ingest.from_url(url, title))
+
+@dataclass(frozen=True)
+class RepoImportResult:
+    """What one repository import decided to do, for the API response.
+
+    `documents` is one entry per file that will be indexed, paired with its
+    chunks so the caller can dispatch the slow phase exactly as the single-file
+    routes do. `removed` counts rows from the PREVIOUS import of the same repo
+    whose content no longer exists in it.
+    """
+
+    repo: str
+    ref: str
+    group_key: str
+    documents: list[tuple[RagDocumentItem, list[str]]]
+    skipped_files: int
+    removed: int
+
+
+def begin_repo(
+    workspace_slug: str,
+    url: str,
+    ref: str | None = None,
+) -> RepoImportResult:
+    """Import a public GitHub repository as ONE CATALOG ROW PER FILE.
+
+    Every file goes through the ordinary `begin_ingest`, so the whole existing
+    machine applies unchanged: same status/progress row, same (workspace_id,
+    sha) identity, same chunk ids, same delete path. The only additions are the
+    `group_key` stamped on each row and the prune below.
+
+    The prune is what makes a RE-import behave like an update rather than an
+    append. A file whose content changed hashes differently, so it becomes a
+    NEW row while the row holding its old content is still sitting there with
+    the same group_key - stale knowledge that would keep grounding answers. So
+    after the new rows are written, any row in this group whose sha is not in
+    the freshly fetched set is deleted through the normal `delete_document`
+    (which also clears its Chroma chunks and purges cache entries grounded in
+    it). Unchanged files keep their row, their id, and their chunks untouched.
+
+    Pruning runs AFTER the new rows exist, never before: a fetch that fails
+    half way must leave the previous import intact, not half-deleted.
+    """
+    _assert_can_add(workspace_slug)
+    fetched = rag_ingest.from_repo(url, ref)
+    if not fetched.ok:
+        raise RagIngestError(fetched.reason or "could not import repository")
+
+    documents: list[tuple[RagDocumentItem, list[str]]] = []
+    skipped = fetched.skipped
+    for file_result in fetched.files:
+        try:
+            documents.append(
+                begin_ingest(workspace_slug, file_result, group_key=fetched.group_key)
+            )
+        except RagIngestError:
+            # One unchunkable file must not abort a 200-file import.
+            logger.info(
+                "rag_repo_skip_file repo=%s path=%r reason=no-chunks",
+                fetched.group_key, file_result.title,
+            )
+            skipped += 1
+    if not documents:
+        raise RagIngestError(f"no indexable text files found in {fetched.group_key}")
+
+    current_shas = {f.sha for f in fetched.files}
+    with get_session() as session:
+        workspace = _resolve_workspace(session, workspace_slug)
+        stale_ids = [
+            row.id
+            for row in rag_document_repo.list_for_group(
+                session, workspace.id, fetched.group_key
+            )
+            if row.sha not in current_shas
+        ]
+    for doc_id in stale_ids:
+        try:
+            delete_document(workspace_slug, doc_id)
+        except RagDocumentNotFound:
+            pass
+
+    logger.info(
+        "rag_repo_import workspace=%s repo=%s ref=%s files=%d skipped=%d removed=%d",
+        workspace_slug, fetched.group_key, fetched.resolved_ref,
+        len(documents), skipped, len(stale_ids),
+    )
+    return RepoImportResult(
+        repo=fetched.ref.slug if fetched.ref else "",
+        ref=fetched.resolved_ref,
+        group_key=fetched.group_key,
+        documents=documents,
+        skipped_files=skipped,
+        removed=len(stale_ids),
+    )
 
 
 def add_text(workspace_slug: str, title: str, content: str) -> RagDocumentItem:

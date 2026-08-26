@@ -79,8 +79,11 @@ export type RagDocumentItem = {
   id: number;
   title: string;
   kind: string;        // text | pdf | docx | markdown | url | image
-  source: string;      // paste | upload | url | ocr
+  source: string;      // paste | upload | url | ocr | repo
   source_ref: string | null;
+  // Non-null only for rows imported together as one unit (today: a GitHub
+  // repository, "github:owner/repo"), which the list collapses into one entry.
+  group_key: string | null;
   char_count: number;
   byte_size: number;
   chunk_count: number;

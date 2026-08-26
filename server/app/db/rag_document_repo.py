@@ -15,6 +15,7 @@ def start_processing_new(
     char_count: int,
     progress_total: int,
     byte_size: int = 0,
+    group_key: str | None = None,
 ) -> RagDocument:
     """Catalog a brand-new document as ingestion begins.
 
@@ -27,6 +28,7 @@ def start_processing_new(
         kind=kind,
         source=source,
         source_ref=source_ref,
+        group_key=group_key,
         sha=sha,
         char_count=char_count,
         byte_size=byte_size,
@@ -52,6 +54,7 @@ def start_processing_existing(
     char_count: int,
     progress_total: int,
     byte_size: int = 0,
+    group_key: str | None = None,
 ) -> RagDocument:
     """Re-ingest an existing document (same sha) in place, keeping its id.
 
@@ -62,6 +65,7 @@ def start_processing_existing(
     row.kind = kind
     row.source = source
     row.source_ref = source_ref
+    row.group_key = group_key
     row.char_count = char_count
     row.byte_size = byte_size
     row.status = "processing"
@@ -110,6 +114,20 @@ def get_by_sha(session: Session, workspace_id: int, sha: str) -> RagDocument | N
         session.query(RagDocument)
         .filter_by(workspace_id=workspace_id, sha=sha)
         .first()
+    )
+
+
+def list_for_group(session: Session, workspace_id: int, group_key: str) -> list[RagDocument]:
+    """Every row imported under one group (today: one GitHub repository).
+
+    This is what a re-import diffs against to find the rows whose file no
+    longer exists (or whose content changed, giving it a new sha and therefore
+    a new row) - see rag_admin_service.begin_repo.
+    """
+    return (
+        session.query(RagDocument)
+        .filter_by(workspace_id=workspace_id, group_key=group_key)
+        .all()
     )
 
 

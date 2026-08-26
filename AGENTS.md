@@ -189,6 +189,30 @@ A `server/dejaq.db` migrated at the start of a session goes stale the moment the
 
 The repo's `pyproject.toml` `addopts` always requests `--html=test_reports/report.html --self-contained-html`. In this environment that can fail at `pytest_sessionfinish` with `jinja2.exceptions.TemplateNotFound: 'app.js' not found in search path: .../pytest_html/resources` - a broken/incomplete `pytest-html` install, not a test failure: every test already ran and passed by the time this fires, and the traceback is easy to mistake for a suite-wide failure since it prints after the dot/verbose output. Also separately: `uv run <anything>` without `--group test` re-syncs the venv to the default dependency group and can silently drop `pytest` itself mid-session (see the entry above on this) - chain `uv sync --group test && uv run pytest ...` in one command rather than assuming a prior sync still holds. Work around the html-report crash with `uv run pytest -q -o addopts=""` (or any override that drops `--self-contained-html`) to get a clean pass/fail summary.
 
+## A GitHub repo import is one RAG document PER FILE, grouped by `group_key`
+
+`POST /admin/v1/workspaces/{slug}/rag-documents/repo` (`rag_ingest.from_repo` +
+`rag_admin_service.begin_repo`, branch `fm/dejaq-kb-github-repo`) fetches the GitHub
+API source tarball and writes one `rag_documents` row per indexable file, not one per
+repository - so an answer names the file it came from, and the existing
+`(workspace_id, sha)` identity makes an unchanged file's row/id/chunks survive a
+re-import untouched. Rows from one import share the nullable `group_key`
+(`github:{owner}/{repo}`, migration `a7b8c9d0e1f2`); every other source leaves it
+null. `begin_repo` prunes rows in the group whose sha is no longer in the repo, so a
+re-import is an update rather than an append - and it prunes AFTER writing the new
+rows, so a failed fetch cannot half-delete the previous import. Every file-selection
+rule lives in `rag_ingest._repo_skip_reason` and the constants above it; do not put
+new ones in the read loop. Full rationale, defaults, and measured retrieval numbers:
+[docs/rag-layer.md](docs/rag-layer.md#github-repository-import).
+
+Measured, and the reason not to trust code retrieval yet: `rag_service.chunk_text`
+splits on sentence/paragraph boundaries (prose logic) and therefore cuts through the
+middle of a function. `requests`' `super_len` lands across chunks 5-8 of
+`src/requests/utils.py`, top-4 retrieval returned 5/6/44/7, and the `return` line in
+chunk 8 was never retrieved - the answer was wrong. Markdown questions answer well,
+and nothing was invented for an unanswerable question. A code-aware chunker is the
+obvious fix and is deliberately unbuilt; measure it against that same battery first.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.

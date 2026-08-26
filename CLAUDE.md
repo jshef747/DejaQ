@@ -214,7 +214,7 @@ RAG knowledge-layer settings (`DEJAQ_RAG_ENABLED`, `DEJAQ_RAG_TOP_K`, `DEJAQ_RAG
   - `PUT /admin/v1/workspaces/{workspace_slug}/credentials/{provider}`
   - `DELETE /admin/v1/workspaces/{workspace_slug}/credentials/{provider}`
   - `POST /admin/v1/workspaces/{workspace_slug}/test-provider`
-  - `GET /admin/v1/workspaces/{workspace_slug}/rag-documents`, `POST .../rag-documents/text|url|upload`, `DELETE .../rag-documents/{id}` - RAG knowledge base ([docs/rag-layer.md](docs/rag-layer.md))
+  - `GET /admin/v1/workspaces/{workspace_slug}/rag-documents`, `POST .../rag-documents/text|url|upload|repo`, `DELETE .../rag-documents/{id}` - RAG knowledge base ([docs/rag-layer.md](docs/rag-layer.md)). `repo` imports one public GitHub repository as **one document per file** (grouped by the nullable `rag_documents.group_key`, `github:{owner}/{repo}`); a re-import replaces changed files, leaves unchanged ones alone, and prunes files the repo no longer has
   - `GET|POST /admin/v1/feedback`
 - `dejaq-admin cache purge-images --workspace <slug> [--department <slug>] [--no-dry-run]` — delete image-anchored cache entries after a gate rule change; text entries untouched, defaults to a dry run
 

@@ -7,6 +7,8 @@ from app.config import MAX_ATTACHMENT_BYTES, USE_CELERY
 from app.schemas.admin.rag_documents import (
     RagDocumentDeleteResponse,
     RagDocumentItem,
+    RagRepoCreate,
+    RagRepoImportResponse,
     RagTextCreate,
     RagUrlCreate,
 )
@@ -97,6 +99,42 @@ def add_rag_url(
         raise _map_workspace_errors(exc)
     _dispatch_ingest(workspace_slug, item.id, chunks, background_tasks)
     return item
+
+
+@router.post(
+    "/workspaces/{workspace_slug}/rag-documents/repo",
+    response_model=RagRepoImportResponse,
+    status_code=202,
+)
+async def add_rag_repo(
+    workspace_slug: str,
+    body: RagRepoCreate,
+    background_tasks: BackgroundTasks,
+):
+    """Import a public GitHub repository as one catalog row per file.
+
+    Same 202 + async shape as the three routes beside it, and each file's slow
+    embed phase is dispatched through the very same `_dispatch_ingest`. It runs
+    on the threadpool because the fast phase here is not fast: it downloads and
+    unpacks a tarball, which would block the event loop from a sync def.
+    """
+    try:
+        result = await run_in_threadpool(
+            rag_admin_service.begin_repo, workspace_slug, body.url, body.ref
+        )
+    except (WorkspaceNotFound, RagIngestError, RagDisabledError) as exc:
+        raise _map_workspace_errors(exc)
+    for item, chunks in result.documents:
+        _dispatch_ingest(workspace_slug, item.id, chunks, background_tasks)
+    return RagRepoImportResponse(
+        repo=result.repo,
+        ref=result.ref,
+        group_key=result.group_key,
+        documents=[item for item, _ in result.documents],
+        indexed_files=len(result.documents),
+        skipped_files=result.skipped_files,
+        removed_documents=result.removed,
+    )
 
 
 @router.post("/workspaces/{workspace_slug}/rag-documents/upload", response_model=RagDocumentItem, status_code=202)

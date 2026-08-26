@@ -318,6 +318,7 @@ Files: `server/app/routers/admin/rag_documents.py` ·
 | **Image** (PNG/JPG/…) | Tesseract OCR (`image_text.ocr_plaintext`) | `image` / `ocr` |
 | **Scanned PDF** (no text layer) | Its embedded page images are pulled out with pypdf and OCR'd | `pdf` / `ocr` |
 | **URL** | `httpx` fetch → `BeautifulSoup` readable-text extraction (scripts/styles stripped) | `url` / `url` |
+| **GitHub repository** (public) | GitHub API source tarball → `tarfile` in memory → one document **per file** | `markdown`\|`text`\|`code` / `repo` |
 
 Notes:
 - Type detection is by content, not a MIME/extension allow-list: a file is a PDF or
@@ -334,6 +335,86 @@ Notes:
   `_SCANNED_PDF_MAX_SECONDS`). The image and time budgets are checked per
   embedded image, not only per page — a single page can carry hundreds of
   rasters, and a per-page check would let that one page run unbounded.
+
+### GitHub repository import
+
+`POST /admin/v1/workspaces/{slug}/rag-documents/repo` (body `{url, ref?}`, 202 like
+its three siblings) imports **one public GitHub repository as one catalog row per
+file**. `url` accepts `owner/repo`, `github.com/owner/repo`, the full https URL, or
+a `/tree/<branch>` deep link; `ref` (branch, tag, or sha) overrides it.
+
+One row per file, rather than one per repository, is the load-bearing decision:
+
+- **Provenance.** An answer grounded in the repo names the *file* it came from, and
+  an explicit `@`-reference can pin one file (`retrieve_by_document`), which a
+  single whole-repo document could not express.
+- **Re-import is an update, for free.** The existing `(workspace_id, sha)` identity
+  already makes re-adding identical content a replace, so an unchanged file keeps
+  its row, its id, and its chunks. A changed file hashes differently and becomes a
+  new row; `rag_admin_service.begin_repo` then prunes any row in the group whose sha
+  is no longer in the repo, through the ordinary `delete_document` (Chroma chunks and
+  grounded cache entries included). Pruning runs *after* the new rows exist, so a
+  failed fetch leaves the previous import intact.
+
+Rows imported together share a nullable **`group_key`** (`github:{owner}/{repo}`,
+migration `a7b8c9d0e1f2`), which is what the dashboard collapses into one expandable
+entry and what the prune above queries by. Every other source leaves it null.
+
+**File selection** lives entirely in `rag_ingest._repo_skip_reason` and the constants
+above it — do not scatter new rules into the read loop. Defaults:
+
+| Rule | Value |
+|---|---|
+| Tarball ceiling | 50 MB compressed (`_REPO_TARBALL_MAX_BYTES`) — a backstop, not the real limit |
+| Per-file ceiling | 256 KB (`_REPO_MAX_FILE_BYTES`) |
+| Files per import | 400 (`_REPO_MAX_FILES`) |
+| Minimum file size | 50 normalised characters (`_REPO_MIN_FILE_CHARS`) |
+| Excluded directories | `.git`, `.github`, `node_modules`, `vendor`, `third_party`, `dist`, `build`, `out`, `target`, `.next`, `__pycache__`, `.venv`, `.tox`, caches, IDE/VCS metadata |
+| Excluded files | lockfiles (`package-lock.json`, `uv.lock`, `Cargo.lock`, `go.sum`, …), binaries/media/archives/fonts/model weights, `.ipynb`, `.map`, minified bundles |
+| Also dropped | anything that is not a strict UTF-8 decode, and the second of two byte-identical files (they share one sha, so the second would silently replace the first's row) |
+
+Everything else — source, Markdown, plain text — is indexed, labelled `markdown`,
+`text`, or `code`, titled by its repo-relative path, with `source_ref` set to the
+file's GitHub blob URL at the resolved ref.
+
+**Public repositories only.** An unauthenticated fetch of a private repo gets a
+GitHub 404 (GitHub will not confirm it exists), so the one message names both
+possibilities and says plainly that private repositories need a stored token that
+DejaQ does not have. Redirect hops are re-checked against the same private-address
+rules `from_url` uses.
+
+**Not built, deliberately:** private repositories, and any mechanism that keeps an
+import in sync with the repo (webhook, poll, scheduled re-import). Re-importing is a
+manual operator action.
+
+#### Measured retrieval quality (what this is good and bad at)
+
+Measured end to end against two real repositories
+(`RichardLitt/standard-readme`, 13 files/45 chunks; `psf/requests`, 94 files/840
+chunks), asking through `/rag-suggest` + `/v1/responses`:
+
+- **Markdown answers well.** "What sections are required in a standard readme, and
+  in what order?" retrieved `spec.md` chunks 0/1/2 and answered correctly.
+- **Code sometimes works and sometimes does not, and the failure mode is chunking.**
+  `chunk_text` splits on sentence/paragraph boundaries — prose logic — so it cuts
+  through the middle of a function. In `src/requests/utils.py`, `super_len` is split
+  across chunks 5–8; chunk 5 also carries the tail of `proxy_bypass` and all of
+  `dict_to_sequence`. Asked what `super_len` returns for a partially-read file, top-4
+  retrieval returned chunks 5, 6, 44 and 7 — the `return max(0, total_length -
+  current_position)` line is in chunk **8**, and the answer was wrong. The same repo
+  answered a `rebuild_auth` question correctly, because that function happened to fit
+  inside one chunk.
+- **It does not invent answers.** "How much does the requests library's commercial
+  enterprise support plan cost?" was answered "the provided workspace knowledge does
+  not contain information about…".
+- **The suggestion picks the wrong file for code questions.** `/rag-suggest` chose
+  `tests/test_requests.py` and `tests/test_utils.py` over the source modules for both
+  code questions — test files restate the API in prose-like assertions and embed
+  closer to a natural-language question than an implementation does.
+
+A code-aware chunker (split on top-level `def`/`class`, keep a function whole) is the
+obvious next step and is deliberately **not** built here: measure it against this
+same battery before adding it.
 
 ---
 

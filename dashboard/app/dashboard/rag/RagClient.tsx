@@ -2,7 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { BookOpen, FileText, Globe, Image as ImageIcon, Trash2, Upload } from "lucide-react";
+import {
+  BookOpen, ChevronDown, ChevronRight, FileCode, FileText, FolderGit2, Globe,
+  Image as ImageIcon, Trash2, Upload,
+} from "lucide-react";
 import Modal from "@/components/Modal";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import Button from "@/components/ui/Button";
@@ -11,7 +14,9 @@ import Field from "@/components/ui/Field";
 import Input from "@/components/ui/Input";
 import EmptyState from "@/components/ui/EmptyState";
 import SectionHeader from "@/components/ui/SectionHeader";
-import { addRagText, addRagUrl, deleteRagDocument, uploadRagFile } from "@/app/actions/rag";
+import {
+  addRagRepo, addRagText, addRagUrl, deleteRagDocument, deleteRagGroup, uploadRagFile,
+} from "@/app/actions/rag";
 import type { RagDocumentItem } from "@/lib/types";
 
 const fmt = new Intl.DateTimeFormat("en-US", { year: "numeric", month: "short", day: "numeric" });
@@ -32,7 +37,53 @@ const POLL_INTERVAL_MS = 1200;
 const KIND_ICON: Record<string, typeof FileText> = {
   url: Globe,
   image: ImageIcon,
+  code: FileCode,
 };
+
+// A repository is imported as one catalog row PER FILE (so an answer can name
+// the file it came from), which would otherwise be hundreds of loose rows in
+// this list. Rows sharing a group_key collapse into one expandable entry.
+type Entry =
+  | { kind: "doc"; doc: RagDocumentItem }
+  | { kind: "group"; key: string; label: string; docs: RagDocumentItem[] };
+
+function groupDocs(docs: RagDocumentItem[]): Entry[] {
+  const out: Entry[] = [];
+  const groups = new Map<string, Extract<Entry, { kind: "group" }>>();
+  for (const doc of docs) {
+    if (!doc.group_key) {
+      out.push({ kind: "doc", doc });
+      continue;
+    }
+    let group = groups.get(doc.group_key);
+    if (!group) {
+      group = {
+        kind: "group",
+        key: doc.group_key,
+        label: doc.group_key.replace(/^github:/, ""),
+        docs: [],
+      };
+      groups.set(doc.group_key, group);
+      out.push(group);
+    }
+    group.docs.push(doc);
+  }
+  for (const group of groups.values()) {
+    group.docs.sort((a, b) => a.title.localeCompare(b.title));
+  }
+  return out;
+}
+
+function groupStatus(docs: RagDocumentItem[]) {
+  const failed = docs.filter((d) => d.status === "failed").length;
+  const processing = docs.filter((d) => d.status === "processing");
+  return {
+    failed,
+    processing: processing.length,
+    current: docs.reduce((n, d) => n + (d.status === "ready" ? (d.progress_total ?? 0) : d.progress_current), 0),
+    total: docs.reduce((n, d) => n + (d.progress_total ?? 0), 0),
+  };
+}
 
 interface Props {
   workspaceSlug: string;
@@ -55,6 +106,15 @@ export default function RagClient({ workspaceSlug, docs, error }: Props) {
   const [urlTitle, setUrlTitle] = useState("");
   const [urlBusy, setUrlBusy] = useState(false);
   const [urlErr, setUrlErr] = useState<string | null>(null);
+
+  const [repoOpen, setRepoOpen] = useState(false);
+  const [repoUrl, setRepoUrl] = useState("");
+  const [repoRef, setRepoRef] = useState("");
+  const [repoBusy, setRepoBusy] = useState(false);
+  const [repoErr, setRepoErr] = useState<string | null>(null);
+
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [confirmDeleteGroup, setConfirmDeleteGroup] = useState<string | null>(null);
 
   const [uploadBusy, setUploadBusy] = useState(false);
   const [uploadErr, setUploadErr] = useState<string | null>(null);
@@ -121,6 +181,47 @@ export default function RagClient({ workspaceSlug, docs, error }: Props) {
     router.refresh();
   }
 
+  async function handleAddRepo() {
+    setRepoBusy(true);
+    setRepoErr(null);
+    const res = await addRagRepo(workspaceSlug, repoUrl, repoRef || undefined);
+    setRepoBusy(false);
+    if (!res.ok) { setRepoErr(res.error); return; }
+    setRepoOpen(false);
+    setRepoUrl("");
+    setRepoRef("");
+    const { indexed_files, skipped_files, removed_documents, repo, ref } = res.data;
+    const id = `repo-${repo}-${ref}`;
+    setToasts((t) => [...t, {
+      id,
+      text: `Importing ${repo} @ ${ref} — ${indexed_files} file${indexed_files === 1 ? "" : "s"} indexing, `
+        + `${skipped_files} skipped`
+        + (removed_documents ? `, ${removed_documents} removed` : "") + ".",
+    }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 8000);
+    router.refresh();
+  }
+
+  async function handleDeleteGroup(key: string) {
+    const group = entries.find((e) => e.kind === "group" && e.key === key);
+    if (group?.kind !== "group") return;
+    setDeleteBusy(true);
+    setDeleteErr(null);
+    const res = await deleteRagGroup(workspaceSlug, group.docs.map((d) => d.id));
+    setDeleteBusy(false);
+    if (!res.ok) { setDeleteErr(res.error); return; }
+    setConfirmDeleteGroup(null);
+    router.refresh();
+  }
+
+  function toggleGroup(key: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }
+
   async function ingestFile(file: File) {
     setUploadErr(null);
     if (file.size > MAX_ATTACHMENT_BYTES) {
@@ -167,7 +268,84 @@ export default function RagClient({ workspaceSlug, docs, error }: Props) {
     router.refresh();
   }
 
+  function renderDocRow(doc: RagDocumentItem, nested: boolean) {
+    const Icon = KIND_ICON[doc.kind] ?? FileText;
+    return (
+      <tr key={doc.id}>
+        <td>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, paddingLeft: nested ? 21 : 0 }}>
+            <Icon size={13} style={{ color: "var(--fg-dimmer)", flexShrink: 0 }} />
+            <span
+              style={{ color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 320 }}
+              title={doc.source_ref ?? doc.title}
+            >
+              {doc.title}
+            </span>
+          </div>
+        </td>
+        <td>
+          <Pill variant="neutral">{doc.kind}{doc.source === "ocr" ? " · ocr" : ""}</Pill>
+        </td>
+        <td className="ds-dim" style={{ fontSize: 12 }}>{formatBytes(doc.byte_size)}</td>
+        <td style={{ fontSize: 12, minWidth: 150 }}>
+          {doc.status === "processing" ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <span className="ds-dim">
+                {doc.progress_total
+                  ? `embedding ${formatBytes((doc.byte_size * doc.progress_current) / doc.progress_total)} of ${formatBytes(doc.byte_size)}`
+                  : "starting…"}
+              </span>
+              <div style={{ height: 4, borderRadius: 2, background: "var(--border)", overflow: "hidden" }}>
+                <div
+                  style={{
+                    height: "100%",
+                    width: doc.progress_total
+                      ? `${Math.min(100, (doc.progress_current / doc.progress_total) * 100)}%`
+                      : "3%",
+                    background: "var(--accent)",
+                    transition: "width 0.3s ease",
+                  }}
+                />
+              </div>
+            </div>
+          ) : doc.status === "failed" ? (
+            <div>
+              <Pill variant="err">failed</Pill>
+              {doc.error_message && (
+                <div
+                  className="ds-dim"
+                  style={{ fontSize: 11, marginTop: 3, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                  title={doc.error_message}
+                >
+                  {doc.error_message}
+                </div>
+              )}
+            </div>
+          ) : (
+            <Pill variant="neutral">ready</Pill>
+          )}
+        </td>
+        <td className="ds-dim" style={{ fontSize: 12 }}>{fmt.format(new Date(doc.created_at))}</td>
+        <td style={{ textAlign: "right" }}>
+          <Button
+            variant="ghost-danger"
+            size="sm"
+            onClick={() => { setDeleteErr(null); setConfirmDeleteId(doc.id); }}
+            aria-label={`Delete ${doc.title}`}
+            title={`Delete ${doc.title}`}
+          >
+            <Trash2 size={12} />
+          </Button>
+        </td>
+      </tr>
+    );
+  }
+
   const confirmDeleteDoc = docs.find((d) => d.id === confirmDeleteId);
+  const entries = groupDocs(docs);
+  const confirmDeleteGroupEntry = entries.find(
+    (e) => e.kind === "group" && e.key === confirmDeleteGroup,
+  );
 
   return (
     <div
@@ -182,6 +360,9 @@ export default function RagClient({ workspaceSlug, docs, error }: Props) {
         subtitle={`Curated knowledge for workspace ${workspaceSlug} — grounds answers on a cache miss`}
         action={
           <div style={{ display: "flex", gap: 8 }}>
+            <Button onClick={() => { setRepoErr(null); setRepoOpen(true); }}>
+              <FolderGit2 size={12} style={{ marginRight: 5 }} />Repo
+            </Button>
             <Button onClick={() => { setUrlErr(null); setUrlOpen(true); }}>+ URL</Button>
             <Button onClick={() => { setTextErr(null); setTextOpen(true); }}>+ Text</Button>
             <Button variant="primary" loading={uploadBusy} onClick={() => fileInputRef.current?.click()}>
@@ -219,7 +400,7 @@ export default function RagClient({ workspaceSlug, docs, error }: Props) {
           <EmptyState
             icon={BookOpen}
             title="No knowledge yet"
-            description="Add text, a URL, or upload a document (PDF, DOCX, text, or an image to OCR). Drag a file anywhere on this page to upload it."
+            description="Add text, a URL, a GitHub repository, or upload a document (PDF, DOCX, text, or an image to OCR). Drag a file anywhere on this page to upload it."
             action={
               <Button variant="primary" loading={uploadBusy} onClick={() => fileInputRef.current?.click()}>
                 <Upload size={12} style={{ marginRight: 5 }} />Upload file
@@ -241,74 +422,78 @@ export default function RagClient({ workspaceSlug, docs, error }: Props) {
               </tr>
             </thead>
             <tbody>
-              {docs.map((doc) => {
-                const Icon = KIND_ICON[doc.kind] ?? FileText;
-                return (
-                  <tr key={doc.id}>
-                    <td>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <Icon size={13} style={{ color: "var(--fg-dimmer)", flexShrink: 0 }} />
-                        <span style={{ color: "var(--fg)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 320 }} title={doc.source_ref ?? doc.title}>
-                          {doc.title}
-                        </span>
-                      </div>
-                    </td>
-                    <td>
-                      <Pill variant="neutral">{doc.kind}{doc.source === "ocr" ? " · ocr" : ""}</Pill>
-                    </td>
-                    <td className="ds-dim" style={{ fontSize: 12 }}>{formatBytes(doc.byte_size)}</td>
-                    <td style={{ fontSize: 12, minWidth: 150 }}>
-                      {doc.status === "processing" ? (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                          <span className="ds-dim">
-                            {doc.progress_total
-                              ? `embedding ${formatBytes((doc.byte_size * doc.progress_current) / doc.progress_total)} of ${formatBytes(doc.byte_size)}`
-                              : "starting…"}
-                          </span>
-                          <div style={{ height: 4, borderRadius: 2, background: "var(--border)", overflow: "hidden" }}>
-                            <div
-                              style={{
-                                height: "100%",
-                                width: doc.progress_total
-                                  ? `${Math.min(100, (doc.progress_current / doc.progress_total) * 100)}%`
-                                  : "3%",
-                                background: "var(--accent)",
-                                transition: "width 0.3s ease",
-                              }}
-                            />
-                          </div>
-                        </div>
-                      ) : doc.status === "failed" ? (
-                        <div>
-                          <Pill variant="err">failed</Pill>
-                          {doc.error_message && (
-                            <div
-                              className="ds-dim"
-                              style={{ fontSize: 11, marginTop: 3, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                              title={doc.error_message}
-                            >
-                              {doc.error_message}
+              {entries.map((entry) => {
+                if (entry.kind === "group") {
+                  const open = expanded.has(entry.key);
+                  const st = groupStatus(entry.docs);
+                  const bytes = entry.docs.reduce((n, d) => n + d.byte_size, 0);
+                  const added = entry.docs.reduce(
+                    (min, d) => (d.created_at < min ? d.created_at : min),
+                    entry.docs[0].created_at,
+                  );
+                  return [
+                    <tr key={entry.key}>
+                      <td>
+                        <button
+                          onClick={() => toggleGroup(entry.key)}
+                          aria-expanded={open}
+                          style={{
+                            display: "flex", alignItems: "center", gap: 8, background: "none",
+                            border: "none", padding: 0, cursor: "pointer", color: "var(--fg)",
+                            font: "inherit",
+                          }}
+                        >
+                          {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                          <FolderGit2 size={13} style={{ color: "var(--fg-dimmer)", flexShrink: 0 }} />
+                          <span style={{ fontWeight: 500 }}>{entry.label}</span>
+                        </button>
+                      </td>
+                      <td>
+                        <Pill variant="neutral">
+                          repo · {entry.docs.length} file{entry.docs.length === 1 ? "" : "s"}
+                        </Pill>
+                      </td>
+                      <td className="ds-dim" style={{ fontSize: 12 }}>{formatBytes(bytes)}</td>
+                      <td style={{ fontSize: 12, minWidth: 150 }}>
+                        {st.processing > 0 ? (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                            <span className="ds-dim">
+                              {`indexing ${st.processing} of ${entry.docs.length} files`}
+                            </span>
+                            <div style={{ height: 4, borderRadius: 2, background: "var(--border)", overflow: "hidden" }}>
+                              <div
+                                style={{
+                                  height: "100%",
+                                  width: st.total ? `${Math.min(100, (st.current / st.total) * 100)}%` : "3%",
+                                  background: "var(--accent)",
+                                  transition: "width 0.3s ease",
+                                }}
+                              />
                             </div>
-                          )}
-                        </div>
-                      ) : (
-                        <Pill variant="neutral">ready</Pill>
-                      )}
-                    </td>
-                    <td className="ds-dim" style={{ fontSize: 12 }}>{fmt.format(new Date(doc.created_at))}</td>
-                    <td style={{ textAlign: "right" }}>
-                      <Button
-                        variant="ghost-danger"
-                        size="sm"
-                        onClick={() => { setDeleteErr(null); setConfirmDeleteId(doc.id); }}
-                        aria-label={`Delete ${doc.title}`}
-                        title={`Delete ${doc.title}`}
-                      >
-                        <Trash2 size={12} />
-                      </Button>
-                    </td>
-                  </tr>
-                );
+                          </div>
+                        ) : st.failed > 0 ? (
+                          <Pill variant="err">{st.failed} failed</Pill>
+                        ) : (
+                          <Pill variant="neutral">ready</Pill>
+                        )}
+                      </td>
+                      <td className="ds-dim" style={{ fontSize: 12 }}>{fmt.format(new Date(added))}</td>
+                      <td style={{ textAlign: "right" }}>
+                        <Button
+                          variant="ghost-danger"
+                          size="sm"
+                          onClick={() => { setDeleteErr(null); setConfirmDeleteGroup(entry.key); }}
+                          aria-label={`Delete ${entry.label}`}
+                          title={`Delete every document imported from ${entry.label}`}
+                        >
+                          <Trash2 size={12} />
+                        </Button>
+                      </td>
+                    </tr>,
+                    ...(open ? entry.docs.map((doc) => renderDocRow(doc, true)) : []),
+                  ];
+                }
+                return renderDocRow(entry.doc, false);
               })}
             </tbody>
           </table>
@@ -366,6 +551,32 @@ export default function RagClient({ workspaceSlug, docs, error }: Props) {
         </Field>
       </Modal>
 
+      {/* Import repository modal */}
+      <Modal
+        open={repoOpen}
+        onClose={() => setRepoOpen(false)}
+        title="Import a GitHub repository"
+        subtitle="Public repositories only. Each file becomes its own knowledge document, so an answer can name the file it came from."
+        widthPx={520}
+        footer={
+          <>
+            <Button onClick={() => setRepoOpen(false)} disabled={repoBusy}>Cancel</Button>
+            <Button variant="primary" onClick={handleAddRepo} loading={repoBusy} disabled={!repoUrl.trim()}>Import</Button>
+          </>
+        }
+      >
+        <Field label="Repository" required error={repoErr ?? undefined}>
+          <Input value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)} placeholder="https://github.com/owner/repo" mono />
+        </Field>
+        <Field label="Branch, tag, or commit" hint="Optional — defaults to the repository's default branch.">
+          <Input value={repoRef} onChange={(e) => setRepoRef(e.target.value)} placeholder="main" mono />
+        </Field>
+        <div className="ds-dim" style={{ fontSize: 11, marginTop: 4 }}>
+          Source, Markdown and plain-text files are indexed. Binaries, images, lockfiles,
+          minified bundles and dependency/build directories are skipped, as is any file over 256 KB.
+        </div>
+      </Modal>
+
       {/* Delete confirm */}
       <ConfirmDialog
         open={!!confirmDeleteId}
@@ -376,6 +587,22 @@ export default function RagClient({ workspaceSlug, docs, error }: Props) {
         busy={deleteBusy}
         onCancel={() => setConfirmDeleteId(null)}
         onConfirm={() => confirmDeleteId !== null && handleDelete(confirmDeleteId)}
+      />
+
+      {/* Delete a whole imported repository */}
+      <ConfirmDialog
+        open={!!confirmDeleteGroup}
+        title="Delete imported repository"
+        message={
+          confirmDeleteGroupEntry?.kind === "group"
+            ? `Delete all ${confirmDeleteGroupEntry.docs.length} documents imported from "${confirmDeleteGroupEntry.label}"? They stop grounding answers. This cannot be undone.`
+            : ""
+        }
+        confirmLabel="Delete all"
+        destructive
+        busy={deleteBusy}
+        onCancel={() => setConfirmDeleteGroup(null)}
+        onConfirm={() => confirmDeleteGroup !== null && handleDeleteGroup(confirmDeleteGroup)}
       />
     </div>
   );

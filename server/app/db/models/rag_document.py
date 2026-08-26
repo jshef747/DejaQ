@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -24,6 +24,7 @@ class RagDocument(Base):
     __tablename__ = "rag_documents"
     __table_args__ = (
         UniqueConstraint("workspace_id", "sha", name="uq_rag_workspace_sha"),
+        Index("ix_rag_documents_group_key", "workspace_id", "group_key"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -32,12 +33,21 @@ class RagDocument(Base):
     )
     # Human-facing name shown in the dashboard list.
     title: Mapped[str] = mapped_column(String, nullable=False)
-    # What the content is: text | pdf | docx | markdown | url | image.
+    # What the content is: text | pdf | docx | markdown | url | image | code.
     kind: Mapped[str] = mapped_column(String, nullable=False)
-    # Where it came from: paste | upload | url | ocr.
+    # Where it came from: paste | upload | url | ocr | repo.
     source: Mapped[str] = mapped_column(String, nullable=False)
     # Original filename or URL, for display/debugging. Null for pasted text.
     source_ref: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Groups rows that were ingested together and should be shown as ONE entry.
+    # Null for every single-document source (paste/upload/URL) - only a
+    # repository import sets it, to "github:{owner}/{repo}". A repo produces one
+    # row PER FILE so provenance survives ("which file grounded this answer?"),
+    # which would otherwise flood the dashboard list with hundreds of loose
+    # rows; this column is what lets the list collapse them back into one.
+    # It is also the handle a re-import uses to find the rows that belonged to
+    # the previous version of the repo - see rag_admin_service.begin_repo.
+    group_key: Mapped[str | None] = mapped_column(String, nullable=True)
     # sha256 of the normalised extracted text — the document's identity.
     sha: Mapped[str] = mapped_column(String, nullable=False)
     char_count: Mapped[int] = mapped_column(Integer, nullable=False)
