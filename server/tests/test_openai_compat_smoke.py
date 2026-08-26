@@ -89,7 +89,24 @@ class StubExternalLLM:
         raise AssertionError("External LLM should not be called for easy query smoke test")
 
 
-class StubMemory:
+class _StubMemoryBase:
+    """The store path's methods, not just the lookup path's.
+
+    Most of these doubles are used by tests whose request ends up on the miss
+    path, so the background store runs against them. Until the store's handler
+    stopped swallowing AttributeError, a double missing one of these stored
+    nothing while the test still passed - the same gap 48db1e9/371a240 hit.
+    Override either method in a subclass that needs to observe or fail the store.
+    """
+
+    def get_entry_metadata(self, entry_id: str):
+        return None
+
+    def store_interaction(self, clean_query, generalized_answer, original_query, user_id, **kwargs):
+        return "doc123"
+
+
+class StubMemory(_StubMemoryBase):
     def lookup_cache(self, clean_query: str):
         return CacheLookupResult(hit=False)
 
@@ -97,7 +114,7 @@ class StubMemory:
         return None
 
 
-class StubNearestMissMemory:
+class StubNearestMissMemory(_StubMemoryBase):
     def lookup_cache(self, clean_query: str):
         return CacheLookupResult(
             hit=False,
@@ -109,7 +126,7 @@ class StubNearestMissMemory:
         return None
 
 
-class StubNonLatin1NearestMissMemory:
+class StubNonLatin1NearestMissMemory(_StubMemoryBase):
     """Nearest cache prompt contains an em-dash (U+2014) - not Latin-1
     encodable, which used to crash Starlette's header encoding (report
     dejaq-big-eval-v2 section 9.1, queries q265/q369)."""
@@ -125,7 +142,7 @@ class StubNonLatin1NearestMissMemory:
         return None
 
 
-class StubHitMemory:
+class StubHitMemory(_StubMemoryBase):
     def lookup_cache(self, clean_query: str):
         return CacheLookupResult(
             hit=True,
@@ -144,7 +161,7 @@ class StubHitMemory:
         return None
 
 
-class StubHitMemoryVeryClose:
+class StubHitMemoryVeryClose(_StubMemoryBase):
     """Same shape as StubHitMemory but at a distance below
     VALIDATOR_SKIP_DISTANCE (0.003) as well as ADJUSTER_SKIP_DISTANCE -
     for tests that need the validator itself skipped, not just adjust()."""
@@ -167,7 +184,7 @@ class StubHitMemoryVeryClose:
         return None
 
 
-class StubNonLatin1HitMemory:
+class StubNonLatin1HitMemory(_StubMemoryBase):
     """Matched cache query contains a curly apostrophe (U+2019) - the sibling
     free-text header (x-dejaq-cache-matched-query) that carries the same risk
     as x-dejaq-nearest-cache-prompt but wasn't the one that crashed first."""
@@ -192,7 +209,7 @@ class StubNonLatin1HitMemory:
         return None
 
 
-class StubHitMemoryBeyondAdjustSkip:
+class StubHitMemoryBeyondAdjustSkip(_StubMemoryBase):
     """Trusted-tier hit (distance well under CACHE_TRUST_DISTANCE) but past
     ADJUSTER_SKIP_DISTANCE - adjust() must still run for this one."""
 
@@ -214,7 +231,7 @@ class StubHitMemoryBeyondAdjustSkip:
         return None
 
 
-class StubBandMemory:
+class StubBandMemory(_StubMemoryBase):
     """Cache hit in the validator-guarded band (requires_validation=True)."""
 
     def lookup_cache(self, clean_query: str):
@@ -236,7 +253,7 @@ class StubBandMemory:
         return None
 
 
-class StubRescueMemory:
+class StubRescueMemory(_StubMemoryBase):
     """Cache hit from the lexical-rescue tier (past band, word-aligned)."""
 
     def lookup_cache(self, clean_query: str):
@@ -259,7 +276,7 @@ class StubRescueMemory:
         return None
 
 
-class StubMismatchBandMemory:
+class StubMismatchBandMemory(_StubMemoryBase):
     """Band hit whose stored query differs by one word (list vs string)."""
 
     def lookup_cache(self, clean_query: str):
@@ -1913,7 +1930,7 @@ def test_cache_hit_with_non_latin1_enriched_query_does_not_crash(monkeypatch):
     assert urllib.parse.unquote(header) == ENRICHED
 
 
-class StubMultiScriptHitMemory:
+class StubMultiScriptHitMemory(_StubMemoryBase):
     """Matched/nearest cache query is Hebrew mixed with an em-dash - the bug
     this whole file is a regression suite for: `_sanitize_headers` used to
     Latin-1-replace every character outside Latin-1 with "?", so a Hebrew

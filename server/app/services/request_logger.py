@@ -118,10 +118,13 @@ def ensure_stats_schema(con: sqlite3.Connection) -> None:
     con.execute(_CREATE_REQUESTS_TABLE)
     con.execute(_CREATE_FEEDBACK_TABLE)
     con.execute(_CREATE_CACHE_STORE_FAILURES_TABLE)
-    for statement in _CREATE_INDEXES:
-        con.execute(statement)
     _migrate_table(con, "requests", _REQUEST_COLUMNS)
     _migrate_table(con, "feedback_log", _FEEDBACK_COLUMNS)
+    # After the migrations, not before: several of these index columns are
+    # themselves additive, so a legacy DB has no such column until _migrate_table
+    # has added it.
+    for statement in _CREATE_INDEXES:
+        con.execute(statement)
     con.commit()
 
 

@@ -296,6 +296,12 @@ dependency must let programming errors through, or the next broken call site is
 invisible again. Regression test:
 `server/tests/test_cache_store_failure_visibility.py`.
 
+Turning the swallow off immediately exposed two more doubles in
+`test_openai_compat_smoke.py` that had no `store_interaction` at all and had been
+storing nothing while their tests passed, so every memory double there now inherits
+`_StubMemoryBase`, which supplies the store path's methods. Give a new memory double
+that base rather than only the lookup methods the test happens to need.
+
 The id itself is still emitted optimistically, before the write - see the long comment
 at the `_planned_response_id` assignment for why (withholding it means withholding the
 streaming response head), and `chat/app/components/chat-api.ts` for the client-side
