@@ -15,6 +15,7 @@ from app.services.memory_chromaDB import (
     _pool,
 )
 from app.services import llm_config_service, pipeline_config_cache, rag_service
+from app.services.request_logger import record_store_failure
 from app.services.service_factory import get_context_adjuster_service
 
 logger = logging.getLogger("dejaq.tasks.cache")
@@ -204,6 +205,17 @@ def generalize_and_store_task(
         return {"status": "stored", "clean_query": clean_query, "namespace": cache_namespace, "doc_id": doc_id}
     except Exception as exc:
         logger.exception("cache_store status=failed namespace=%s doc_id=%s", cache_namespace, doc_id)
+        # Counted once the retries are spent, not per attempt - the same row the
+        # router's in-process fallback writes, so the metric is complete whether
+        # or not Celery is enabled. Celery's own task-failure record surfaces the
+        # exception itself; nothing surfaces the missing cache entry.
+        if self.request.retries >= self.max_retries:
+            record_store_failure(
+                workspace=workspace_slug or user_id,
+                namespace=cache_namespace,
+                doc_id=doc_id,
+                error_type=type(exc).__name__,
+            )
         raise self.retry(exc=exc)
 
 

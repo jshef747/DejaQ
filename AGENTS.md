@@ -276,6 +276,32 @@ starts at `def` competes with a test file's prose-like assertions and a mid-func
 fragment did not. Full numbers, including the DejaQ secondary run:
 [docs/rag-layer.md](docs/rag-layer.md#chunking).
 
+## A background cache write that fails is a real failure mode, and it has a counter now
+
+`_bg_generalize_and_store` (`server/app/routers/openai_compat.py`) and
+`generalize_and_store_task` (`server/app/tasks/cache_tasks.py`) both run AFTER the
+response - `X-DejaQ-Response-Id` header and all - has already gone out, so a failure
+there has no request-level status to ride on. It used to be swallowed whole: one
+`background_store status=failed` ERROR line, a client holding an id for an entry that
+was never written, and a cache that quietly stopped filling. That is how a plain
+`TypeError` from a signature mismatch (`48db1e9`) survived - indistinguishable from a
+ChromaDB blip. Both paths now write a `cache_store_failures` row to the stats DB
+(`request_logger.record_store_failure`, surfaced as `store_failures` on
+`/admin/v1/stats/*` and in `dejaq-admin stats`); any non-zero value is a defect or an
+outage, never normal traffic. The router's handler also re-raises
+`_PROGRAMMING_ERRORS` (TypeError/AttributeError/...) instead of tolerating them - a
+defect in our own code is not a runtime condition. Same rule as the classify step's
+bare `except Exception` above: an `except Exception` that exists to tolerate a flaky
+dependency must let programming errors through, or the next broken call site is
+invisible again. Regression test:
+`server/tests/test_cache_store_failure_visibility.py`.
+
+The id itself is still emitted optimistically, before the write - see the long comment
+at the `_planned_response_id` assignment for why (withholding it means withholding the
+streaming response head), and `chat/app/components/chat-api.ts` for the client-side
+retry-then-honest-404 that pairs with it. Making the id conditional on a completed
+write is a contract change, not a bug fix.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.

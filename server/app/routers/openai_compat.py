@@ -126,7 +126,7 @@ from app.utils.pipeline_trace import PipelineTrace
 from app.schemas.chat import ExternalLLMRequest
 from app.services.language_gate import dominant_script, scripts_conflict
 from app.services.chat_messages import extract_pipeline_inputs
-from app.services.request_logger import request_logger
+from app.services.request_logger import record_store_failure, request_logger
 from app.services.response_registry import ResponseInteraction, ServedTier, response_registry
 
 logger = logging.getLogger("dejaq.router.openai_compat")
@@ -1058,6 +1058,22 @@ def _llm_config_for_workspace_slug(workspace_slug: str) -> EffectiveLlmConfig:
 _human_authored_entry = is_human_authored
 
 
+# A defect in our own code, not a runtime condition. The background store's
+# handler below tolerates a flaky ChromaDB but must let these through: a
+# swallowed one turns a broken call site into a silent no-op that only a test
+# happening to check the side effect can find - which is exactly how the store
+# path hid a TypeError from a signature mismatch (48db1e9).
+_PROGRAMMING_ERRORS = (
+    TypeError,
+    AttributeError,
+    NameError,
+    ImportError,
+    IndexError,
+    UnboundLocalError,
+    AssertionError,
+)
+
+
 def _bg_generalize_and_store(
     clean_query: str,
     answer: str,
@@ -1139,8 +1155,25 @@ def _bg_generalize_and_store(
                 doc_id,
                 latency_ms,
             )
-    except Exception:
+    except Exception as exc:
         logger.exception("background_store status=failed namespace=%s doc_id=%s", cache_namespace, doc_id)
+        # Countable, not just loggable. The response - id header and all - left
+        # before this ran, so a failure here has no request-level status to ride
+        # on: without this row the cache simply stops filling and the only trace
+        # is the ERROR line above.
+        record_store_failure(
+            workspace=tenant_id,
+            namespace=cache_namespace,
+            doc_id=doc_id,
+            error_type=type(exc).__name__,
+        )
+        # A TypeError/AttributeError here is OUR bug, not a runtime condition -
+        # a signature mismatch (48db1e9) sat behind this handler as a plain
+        # `status=failed` line until a test happened to check what was written.
+        # An unreachable ChromaDB is still tolerated: the answer already reached
+        # the user, and re-raising it would only add noise to a transient outage.
+        if isinstance(exc, _PROGRAMMING_ERRORS):
+            raise
 
 
 async def _increment_hit_count_bg(namespace: str, doc_id: str) -> None:

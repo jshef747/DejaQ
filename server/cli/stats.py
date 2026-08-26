@@ -100,7 +100,27 @@ def run() -> None:
     console = Console()
     console.print(table)
     console.print()
+    # Before the Cache Health panel, which returns early when ChromaDB is
+    # unreachable - the exact outage that produces these failures.
+    _print_store_failures(console, workspace_report.total.store_failures)
     _print_cache_health(console, db_path)
+
+
+def _print_store_failures(console: Console, store_failures: int) -> None:
+    """Report answers that reached the user but never reached the cache.
+
+    The background store runs after the response - response_id header and all -
+    has gone out, so a failed write has no request-level status to ride on and
+    used to leave one ERROR line in the log as its only trace. Any non-zero
+    count is a defect or an outage, never normal traffic.
+    """
+    if not store_failures:
+        return
+    console.print(
+        f"[red]Failed cache writes:[/red] {store_failures}  "
+        "[dim]answers served but not stored - see the ERROR lines in the server log[/dim]"
+    )
+    console.print()
 
 
 def _print_cache_health(console: Console, db_path: str) -> None:

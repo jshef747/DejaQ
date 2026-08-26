@@ -28,6 +28,24 @@ CREATE TABLE IF NOT EXISTS requests (
 )
 """
 
+# A cache write that never landed. The response has already gone out by the
+# time the background store runs, so this failure has no request-level status
+# to ride on and used to leave exactly one ERROR line in the log behind. Its own
+# table rather than a `requests` column: the store outcome arrives after the
+# request row is written (fire-and-forget), the same response_id can belong to
+# more than one request row, and a failure that happens in the Celery worker has
+# no request row of its own to update at all.
+_CREATE_CACHE_STORE_FAILURES_TABLE = """
+CREATE TABLE IF NOT EXISTS cache_store_failures (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          TEXT    NOT NULL,
+    workspace   TEXT    NOT NULL,
+    namespace   TEXT    NOT NULL,
+    doc_id      TEXT    NOT NULL,
+    error_type  TEXT    NOT NULL
+)
+"""
+
 _CREATE_FEEDBACK_TABLE = """
 CREATE TABLE IF NOT EXISTS feedback_log (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,6 +90,8 @@ _CREATE_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_requests_interaction_id ON requests(interaction_id)",
     "CREATE INDEX IF NOT EXISTS idx_requests_source ON requests(source)",
     "CREATE INDEX IF NOT EXISTS idx_feedback_log_interaction_id ON feedback_log(interaction_id)",
+    "CREATE INDEX IF NOT EXISTS idx_cache_store_failures_ts ON cache_store_failures(ts)",
+    "CREATE INDEX IF NOT EXISTS idx_cache_store_failures_workspace ON cache_store_failures(workspace)",
 )
 
 
@@ -97,9 +117,57 @@ def ensure_stats_schema(con: sqlite3.Connection) -> None:
     """
     con.execute(_CREATE_REQUESTS_TABLE)
     con.execute(_CREATE_FEEDBACK_TABLE)
+    con.execute(_CREATE_CACHE_STORE_FAILURES_TABLE)
+    for statement in _CREATE_INDEXES:
+        con.execute(statement)
     _migrate_table(con, "requests", _REQUEST_COLUMNS)
     _migrate_table(con, "feedback_log", _FEEDBACK_COLUMNS)
     con.commit()
+
+
+def record_store_failure(
+    *,
+    workspace: str,
+    namespace: str,
+    doc_id: str,
+    error_type: str,
+) -> None:
+    """Count one cache write that did not land.
+
+    Deliberately synchronous sqlite3 rather than the async RequestLogger: both
+    callers are synchronous - the router's background store runs in Starlette's
+    threadpool, and the Celery task runs in a worker process that never touches
+    this module's aiosqlite connection.
+
+    Workspace-level, not per-department: neither caller carries the department
+    slug (the namespace does, and is recorded here for drill-down, but it is a
+    DB-assigned string this module cannot decompose). Adding one would mean a
+    new positional argument on exactly the two signatures whose last mismatch
+    is the bug this exists to make visible.
+
+    Never raises. A failed write of a failure counter must not replace the
+    failure it was counting.
+    """
+    try:
+        con = sqlite3.connect(STATS_DB_PATH)
+        try:
+            ensure_stats_schema(con)
+            con.execute(
+                "INSERT INTO cache_store_failures (ts, workspace, namespace, doc_id, error_type) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    datetime.now(timezone.utc).isoformat(),
+                    workspace,
+                    namespace,
+                    doc_id,
+                    error_type,
+                ),
+            )
+            con.commit()
+        finally:
+            con.close()
+    except Exception:
+        logger.warning("Could not record cache store failure", exc_info=True)
 
 
 class RequestLogger:

@@ -56,7 +56,20 @@ def _models(value: str | None) -> list[str]:
     return sorted(model for model in (value or "").split(",") if model)
 
 
-def _metrics(row) -> StatsMetrics:
+def _store_failures(con: sqlite3.Connection, where_clause: str, params: list) -> int:
+    """Count cache writes that failed in the same window as the report.
+
+    Its own query rather than a column on the `requests` aggregate: a store
+    failure is recorded after (and sometimes in a different process from) the
+    request row it belongs to, so there is no row to join it onto.
+    """
+    row = con.execute(
+        f"SELECT COUNT(*) FROM cache_store_failures {where_clause}", params
+    ).fetchone()
+    return int(row[0] or 0)
+
+
+def _metrics(row, store_failures: int = 0) -> StatsMetrics:
     requests = int(row[0] or 0)
     hits = int(row[1] or 0)
     misses = int(row[2] or 0)
@@ -83,6 +96,7 @@ def _metrics(row) -> StatsMetrics:
         # guard at openai_compat.py correctly refuses to cache a truncated
         # answer) - this is the only place that failure becomes visible.
         truncation_rate=(truncated / misses if misses else 0.0),
+        store_failures=store_failures,
     )
 
 
@@ -154,14 +168,19 @@ def workspace_stats(
             params,
         ).fetchall()
         total_row = con.execute(_aggregate_sql(where_clause), params).fetchone()
+        failure_rows = con.execute(
+            f"SELECT workspace, COUNT(*) FROM cache_store_failures {where_clause} GROUP BY workspace",
+            params,
+        ).fetchall()
+    failures = {slug: int(count) for slug, count in failure_rows}
 
     items = []
     for row in rows:
         slug = row[0]
-        metrics = _metrics(row[1:])
+        metrics = _metrics(row[1:], store_failures=failures.get(slug, 0))
         items.append(WorkspaceStats(workspace=slug, workspace_name=name_map.get(slug, slug), **metrics.model_dump()))
 
-    return WorkspaceStatsReport(items=items, total=_metrics(total_row))
+    return WorkspaceStatsReport(items=items, total=_metrics(total_row, store_failures=sum(failures.values())))
 
 
 def department_stats(
@@ -192,6 +211,10 @@ def department_stats(
             params,
         ).fetchall()
         total_row = con.execute(_aggregate_sql(where_clause), params).fetchone()
+        # Workspace-level: the failure row carries no department (see
+        # request_logger.record_store_failure), so every department in this
+        # report shows the same workspace-wide count rather than a wrong split.
+        workspace_failures = _store_failures(con, where_clause, params)
 
     dept_name_map = _dept_name_map(workspace_slug)
     items = []
@@ -199,7 +222,7 @@ def department_stats(
         slug = row[0]
         if dept_name_map and slug not in dept_name_map:
             continue
-        metrics = _metrics(row[1:])
+        metrics = _metrics(row[1:], store_failures=workspace_failures)
         items.append(
             DepartmentStats(
                 workspace=workspace_slug,
@@ -208,4 +231,7 @@ def department_stats(
                 **metrics.model_dump(),
             )
         )
-    return DepartmentStatsReport(workspace=workspace_slug, items=items, total=_metrics(total_row))
+    return DepartmentStatsReport(
+        workspace=workspace_slug, items=items,
+        total=_metrics(total_row, store_failures=workspace_failures),
+    )
