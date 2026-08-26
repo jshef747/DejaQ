@@ -103,7 +103,37 @@ Root-caused on `fm/dejaq-acceptance-fixes-2`, direct answer to "why did staging 
 
 ## The lexical alignment gate's mismatch-hint can silently vanish on a punctuation-driven tokenizer quirk, and that also produces a validator false-ACCEPT (not just the false-rejects above)
 
-Opposite failure direction from the entry above: `lexical_match.py`'s tokenizer (`_NON_ALNUM`) used to strip the Hebrew geresh (`׳`, and ASCII `'`) to a space like any other punctuation, so a word like `ניז'ר` (Niger) tokenized as TWO words. Against `ניגריה` (Nigeria), that turns a genuine single-word swap into a 1-vs-2 leftover mismatch, which trips the "only hint on a clean 1-vs-1 swap" suppression heuristic ([[fix1]] on `fm/dejaq-acceptance-fixes`, built for broadly-reworded paraphrases) - so the validator got NO hint at all on a real different-country pair and said VALID (`dejaq-400-reality-test`, distance 0.1795, band tier, model `granite4.1:3b` per `DEJAQ_VALIDATOR_MODEL_NAME`'s actual default - CLAUDE.md's model table still says `gemma_e2b`, see `config.py`). Fixed on `dejaq-200-test-fixes`: keep `'`/`׳` as word-internal characters instead of splitters. Confirmed against the real validator model both ways (VALID before the fix, INVALID with a hint after, same exact pair) and on a built 12-pair EN+HE near-identical-proper-noun sweep (Niger/Nigeria, Austria/Australia, Iran/Iraq, Slovakia/Slovenia, Mauritania/Mauritius, Dominica/Dominican Republic): 11/12 siblings correctly rejected post-fix, 8/8 genuine paraphrases still correctly accepted. The one residual miss (Dominica/Dominican Republic) is a genuine multi-word swap, not this tokenizer bug, and is unfixed - see `dejaq-200-test-fixes/report.md`.
+Opposite failure direction from the entry above: `lexical_match.py`'s tokenizer (`_NON_ALNUM`) used to strip the Hebrew geresh (`׳`, and ASCII `'`) to a space like any other punctuation, so a word like `ניז'ר` (Niger) tokenized as TWO words. Against `ניגריה` (Nigeria), that turns a genuine single-word swap into a 1-vs-2 leftover mismatch, which trips the "only hint on a clean 1-vs-1 swap" suppression heuristic ([[fix1]] on `fm/dejaq-acceptance-fixes`, built for broadly-reworded paraphrases) - so the validator got NO hint at all on a real different-country pair and said VALID (`dejaq-400-reality-test`, distance 0.1795, band tier, model `granite4.1:3b`, which was `DEJAQ_VALIDATOR_MODEL_NAME`'s default at the time; the default is `gemma_e2b` again as of 2026-08-26, matching CLAUDE.md's model table). Fixed on `dejaq-200-test-fixes`: keep `'`/`׳` as word-internal characters instead of splitters. Confirmed against the real validator model both ways (VALID before the fix, INVALID with a hint after, same exact pair) and on a built 12-pair EN+HE near-identical-proper-noun sweep (Niger/Nigeria, Austria/Australia, Iran/Iraq, Slovakia/Slovenia, Mauritania/Mauritius, Dominica/Dominican Republic): 11/12 siblings correctly rejected post-fix, 8/8 genuine paraphrases still correctly accepted. The one residual miss (Dominica/Dominican Republic) is a genuine multi-word swap, not this tokenizer bug, and is unfixed - see `dejaq-200-test-fixes/report.md`.
+
+## The validator's 300-pair eval set does not predict referential follow-ups; run both corpora
+
+`evals/validator` has two populations and they rank models differently. The original 300 pairs
+(`dataset/pairs*.json` minus the follow-up file) are standalone questions; `pairs_follow_up_fragment.json`
+(112 pairs) is referential fragments - "what's the difference?", "how so?", "and the other one?" - which
+is what the validator actually receives, because `openai_compat.py` passes the raw `user_query`, not the
+enriched question. Measured 2026-08-26 through the shipped `ValidatorService`: `gemma4:e4b` scores
+300/300 on the old set and 82/112 (73.2%) on the new one; `granite4.1:3b` 266/300 and the same 82/112;
+`gemma4:e2b` 281/300 and 96/112 (85.7%). The correlation is inverted, so a validator decision made on the
+300-pair set alone will keep picking the wrong model - that is how `granite4.1:3b` shipped as the default
+on 2026-08-21 with no config in `evals/validator/configs/` at all. `server/tests/test_validator_eval_coverage.py`
+now fails if `VALIDATOR_MODEL_NAME` names a model the harness cannot run.
+
+Two harness facts that are not visible from the files: a config with an `"ollama_model"` key runs the real
+`app.services.validator.ValidatorService` against live Ollama (so it inherits production's prompt, few-shots
+and 400-word answer cap, and cannot drift), and it must therefore be run from the **server** venv -
+`cd evals/validator && ../../server/.venv/bin/python -m harness.runner --all-datasets`. The older GGUF
+configs are disabled: each carries its own copy of a system prompt that had drifted from the shipped one.
+
+## Measuring the real cache-hit path needs alias learning off, or the second request is not a hit of the same kind
+
+A validated band hit stores the probe's phrasing as an alias (`DEJAQ_CACHE_ALIAS_ENABLED`), so repeating a
+probe to collect samples turns it into a *trusted* hit that skips the validator entirely - measured 40-64 ms
+instead of ~1,100 ms, which reads as a spectacular result and is really a different code path. Set
+`DEJAQ_CACHE_ALIAS_ENABLED=false` for the run. Two more knobs matter: `DEJAQ_CACHE_TRUST_DISTANCE=0.0` and
+`DEJAQ_VALIDATOR_SKIP_DISTANCE=0.0` force every hit through the validator, otherwise close paraphrases skip
+it. Read the per-step numbers off the server's own `done cache=hit ... steps=...validate:Xms adjust:Yms` log
+line rather than the client's wall clock: `adjust()` dominates the total and is noisy enough (±100 ms
+between identical runs) to swamp the step being measured.
 
 ## Local dev stack gotchas: ChromaDB under a sandboxed shell, and Qwen3 tags ignoring `think:false`
 

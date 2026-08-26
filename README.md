@@ -13,7 +13,7 @@ OpenAI-compatible request
   -> context enrichment
   -> normalization
   -> ChromaDB semantic cache lookup
-     -> hit: cache validator (granite4.1:3b) checks coverage
+     -> hit: cache validator (gemma4:e2b) checks coverage
         -> VALID: context adjuster re-tones cached answer
                   (skipped when there is no tone gap to close)
         -> INVALID: treat as miss

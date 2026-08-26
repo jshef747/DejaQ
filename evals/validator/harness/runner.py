@@ -74,9 +74,79 @@ def build_messages(
     return messages
 
 
+def run_ollama_config(config: dict, pairs: list[dict]) -> list[dict]:
+    """Run a candidate through the SHIPPED ValidatorService against live Ollama.
+
+    This path re-implements nothing: it constructs the production
+    `app.services.validator.ValidatorService` and calls `validate()`, so the
+    system prompt, the few-shots, the 400-word answer cap, `max_tokens=8`,
+    `temperature=0.0` and `num_ctx` are whatever production currently uses.
+
+    That is deliberate. The pre-existing GGUF configs carry their own *copy* of
+    a system prompt that drifted away from the shipped one (8 few-shots and
+    "when in doubt, choose INVALID", against production's 12 and "choose
+    VALID"), so they measure a validator DejaQ does not run. A config on this
+    path cannot drift, because there is nothing to keep in sync.
+
+    Run it from the server virtualenv, which already has the app's deps:
+        server/.venv/bin/python -m harness.runner --configs granite4_1_3b,...
+    """
+    import asyncio
+
+    from harness.parser import parse_verdict
+
+    sys.path.insert(0, str(ROOT.parent.parent / "server"))
+    from app.services.model_backends import OllamaBackend
+    from app.services.validator import ValidatorService
+
+    import app.config as app_config
+
+    logical = config["ollama_model"]
+    logger.info("Running config '%s' through the shipped ValidatorService (%s)",
+                config["name"], logical)
+
+    backend = OllamaBackend(app_config.OLLAMA_URL, timeout_seconds=300.0)
+    validator = ValidatorService(backend, logical)
+
+    async def run() -> list[dict]:
+        # Warm-up: first call pays the model load, which is not a per-pair cost.
+        await validator.validate("what is the capital of france?",
+                                 "What is the capital of France?",
+                                 "The capital of France is Paris.")
+        rows: list[dict] = []
+        for i, pair in enumerate(pairs, 1):
+            start = time.time()
+            _, raw_output = await validator.validate(
+                pair["new_query"], pair["cached_query"], pair["cached_answer"]
+            )
+            latency_ms = (time.time() - start) * 1000
+            predicted_verdict, _ = parse_verdict(raw_output)
+            rows.append({
+                "pair_id": pair["id"],
+                "category": pair["category"],
+                "cached_query": pair["cached_query"],
+                "cached_answer": pair["cached_answer"],
+                "new_query": pair["new_query"],
+                "expected_verdict": pair["expected_verdict"],
+                "predicted_verdict": predicted_verdict,
+                "raw_output": raw_output,
+                "latency_ms": latency_ms,
+                "prefilter_verdict": "",
+                "prefilter_reason": "",
+            })
+            if i % 10 == 0 or i == len(pairs):
+                logger.info("  [%s] %d/%d pairs", config["name"], i, len(pairs))
+        return rows
+
+    return asyncio.run(run())
+
+
 def run_config(config: dict, pairs: list[dict]) -> list[dict]:
     from harness.parser import parse_verdict
     from harness import prefilter as pf_module
+
+    if config.get("ollama_model"):
+        return run_ollama_config(config, pairs)
 
     uses_prefilter = config.get("use_prefilter", False)
     uses_heuristic_only = config.get("heuristic_only", False)

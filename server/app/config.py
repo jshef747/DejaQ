@@ -558,13 +558,42 @@ GENERALIZER_MODEL_NAME = _get_text("DEJAQ_GENERALIZER_MODEL_NAME", "granite4_1_3
 # model that reliably shortens on request, and this role sits on the hot
 # cache-hit path, so it stays.
 CONTEXT_ADJUSTER_MODEL_NAME = _get_text("DEJAQ_CONTEXT_ADJUSTER_MODEL_NAME", "qwen_1_5b")
-# granite4.1:3b: ties gemma_e2b on the broad accuracy set, ~2x faster, never
-# produced an unparseable verdict (unlike two rejected candidates). NOT
-# adopted because it "fixes a named defect" - an independent reconstruction
-# of that defect (dejaq-thread-followup-form-mismatch) found the current
-# model already answers it correctly, so the original claim doesn't hold; the
-# swap rests on speed and equal accuracy alone.
-VALIDATOR_MODEL_NAME = _get_text("DEJAQ_VALIDATOR_MODEL_NAME", "granite4_1_3b")
+# gemma_e2b, restored here after granite4.1:3b held this role from 2026-08-21.
+# The granite swap was justified by a claim that measurement does not support:
+# it does NOT tie gemma_e2b on the broad accuracy set. On the project's own
+# 300-pair corpus (evals/validator/dataset/pairs*.json) granite scores
+# 266/300 88.7% against gemma_e2b's 281/300 93.7%, worse in BOTH error
+# directions, and its whole gap is tone_variant + partial_overlap.
+#
+# The gap that matters is larger. On referential follow-up fragments - "what's
+# the difference?", "how so?", "and the other one?", the shape a real second
+# turn actually takes - the validator is handed the RAW user fragment, not the
+# enriched question (openai_compat.py binds user_query and passes it here), so
+# a contentless fragment gets judged partly by the stored answer's incidental
+# shape. Over a 112-pair corpus of exactly that class
+# (evals/validator/dataset/pairs_follow_up_fragment.json):
+#
+#   granite4.1:3b  73.2%  30/56 false rejections  0/56 false accepts  242ms
+#   gemma_e2b      85.7%  14/56 false rejections  2/56 false accepts  439ms
+#   gemma4:e4b     73.2%  28/56 false rejections  2/56 false accepts  533ms
+#
+# On the 42 contentless fragments that should be served, granite accepts 12
+# and gemma_e2b accepts 28: granite throws away most of the hits the cache
+# exists to serve. gemma_e2b is the only candidate better than granite on BOTH
+# corpora. gemma4:e4b is deliberately NOT adopted despite scoring 300/300 on
+# the 300-pair set - that score does not transfer to this class, where it ties
+# granite for +291ms.
+#
+# The cost is real and accepted, not hidden: +197ms median on the synchronous
+# cache-hit path, and 2 false accepts against granite's 0 - one of them a
+# count trap ("what about the third one?" against an answer naming exactly
+# two). A wrong VALID is the direction that cannot be recovered.
+#
+# Evidence: dejaq-validator-rejects-enriched (the raw-fragment finding) and
+# dejaq-validator-followup-corpus (the 112-pair corpus and 4,152 measured
+# calls). Do not re-decide this role on the 300-pair corpus alone - it is what
+# made the last swap look safe.
+VALIDATOR_MODEL_NAME = _get_text("DEJAQ_VALIDATOR_MODEL_NAME", "gemma_e2b")
 # Cache hits at or below this cosine distance are near-identical to the stored
 # query; skip the validator and serve them directly (the embedding already
 # guarantees the cached answer covers the question).

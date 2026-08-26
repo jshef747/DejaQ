@@ -1,0 +1,2690 @@
+[
+  {
+    "id": "ff_001",
+    "category": "follow_up_fragment",
+    "scenario": "S1",
+    "topic": "consumer finance",
+    "answer_shape": "short_prose",
+    "fragment_type": "contentless",
+    "cached_query": "What is the difference between a debit card and a credit card?",
+    "cached_answer": "A debit card takes the money straight out of your own bank balance the moment you pay, so you can only spend what you already have. A credit card borrows from the card issuer up to an agreed limit and you repay later; if you do not repay in full you are charged interest. Because a credit card is a loan, using it responsibly builds a credit history, and it usually carries stronger fraud protection than a debit card.",
+    "new_query": "what's the difference?",
+    "enriched_query": "What is the difference between a debit card and a credit card for someone who currently only uses a debit card?",
+    "expected_verdict": "VALID",
+    "rationale": "Once 'the difference' is resolved against the previous turn it is exactly the cached question, and every answer shape states the difference in full. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I have always just used my debit card, but my bank keeps offering me a credit card."
+      },
+      {
+        "role": "assistant",
+        "content": "That is a common decision point. The two cards behave quite differently once you look past the fact that both are plastic rectangles you tap at a till."
+      }
+    ]
+  },
+  {
+    "id": "ff_002",
+    "category": "follow_up_fragment",
+    "scenario": "S1",
+    "topic": "consumer finance",
+    "answer_shape": "short_prose",
+    "fragment_type": "contentless",
+    "cached_query": "What is the difference between a debit card and a credit card?",
+    "cached_answer": "A debit card takes the money straight out of your own bank balance the moment you pay, so you can only spend what you already have. A credit card borrows from the card issuer up to an agreed limit and you repay later; if you do not repay in full you are charged interest. Because a credit card is a loan, using it responsibly builds a credit history, and it usually carries stronger fraud protection than a debit card.",
+    "new_query": "and what are the fees on each?",
+    "enriched_query": "What fees does a debit card charge compared with a credit card?",
+    "expected_verdict": "INVALID",
+    "rationale": "A genuinely different question in the same topic. No answer shape states any fee (annual fee, ATM fee, foreign-transaction fee). Interest is not a fee schedule. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I have always just used my debit card, but my bank keeps offering me a credit card."
+      },
+      {
+        "role": "assistant",
+        "content": "That is a common decision point. The two cards behave quite differently once you look past the fact that both are plastic rectangles you tap at a till."
+      }
+    ]
+  },
+  {
+    "id": "ff_003",
+    "category": "follow_up_fragment",
+    "scenario": "S1",
+    "topic": "consumer finance",
+    "answer_shape": "long_prose",
+    "fragment_type": "contentless",
+    "cached_query": "What is the difference between a debit card and a credit card?",
+    "cached_answer": "The core difference is whose money you are spending. A debit card is linked directly to your current account. When you tap it, the amount leaves your own balance within seconds, and if the balance is not there the payment is simply declined. There is no borrowing involved, so there is no interest to pay and no way to run up a debt on the card itself.\n\nA credit card works the other way round. The issuer pays the merchant on your behalf and lends you the amount up to a pre-agreed credit limit. You then get a monthly statement; if you clear it in full by the due date you pay nothing extra, and if you do not, interest accrues on the outstanding balance. Because the card is genuinely a credit product, the issuer reports how you use it, so paying on time steadily builds a credit history that lenders later look at.\n\nThe third practical difference is what happens when something goes wrong. Money spent on a credit card is the issuer's money until you repay it, which is why disputed charges, undelivered goods and fraud are generally easier to reverse on a credit card. On a debit card the money is already gone from your account while the dispute is being investigated.",
+    "new_query": "what's the difference?",
+    "enriched_query": "What is the difference between a debit card and a credit card for someone who currently only uses a debit card?",
+    "expected_verdict": "VALID",
+    "rationale": "Once 'the difference' is resolved against the previous turn it is exactly the cached question, and every answer shape states the difference in full. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I have always just used my debit card, but my bank keeps offering me a credit card."
+      },
+      {
+        "role": "assistant",
+        "content": "That is a common decision point. The two cards behave quite differently once you look past the fact that both are plastic rectangles you tap at a till."
+      }
+    ]
+  },
+  {
+    "id": "ff_004",
+    "category": "follow_up_fragment",
+    "scenario": "S1",
+    "topic": "consumer finance",
+    "answer_shape": "long_prose",
+    "fragment_type": "contentless",
+    "cached_query": "What is the difference between a debit card and a credit card?",
+    "cached_answer": "The core difference is whose money you are spending. A debit card is linked directly to your current account. When you tap it, the amount leaves your own balance within seconds, and if the balance is not there the payment is simply declined. There is no borrowing involved, so there is no interest to pay and no way to run up a debt on the card itself.\n\nA credit card works the other way round. The issuer pays the merchant on your behalf and lends you the amount up to a pre-agreed credit limit. You then get a monthly statement; if you clear it in full by the due date you pay nothing extra, and if you do not, interest accrues on the outstanding balance. Because the card is genuinely a credit product, the issuer reports how you use it, so paying on time steadily builds a credit history that lenders later look at.\n\nThe third practical difference is what happens when something goes wrong. Money spent on a credit card is the issuer's money until you repay it, which is why disputed charges, undelivered goods and fraud are generally easier to reverse on a credit card. On a debit card the money is already gone from your account while the dispute is being investigated.",
+    "new_query": "and what are the fees on each?",
+    "enriched_query": "What fees does a debit card charge compared with a credit card?",
+    "expected_verdict": "INVALID",
+    "rationale": "A genuinely different question in the same topic. No answer shape states any fee (annual fee, ATM fee, foreign-transaction fee). Interest is not a fee schedule. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I have always just used my debit card, but my bank keeps offering me a credit card."
+      },
+      {
+        "role": "assistant",
+        "content": "That is a common decision point. The two cards behave quite differently once you look past the fact that both are plastic rectangles you tap at a till."
+      }
+    ]
+  },
+  {
+    "id": "ff_005",
+    "category": "follow_up_fragment",
+    "scenario": "S1",
+    "topic": "consumer finance",
+    "answer_shape": "prose_table",
+    "fragment_type": "contentless",
+    "cached_query": "What is the difference between a debit card and a credit card?",
+    "cached_answer": "A debit card spends money you already have; a credit card spends the issuer's money and you settle up later. That single distinction drives everything else.\n\n| | Debit card | Credit card |\n| :--- | :--- | :--- |\n| Whose money | Your own current-account balance | Borrowed from the issuer, up to a limit |\n| When it leaves you | Immediately | On the statement due date |\n| Interest | None | Charged on any balance not repaid in full |\n| Credit history | Not reported | Reported; on-time use builds it |\n| Disputed or fraudulent charges | Money already gone while investigated | Issuer's money; easier to reverse |\n",
+    "new_query": "what's the difference?",
+    "enriched_query": "What is the difference between a debit card and a credit card for someone who currently only uses a debit card?",
+    "expected_verdict": "VALID",
+    "rationale": "Once 'the difference' is resolved against the previous turn it is exactly the cached question, and every answer shape states the difference in full. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I have always just used my debit card, but my bank keeps offering me a credit card."
+      },
+      {
+        "role": "assistant",
+        "content": "That is a common decision point. The two cards behave quite differently once you look past the fact that both are plastic rectangles you tap at a till."
+      }
+    ]
+  },
+  {
+    "id": "ff_006",
+    "category": "follow_up_fragment",
+    "scenario": "S1",
+    "topic": "consumer finance",
+    "answer_shape": "prose_table",
+    "fragment_type": "contentless",
+    "cached_query": "What is the difference between a debit card and a credit card?",
+    "cached_answer": "A debit card spends money you already have; a credit card spends the issuer's money and you settle up later. That single distinction drives everything else.\n\n| | Debit card | Credit card |\n| :--- | :--- | :--- |\n| Whose money | Your own current-account balance | Borrowed from the issuer, up to a limit |\n| When it leaves you | Immediately | On the statement due date |\n| Interest | None | Charged on any balance not repaid in full |\n| Credit history | Not reported | Reported; on-time use builds it |\n| Disputed or fraudulent charges | Money already gone while investigated | Issuer's money; easier to reverse |\n",
+    "new_query": "and what are the fees on each?",
+    "enriched_query": "What fees does a debit card charge compared with a credit card?",
+    "expected_verdict": "INVALID",
+    "rationale": "A genuinely different question in the same topic. No answer shape states any fee (annual fee, ATM fee, foreign-transaction fee). Interest is not a fee schedule. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I have always just used my debit card, but my bank keeps offering me a credit card."
+      },
+      {
+        "role": "assistant",
+        "content": "That is a common decision point. The two cards behave quite differently once you look past the fact that both are plastic rectangles you tap at a till."
+      }
+    ]
+  },
+  {
+    "id": "ff_007",
+    "category": "follow_up_fragment",
+    "scenario": "S1",
+    "topic": "consumer finance",
+    "answer_shape": "bullets",
+    "fragment_type": "contentless",
+    "cached_query": "What is the difference between a debit card and a credit card?",
+    "cached_answer": "Debit card:\n- Draws on your own current-account balance, immediately.\n- Declines if the balance is not there; you cannot go into debt on the card.\n- No interest, because nothing is borrowed.\n- Not reported to credit bureaus, so it does not build a credit history.\n- On a disputed charge, the money is out of your account while it is investigated.\n\nCredit card:\n- Borrows from the issuer up to an agreed credit limit.\n- Repaid on a monthly statement; interest applies to anything not cleared in full.\n- Reported to credit bureaus, so on-time use builds a credit history.\n- Stronger fraud and purchase protection, because it is the issuer's money at risk.",
+    "new_query": "what's the difference?",
+    "enriched_query": "What is the difference between a debit card and a credit card for someone who currently only uses a debit card?",
+    "expected_verdict": "VALID",
+    "rationale": "Once 'the difference' is resolved against the previous turn it is exactly the cached question, and every answer shape states the difference in full. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I have always just used my debit card, but my bank keeps offering me a credit card."
+      },
+      {
+        "role": "assistant",
+        "content": "That is a common decision point. The two cards behave quite differently once you look past the fact that both are plastic rectangles you tap at a till."
+      }
+    ]
+  },
+  {
+    "id": "ff_008",
+    "category": "follow_up_fragment",
+    "scenario": "S1",
+    "topic": "consumer finance",
+    "answer_shape": "bullets",
+    "fragment_type": "contentless",
+    "cached_query": "What is the difference between a debit card and a credit card?",
+    "cached_answer": "Debit card:\n- Draws on your own current-account balance, immediately.\n- Declines if the balance is not there; you cannot go into debt on the card.\n- No interest, because nothing is borrowed.\n- Not reported to credit bureaus, so it does not build a credit history.\n- On a disputed charge, the money is out of your account while it is investigated.\n\nCredit card:\n- Borrows from the issuer up to an agreed credit limit.\n- Repaid on a monthly statement; interest applies to anything not cleared in full.\n- Reported to credit bureaus, so on-time use builds a credit history.\n- Stronger fraud and purchase protection, because it is the issuer's money at risk.",
+    "new_query": "and what are the fees on each?",
+    "enriched_query": "What fees does a debit card charge compared with a credit card?",
+    "expected_verdict": "INVALID",
+    "rationale": "A genuinely different question in the same topic. No answer shape states any fee (annual fee, ATM fee, foreign-transaction fee). Interest is not a fee schedule. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I have always just used my debit card, but my bank keeps offering me a credit card."
+      },
+      {
+        "role": "assistant",
+        "content": "That is a common decision point. The two cards behave quite differently once you look past the fact that both are plastic rectangles you tap at a till."
+      }
+    ]
+  },
+  {
+    "id": "ff_009",
+    "category": "follow_up_fragment",
+    "scenario": "S1",
+    "topic": "consumer finance",
+    "answer_shape": "numbered_list",
+    "fragment_type": "contentless",
+    "cached_query": "What is the difference between a debit card and a credit card?",
+    "cached_answer": "1. Source of funds. A debit card spends your own balance; a credit card spends the issuer's money against a credit limit.\n2. Timing. Debit leaves your account at the moment of payment; credit is settled on a monthly statement.\n3. Interest. Debit has none. Credit charges interest on any part of the statement you do not clear in full.\n4. Credit history. Debit use is invisible to lenders; credit-card use is reported, so paying on time builds a record.\n5. Protection. Disputed or fraudulent charges are generally easier to reverse on a credit card, because the money at risk is still the issuer's.",
+    "new_query": "what's the difference?",
+    "enriched_query": "What is the difference between a debit card and a credit card for someone who currently only uses a debit card?",
+    "expected_verdict": "VALID",
+    "rationale": "Once 'the difference' is resolved against the previous turn it is exactly the cached question, and every answer shape states the difference in full. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I have always just used my debit card, but my bank keeps offering me a credit card."
+      },
+      {
+        "role": "assistant",
+        "content": "That is a common decision point. The two cards behave quite differently once you look past the fact that both are plastic rectangles you tap at a till."
+      }
+    ]
+  },
+  {
+    "id": "ff_010",
+    "category": "follow_up_fragment",
+    "scenario": "S1",
+    "topic": "consumer finance",
+    "answer_shape": "numbered_list",
+    "fragment_type": "contentless",
+    "cached_query": "What is the difference between a debit card and a credit card?",
+    "cached_answer": "1. Source of funds. A debit card spends your own balance; a credit card spends the issuer's money against a credit limit.\n2. Timing. Debit leaves your account at the moment of payment; credit is settled on a monthly statement.\n3. Interest. Debit has none. Credit charges interest on any part of the statement you do not clear in full.\n4. Credit history. Debit use is invisible to lenders; credit-card use is reported, so paying on time builds a record.\n5. Protection. Disputed or fraudulent charges are generally easier to reverse on a credit card, because the money at risk is still the issuer's.",
+    "new_query": "and what are the fees on each?",
+    "enriched_query": "What fees does a debit card charge compared with a credit card?",
+    "expected_verdict": "INVALID",
+    "rationale": "A genuinely different question in the same topic. No answer shape states any fee (annual fee, ATM fee, foreign-transaction fee). Interest is not a fee schedule. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I have always just used my debit card, but my bank keeps offering me a credit card."
+      },
+      {
+        "role": "assistant",
+        "content": "That is a common decision point. The two cards behave quite differently once you look past the fact that both are plastic rectangles you tap at a till."
+      }
+    ]
+  },
+  {
+    "id": "ff_011",
+    "category": "follow_up_fragment",
+    "scenario": "S1",
+    "topic": "consumer finance",
+    "answer_shape": "extra_dimensions",
+    "fragment_type": "contentless",
+    "cached_query": "What is the difference between a debit card and a credit card?",
+    "cached_answer": "A debit card spends your own balance at the moment of payment; a credit card borrows from the issuer up to a limit and is settled on a monthly statement, with interest on anything not cleared in full. Because a credit card is a loan, its use is reported to credit bureaus and builds a credit history, and disputed or fraudulent charges are easier to reverse because it is still the issuer's money.\n\nA few further dimensions people run into:\n\nAcceptance abroad. Both work on the same networks, but some overseas merchants accept credit only.\n\nHolds on funds. Hotels and rental firms place an authorisation hold. On a credit card it eats into your limit; on a debit card it freezes real money in your account for days.\n\nBudgeting. A debit card enforces discipline mechanically, since it cannot overspend your balance. A credit card leaves the discipline to you.\n\nIf the card is lost. Both can be frozen from the app, but a debit card's exposure is your live balance, while a credit card's exposure is the unused part of a limit you have not spent yet.",
+    "new_query": "what's the difference?",
+    "enriched_query": "What is the difference between a debit card and a credit card for someone who currently only uses a debit card?",
+    "expected_verdict": "VALID",
+    "rationale": "Once 'the difference' is resolved against the previous turn it is exactly the cached question, and every answer shape states the difference in full. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I have always just used my debit card, but my bank keeps offering me a credit card."
+      },
+      {
+        "role": "assistant",
+        "content": "That is a common decision point. The two cards behave quite differently once you look past the fact that both are plastic rectangles you tap at a till."
+      }
+    ]
+  },
+  {
+    "id": "ff_012",
+    "category": "follow_up_fragment",
+    "scenario": "S1",
+    "topic": "consumer finance",
+    "answer_shape": "extra_dimensions",
+    "fragment_type": "contentless",
+    "cached_query": "What is the difference between a debit card and a credit card?",
+    "cached_answer": "A debit card spends your own balance at the moment of payment; a credit card borrows from the issuer up to a limit and is settled on a monthly statement, with interest on anything not cleared in full. Because a credit card is a loan, its use is reported to credit bureaus and builds a credit history, and disputed or fraudulent charges are easier to reverse because it is still the issuer's money.\n\nA few further dimensions people run into:\n\nAcceptance abroad. Both work on the same networks, but some overseas merchants accept credit only.\n\nHolds on funds. Hotels and rental firms place an authorisation hold. On a credit card it eats into your limit; on a debit card it freezes real money in your account for days.\n\nBudgeting. A debit card enforces discipline mechanically, since it cannot overspend your balance. A credit card leaves the discipline to you.\n\nIf the card is lost. Both can be frozen from the app, but a debit card's exposure is your live balance, while a credit card's exposure is the unused part of a limit you have not spent yet.",
+    "new_query": "and what are the fees on each?",
+    "enriched_query": "What fees does a debit card charge compared with a credit card?",
+    "expected_verdict": "INVALID",
+    "rationale": "A genuinely different question in the same topic. No answer shape states any fee (annual fee, ATM fee, foreign-transaction fee). Interest is not a fee schedule. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I have always just used my debit card, but my bank keeps offering me a credit card."
+      },
+      {
+        "role": "assistant",
+        "content": "That is a common decision point. The two cards behave quite differently once you look past the fact that both are plastic rectangles you tap at a till."
+      }
+    ]
+  },
+  {
+    "id": "ff_013",
+    "category": "follow_up_fragment",
+    "scenario": "S2",
+    "topic": "product support - small appliance",
+    "answer_shape": "short_prose",
+    "fragment_type": "contentless",
+    "cached_query": "What do the error codes E14 and E22 mean on the Bellini Uno espresso machine?",
+    "cached_answer": "E14 means the water tank is empty or not seated properly: refill it and push it back until it clicks. E22 means the grinder has jammed, almost always because oily beans have packed the burrs: switch the machine off at the wall, empty the hopper, brush the burrs clean and switch it back on.",
+    "new_query": "what do those mean?",
+    "enriched_query": "What do the error codes E14 and E22 mean on the Bellini Uno espresso machine?",
+    "expected_verdict": "VALID",
+    "rationale": "'Those' resolves to the two codes named in the previous turn - exactly the cached question. Every shape defines both. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Bellini Uno flashed two codes at me this morning, E14 and E22."
+      },
+      {
+        "role": "assistant",
+        "content": "Both of those are documented codes on that machine rather than a general failure."
+      }
+    ]
+  },
+  {
+    "id": "ff_014",
+    "category": "follow_up_fragment",
+    "scenario": "S2",
+    "topic": "product support - small appliance",
+    "answer_shape": "short_prose",
+    "fragment_type": "contentless",
+    "cached_query": "What do the error codes E14 and E22 mean on the Bellini Uno espresso machine?",
+    "cached_answer": "E14 means the water tank is empty or not seated properly: refill it and push it back until it clicks. E22 means the grinder has jammed, almost always because oily beans have packed the burrs: switch the machine off at the wall, empty the hopper, brush the burrs clean and switch it back on.",
+    "new_query": "and what about E31?",
+    "enriched_query": "What does error code E31 mean on the Bellini Uno espresso machine?",
+    "expected_verdict": "INVALID",
+    "rationale": "A third code no shape mentions. The referent resolves to something outside the answer. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Bellini Uno flashed two codes at me this morning, E14 and E22."
+      },
+      {
+        "role": "assistant",
+        "content": "Both of those are documented codes on that machine rather than a general failure."
+      }
+    ]
+  },
+  {
+    "id": "ff_015",
+    "category": "follow_up_fragment",
+    "scenario": "S2",
+    "topic": "product support - small appliance",
+    "answer_shape": "long_prose",
+    "fragment_type": "contentless",
+    "cached_query": "What do the error codes E14 and E22 mean on the Bellini Uno espresso machine?",
+    "cached_answer": "Both codes are hardware sensor faults rather than software errors, and both clear themselves once the underlying condition is fixed.\n\nE14 is the water code. The machine reads it from a float sensor in the tank, so it fires either when the tank is genuinely empty or when the tank has been put back without seating fully on its valve. Refill the tank to the MAX line and press it home until you feel it click; the code clears on the next brew cycle.\n\nE22 is the grinder code. It fires when the grinder motor draws more current than expected, which in practice means the burrs are jammed. The usual cause is oily dark-roast beans packing into the burr chamber. Turn the machine off at the wall socket, empty the bean hopper, brush the burr chamber out with the supplied brush, and power it back on. The code clears after one successful grind.",
+    "new_query": "what do those mean?",
+    "enriched_query": "What do the error codes E14 and E22 mean on the Bellini Uno espresso machine?",
+    "expected_verdict": "VALID",
+    "rationale": "'Those' resolves to the two codes named in the previous turn - exactly the cached question. Every shape defines both. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Bellini Uno flashed two codes at me this morning, E14 and E22."
+      },
+      {
+        "role": "assistant",
+        "content": "Both of those are documented codes on that machine rather than a general failure."
+      }
+    ]
+  },
+  {
+    "id": "ff_016",
+    "category": "follow_up_fragment",
+    "scenario": "S2",
+    "topic": "product support - small appliance",
+    "answer_shape": "long_prose",
+    "fragment_type": "contentless",
+    "cached_query": "What do the error codes E14 and E22 mean on the Bellini Uno espresso machine?",
+    "cached_answer": "Both codes are hardware sensor faults rather than software errors, and both clear themselves once the underlying condition is fixed.\n\nE14 is the water code. The machine reads it from a float sensor in the tank, so it fires either when the tank is genuinely empty or when the tank has been put back without seating fully on its valve. Refill the tank to the MAX line and press it home until you feel it click; the code clears on the next brew cycle.\n\nE22 is the grinder code. It fires when the grinder motor draws more current than expected, which in practice means the burrs are jammed. The usual cause is oily dark-roast beans packing into the burr chamber. Turn the machine off at the wall socket, empty the bean hopper, brush the burr chamber out with the supplied brush, and power it back on. The code clears after one successful grind.",
+    "new_query": "and what about E31?",
+    "enriched_query": "What does error code E31 mean on the Bellini Uno espresso machine?",
+    "expected_verdict": "INVALID",
+    "rationale": "A third code no shape mentions. The referent resolves to something outside the answer. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Bellini Uno flashed two codes at me this morning, E14 and E22."
+      },
+      {
+        "role": "assistant",
+        "content": "Both of those are documented codes on that machine rather than a general failure."
+      }
+    ]
+  },
+  {
+    "id": "ff_017",
+    "category": "follow_up_fragment",
+    "scenario": "S2",
+    "topic": "product support - small appliance",
+    "answer_shape": "prose_table",
+    "fragment_type": "contentless",
+    "cached_query": "What do the error codes E14 and E22 mean on the Bellini Uno espresso machine?",
+    "cached_answer": "Both are sensor faults and both clear once the cause is fixed.\n\n| Code | Meaning | Fix |\n| :--- | :--- | :--- |\n| E14 | Water tank empty, or not seated on its valve | Refill to MAX and press the tank home until it clicks |\n| E22 | Grinder jammed, usually oily beans packing the burrs | Power off at the wall, empty the hopper, brush the burrs, restart |\n",
+    "new_query": "what do those mean?",
+    "enriched_query": "What do the error codes E14 and E22 mean on the Bellini Uno espresso machine?",
+    "expected_verdict": "VALID",
+    "rationale": "'Those' resolves to the two codes named in the previous turn - exactly the cached question. Every shape defines both. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Bellini Uno flashed two codes at me this morning, E14 and E22."
+      },
+      {
+        "role": "assistant",
+        "content": "Both of those are documented codes on that machine rather than a general failure."
+      }
+    ]
+  },
+  {
+    "id": "ff_018",
+    "category": "follow_up_fragment",
+    "scenario": "S2",
+    "topic": "product support - small appliance",
+    "answer_shape": "prose_table",
+    "fragment_type": "contentless",
+    "cached_query": "What do the error codes E14 and E22 mean on the Bellini Uno espresso machine?",
+    "cached_answer": "Both are sensor faults and both clear once the cause is fixed.\n\n| Code | Meaning | Fix |\n| :--- | :--- | :--- |\n| E14 | Water tank empty, or not seated on its valve | Refill to MAX and press the tank home until it clicks |\n| E22 | Grinder jammed, usually oily beans packing the burrs | Power off at the wall, empty the hopper, brush the burrs, restart |\n",
+    "new_query": "and what about E31?",
+    "enriched_query": "What does error code E31 mean on the Bellini Uno espresso machine?",
+    "expected_verdict": "INVALID",
+    "rationale": "A third code no shape mentions. The referent resolves to something outside the answer. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Bellini Uno flashed two codes at me this morning, E14 and E22."
+      },
+      {
+        "role": "assistant",
+        "content": "Both of those are documented codes on that machine rather than a general failure."
+      }
+    ]
+  },
+  {
+    "id": "ff_019",
+    "category": "follow_up_fragment",
+    "scenario": "S2",
+    "topic": "product support - small appliance",
+    "answer_shape": "bullets",
+    "fragment_type": "contentless",
+    "cached_query": "What do the error codes E14 and E22 mean on the Bellini Uno espresso machine?",
+    "cached_answer": "- **E14 - water tank.** Read from the float sensor in the tank. Fires when the tank is empty or has not been pushed fully onto its valve. Refill to the MAX line and press the tank home until it clicks; the code clears on the next brew.\n- **E22 - grinder jam.** Fires when the grinder motor over-draws current, which means the burrs are packed. Usually caused by oily dark-roast beans. Switch off at the wall, empty the hopper, brush the burr chamber, power back on; the code clears after one successful grind.",
+    "new_query": "what do those mean?",
+    "enriched_query": "What do the error codes E14 and E22 mean on the Bellini Uno espresso machine?",
+    "expected_verdict": "VALID",
+    "rationale": "'Those' resolves to the two codes named in the previous turn - exactly the cached question. Every shape defines both. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Bellini Uno flashed two codes at me this morning, E14 and E22."
+      },
+      {
+        "role": "assistant",
+        "content": "Both of those are documented codes on that machine rather than a general failure."
+      }
+    ]
+  },
+  {
+    "id": "ff_020",
+    "category": "follow_up_fragment",
+    "scenario": "S2",
+    "topic": "product support - small appliance",
+    "answer_shape": "bullets",
+    "fragment_type": "contentless",
+    "cached_query": "What do the error codes E14 and E22 mean on the Bellini Uno espresso machine?",
+    "cached_answer": "- **E14 - water tank.** Read from the float sensor in the tank. Fires when the tank is empty or has not been pushed fully onto its valve. Refill to the MAX line and press the tank home until it clicks; the code clears on the next brew.\n- **E22 - grinder jam.** Fires when the grinder motor over-draws current, which means the burrs are packed. Usually caused by oily dark-roast beans. Switch off at the wall, empty the hopper, brush the burr chamber, power back on; the code clears after one successful grind.",
+    "new_query": "and what about E31?",
+    "enriched_query": "What does error code E31 mean on the Bellini Uno espresso machine?",
+    "expected_verdict": "INVALID",
+    "rationale": "A third code no shape mentions. The referent resolves to something outside the answer. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Bellini Uno flashed two codes at me this morning, E14 and E22."
+      },
+      {
+        "role": "assistant",
+        "content": "Both of those are documented codes on that machine rather than a general failure."
+      }
+    ]
+  },
+  {
+    "id": "ff_021",
+    "category": "follow_up_fragment",
+    "scenario": "S2",
+    "topic": "product support - small appliance",
+    "answer_shape": "numbered_list",
+    "fragment_type": "contentless",
+    "cached_query": "What do the error codes E14 and E22 mean on the Bellini Uno espresso machine?",
+    "cached_answer": "1. E14 - water tank empty or not seated. The float sensor in the tank has stopped reading water.\n2. Fix for E14: refill to the MAX line, then press the tank back until it clicks onto its valve. The code clears on the next brew.\n3. E22 - grinder jammed. The grinder motor is over-drawing current because the burrs are packed, usually with oily dark-roast beans.\n4. Fix for E22: switch off at the wall socket, empty the bean hopper, brush the burr chamber with the supplied brush, then power back on. The code clears after one successful grind.",
+    "new_query": "what do those mean?",
+    "enriched_query": "What do the error codes E14 and E22 mean on the Bellini Uno espresso machine?",
+    "expected_verdict": "VALID",
+    "rationale": "'Those' resolves to the two codes named in the previous turn - exactly the cached question. Every shape defines both. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Bellini Uno flashed two codes at me this morning, E14 and E22."
+      },
+      {
+        "role": "assistant",
+        "content": "Both of those are documented codes on that machine rather than a general failure."
+      }
+    ]
+  },
+  {
+    "id": "ff_022",
+    "category": "follow_up_fragment",
+    "scenario": "S2",
+    "topic": "product support - small appliance",
+    "answer_shape": "numbered_list",
+    "fragment_type": "contentless",
+    "cached_query": "What do the error codes E14 and E22 mean on the Bellini Uno espresso machine?",
+    "cached_answer": "1. E14 - water tank empty or not seated. The float sensor in the tank has stopped reading water.\n2. Fix for E14: refill to the MAX line, then press the tank back until it clicks onto its valve. The code clears on the next brew.\n3. E22 - grinder jammed. The grinder motor is over-drawing current because the burrs are packed, usually with oily dark-roast beans.\n4. Fix for E22: switch off at the wall socket, empty the bean hopper, brush the burr chamber with the supplied brush, then power back on. The code clears after one successful grind.",
+    "new_query": "and what about E31?",
+    "enriched_query": "What does error code E31 mean on the Bellini Uno espresso machine?",
+    "expected_verdict": "INVALID",
+    "rationale": "A third code no shape mentions. The referent resolves to something outside the answer. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Bellini Uno flashed two codes at me this morning, E14 and E22."
+      },
+      {
+        "role": "assistant",
+        "content": "Both of those are documented codes on that machine rather than a general failure."
+      }
+    ]
+  },
+  {
+    "id": "ff_023",
+    "category": "follow_up_fragment",
+    "scenario": "S2",
+    "topic": "product support - small appliance",
+    "answer_shape": "extra_dimensions",
+    "fragment_type": "contentless",
+    "cached_query": "What do the error codes E14 and E22 mean on the Bellini Uno espresso machine?",
+    "cached_answer": "E14 is the water-tank code: the float sensor has stopped reading water, either because the tank is empty or because it has not been pressed fully onto its valve. Refill to MAX and push it home until it clicks. E22 is the grinder code: the grinder motor is over-drawing current because the burrs are packed, almost always with oily dark-roast beans. Power off at the wall, empty the hopper, brush the burr chamber, power back on.\n\nSome context around the two codes:\n\nHow often they appear. E14 is by far the most common code on this machine and is almost never a real fault. E22 shows up perhaps once a year on a machine fed oily beans, and never on drier medium roasts.\n\nWhether they self-clear. Both do, once the cause is fixed - neither needs a service reset and neither is stored in the fault log.\n\nWarranty. Neither code voids the warranty, but repeated E22 with visible burr damage is treated as user maintenance rather than a defect.\n\nPrevention. Keeping the tank above the MIN line and using medium roasts rather than very oily dark roasts avoids nearly every occurrence of both.",
+    "new_query": "what do those mean?",
+    "enriched_query": "What do the error codes E14 and E22 mean on the Bellini Uno espresso machine?",
+    "expected_verdict": "VALID",
+    "rationale": "'Those' resolves to the two codes named in the previous turn - exactly the cached question. Every shape defines both. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Bellini Uno flashed two codes at me this morning, E14 and E22."
+      },
+      {
+        "role": "assistant",
+        "content": "Both of those are documented codes on that machine rather than a general failure."
+      }
+    ]
+  },
+  {
+    "id": "ff_024",
+    "category": "follow_up_fragment",
+    "scenario": "S2",
+    "topic": "product support - small appliance",
+    "answer_shape": "extra_dimensions",
+    "fragment_type": "contentless",
+    "cached_query": "What do the error codes E14 and E22 mean on the Bellini Uno espresso machine?",
+    "cached_answer": "E14 is the water-tank code: the float sensor has stopped reading water, either because the tank is empty or because it has not been pressed fully onto its valve. Refill to MAX and push it home until it clicks. E22 is the grinder code: the grinder motor is over-drawing current because the burrs are packed, almost always with oily dark-roast beans. Power off at the wall, empty the hopper, brush the burr chamber, power back on.\n\nSome context around the two codes:\n\nHow often they appear. E14 is by far the most common code on this machine and is almost never a real fault. E22 shows up perhaps once a year on a machine fed oily beans, and never on drier medium roasts.\n\nWhether they self-clear. Both do, once the cause is fixed - neither needs a service reset and neither is stored in the fault log.\n\nWarranty. Neither code voids the warranty, but repeated E22 with visible burr damage is treated as user maintenance rather than a defect.\n\nPrevention. Keeping the tank above the MIN line and using medium roasts rather than very oily dark roasts avoids nearly every occurrence of both.",
+    "new_query": "and what about E31?",
+    "enriched_query": "What does error code E31 mean on the Bellini Uno espresso machine?",
+    "expected_verdict": "INVALID",
+    "rationale": "A third code no shape mentions. The referent resolves to something outside the answer. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Bellini Uno flashed two codes at me this morning, E14 and E22."
+      },
+      {
+        "role": "assistant",
+        "content": "Both of those are documented codes on that machine rather than a general failure."
+      }
+    ]
+  },
+  {
+    "id": "ff_025",
+    "category": "follow_up_fragment",
+    "scenario": "S3",
+    "topic": "product support - networking hardware",
+    "answer_shape": "short_prose",
+    "fragment_type": "contentless",
+    "cached_query": "How do I reset the Nimbus R7 router to factory settings?",
+    "cached_answer": "With the router powered on, push a straightened paperclip into the recessed RESET pinhole on the back and hold it for ten seconds, until the status LED blinks amber. Release it and let the router reboot, which takes about two minutes. It will come back with the SSID and password printed on the label underneath, and every custom setting - Wi-Fi name, port forwards, guest network - will be gone.",
+    "new_query": "give me the short version",
+    "enriched_query": "In short, how do I reset the Nimbus R7 router to factory settings?",
+    "expected_verdict": "VALID",
+    "rationale": "A depth/tone modifier on the same ask. The validator's TONE rule makes this VALID whenever the answer contains the procedure, which every shape does.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Nimbus R7 is in a weird state and I think I need to wipe it back to how it shipped."
+      },
+      {
+        "role": "assistant",
+        "content": "A factory reset will do that. It is a hardware button rather than a menu item, so it works even when you cannot log into the web interface."
+      }
+    ]
+  },
+  {
+    "id": "ff_026",
+    "category": "follow_up_fragment",
+    "scenario": "S3",
+    "topic": "product support - networking hardware",
+    "answer_shape": "short_prose",
+    "fragment_type": "contentless",
+    "cached_query": "How do I reset the Nimbus R7 router to factory settings?",
+    "cached_answer": "With the router powered on, push a straightened paperclip into the recessed RESET pinhole on the back and hold it for ten seconds, until the status LED blinks amber. Release it and let the router reboot, which takes about two minutes. It will come back with the SSID and password printed on the label underneath, and every custom setting - Wi-Fi name, port forwards, guest network - will be gone.",
+    "new_query": "and how do I undo it?",
+    "enriched_query": "How do I undo a factory reset on the Nimbus R7 router and restore my previous settings?",
+    "expected_verdict": "INVALID",
+    "rationale": "Restoring a saved configuration backup is a different procedure. No shape describes it - they all describe the erase, not the restore. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Nimbus R7 is in a weird state and I think I need to wipe it back to how it shipped."
+      },
+      {
+        "role": "assistant",
+        "content": "A factory reset will do that. It is a hardware button rather than a menu item, so it works even when you cannot log into the web interface."
+      }
+    ]
+  },
+  {
+    "id": "ff_027",
+    "category": "follow_up_fragment",
+    "scenario": "S3",
+    "topic": "product support - networking hardware",
+    "answer_shape": "long_prose",
+    "fragment_type": "contentless",
+    "cached_query": "How do I reset the Nimbus R7 router to factory settings?",
+    "cached_answer": "A factory reset on the R7 is done with the recessed button, not from the web interface, so it works even when you cannot log in.\n\nLeave the router plugged in and powered on. On the back panel, next to the WAN socket, there is a pinhole marked RESET. Straighten a paperclip, push it in until you feel the button click, and hold it there for a full ten seconds. Watch the status LED: it will go from solid white to blinking amber, which is the confirmation that the reset has been accepted. Release the paperclip then.\n\nThe router reboots on its own and takes roughly two minutes to come back. When it does, it is in the state it shipped in: the Wi-Fi network name and password are the ones printed on the label on the underside of the unit, the admin password is back to the default, and everything you configured yourself - a renamed SSID, port forwarding rules, static DHCP leases, the guest network, parental schedules - has been erased.",
+    "new_query": "give me the short version",
+    "enriched_query": "In short, how do I reset the Nimbus R7 router to factory settings?",
+    "expected_verdict": "VALID",
+    "rationale": "A depth/tone modifier on the same ask. The validator's TONE rule makes this VALID whenever the answer contains the procedure, which every shape does.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Nimbus R7 is in a weird state and I think I need to wipe it back to how it shipped."
+      },
+      {
+        "role": "assistant",
+        "content": "A factory reset will do that. It is a hardware button rather than a menu item, so it works even when you cannot log into the web interface."
+      }
+    ]
+  },
+  {
+    "id": "ff_028",
+    "category": "follow_up_fragment",
+    "scenario": "S3",
+    "topic": "product support - networking hardware",
+    "answer_shape": "long_prose",
+    "fragment_type": "contentless",
+    "cached_query": "How do I reset the Nimbus R7 router to factory settings?",
+    "cached_answer": "A factory reset on the R7 is done with the recessed button, not from the web interface, so it works even when you cannot log in.\n\nLeave the router plugged in and powered on. On the back panel, next to the WAN socket, there is a pinhole marked RESET. Straighten a paperclip, push it in until you feel the button click, and hold it there for a full ten seconds. Watch the status LED: it will go from solid white to blinking amber, which is the confirmation that the reset has been accepted. Release the paperclip then.\n\nThe router reboots on its own and takes roughly two minutes to come back. When it does, it is in the state it shipped in: the Wi-Fi network name and password are the ones printed on the label on the underside of the unit, the admin password is back to the default, and everything you configured yourself - a renamed SSID, port forwarding rules, static DHCP leases, the guest network, parental schedules - has been erased.",
+    "new_query": "and how do I undo it?",
+    "enriched_query": "How do I undo a factory reset on the Nimbus R7 router and restore my previous settings?",
+    "expected_verdict": "INVALID",
+    "rationale": "Restoring a saved configuration backup is a different procedure. No shape describes it - they all describe the erase, not the restore. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Nimbus R7 is in a weird state and I think I need to wipe it back to how it shipped."
+      },
+      {
+        "role": "assistant",
+        "content": "A factory reset will do that. It is a hardware button rather than a menu item, so it works even when you cannot log into the web interface."
+      }
+    ]
+  },
+  {
+    "id": "ff_029",
+    "category": "follow_up_fragment",
+    "scenario": "S3",
+    "topic": "product support - networking hardware",
+    "answer_shape": "prose_table",
+    "fragment_type": "contentless",
+    "cached_query": "How do I reset the Nimbus R7 router to factory settings?",
+    "cached_answer": "The reset is done with the recessed RESET pinhole on the back panel, not from the web interface, so it works even if you cannot log in.\n\n| Step | What to do | What you should see |\n| :--- | :--- | :--- |\n| 1 | Leave the router powered on | Status LED solid white |\n| 2 | Push a paperclip into the RESET pinhole and hold 10 seconds | LED changes to blinking amber |\n| 3 | Release and wait | Router reboots, about 2 minutes |\n| 4 | Reconnect | SSID and password are the ones on the label underneath |\n\nEverything you configured yourself - renamed SSID, port forwards, static leases, guest network - is erased by the reset.",
+    "new_query": "give me the short version",
+    "enriched_query": "In short, how do I reset the Nimbus R7 router to factory settings?",
+    "expected_verdict": "VALID",
+    "rationale": "A depth/tone modifier on the same ask. The validator's TONE rule makes this VALID whenever the answer contains the procedure, which every shape does.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Nimbus R7 is in a weird state and I think I need to wipe it back to how it shipped."
+      },
+      {
+        "role": "assistant",
+        "content": "A factory reset will do that. It is a hardware button rather than a menu item, so it works even when you cannot log into the web interface."
+      }
+    ]
+  },
+  {
+    "id": "ff_030",
+    "category": "follow_up_fragment",
+    "scenario": "S3",
+    "topic": "product support - networking hardware",
+    "answer_shape": "prose_table",
+    "fragment_type": "contentless",
+    "cached_query": "How do I reset the Nimbus R7 router to factory settings?",
+    "cached_answer": "The reset is done with the recessed RESET pinhole on the back panel, not from the web interface, so it works even if you cannot log in.\n\n| Step | What to do | What you should see |\n| :--- | :--- | :--- |\n| 1 | Leave the router powered on | Status LED solid white |\n| 2 | Push a paperclip into the RESET pinhole and hold 10 seconds | LED changes to blinking amber |\n| 3 | Release and wait | Router reboots, about 2 minutes |\n| 4 | Reconnect | SSID and password are the ones on the label underneath |\n\nEverything you configured yourself - renamed SSID, port forwards, static leases, guest network - is erased by the reset.",
+    "new_query": "and how do I undo it?",
+    "enriched_query": "How do I undo a factory reset on the Nimbus R7 router and restore my previous settings?",
+    "expected_verdict": "INVALID",
+    "rationale": "Restoring a saved configuration backup is a different procedure. No shape describes it - they all describe the erase, not the restore. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Nimbus R7 is in a weird state and I think I need to wipe it back to how it shipped."
+      },
+      {
+        "role": "assistant",
+        "content": "A factory reset will do that. It is a hardware button rather than a menu item, so it works even when you cannot log into the web interface."
+      }
+    ]
+  },
+  {
+    "id": "ff_031",
+    "category": "follow_up_fragment",
+    "scenario": "S3",
+    "topic": "product support - networking hardware",
+    "answer_shape": "bullets",
+    "fragment_type": "contentless",
+    "cached_query": "How do I reset the Nimbus R7 router to factory settings?",
+    "cached_answer": "- Leave the router plugged in and powered on; the reset is done live.\n- Find the recessed RESET pinhole on the back panel, beside the WAN socket.\n- Push a straightened paperclip in until it clicks and hold for ten seconds.\n- Watch the status LED: solid white changes to blinking amber. That is the confirmation.\n- Release and wait about two minutes for the reboot to finish.\n- Reconnect using the SSID and password printed on the label on the underside.\n- Note that all custom settings - SSID, admin password, port forwards, static DHCP leases, guest network, parental schedules - are erased.",
+    "new_query": "give me the short version",
+    "enriched_query": "In short, how do I reset the Nimbus R7 router to factory settings?",
+    "expected_verdict": "VALID",
+    "rationale": "A depth/tone modifier on the same ask. The validator's TONE rule makes this VALID whenever the answer contains the procedure, which every shape does.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Nimbus R7 is in a weird state and I think I need to wipe it back to how it shipped."
+      },
+      {
+        "role": "assistant",
+        "content": "A factory reset will do that. It is a hardware button rather than a menu item, so it works even when you cannot log into the web interface."
+      }
+    ]
+  },
+  {
+    "id": "ff_032",
+    "category": "follow_up_fragment",
+    "scenario": "S3",
+    "topic": "product support - networking hardware",
+    "answer_shape": "bullets",
+    "fragment_type": "contentless",
+    "cached_query": "How do I reset the Nimbus R7 router to factory settings?",
+    "cached_answer": "- Leave the router plugged in and powered on; the reset is done live.\n- Find the recessed RESET pinhole on the back panel, beside the WAN socket.\n- Push a straightened paperclip in until it clicks and hold for ten seconds.\n- Watch the status LED: solid white changes to blinking amber. That is the confirmation.\n- Release and wait about two minutes for the reboot to finish.\n- Reconnect using the SSID and password printed on the label on the underside.\n- Note that all custom settings - SSID, admin password, port forwards, static DHCP leases, guest network, parental schedules - are erased.",
+    "new_query": "and how do I undo it?",
+    "enriched_query": "How do I undo a factory reset on the Nimbus R7 router and restore my previous settings?",
+    "expected_verdict": "INVALID",
+    "rationale": "Restoring a saved configuration backup is a different procedure. No shape describes it - they all describe the erase, not the restore. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Nimbus R7 is in a weird state and I think I need to wipe it back to how it shipped."
+      },
+      {
+        "role": "assistant",
+        "content": "A factory reset will do that. It is a hardware button rather than a menu item, so it works even when you cannot log into the web interface."
+      }
+    ]
+  },
+  {
+    "id": "ff_033",
+    "category": "follow_up_fragment",
+    "scenario": "S3",
+    "topic": "product support - networking hardware",
+    "answer_shape": "numbered_list",
+    "fragment_type": "contentless",
+    "cached_query": "How do I reset the Nimbus R7 router to factory settings?",
+    "cached_answer": "1. Leave the router powered on. The reset is performed live, not while unplugged.\n2. Locate the recessed pinhole marked RESET on the back panel, next to the WAN socket.\n3. Push a straightened paperclip in until you feel the button click, and hold it for ten seconds.\n4. Watch the status LED change from solid white to blinking amber, then release.\n5. Wait roughly two minutes while the router reboots by itself.\n6. Reconnect with the SSID and password printed on the label on the underside of the unit; the admin password is back to its default too.\n7. Expect every custom setting to be gone: renamed SSID, port forwards, static DHCP leases, guest network and parental schedules.",
+    "new_query": "give me the short version",
+    "enriched_query": "In short, how do I reset the Nimbus R7 router to factory settings?",
+    "expected_verdict": "VALID",
+    "rationale": "A depth/tone modifier on the same ask. The validator's TONE rule makes this VALID whenever the answer contains the procedure, which every shape does.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Nimbus R7 is in a weird state and I think I need to wipe it back to how it shipped."
+      },
+      {
+        "role": "assistant",
+        "content": "A factory reset will do that. It is a hardware button rather than a menu item, so it works even when you cannot log into the web interface."
+      }
+    ]
+  },
+  {
+    "id": "ff_034",
+    "category": "follow_up_fragment",
+    "scenario": "S3",
+    "topic": "product support - networking hardware",
+    "answer_shape": "numbered_list",
+    "fragment_type": "contentless",
+    "cached_query": "How do I reset the Nimbus R7 router to factory settings?",
+    "cached_answer": "1. Leave the router powered on. The reset is performed live, not while unplugged.\n2. Locate the recessed pinhole marked RESET on the back panel, next to the WAN socket.\n3. Push a straightened paperclip in until you feel the button click, and hold it for ten seconds.\n4. Watch the status LED change from solid white to blinking amber, then release.\n5. Wait roughly two minutes while the router reboots by itself.\n6. Reconnect with the SSID and password printed on the label on the underside of the unit; the admin password is back to its default too.\n7. Expect every custom setting to be gone: renamed SSID, port forwards, static DHCP leases, guest network and parental schedules.",
+    "new_query": "and how do I undo it?",
+    "enriched_query": "How do I undo a factory reset on the Nimbus R7 router and restore my previous settings?",
+    "expected_verdict": "INVALID",
+    "rationale": "Restoring a saved configuration backup is a different procedure. No shape describes it - they all describe the erase, not the restore. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Nimbus R7 is in a weird state and I think I need to wipe it back to how it shipped."
+      },
+      {
+        "role": "assistant",
+        "content": "A factory reset will do that. It is a hardware button rather than a menu item, so it works even when you cannot log into the web interface."
+      }
+    ]
+  },
+  {
+    "id": "ff_035",
+    "category": "follow_up_fragment",
+    "scenario": "S3",
+    "topic": "product support - networking hardware",
+    "answer_shape": "extra_dimensions",
+    "fragment_type": "contentless",
+    "cached_query": "How do I reset the Nimbus R7 router to factory settings?",
+    "cached_answer": "Hold a paperclip in the recessed RESET pinhole on the back panel for ten seconds while the router is powered on, until the status LED goes from solid white to blinking amber. Release, wait about two minutes for the reboot, and reconnect using the SSID and password on the label underneath. Every custom setting - SSID, admin password, port forwards, static DHCP leases, guest network, parental schedules - is erased.\n\nA few related points:\n\nReset versus reboot. A reboot is the power button or a 2-second press of the same pinhole; it clears a hung radio but keeps all settings. Only the 10-second hold is a factory reset. Most connectivity problems are fixed by the reboot.\n\nFirmware. A factory reset does not roll firmware back. Whatever version is installed stays installed.\n\nLED sequence timing. Solid white is normal operation, blinking amber is reset accepted, blinking white is booting, and solid amber for more than five minutes means the boot failed.\n\nWhen it is the right move. Use it after a failed firmware update, when the admin password is lost, or before selling the unit on.",
+    "new_query": "give me the short version",
+    "enriched_query": "In short, how do I reset the Nimbus R7 router to factory settings?",
+    "expected_verdict": "VALID",
+    "rationale": "A depth/tone modifier on the same ask. The validator's TONE rule makes this VALID whenever the answer contains the procedure, which every shape does.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Nimbus R7 is in a weird state and I think I need to wipe it back to how it shipped."
+      },
+      {
+        "role": "assistant",
+        "content": "A factory reset will do that. It is a hardware button rather than a menu item, so it works even when you cannot log into the web interface."
+      }
+    ]
+  },
+  {
+    "id": "ff_036",
+    "category": "follow_up_fragment",
+    "scenario": "S3",
+    "topic": "product support - networking hardware",
+    "answer_shape": "extra_dimensions",
+    "fragment_type": "contentless",
+    "cached_query": "How do I reset the Nimbus R7 router to factory settings?",
+    "cached_answer": "Hold a paperclip in the recessed RESET pinhole on the back panel for ten seconds while the router is powered on, until the status LED goes from solid white to blinking amber. Release, wait about two minutes for the reboot, and reconnect using the SSID and password on the label underneath. Every custom setting - SSID, admin password, port forwards, static DHCP leases, guest network, parental schedules - is erased.\n\nA few related points:\n\nReset versus reboot. A reboot is the power button or a 2-second press of the same pinhole; it clears a hung radio but keeps all settings. Only the 10-second hold is a factory reset. Most connectivity problems are fixed by the reboot.\n\nFirmware. A factory reset does not roll firmware back. Whatever version is installed stays installed.\n\nLED sequence timing. Solid white is normal operation, blinking amber is reset accepted, blinking white is booting, and solid amber for more than five minutes means the boot failed.\n\nWhen it is the right move. Use it after a failed firmware update, when the admin password is lost, or before selling the unit on.",
+    "new_query": "and how do I undo it?",
+    "enriched_query": "How do I undo a factory reset on the Nimbus R7 router and restore my previous settings?",
+    "expected_verdict": "INVALID",
+    "rationale": "Restoring a saved configuration backup is a different procedure. No shape describes it - they all describe the erase, not the restore. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Nimbus R7 is in a weird state and I think I need to wipe it back to how it shipped."
+      },
+      {
+        "role": "assistant",
+        "content": "A factory reset will do that. It is a hardware button rather than a menu item, so it works even when you cannot log into the web interface."
+      }
+    ]
+  },
+  {
+    "id": "ff_037",
+    "category": "follow_up_fragment",
+    "scenario": "S4",
+    "topic": "general science",
+    "answer_shape": "short_prose",
+    "fragment_type": "contentless",
+    "cached_query": "Why do leaves change colour in autumn?",
+    "cached_answer": "As days shorten and nights cool, a tree stops making chlorophyll, the green pigment that dominates a leaf all summer. The existing chlorophyll then breaks down, and the yellow and orange carotenoids that were in the leaf all along stop being masked and become visible. Reds and purples are different: those anthocyanins are made fresh in autumn from sugars trapped in the leaf as the tree seals it off at the base.",
+    "new_query": "how so?",
+    "enriched_query": "How does the autumn pigment change work, that turns green leaves gold and red?",
+    "expected_verdict": "VALID",
+    "rationale": "'How so?' asks for the mechanism behind the previous turn's claim, which is exactly the cached question. Every shape gives the mechanism. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My street is suddenly gold and red and it was all green two weeks ago."
+      },
+      {
+        "role": "assistant",
+        "content": "That is the autumn pigment change, and it is happening faster this year than usual because the nights turned cold quickly."
+      }
+    ]
+  },
+  {
+    "id": "ff_038",
+    "category": "follow_up_fragment",
+    "scenario": "S4",
+    "topic": "general science",
+    "answer_shape": "short_prose",
+    "fragment_type": "contentless",
+    "cached_query": "Why do leaves change colour in autumn?",
+    "cached_answer": "As days shorten and nights cool, a tree stops making chlorophyll, the green pigment that dominates a leaf all summer. The existing chlorophyll then breaks down, and the yellow and orange carotenoids that were in the leaf all along stop being masked and become visible. Reds and purples are different: those anthocyanins are made fresh in autumn from sugars trapped in the leaf as the tree seals it off at the base.",
+    "new_query": "and what about evergreens?",
+    "enriched_query": "Why do evergreen trees not change colour in autumn?",
+    "expected_verdict": "INVALID",
+    "rationale": "Conifers and their needle chemistry are not covered by any shape; the answer is entirely about deciduous leaves. Referent resolves outside the answer. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My street is suddenly gold and red and it was all green two weeks ago."
+      },
+      {
+        "role": "assistant",
+        "content": "That is the autumn pigment change, and it is happening faster this year than usual because the nights turned cold quickly."
+      }
+    ]
+  },
+  {
+    "id": "ff_039",
+    "category": "follow_up_fragment",
+    "scenario": "S4",
+    "topic": "general science",
+    "answer_shape": "long_prose",
+    "fragment_type": "contentless",
+    "cached_query": "Why do leaves change colour in autumn?",
+    "cached_answer": "The colour was always there. Through the growing season a leaf is packed with chlorophyll, which absorbs red and blue light and reflects green, and that green simply overwhelms every other pigment present.\n\nShorter days and cooler nights are the trigger. They tell the tree to stop investing in the leaf, so chlorophyll production halts while the existing chlorophyll keeps degrading as it always did. Within a couple of weeks the green is gone, and the carotenoids - the yellows and oranges that were sitting in the leaf the whole summer, unnoticed - are revealed.\n\nThe reds and purples work differently and are not a reveal at all. Anthocyanins are manufactured in the autumn itself. As the tree builds the abscission layer, a corky seal across the base of the leaf stalk, sugars produced by the last of the photosynthesis are trapped in the leaf, and the tree converts them into anthocyanins. That is why red autumn colour is variable from year to year while yellow is reliable: it depends on how much sugar was trapped and how much sunlight fell on the leaf while it was being sealed off.",
+    "new_query": "how so?",
+    "enriched_query": "How does the autumn pigment change work, that turns green leaves gold and red?",
+    "expected_verdict": "VALID",
+    "rationale": "'How so?' asks for the mechanism behind the previous turn's claim, which is exactly the cached question. Every shape gives the mechanism. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My street is suddenly gold and red and it was all green two weeks ago."
+      },
+      {
+        "role": "assistant",
+        "content": "That is the autumn pigment change, and it is happening faster this year than usual because the nights turned cold quickly."
+      }
+    ]
+  },
+  {
+    "id": "ff_040",
+    "category": "follow_up_fragment",
+    "scenario": "S4",
+    "topic": "general science",
+    "answer_shape": "long_prose",
+    "fragment_type": "contentless",
+    "cached_query": "Why do leaves change colour in autumn?",
+    "cached_answer": "The colour was always there. Through the growing season a leaf is packed with chlorophyll, which absorbs red and blue light and reflects green, and that green simply overwhelms every other pigment present.\n\nShorter days and cooler nights are the trigger. They tell the tree to stop investing in the leaf, so chlorophyll production halts while the existing chlorophyll keeps degrading as it always did. Within a couple of weeks the green is gone, and the carotenoids - the yellows and oranges that were sitting in the leaf the whole summer, unnoticed - are revealed.\n\nThe reds and purples work differently and are not a reveal at all. Anthocyanins are manufactured in the autumn itself. As the tree builds the abscission layer, a corky seal across the base of the leaf stalk, sugars produced by the last of the photosynthesis are trapped in the leaf, and the tree converts them into anthocyanins. That is why red autumn colour is variable from year to year while yellow is reliable: it depends on how much sugar was trapped and how much sunlight fell on the leaf while it was being sealed off.",
+    "new_query": "and what about evergreens?",
+    "enriched_query": "Why do evergreen trees not change colour in autumn?",
+    "expected_verdict": "INVALID",
+    "rationale": "Conifers and their needle chemistry are not covered by any shape; the answer is entirely about deciduous leaves. Referent resolves outside the answer. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My street is suddenly gold and red and it was all green two weeks ago."
+      },
+      {
+        "role": "assistant",
+        "content": "That is the autumn pigment change, and it is happening faster this year than usual because the nights turned cold quickly."
+      }
+    ]
+  },
+  {
+    "id": "ff_041",
+    "category": "follow_up_fragment",
+    "scenario": "S4",
+    "topic": "general science",
+    "answer_shape": "prose_table",
+    "fragment_type": "contentless",
+    "cached_query": "Why do leaves change colour in autumn?",
+    "cached_answer": "Shorter days and cooler nights stop chlorophyll production, the green fades, and what is underneath - or what is newly made - shows through.\n\n| Pigment | Colour | Where it comes from |\n| :--- | :--- | :--- |\n| Chlorophyll | Green | Made all summer; production stops in autumn and it breaks down |\n| Carotenoids | Yellow, orange | Present in the leaf all along, merely unmasked when the green goes |\n| Anthocyanins | Red, purple | Made fresh in autumn from sugars trapped by the abscission layer |\n",
+    "new_query": "how so?",
+    "enriched_query": "How does the autumn pigment change work, that turns green leaves gold and red?",
+    "expected_verdict": "VALID",
+    "rationale": "'How so?' asks for the mechanism behind the previous turn's claim, which is exactly the cached question. Every shape gives the mechanism. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My street is suddenly gold and red and it was all green two weeks ago."
+      },
+      {
+        "role": "assistant",
+        "content": "That is the autumn pigment change, and it is happening faster this year than usual because the nights turned cold quickly."
+      }
+    ]
+  },
+  {
+    "id": "ff_042",
+    "category": "follow_up_fragment",
+    "scenario": "S4",
+    "topic": "general science",
+    "answer_shape": "prose_table",
+    "fragment_type": "contentless",
+    "cached_query": "Why do leaves change colour in autumn?",
+    "cached_answer": "Shorter days and cooler nights stop chlorophyll production, the green fades, and what is underneath - or what is newly made - shows through.\n\n| Pigment | Colour | Where it comes from |\n| :--- | :--- | :--- |\n| Chlorophyll | Green | Made all summer; production stops in autumn and it breaks down |\n| Carotenoids | Yellow, orange | Present in the leaf all along, merely unmasked when the green goes |\n| Anthocyanins | Red, purple | Made fresh in autumn from sugars trapped by the abscission layer |\n",
+    "new_query": "and what about evergreens?",
+    "enriched_query": "Why do evergreen trees not change colour in autumn?",
+    "expected_verdict": "INVALID",
+    "rationale": "Conifers and their needle chemistry are not covered by any shape; the answer is entirely about deciduous leaves. Referent resolves outside the answer. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My street is suddenly gold and red and it was all green two weeks ago."
+      },
+      {
+        "role": "assistant",
+        "content": "That is the autumn pigment change, and it is happening faster this year than usual because the nights turned cold quickly."
+      }
+    ]
+  },
+  {
+    "id": "ff_043",
+    "category": "follow_up_fragment",
+    "scenario": "S4",
+    "topic": "general science",
+    "answer_shape": "bullets",
+    "fragment_type": "contentless",
+    "cached_query": "Why do leaves change colour in autumn?",
+    "cached_answer": "- Shorter days and cooler nights signal the tree to stop making chlorophyll.\n- The chlorophyll already in the leaf continues to break down, so the green fades over a couple of weeks.\n- Carotenoids - yellow and orange - were in the leaf all summer and were simply masked by the green. They are now visible.\n- Anthocyanins - red and purple - are different: they are made fresh in autumn.\n- The tree seals the leaf base with a corky abscission layer, trapping sugars in the leaf, and those sugars are converted into anthocyanins.\n- That is why yellow is reliable each year and red varies with the weather.",
+    "new_query": "how so?",
+    "enriched_query": "How does the autumn pigment change work, that turns green leaves gold and red?",
+    "expected_verdict": "VALID",
+    "rationale": "'How so?' asks for the mechanism behind the previous turn's claim, which is exactly the cached question. Every shape gives the mechanism. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My street is suddenly gold and red and it was all green two weeks ago."
+      },
+      {
+        "role": "assistant",
+        "content": "That is the autumn pigment change, and it is happening faster this year than usual because the nights turned cold quickly."
+      }
+    ]
+  },
+  {
+    "id": "ff_044",
+    "category": "follow_up_fragment",
+    "scenario": "S4",
+    "topic": "general science",
+    "answer_shape": "bullets",
+    "fragment_type": "contentless",
+    "cached_query": "Why do leaves change colour in autumn?",
+    "cached_answer": "- Shorter days and cooler nights signal the tree to stop making chlorophyll.\n- The chlorophyll already in the leaf continues to break down, so the green fades over a couple of weeks.\n- Carotenoids - yellow and orange - were in the leaf all summer and were simply masked by the green. They are now visible.\n- Anthocyanins - red and purple - are different: they are made fresh in autumn.\n- The tree seals the leaf base with a corky abscission layer, trapping sugars in the leaf, and those sugars are converted into anthocyanins.\n- That is why yellow is reliable each year and red varies with the weather.",
+    "new_query": "and what about evergreens?",
+    "enriched_query": "Why do evergreen trees not change colour in autumn?",
+    "expected_verdict": "INVALID",
+    "rationale": "Conifers and their needle chemistry are not covered by any shape; the answer is entirely about deciduous leaves. Referent resolves outside the answer. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My street is suddenly gold and red and it was all green two weeks ago."
+      },
+      {
+        "role": "assistant",
+        "content": "That is the autumn pigment change, and it is happening faster this year than usual because the nights turned cold quickly."
+      }
+    ]
+  },
+  {
+    "id": "ff_045",
+    "category": "follow_up_fragment",
+    "scenario": "S4",
+    "topic": "general science",
+    "answer_shape": "numbered_list",
+    "fragment_type": "contentless",
+    "cached_query": "Why do leaves change colour in autumn?",
+    "cached_answer": "1. Shorter days and cooler nights tell the tree to stop investing in its leaves, so chlorophyll production halts.\n2. The chlorophyll already present keeps degrading, and within about two weeks the green has gone.\n3. Carotenoids, the yellow and orange pigments, were present all summer and were masked by the green. They now become visible.\n4. Meanwhile the tree grows an abscission layer, a corky seal across the base of the leaf stalk.\n5. That seal traps the sugars the leaf is still producing.\n6. The trapped sugars are converted into anthocyanins, which produce the reds and purples - these are newly made, not revealed.",
+    "new_query": "how so?",
+    "enriched_query": "How does the autumn pigment change work, that turns green leaves gold and red?",
+    "expected_verdict": "VALID",
+    "rationale": "'How so?' asks for the mechanism behind the previous turn's claim, which is exactly the cached question. Every shape gives the mechanism. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My street is suddenly gold and red and it was all green two weeks ago."
+      },
+      {
+        "role": "assistant",
+        "content": "That is the autumn pigment change, and it is happening faster this year than usual because the nights turned cold quickly."
+      }
+    ]
+  },
+  {
+    "id": "ff_046",
+    "category": "follow_up_fragment",
+    "scenario": "S4",
+    "topic": "general science",
+    "answer_shape": "numbered_list",
+    "fragment_type": "contentless",
+    "cached_query": "Why do leaves change colour in autumn?",
+    "cached_answer": "1. Shorter days and cooler nights tell the tree to stop investing in its leaves, so chlorophyll production halts.\n2. The chlorophyll already present keeps degrading, and within about two weeks the green has gone.\n3. Carotenoids, the yellow and orange pigments, were present all summer and were masked by the green. They now become visible.\n4. Meanwhile the tree grows an abscission layer, a corky seal across the base of the leaf stalk.\n5. That seal traps the sugars the leaf is still producing.\n6. The trapped sugars are converted into anthocyanins, which produce the reds and purples - these are newly made, not revealed.",
+    "new_query": "and what about evergreens?",
+    "enriched_query": "Why do evergreen trees not change colour in autumn?",
+    "expected_verdict": "INVALID",
+    "rationale": "Conifers and their needle chemistry are not covered by any shape; the answer is entirely about deciduous leaves. Referent resolves outside the answer. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My street is suddenly gold and red and it was all green two weeks ago."
+      },
+      {
+        "role": "assistant",
+        "content": "That is the autumn pigment change, and it is happening faster this year than usual because the nights turned cold quickly."
+      }
+    ]
+  },
+  {
+    "id": "ff_047",
+    "category": "follow_up_fragment",
+    "scenario": "S4",
+    "topic": "general science",
+    "answer_shape": "extra_dimensions",
+    "fragment_type": "contentless",
+    "cached_query": "Why do leaves change colour in autumn?",
+    "cached_answer": "Shorter days and cooler nights stop chlorophyll production; the green breaks down and fades, unmasking the yellow and orange carotenoids that were in the leaf all summer. Red and purple anthocyanins are different again - they are manufactured in autumn from sugars trapped in the leaf by the corky abscission layer the tree grows across the leaf stalk.\n\nSome further dimensions of the same process:\n\nWhy some years are brighter. A warm sunny autumn with cool but frost-free nights traps the most sugar and gives the strongest reds. A wet, overcast autumn gives a muted year, and an early hard frost ends the display outright.\n\nWhich species do what. Birches and hickories are reliably yellow because they make little anthocyanin. Maples, sumacs and some oaks make a great deal, which is why they carry the red displays.\n\nTiming by latitude and altitude. The change runs from high latitudes and high ground downwards and southwards over about six weeks, tracking night-time temperature rather than the calendar.\n\nWhy the leaf finally falls. Once the abscission layer is complete it severs the vascular connection entirely, and the leaf drops under its own weight or with the first wind.",
+    "new_query": "how so?",
+    "enriched_query": "How does the autumn pigment change work, that turns green leaves gold and red?",
+    "expected_verdict": "VALID",
+    "rationale": "'How so?' asks for the mechanism behind the previous turn's claim, which is exactly the cached question. Every shape gives the mechanism. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My street is suddenly gold and red and it was all green two weeks ago."
+      },
+      {
+        "role": "assistant",
+        "content": "That is the autumn pigment change, and it is happening faster this year than usual because the nights turned cold quickly."
+      }
+    ]
+  },
+  {
+    "id": "ff_048",
+    "category": "follow_up_fragment",
+    "scenario": "S4",
+    "topic": "general science",
+    "answer_shape": "extra_dimensions",
+    "fragment_type": "contentless",
+    "cached_query": "Why do leaves change colour in autumn?",
+    "cached_answer": "Shorter days and cooler nights stop chlorophyll production; the green breaks down and fades, unmasking the yellow and orange carotenoids that were in the leaf all summer. Red and purple anthocyanins are different again - they are manufactured in autumn from sugars trapped in the leaf by the corky abscission layer the tree grows across the leaf stalk.\n\nSome further dimensions of the same process:\n\nWhy some years are brighter. A warm sunny autumn with cool but frost-free nights traps the most sugar and gives the strongest reds. A wet, overcast autumn gives a muted year, and an early hard frost ends the display outright.\n\nWhich species do what. Birches and hickories are reliably yellow because they make little anthocyanin. Maples, sumacs and some oaks make a great deal, which is why they carry the red displays.\n\nTiming by latitude and altitude. The change runs from high latitudes and high ground downwards and southwards over about six weeks, tracking night-time temperature rather than the calendar.\n\nWhy the leaf finally falls. Once the abscission layer is complete it severs the vascular connection entirely, and the leaf drops under its own weight or with the first wind.",
+    "new_query": "and what about evergreens?",
+    "enriched_query": "Why do evergreen trees not change colour in autumn?",
+    "expected_verdict": "INVALID",
+    "rationale": "Conifers and their needle chemistry are not covered by any shape; the answer is entirely about deciduous leaves. Referent resolves outside the answer. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My street is suddenly gold and red and it was all green two weeks ago."
+      },
+      {
+        "role": "assistant",
+        "content": "That is the autumn pigment change, and it is happening faster this year than usual because the nights turned cold quickly."
+      }
+    ]
+  },
+  {
+    "id": "ff_049",
+    "category": "follow_up_fragment",
+    "scenario": "S5",
+    "topic": "consumer security advice",
+    "answer_shape": "short_prose",
+    "fragment_type": "contentless",
+    "cached_query": "Should I use a VPN or a proxy to stay private on public Wi-Fi?",
+    "cached_answer": "Use a VPN. A VPN encrypts everything leaving your device and hides it from whoever runs the network, which is exactly the threat on public Wi-Fi. A proxy only reroutes the traffic of one application and usually does not encrypt it at all, so the cafe network, or anyone sitting on it, can still read what you are doing. A proxy is a reasonable tool for shifting one app's apparent location; it is not a privacy tool.",
+    "new_query": "which is better?",
+    "enriched_query": "Which is better for privacy on public Wi-Fi, a VPN or a proxy?",
+    "expected_verdict": "VALID",
+    "rationale": "'Which' resolves to the two options of the previous turn - the cached question exactly. Every shape states the verdict and the reasoning. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I work from cafes a lot and someone told me I should be running something to protect my traffic."
+      },
+      {
+        "role": "assistant",
+        "content": "There are two things people usually mean by that, and they are not equivalent."
+      }
+    ]
+  },
+  {
+    "id": "ff_050",
+    "category": "follow_up_fragment",
+    "scenario": "S5",
+    "topic": "consumer security advice",
+    "answer_shape": "short_prose",
+    "fragment_type": "contentless",
+    "cached_query": "Should I use a VPN or a proxy to stay private on public Wi-Fi?",
+    "cached_answer": "Use a VPN. A VPN encrypts everything leaving your device and hides it from whoever runs the network, which is exactly the threat on public Wi-Fi. A proxy only reroutes the traffic of one application and usually does not encrypt it at all, so the cafe network, or anyone sitting on it, can still read what you are doing. A proxy is a reasonable tool for shifting one app's apparent location; it is not a privacy tool.",
+    "new_query": "and which one is cheaper?",
+    "enriched_query": "Which is cheaper, a VPN or a proxy?",
+    "expected_verdict": "INVALID",
+    "rationale": "Price is a genuinely different question in the same topic and appears in no shape. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I work from cafes a lot and someone told me I should be running something to protect my traffic."
+      },
+      {
+        "role": "assistant",
+        "content": "There are two things people usually mean by that, and they are not equivalent."
+      }
+    ]
+  },
+  {
+    "id": "ff_051",
+    "category": "follow_up_fragment",
+    "scenario": "S5",
+    "topic": "consumer security advice",
+    "answer_shape": "long_prose",
+    "fragment_type": "contentless",
+    "cached_query": "Should I use a VPN or a proxy to stay private on public Wi-Fi?",
+    "cached_answer": "The right answer depends on what you are defending against, and on public Wi-Fi the thing you are defending against is the network itself.\n\nA VPN builds an encrypted tunnel from your device to a server you choose. Every application's traffic goes through it, and the operator of the coffee-shop access point sees only an opaque stream to a single address. They cannot read the contents, and they cannot see which sites you visit. That is a direct answer to the public Wi-Fi threat model.\n\nA proxy is a much lighter thing. You configure one application - typically a browser - to route its requests through an intermediate server. Two consequences follow. First, only that application is covered; everything else on the device still goes out in the clear. Second, most proxies do no encryption of their own, so the network operator still sees the request contents.\n\nSo for privacy on an untrusted network, a VPN is the correct choice and a proxy is not a substitute. A proxy earns its place elsewhere: making one application appear to be somewhere else, on a network you already trust.",
+    "new_query": "which is better?",
+    "enriched_query": "Which is better for privacy on public Wi-Fi, a VPN or a proxy?",
+    "expected_verdict": "VALID",
+    "rationale": "'Which' resolves to the two options of the previous turn - the cached question exactly. Every shape states the verdict and the reasoning. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I work from cafes a lot and someone told me I should be running something to protect my traffic."
+      },
+      {
+        "role": "assistant",
+        "content": "There are two things people usually mean by that, and they are not equivalent."
+      }
+    ]
+  },
+  {
+    "id": "ff_052",
+    "category": "follow_up_fragment",
+    "scenario": "S5",
+    "topic": "consumer security advice",
+    "answer_shape": "long_prose",
+    "fragment_type": "contentless",
+    "cached_query": "Should I use a VPN or a proxy to stay private on public Wi-Fi?",
+    "cached_answer": "The right answer depends on what you are defending against, and on public Wi-Fi the thing you are defending against is the network itself.\n\nA VPN builds an encrypted tunnel from your device to a server you choose. Every application's traffic goes through it, and the operator of the coffee-shop access point sees only an opaque stream to a single address. They cannot read the contents, and they cannot see which sites you visit. That is a direct answer to the public Wi-Fi threat model.\n\nA proxy is a much lighter thing. You configure one application - typically a browser - to route its requests through an intermediate server. Two consequences follow. First, only that application is covered; everything else on the device still goes out in the clear. Second, most proxies do no encryption of their own, so the network operator still sees the request contents.\n\nSo for privacy on an untrusted network, a VPN is the correct choice and a proxy is not a substitute. A proxy earns its place elsewhere: making one application appear to be somewhere else, on a network you already trust.",
+    "new_query": "and which one is cheaper?",
+    "enriched_query": "Which is cheaper, a VPN or a proxy?",
+    "expected_verdict": "INVALID",
+    "rationale": "Price is a genuinely different question in the same topic and appears in no shape. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I work from cafes a lot and someone told me I should be running something to protect my traffic."
+      },
+      {
+        "role": "assistant",
+        "content": "There are two things people usually mean by that, and they are not equivalent."
+      }
+    ]
+  },
+  {
+    "id": "ff_053",
+    "category": "follow_up_fragment",
+    "scenario": "S5",
+    "topic": "consumer security advice",
+    "answer_shape": "prose_table",
+    "fragment_type": "contentless",
+    "cached_query": "Should I use a VPN or a proxy to stay private on public Wi-Fi?",
+    "cached_answer": "For public Wi-Fi, use a VPN. The threat there is the network operator, and only one of the two actually defends against it.\n\n| | VPN | Proxy |\n| :--- | :--- | :--- |\n| Scope | The whole device, every application | One application you configure |\n| Encryption | Yes, an encrypted tunnel | Usually none |\n| What the Wi-Fi operator sees | An opaque stream to one address | The request contents, in the clear |\n| Right tool for public Wi-Fi | Yes | No |\n| What it is actually for | Privacy on untrusted networks | Making one app appear to be elsewhere |\n",
+    "new_query": "which is better?",
+    "enriched_query": "Which is better for privacy on public Wi-Fi, a VPN or a proxy?",
+    "expected_verdict": "VALID",
+    "rationale": "'Which' resolves to the two options of the previous turn - the cached question exactly. Every shape states the verdict and the reasoning. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I work from cafes a lot and someone told me I should be running something to protect my traffic."
+      },
+      {
+        "role": "assistant",
+        "content": "There are two things people usually mean by that, and they are not equivalent."
+      }
+    ]
+  },
+  {
+    "id": "ff_054",
+    "category": "follow_up_fragment",
+    "scenario": "S5",
+    "topic": "consumer security advice",
+    "answer_shape": "prose_table",
+    "fragment_type": "contentless",
+    "cached_query": "Should I use a VPN or a proxy to stay private on public Wi-Fi?",
+    "cached_answer": "For public Wi-Fi, use a VPN. The threat there is the network operator, and only one of the two actually defends against it.\n\n| | VPN | Proxy |\n| :--- | :--- | :--- |\n| Scope | The whole device, every application | One application you configure |\n| Encryption | Yes, an encrypted tunnel | Usually none |\n| What the Wi-Fi operator sees | An opaque stream to one address | The request contents, in the clear |\n| Right tool for public Wi-Fi | Yes | No |\n| What it is actually for | Privacy on untrusted networks | Making one app appear to be elsewhere |\n",
+    "new_query": "and which one is cheaper?",
+    "enriched_query": "Which is cheaper, a VPN or a proxy?",
+    "expected_verdict": "INVALID",
+    "rationale": "Price is a genuinely different question in the same topic and appears in no shape. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I work from cafes a lot and someone told me I should be running something to protect my traffic."
+      },
+      {
+        "role": "assistant",
+        "content": "There are two things people usually mean by that, and they are not equivalent."
+      }
+    ]
+  },
+  {
+    "id": "ff_055",
+    "category": "follow_up_fragment",
+    "scenario": "S5",
+    "topic": "consumer security advice",
+    "answer_shape": "bullets",
+    "fragment_type": "contentless",
+    "cached_query": "Should I use a VPN or a proxy to stay private on public Wi-Fi?",
+    "cached_answer": "- On public Wi-Fi the adversary is the network itself, so encryption is the requirement.\n- A VPN encrypts all traffic leaving the device, not just one app's.\n- Through a VPN the access-point operator sees only an opaque stream to a single address - not the sites, not the contents.\n- A proxy reroutes only the one application you configure; everything else goes out in the clear.\n- Most proxies do not encrypt, so the network operator can still read the requests.\n- Verdict: use a VPN. A proxy is for geo-shifting a single app on a network you already trust, not for privacy on an untrusted one.",
+    "new_query": "which is better?",
+    "enriched_query": "Which is better for privacy on public Wi-Fi, a VPN or a proxy?",
+    "expected_verdict": "VALID",
+    "rationale": "'Which' resolves to the two options of the previous turn - the cached question exactly. Every shape states the verdict and the reasoning. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I work from cafes a lot and someone told me I should be running something to protect my traffic."
+      },
+      {
+        "role": "assistant",
+        "content": "There are two things people usually mean by that, and they are not equivalent."
+      }
+    ]
+  },
+  {
+    "id": "ff_056",
+    "category": "follow_up_fragment",
+    "scenario": "S5",
+    "topic": "consumer security advice",
+    "answer_shape": "bullets",
+    "fragment_type": "contentless",
+    "cached_query": "Should I use a VPN or a proxy to stay private on public Wi-Fi?",
+    "cached_answer": "- On public Wi-Fi the adversary is the network itself, so encryption is the requirement.\n- A VPN encrypts all traffic leaving the device, not just one app's.\n- Through a VPN the access-point operator sees only an opaque stream to a single address - not the sites, not the contents.\n- A proxy reroutes only the one application you configure; everything else goes out in the clear.\n- Most proxies do not encrypt, so the network operator can still read the requests.\n- Verdict: use a VPN. A proxy is for geo-shifting a single app on a network you already trust, not for privacy on an untrusted one.",
+    "new_query": "and which one is cheaper?",
+    "enriched_query": "Which is cheaper, a VPN or a proxy?",
+    "expected_verdict": "INVALID",
+    "rationale": "Price is a genuinely different question in the same topic and appears in no shape. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I work from cafes a lot and someone told me I should be running something to protect my traffic."
+      },
+      {
+        "role": "assistant",
+        "content": "There are two things people usually mean by that, and they are not equivalent."
+      }
+    ]
+  },
+  {
+    "id": "ff_057",
+    "category": "follow_up_fragment",
+    "scenario": "S5",
+    "topic": "consumer security advice",
+    "answer_shape": "numbered_list",
+    "fragment_type": "contentless",
+    "cached_query": "Should I use a VPN or a proxy to stay private on public Wi-Fi?",
+    "cached_answer": "1. Identify the threat: on public Wi-Fi it is the network operator and anyone else on the same access point.\n2. A VPN encrypts everything leaving the device and tunnels it to a server you choose.\n3. Consequently the access-point operator sees an opaque stream to one address, and neither the sites nor the contents.\n4. A proxy, by contrast, covers only the single application you point at it.\n5. Most proxies add no encryption, so the request contents remain readable on the local network.\n6. Therefore use a VPN for public Wi-Fi. Keep a proxy for making one application appear to be in another country, on a network you already trust.",
+    "new_query": "which is better?",
+    "enriched_query": "Which is better for privacy on public Wi-Fi, a VPN or a proxy?",
+    "expected_verdict": "VALID",
+    "rationale": "'Which' resolves to the two options of the previous turn - the cached question exactly. Every shape states the verdict and the reasoning. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I work from cafes a lot and someone told me I should be running something to protect my traffic."
+      },
+      {
+        "role": "assistant",
+        "content": "There are two things people usually mean by that, and they are not equivalent."
+      }
+    ]
+  },
+  {
+    "id": "ff_058",
+    "category": "follow_up_fragment",
+    "scenario": "S5",
+    "topic": "consumer security advice",
+    "answer_shape": "numbered_list",
+    "fragment_type": "contentless",
+    "cached_query": "Should I use a VPN or a proxy to stay private on public Wi-Fi?",
+    "cached_answer": "1. Identify the threat: on public Wi-Fi it is the network operator and anyone else on the same access point.\n2. A VPN encrypts everything leaving the device and tunnels it to a server you choose.\n3. Consequently the access-point operator sees an opaque stream to one address, and neither the sites nor the contents.\n4. A proxy, by contrast, covers only the single application you point at it.\n5. Most proxies add no encryption, so the request contents remain readable on the local network.\n6. Therefore use a VPN for public Wi-Fi. Keep a proxy for making one application appear to be in another country, on a network you already trust.",
+    "new_query": "and which one is cheaper?",
+    "enriched_query": "Which is cheaper, a VPN or a proxy?",
+    "expected_verdict": "INVALID",
+    "rationale": "Price is a genuinely different question in the same topic and appears in no shape. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I work from cafes a lot and someone told me I should be running something to protect my traffic."
+      },
+      {
+        "role": "assistant",
+        "content": "There are two things people usually mean by that, and they are not equivalent."
+      }
+    ]
+  },
+  {
+    "id": "ff_059",
+    "category": "follow_up_fragment",
+    "scenario": "S5",
+    "topic": "consumer security advice",
+    "answer_shape": "extra_dimensions",
+    "fragment_type": "contentless",
+    "cached_query": "Should I use a VPN or a proxy to stay private on public Wi-Fi?",
+    "cached_answer": "Use a VPN. It encrypts everything leaving the device and hides both the sites and the contents from whoever runs the access point, which is the actual public Wi-Fi threat. A proxy covers only one configured application and usually adds no encryption at all, so it does not address that threat; it is a geo-shifting tool for networks you already trust.\n\nSome adjacent dimensions worth knowing:\n\nSpeed. A VPN adds a hop and encryption overhead, typically costing 10-30 percent of throughput and a few milliseconds of latency. A proxy adds a hop but no crypto, so it is usually faster.\n\nLogging. Both move your trust rather than removing it - you stop trusting the cafe and start trusting the VPN or proxy operator. A published no-logs policy that has been independently audited is the only meaningful distinction between providers.\n\nDNS leaks. A badly configured VPN client can still send DNS queries over the local network, which reveals every domain you visit. Check for DNS leaks after setting one up.\n\nCorporate split tunnelling. Work VPNs often route only company traffic through the tunnel and everything else directly, which means they do not protect your personal browsing on that cafe network at all.",
+    "new_query": "which is better?",
+    "enriched_query": "Which is better for privacy on public Wi-Fi, a VPN or a proxy?",
+    "expected_verdict": "VALID",
+    "rationale": "'Which' resolves to the two options of the previous turn - the cached question exactly. Every shape states the verdict and the reasoning. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I work from cafes a lot and someone told me I should be running something to protect my traffic."
+      },
+      {
+        "role": "assistant",
+        "content": "There are two things people usually mean by that, and they are not equivalent."
+      }
+    ]
+  },
+  {
+    "id": "ff_060",
+    "category": "follow_up_fragment",
+    "scenario": "S5",
+    "topic": "consumer security advice",
+    "answer_shape": "extra_dimensions",
+    "fragment_type": "contentless",
+    "cached_query": "Should I use a VPN or a proxy to stay private on public Wi-Fi?",
+    "cached_answer": "Use a VPN. It encrypts everything leaving the device and hides both the sites and the contents from whoever runs the access point, which is the actual public Wi-Fi threat. A proxy covers only one configured application and usually adds no encryption at all, so it does not address that threat; it is a geo-shifting tool for networks you already trust.\n\nSome adjacent dimensions worth knowing:\n\nSpeed. A VPN adds a hop and encryption overhead, typically costing 10-30 percent of throughput and a few milliseconds of latency. A proxy adds a hop but no crypto, so it is usually faster.\n\nLogging. Both move your trust rather than removing it - you stop trusting the cafe and start trusting the VPN or proxy operator. A published no-logs policy that has been independently audited is the only meaningful distinction between providers.\n\nDNS leaks. A badly configured VPN client can still send DNS queries over the local network, which reveals every domain you visit. Check for DNS leaks after setting one up.\n\nCorporate split tunnelling. Work VPNs often route only company traffic through the tunnel and everything else directly, which means they do not protect your personal browsing on that cafe network at all.",
+    "new_query": "and which one is cheaper?",
+    "enriched_query": "Which is cheaper, a VPN or a proxy?",
+    "expected_verdict": "INVALID",
+    "rationale": "Price is a genuinely different question in the same topic and appears in no shape. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I work from cafes a lot and someone told me I should be running something to protect my traffic."
+      },
+      {
+        "role": "assistant",
+        "content": "There are two things people usually mean by that, and they are not equivalent."
+      }
+    ]
+  },
+  {
+    "id": "ff_061",
+    "category": "follow_up_fragment",
+    "scenario": "S6",
+    "topic": "home improvement / general knowledge",
+    "answer_shape": "short_prose",
+    "fragment_type": "contentless",
+    "cached_query": "What are the two main types of solar panel used on home roofs?",
+    "cached_answer": "The two are monocrystalline and polycrystalline. Monocrystalline panels are cut from a single silicon crystal, look uniformly black, and convert about 20-23 percent of the light that hits them, but they cost more. Polycrystalline panels are cast from many crystals, look blue and speckled, and manage about 15-18 percent, so they need more roof area for the same output - but they are cheaper per panel.",
+    "new_query": "and the other one?",
+    "enriched_query": "What is the second of the two main solar panel types used on home roofs, and how does it compare?",
+    "expected_verdict": "VALID",
+    "rationale": "'The other one' resolves to the second of the two types the cached question is about, and every shape describes both in full. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I'm getting quotes for solar and every installer keeps naming two different panel types."
+      },
+      {
+        "role": "assistant",
+        "content": "Yes - domestic rooftop installations effectively come down to two silicon panel families."
+      }
+    ]
+  },
+  {
+    "id": "ff_062",
+    "category": "follow_up_fragment",
+    "scenario": "S6",
+    "topic": "home improvement / general knowledge",
+    "answer_shape": "short_prose",
+    "fragment_type": "contentless",
+    "cached_query": "What are the two main types of solar panel used on home roofs?",
+    "cached_answer": "The two are monocrystalline and polycrystalline. Monocrystalline panels are cut from a single silicon crystal, look uniformly black, and convert about 20-23 percent of the light that hits them, but they cost more. Polycrystalline panels are cast from many crystals, look blue and speckled, and manage about 15-18 percent, so they need more roof area for the same output - but they are cheaper per panel.",
+    "new_query": "what about the third one?",
+    "enriched_query": "What is the third type of solar panel used on home roofs?",
+    "expected_verdict": "INVALID",
+    "rationale": "Count change. Every shape names exactly two types; thin-film exists but appears nowhere in the answer. The dangerous direction - a model that accepts this serves an answer about two things to a question about a third. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I'm getting quotes for solar and every installer keeps naming two different panel types."
+      },
+      {
+        "role": "assistant",
+        "content": "Yes - domestic rooftop installations effectively come down to two silicon panel families."
+      }
+    ]
+  },
+  {
+    "id": "ff_063",
+    "category": "follow_up_fragment",
+    "scenario": "S6",
+    "topic": "home improvement / general knowledge",
+    "answer_shape": "long_prose",
+    "fragment_type": "contentless",
+    "cached_query": "What are the two main types of solar panel used on home roofs?",
+    "cached_answer": "Almost every domestic rooftop installation uses one of two silicon panel types, and the choice between them is mostly a trade of roof area against price.\n\nMonocrystalline panels are made from wafers cut from a single grown silicon crystal. Because the crystal lattice is continuous, electrons move through it with fewer obstacles, and efficiency lands around 20 to 23 percent. Visually they are uniformly black with rounded cell corners. The manufacturing process wastes a good deal of silicon, which is why they carry the higher price.\n\nPolycrystalline panels are cast: molten silicon is poured into a mould and allowed to solidify into many crystals at once. The grain boundaries between those crystals impede electron flow slightly, so efficiency sits around 15 to 18 percent, and the panels have the familiar blue, speckled appearance. Very little silicon is wasted, so they are cheaper.\n\nIn practice that means monocrystalline wins when roof space is the constraint, and polycrystalline wins when budget is the constraint and there is plenty of unshaded roof to cover.",
+    "new_query": "and the other one?",
+    "enriched_query": "What is the second of the two main solar panel types used on home roofs, and how does it compare?",
+    "expected_verdict": "VALID",
+    "rationale": "'The other one' resolves to the second of the two types the cached question is about, and every shape describes both in full. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I'm getting quotes for solar and every installer keeps naming two different panel types."
+      },
+      {
+        "role": "assistant",
+        "content": "Yes - domestic rooftop installations effectively come down to two silicon panel families."
+      }
+    ]
+  },
+  {
+    "id": "ff_064",
+    "category": "follow_up_fragment",
+    "scenario": "S6",
+    "topic": "home improvement / general knowledge",
+    "answer_shape": "long_prose",
+    "fragment_type": "contentless",
+    "cached_query": "What are the two main types of solar panel used on home roofs?",
+    "cached_answer": "Almost every domestic rooftop installation uses one of two silicon panel types, and the choice between them is mostly a trade of roof area against price.\n\nMonocrystalline panels are made from wafers cut from a single grown silicon crystal. Because the crystal lattice is continuous, electrons move through it with fewer obstacles, and efficiency lands around 20 to 23 percent. Visually they are uniformly black with rounded cell corners. The manufacturing process wastes a good deal of silicon, which is why they carry the higher price.\n\nPolycrystalline panels are cast: molten silicon is poured into a mould and allowed to solidify into many crystals at once. The grain boundaries between those crystals impede electron flow slightly, so efficiency sits around 15 to 18 percent, and the panels have the familiar blue, speckled appearance. Very little silicon is wasted, so they are cheaper.\n\nIn practice that means monocrystalline wins when roof space is the constraint, and polycrystalline wins when budget is the constraint and there is plenty of unshaded roof to cover.",
+    "new_query": "what about the third one?",
+    "enriched_query": "What is the third type of solar panel used on home roofs?",
+    "expected_verdict": "INVALID",
+    "rationale": "Count change. Every shape names exactly two types; thin-film exists but appears nowhere in the answer. The dangerous direction - a model that accepts this serves an answer about two things to a question about a third. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I'm getting quotes for solar and every installer keeps naming two different panel types."
+      },
+      {
+        "role": "assistant",
+        "content": "Yes - domestic rooftop installations effectively come down to two silicon panel families."
+      }
+    ]
+  },
+  {
+    "id": "ff_065",
+    "category": "follow_up_fragment",
+    "scenario": "S6",
+    "topic": "home improvement / general knowledge",
+    "answer_shape": "prose_table",
+    "fragment_type": "contentless",
+    "cached_query": "What are the two main types of solar panel used on home roofs?",
+    "cached_answer": "Domestic rooftops use monocrystalline or polycrystalline silicon panels. The choice trades roof area against price.\n\n| | Monocrystalline | Polycrystalline |\n| :--- | :--- | :--- |\n| Made from | One grown silicon crystal, sliced into wafers | Molten silicon cast into many crystals |\n| Appearance | Uniform black, rounded cell corners | Blue and speckled, square cells |\n| Efficiency | About 20-23% | About 15-18% |\n| Roof area for the same output | Less | More |\n| Price | Higher | Lower |\n",
+    "new_query": "and the other one?",
+    "enriched_query": "What is the second of the two main solar panel types used on home roofs, and how does it compare?",
+    "expected_verdict": "VALID",
+    "rationale": "'The other one' resolves to the second of the two types the cached question is about, and every shape describes both in full. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I'm getting quotes for solar and every installer keeps naming two different panel types."
+      },
+      {
+        "role": "assistant",
+        "content": "Yes - domestic rooftop installations effectively come down to two silicon panel families."
+      }
+    ]
+  },
+  {
+    "id": "ff_066",
+    "category": "follow_up_fragment",
+    "scenario": "S6",
+    "topic": "home improvement / general knowledge",
+    "answer_shape": "prose_table",
+    "fragment_type": "contentless",
+    "cached_query": "What are the two main types of solar panel used on home roofs?",
+    "cached_answer": "Domestic rooftops use monocrystalline or polycrystalline silicon panels. The choice trades roof area against price.\n\n| | Monocrystalline | Polycrystalline |\n| :--- | :--- | :--- |\n| Made from | One grown silicon crystal, sliced into wafers | Molten silicon cast into many crystals |\n| Appearance | Uniform black, rounded cell corners | Blue and speckled, square cells |\n| Efficiency | About 20-23% | About 15-18% |\n| Roof area for the same output | Less | More |\n| Price | Higher | Lower |\n",
+    "new_query": "what about the third one?",
+    "enriched_query": "What is the third type of solar panel used on home roofs?",
+    "expected_verdict": "INVALID",
+    "rationale": "Count change. Every shape names exactly two types; thin-film exists but appears nowhere in the answer. The dangerous direction - a model that accepts this serves an answer about two things to a question about a third. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I'm getting quotes for solar and every installer keeps naming two different panel types."
+      },
+      {
+        "role": "assistant",
+        "content": "Yes - domestic rooftop installations effectively come down to two silicon panel families."
+      }
+    ]
+  },
+  {
+    "id": "ff_067",
+    "category": "follow_up_fragment",
+    "scenario": "S6",
+    "topic": "home improvement / general knowledge",
+    "answer_shape": "bullets",
+    "fragment_type": "contentless",
+    "cached_query": "What are the two main types of solar panel used on home roofs?",
+    "cached_answer": "- **Monocrystalline.** Cut from a single grown silicon crystal, so the lattice is continuous and electrons meet fewer obstacles. Uniform black, rounded cell corners. About 20-23 percent efficient. More silicon is wasted in manufacture, so the price is higher. Best when roof space is limited.\n- **Polycrystalline.** Cast from molten silicon that solidifies into many crystals, whose grain boundaries impede electron flow slightly. Blue and speckled, square cells. About 15-18 percent efficient, so more roof area is needed for the same output. Cheaper per panel. Best when budget is the constraint and roof space is not.",
+    "new_query": "and the other one?",
+    "enriched_query": "What is the second of the two main solar panel types used on home roofs, and how does it compare?",
+    "expected_verdict": "VALID",
+    "rationale": "'The other one' resolves to the second of the two types the cached question is about, and every shape describes both in full. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I'm getting quotes for solar and every installer keeps naming two different panel types."
+      },
+      {
+        "role": "assistant",
+        "content": "Yes - domestic rooftop installations effectively come down to two silicon panel families."
+      }
+    ]
+  },
+  {
+    "id": "ff_068",
+    "category": "follow_up_fragment",
+    "scenario": "S6",
+    "topic": "home improvement / general knowledge",
+    "answer_shape": "bullets",
+    "fragment_type": "contentless",
+    "cached_query": "What are the two main types of solar panel used on home roofs?",
+    "cached_answer": "- **Monocrystalline.** Cut from a single grown silicon crystal, so the lattice is continuous and electrons meet fewer obstacles. Uniform black, rounded cell corners. About 20-23 percent efficient. More silicon is wasted in manufacture, so the price is higher. Best when roof space is limited.\n- **Polycrystalline.** Cast from molten silicon that solidifies into many crystals, whose grain boundaries impede electron flow slightly. Blue and speckled, square cells. About 15-18 percent efficient, so more roof area is needed for the same output. Cheaper per panel. Best when budget is the constraint and roof space is not.",
+    "new_query": "what about the third one?",
+    "enriched_query": "What is the third type of solar panel used on home roofs?",
+    "expected_verdict": "INVALID",
+    "rationale": "Count change. Every shape names exactly two types; thin-film exists but appears nowhere in the answer. The dangerous direction - a model that accepts this serves an answer about two things to a question about a third. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I'm getting quotes for solar and every installer keeps naming two different panel types."
+      },
+      {
+        "role": "assistant",
+        "content": "Yes - domestic rooftop installations effectively come down to two silicon panel families."
+      }
+    ]
+  },
+  {
+    "id": "ff_069",
+    "category": "follow_up_fragment",
+    "scenario": "S6",
+    "topic": "home improvement / general knowledge",
+    "answer_shape": "numbered_list",
+    "fragment_type": "contentless",
+    "cached_query": "What are the two main types of solar panel used on home roofs?",
+    "cached_answer": "1. Monocrystalline. Wafers cut from a single grown silicon crystal.\n2. Its continuous lattice gives about 20-23 percent efficiency, the highest of the two, and a uniform black appearance.\n3. Manufacturing wastes silicon, so monocrystalline carries the higher price, and it is the choice when roof area is limited.\n4. Polycrystalline. Cast from molten silicon that solidifies into many crystals.\n5. Grain boundaries between those crystals cost some performance: about 15-18 percent efficiency, and a blue speckled appearance.\n6. Little silicon is wasted, so polycrystalline is cheaper, and it is the choice when there is ample unshaded roof and budget matters more than area.",
+    "new_query": "and the other one?",
+    "enriched_query": "What is the second of the two main solar panel types used on home roofs, and how does it compare?",
+    "expected_verdict": "VALID",
+    "rationale": "'The other one' resolves to the second of the two types the cached question is about, and every shape describes both in full. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I'm getting quotes for solar and every installer keeps naming two different panel types."
+      },
+      {
+        "role": "assistant",
+        "content": "Yes - domestic rooftop installations effectively come down to two silicon panel families."
+      }
+    ]
+  },
+  {
+    "id": "ff_070",
+    "category": "follow_up_fragment",
+    "scenario": "S6",
+    "topic": "home improvement / general knowledge",
+    "answer_shape": "numbered_list",
+    "fragment_type": "contentless",
+    "cached_query": "What are the two main types of solar panel used on home roofs?",
+    "cached_answer": "1. Monocrystalline. Wafers cut from a single grown silicon crystal.\n2. Its continuous lattice gives about 20-23 percent efficiency, the highest of the two, and a uniform black appearance.\n3. Manufacturing wastes silicon, so monocrystalline carries the higher price, and it is the choice when roof area is limited.\n4. Polycrystalline. Cast from molten silicon that solidifies into many crystals.\n5. Grain boundaries between those crystals cost some performance: about 15-18 percent efficiency, and a blue speckled appearance.\n6. Little silicon is wasted, so polycrystalline is cheaper, and it is the choice when there is ample unshaded roof and budget matters more than area.",
+    "new_query": "what about the third one?",
+    "enriched_query": "What is the third type of solar panel used on home roofs?",
+    "expected_verdict": "INVALID",
+    "rationale": "Count change. Every shape names exactly two types; thin-film exists but appears nowhere in the answer. The dangerous direction - a model that accepts this serves an answer about two things to a question about a third. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I'm getting quotes for solar and every installer keeps naming two different panel types."
+      },
+      {
+        "role": "assistant",
+        "content": "Yes - domestic rooftop installations effectively come down to two silicon panel families."
+      }
+    ]
+  },
+  {
+    "id": "ff_071",
+    "category": "follow_up_fragment",
+    "scenario": "S6",
+    "topic": "home improvement / general knowledge",
+    "answer_shape": "extra_dimensions",
+    "fragment_type": "contentless",
+    "cached_query": "What are the two main types of solar panel used on home roofs?",
+    "cached_answer": "Domestic roofs use two silicon panel types. Monocrystalline is cut from a single grown crystal, looks uniformly black, runs at about 20-23 percent efficiency and costs more. Polycrystalline is cast from many crystals at once, looks blue and speckled, runs at about 15-18 percent and costs less, so it needs more roof area for the same output.\n\nSeveral further dimensions separate them:\n\nTemperature coefficient. Output falls as panels heat up. Monocrystalline typically loses about 0.3 percent per degree above 25C, polycrystalline about 0.4, so the gap widens on a hot roof.\n\nWarranty. Both are usually sold with a 25-year performance warranty, but monocrystalline products more often guarantee a higher end-of-term output figure.\n\nAppearance on the roof. The uniform black of monocrystalline is much less visually obtrusive on a dark roof, which matters for planning consent in conservation areas.\n\nWeight and roof load. Both sit around 18-20 kg per panel, so structural load is rarely the deciding factor between them.",
+    "new_query": "and the other one?",
+    "enriched_query": "What is the second of the two main solar panel types used on home roofs, and how does it compare?",
+    "expected_verdict": "VALID",
+    "rationale": "'The other one' resolves to the second of the two types the cached question is about, and every shape describes both in full. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I'm getting quotes for solar and every installer keeps naming two different panel types."
+      },
+      {
+        "role": "assistant",
+        "content": "Yes - domestic rooftop installations effectively come down to two silicon panel families."
+      }
+    ]
+  },
+  {
+    "id": "ff_072",
+    "category": "follow_up_fragment",
+    "scenario": "S6",
+    "topic": "home improvement / general knowledge",
+    "answer_shape": "extra_dimensions",
+    "fragment_type": "contentless",
+    "cached_query": "What are the two main types of solar panel used on home roofs?",
+    "cached_answer": "Domestic roofs use two silicon panel types. Monocrystalline is cut from a single grown crystal, looks uniformly black, runs at about 20-23 percent efficiency and costs more. Polycrystalline is cast from many crystals at once, looks blue and speckled, runs at about 15-18 percent and costs less, so it needs more roof area for the same output.\n\nSeveral further dimensions separate them:\n\nTemperature coefficient. Output falls as panels heat up. Monocrystalline typically loses about 0.3 percent per degree above 25C, polycrystalline about 0.4, so the gap widens on a hot roof.\n\nWarranty. Both are usually sold with a 25-year performance warranty, but monocrystalline products more often guarantee a higher end-of-term output figure.\n\nAppearance on the roof. The uniform black of monocrystalline is much less visually obtrusive on a dark roof, which matters for planning consent in conservation areas.\n\nWeight and roof load. Both sit around 18-20 kg per panel, so structural load is rarely the deciding factor between them.",
+    "new_query": "what about the third one?",
+    "enriched_query": "What is the third type of solar panel used on home roofs?",
+    "expected_verdict": "INVALID",
+    "rationale": "Count change. Every shape names exactly two types; thin-film exists but appears nowhere in the answer. The dangerous direction - a model that accepts this serves an answer about two things to a question about a third. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I'm getting quotes for solar and every installer keeps naming two different panel types."
+      },
+      {
+        "role": "assistant",
+        "content": "Yes - domestic rooftop installations effectively come down to two silicon panel families."
+      }
+    ]
+  },
+  {
+    "id": "ff_073",
+    "category": "follow_up_fragment",
+    "scenario": "S7",
+    "topic": "workplace security advice",
+    "answer_shape": "short_prose",
+    "fragment_type": "contentless",
+    "cached_query": "Should I turn on two-factor authentication for my work email?",
+    "cached_answer": "Yes. With two-factor authentication switched on, a stolen or reused password is no longer enough to get into the account, and password reuse is how the large majority of account takeovers actually begin. Use an authenticator app rather than SMS codes where you can, because a SIM-swap defeats SMS. Turning it on takes about two minutes in your account settings.",
+    "new_query": "why does that matter?",
+    "enriched_query": "Why does turning on two-factor authentication for a work email account matter?",
+    "expected_verdict": "VALID",
+    "rationale": "'That' resolves to enabling 2FA, and every shape gives the reason it matters - credential stuffing - as its main content. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "IT keeps nagging me to set up 2FA on my work email and I keep putting it off."
+      },
+      {
+        "role": "assistant",
+        "content": "It is worth doing, and the reason is more specific than 'security is good'."
+      }
+    ]
+  },
+  {
+    "id": "ff_074",
+    "category": "follow_up_fragment",
+    "scenario": "S7",
+    "topic": "workplace security advice",
+    "answer_shape": "short_prose",
+    "fragment_type": "contentless",
+    "cached_query": "Should I turn on two-factor authentication for my work email?",
+    "cached_answer": "Yes. With two-factor authentication switched on, a stolen or reused password is no longer enough to get into the account, and password reuse is how the large majority of account takeovers actually begin. Use an authenticator app rather than SMS codes where you can, because a SIM-swap defeats SMS. Turning it on takes about two minutes in your account settings.",
+    "new_query": "and what if I lose my phone?",
+    "enriched_query": "What happens if I lose my phone after turning on two-factor authentication for my work email?",
+    "expected_verdict": "INVALID",
+    "rationale": "Account recovery after losing the second-factor device is a different question. No shape covers backup codes, admin reset or re-enrolment. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "IT keeps nagging me to set up 2FA on my work email and I keep putting it off."
+      },
+      {
+        "role": "assistant",
+        "content": "It is worth doing, and the reason is more specific than 'security is good'."
+      }
+    ]
+  },
+  {
+    "id": "ff_075",
+    "category": "follow_up_fragment",
+    "scenario": "S7",
+    "topic": "workplace security advice",
+    "answer_shape": "long_prose",
+    "fragment_type": "contentless",
+    "cached_query": "Should I turn on two-factor authentication for my work email?",
+    "cached_answer": "Yes, and it is probably the single highest-value security change available to you.\n\nThe reason is what attacks on email accounts actually look like. Very few of them are a determined attacker targeting you specifically. The overwhelming majority are credential stuffing: someone takes a list of email addresses and passwords leaked from an unrelated breach and tries them, automatically, against every service they can. If you have ever reused that password, the attempt succeeds. Two-factor authentication breaks that whole class of attack, because the password on its own no longer opens the account.\n\nNot all second factors are equal. An SMS code is much better than nothing, but it can be intercepted by a SIM-swap, where an attacker persuades your mobile carrier to move your number to their SIM. An authenticator app generates its codes on your device with no network involvement, so there is nothing for the carrier to hand over. Prefer the app.\n\nThe practical cost is small. Enabling it is a two-minute job in the account security settings, and after the initial setup most work systems only re-prompt on a new device or after a set period.",
+    "new_query": "why does that matter?",
+    "enriched_query": "Why does turning on two-factor authentication for a work email account matter?",
+    "expected_verdict": "VALID",
+    "rationale": "'That' resolves to enabling 2FA, and every shape gives the reason it matters - credential stuffing - as its main content. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "IT keeps nagging me to set up 2FA on my work email and I keep putting it off."
+      },
+      {
+        "role": "assistant",
+        "content": "It is worth doing, and the reason is more specific than 'security is good'."
+      }
+    ]
+  },
+  {
+    "id": "ff_076",
+    "category": "follow_up_fragment",
+    "scenario": "S7",
+    "topic": "workplace security advice",
+    "answer_shape": "long_prose",
+    "fragment_type": "contentless",
+    "cached_query": "Should I turn on two-factor authentication for my work email?",
+    "cached_answer": "Yes, and it is probably the single highest-value security change available to you.\n\nThe reason is what attacks on email accounts actually look like. Very few of them are a determined attacker targeting you specifically. The overwhelming majority are credential stuffing: someone takes a list of email addresses and passwords leaked from an unrelated breach and tries them, automatically, against every service they can. If you have ever reused that password, the attempt succeeds. Two-factor authentication breaks that whole class of attack, because the password on its own no longer opens the account.\n\nNot all second factors are equal. An SMS code is much better than nothing, but it can be intercepted by a SIM-swap, where an attacker persuades your mobile carrier to move your number to their SIM. An authenticator app generates its codes on your device with no network involvement, so there is nothing for the carrier to hand over. Prefer the app.\n\nThe practical cost is small. Enabling it is a two-minute job in the account security settings, and after the initial setup most work systems only re-prompt on a new device or after a set period.",
+    "new_query": "and what if I lose my phone?",
+    "enriched_query": "What happens if I lose my phone after turning on two-factor authentication for my work email?",
+    "expected_verdict": "INVALID",
+    "rationale": "Account recovery after losing the second-factor device is a different question. No shape covers backup codes, admin reset or re-enrolment. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "IT keeps nagging me to set up 2FA on my work email and I keep putting it off."
+      },
+      {
+        "role": "assistant",
+        "content": "It is worth doing, and the reason is more specific than 'security is good'."
+      }
+    ]
+  },
+  {
+    "id": "ff_077",
+    "category": "follow_up_fragment",
+    "scenario": "S7",
+    "topic": "workplace security advice",
+    "answer_shape": "prose_table",
+    "fragment_type": "contentless",
+    "cached_query": "Should I turn on two-factor authentication for my work email?",
+    "cached_answer": "Yes - it is the highest-value change available, because it breaks the attack that actually happens: credential stuffing with a password leaked somewhere else.\n\n| | Password only | Password plus second factor |\n| :--- | :--- | :--- |\n| A leaked, reused password | Opens the account | Does not open the account |\n| Credential-stuffing attempts | Succeed if the password matches | Fail |\n| Effort to set up | None | About two minutes in account settings |\n\nChoose an authenticator app over SMS codes where you can: a SIM-swap can move your phone number to an attacker's SIM and with it the SMS codes, whereas an authenticator app generates codes on the device with no network involvement.",
+    "new_query": "why does that matter?",
+    "enriched_query": "Why does turning on two-factor authentication for a work email account matter?",
+    "expected_verdict": "VALID",
+    "rationale": "'That' resolves to enabling 2FA, and every shape gives the reason it matters - credential stuffing - as its main content. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "IT keeps nagging me to set up 2FA on my work email and I keep putting it off."
+      },
+      {
+        "role": "assistant",
+        "content": "It is worth doing, and the reason is more specific than 'security is good'."
+      }
+    ]
+  },
+  {
+    "id": "ff_078",
+    "category": "follow_up_fragment",
+    "scenario": "S7",
+    "topic": "workplace security advice",
+    "answer_shape": "prose_table",
+    "fragment_type": "contentless",
+    "cached_query": "Should I turn on two-factor authentication for my work email?",
+    "cached_answer": "Yes - it is the highest-value change available, because it breaks the attack that actually happens: credential stuffing with a password leaked somewhere else.\n\n| | Password only | Password plus second factor |\n| :--- | :--- | :--- |\n| A leaked, reused password | Opens the account | Does not open the account |\n| Credential-stuffing attempts | Succeed if the password matches | Fail |\n| Effort to set up | None | About two minutes in account settings |\n\nChoose an authenticator app over SMS codes where you can: a SIM-swap can move your phone number to an attacker's SIM and with it the SMS codes, whereas an authenticator app generates codes on the device with no network involvement.",
+    "new_query": "and what if I lose my phone?",
+    "enriched_query": "What happens if I lose my phone after turning on two-factor authentication for my work email?",
+    "expected_verdict": "INVALID",
+    "rationale": "Account recovery after losing the second-factor device is a different question. No shape covers backup codes, admin reset or re-enrolment. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "IT keeps nagging me to set up 2FA on my work email and I keep putting it off."
+      },
+      {
+        "role": "assistant",
+        "content": "It is worth doing, and the reason is more specific than 'security is good'."
+      }
+    ]
+  },
+  {
+    "id": "ff_079",
+    "category": "follow_up_fragment",
+    "scenario": "S7",
+    "topic": "workplace security advice",
+    "answer_shape": "bullets",
+    "fragment_type": "contentless",
+    "cached_query": "Should I turn on two-factor authentication for my work email?",
+    "cached_answer": "- Yes, turn it on. It is the highest-value change available for a work email account.\n- The attack it stops is credential stuffing: leaked passwords from unrelated breaches, replayed automatically against every service.\n- That is how the large majority of account takeovers actually start, not targeted attacks.\n- With a second factor, a correct password on its own no longer opens the account.\n- Prefer an authenticator app to SMS: a SIM-swap moves your number, and the codes with it, to an attacker's SIM.\n- An authenticator app generates codes on your own device, with no carrier involved.\n- Setup takes about two minutes in the account security settings.",
+    "new_query": "why does that matter?",
+    "enriched_query": "Why does turning on two-factor authentication for a work email account matter?",
+    "expected_verdict": "VALID",
+    "rationale": "'That' resolves to enabling 2FA, and every shape gives the reason it matters - credential stuffing - as its main content. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "IT keeps nagging me to set up 2FA on my work email and I keep putting it off."
+      },
+      {
+        "role": "assistant",
+        "content": "It is worth doing, and the reason is more specific than 'security is good'."
+      }
+    ]
+  },
+  {
+    "id": "ff_080",
+    "category": "follow_up_fragment",
+    "scenario": "S7",
+    "topic": "workplace security advice",
+    "answer_shape": "bullets",
+    "fragment_type": "contentless",
+    "cached_query": "Should I turn on two-factor authentication for my work email?",
+    "cached_answer": "- Yes, turn it on. It is the highest-value change available for a work email account.\n- The attack it stops is credential stuffing: leaked passwords from unrelated breaches, replayed automatically against every service.\n- That is how the large majority of account takeovers actually start, not targeted attacks.\n- With a second factor, a correct password on its own no longer opens the account.\n- Prefer an authenticator app to SMS: a SIM-swap moves your number, and the codes with it, to an attacker's SIM.\n- An authenticator app generates codes on your own device, with no carrier involved.\n- Setup takes about two minutes in the account security settings.",
+    "new_query": "and what if I lose my phone?",
+    "enriched_query": "What happens if I lose my phone after turning on two-factor authentication for my work email?",
+    "expected_verdict": "INVALID",
+    "rationale": "Account recovery after losing the second-factor device is a different question. No shape covers backup codes, admin reset or re-enrolment. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "IT keeps nagging me to set up 2FA on my work email and I keep putting it off."
+      },
+      {
+        "role": "assistant",
+        "content": "It is worth doing, and the reason is more specific than 'security is good'."
+      }
+    ]
+  },
+  {
+    "id": "ff_081",
+    "category": "follow_up_fragment",
+    "scenario": "S7",
+    "topic": "workplace security advice",
+    "answer_shape": "numbered_list",
+    "fragment_type": "contentless",
+    "cached_query": "Should I turn on two-factor authentication for my work email?",
+    "cached_answer": "1. Yes - enable it. This is the highest-value single security change for a work email account.\n2. The reason: most account takeovers begin with credential stuffing, where passwords leaked from an unrelated breach are replayed against every service automatically.\n3. If you have ever reused that password, a stuffing attempt succeeds against your account.\n4. Two-factor authentication defeats that entire class of attack, because the password alone no longer opens the account.\n5. Choose an authenticator app over SMS codes: a SIM-swap can move your number to an attacker's SIM and deliver the codes to them.\n6. An authenticator app computes its codes on your device, so the carrier is not involved at all.\n7. Setup takes roughly two minutes in the account security settings.",
+    "new_query": "why does that matter?",
+    "enriched_query": "Why does turning on two-factor authentication for a work email account matter?",
+    "expected_verdict": "VALID",
+    "rationale": "'That' resolves to enabling 2FA, and every shape gives the reason it matters - credential stuffing - as its main content. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "IT keeps nagging me to set up 2FA on my work email and I keep putting it off."
+      },
+      {
+        "role": "assistant",
+        "content": "It is worth doing, and the reason is more specific than 'security is good'."
+      }
+    ]
+  },
+  {
+    "id": "ff_082",
+    "category": "follow_up_fragment",
+    "scenario": "S7",
+    "topic": "workplace security advice",
+    "answer_shape": "numbered_list",
+    "fragment_type": "contentless",
+    "cached_query": "Should I turn on two-factor authentication for my work email?",
+    "cached_answer": "1. Yes - enable it. This is the highest-value single security change for a work email account.\n2. The reason: most account takeovers begin with credential stuffing, where passwords leaked from an unrelated breach are replayed against every service automatically.\n3. If you have ever reused that password, a stuffing attempt succeeds against your account.\n4. Two-factor authentication defeats that entire class of attack, because the password alone no longer opens the account.\n5. Choose an authenticator app over SMS codes: a SIM-swap can move your number to an attacker's SIM and deliver the codes to them.\n6. An authenticator app computes its codes on your device, so the carrier is not involved at all.\n7. Setup takes roughly two minutes in the account security settings.",
+    "new_query": "and what if I lose my phone?",
+    "enriched_query": "What happens if I lose my phone after turning on two-factor authentication for my work email?",
+    "expected_verdict": "INVALID",
+    "rationale": "Account recovery after losing the second-factor device is a different question. No shape covers backup codes, admin reset or re-enrolment. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "IT keeps nagging me to set up 2FA on my work email and I keep putting it off."
+      },
+      {
+        "role": "assistant",
+        "content": "It is worth doing, and the reason is more specific than 'security is good'."
+      }
+    ]
+  },
+  {
+    "id": "ff_083",
+    "category": "follow_up_fragment",
+    "scenario": "S7",
+    "topic": "workplace security advice",
+    "answer_shape": "extra_dimensions",
+    "fragment_type": "contentless",
+    "cached_query": "Should I turn on two-factor authentication for my work email?",
+    "cached_answer": "Yes. Two-factor authentication means a stolen or reused password is no longer enough to open the account, and credential stuffing with passwords leaked elsewhere is how the large majority of account takeovers actually start. Prefer an authenticator app to SMS codes, because a SIM-swap can move your number - and the codes - to an attacker. Setup takes about two minutes in account security settings.\n\nA few adjacent dimensions:\n\nHardware security keys. For staff with elevated access, a FIDO2 key is stronger again: it is cryptographically bound to the site, so it cannot be handed over on a phishing page the way a typed code can.\n\nHow often it re-prompts. Most work systems ask for the second factor on a new device, on a new location, and then on a schedule - typically every 7 to 30 days on a device it already knows.\n\nWhether it slows you down. On a known device the added cost is close to zero, which is why the objection that it will slow the team down rarely survives contact with a pilot group.\n\nAdmin enforcement. Most organisations eventually turn it from optional to mandatory at the tenant level; enabling it yourself now simply means you are not migrated under a deadline later.",
+    "new_query": "why does that matter?",
+    "enriched_query": "Why does turning on two-factor authentication for a work email account matter?",
+    "expected_verdict": "VALID",
+    "rationale": "'That' resolves to enabling 2FA, and every shape gives the reason it matters - credential stuffing - as its main content. VALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "IT keeps nagging me to set up 2FA on my work email and I keep putting it off."
+      },
+      {
+        "role": "assistant",
+        "content": "It is worth doing, and the reason is more specific than 'security is good'."
+      }
+    ]
+  },
+  {
+    "id": "ff_084",
+    "category": "follow_up_fragment",
+    "scenario": "S7",
+    "topic": "workplace security advice",
+    "answer_shape": "extra_dimensions",
+    "fragment_type": "contentless",
+    "cached_query": "Should I turn on two-factor authentication for my work email?",
+    "cached_answer": "Yes. Two-factor authentication means a stolen or reused password is no longer enough to open the account, and credential stuffing with passwords leaked elsewhere is how the large majority of account takeovers actually start. Prefer an authenticator app to SMS codes, because a SIM-swap can move your number - and the codes - to an attacker. Setup takes about two minutes in account security settings.\n\nA few adjacent dimensions:\n\nHardware security keys. For staff with elevated access, a FIDO2 key is stronger again: it is cryptographically bound to the site, so it cannot be handed over on a phishing page the way a typed code can.\n\nHow often it re-prompts. Most work systems ask for the second factor on a new device, on a new location, and then on a schedule - typically every 7 to 30 days on a device it already knows.\n\nWhether it slows you down. On a known device the added cost is close to zero, which is why the objection that it will slow the team down rarely survives contact with a pilot group.\n\nAdmin enforcement. Most organisations eventually turn it from optional to mandatory at the tenant level; enabling it yourself now simply means you are not migrated under a deadline later.",
+    "new_query": "and what if I lose my phone?",
+    "enriched_query": "What happens if I lose my phone after turning on two-factor authentication for my work email?",
+    "expected_verdict": "INVALID",
+    "rationale": "Account recovery after losing the second-factor device is a different question. No shape covers backup codes, admin reset or re-enrolment. INVALID.",
+    "history": [
+      {
+        "role": "user",
+        "content": "IT keeps nagging me to set up 2FA on my work email and I keep putting it off."
+      },
+      {
+        "role": "assistant",
+        "content": "It is worth doing, and the reason is more specific than 'security is good'."
+      }
+    ]
+  },
+  {
+    "id": "ff_085",
+    "category": "follow_up_fragment",
+    "scenario": "S1",
+    "topic": "consumer finance",
+    "answer_shape": "short_prose",
+    "fragment_type": "subject_naming",
+    "cached_query": "What is the difference between a debit card and a credit card?",
+    "cached_answer": "A debit card takes the money straight out of your own bank balance the moment you pay, so you can only spend what you already have. A credit card borrows from the card issuer up to an agreed limit and you repay later; if you do not repay in full you are charged interest. Because a credit card is a loan, using it responsibly builds a credit history, and it usually carries stronger fraud protection than a debit card.",
+    "new_query": "what's the difference between the two cards again?",
+    "enriched_query": "What is the difference between a debit card and a credit card?",
+    "expected_verdict": "VALID",
+    "rationale": "Subject-naming version of the contentless VALID fragment; 'again' is a tone marker only.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I have always just used my debit card, but my bank keeps offering me a credit card."
+      },
+      {
+        "role": "assistant",
+        "content": "That is a common decision point. The two cards behave quite differently once you look past the fact that both are plastic rectangles you tap at a till."
+      }
+    ]
+  },
+  {
+    "id": "ff_086",
+    "category": "follow_up_fragment",
+    "scenario": "S1",
+    "topic": "consumer finance",
+    "answer_shape": "long_prose",
+    "fragment_type": "subject_naming",
+    "cached_query": "What is the difference between a debit card and a credit card?",
+    "cached_answer": "The core difference is whose money you are spending. A debit card is linked directly to your current account. When you tap it, the amount leaves your own balance within seconds, and if the balance is not there the payment is simply declined. There is no borrowing involved, so there is no interest to pay and no way to run up a debt on the card itself.\n\nA credit card works the other way round. The issuer pays the merchant on your behalf and lends you the amount up to a pre-agreed credit limit. You then get a monthly statement; if you clear it in full by the due date you pay nothing extra, and if you do not, interest accrues on the outstanding balance. Because the card is genuinely a credit product, the issuer reports how you use it, so paying on time steadily builds a credit history that lenders later look at.\n\nThe third practical difference is what happens when something goes wrong. Money spent on a credit card is the issuer's money until you repay it, which is why disputed charges, undelivered goods and fraud are generally easier to reverse on a credit card. On a debit card the money is already gone from your account while the dispute is being investigated.",
+    "new_query": "so how does a credit card actually differ from a debit card?",
+    "enriched_query": "How does a credit card differ from a debit card?",
+    "expected_verdict": "VALID",
+    "rationale": "Same ask, subject named, order reversed. The cached answer covers it.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I have always just used my debit card, but my bank keeps offering me a credit card."
+      },
+      {
+        "role": "assistant",
+        "content": "That is a common decision point. The two cards behave quite differently once you look past the fact that both are plastic rectangles you tap at a till."
+      }
+    ]
+  },
+  {
+    "id": "ff_087",
+    "category": "follow_up_fragment",
+    "scenario": "S1",
+    "topic": "consumer finance",
+    "answer_shape": "prose_table",
+    "fragment_type": "subject_naming",
+    "cached_query": "What is the difference between a debit card and a credit card?",
+    "cached_answer": "A debit card spends money you already have; a credit card spends the issuer's money and you settle up later. That single distinction drives everything else.\n\n| | Debit card | Credit card |\n| :--- | :--- | :--- |\n| Whose money | Your own current-account balance | Borrowed from the issuer, up to a limit |\n| When it leaves you | Immediately | On the statement due date |\n| Interest | None | Charged on any balance not repaid in full |\n| Credit history | Not reported | Reported; on-time use builds it |\n| Disputed or fraudulent charges | Money already gone while investigated | Issuer's money; easier to reverse |\n",
+    "new_query": "and what are the fees on a debit card versus a credit card?",
+    "enriched_query": "What are the fees on a debit card compared with a credit card?",
+    "expected_verdict": "INVALID",
+    "rationale": "Subject-naming version of the contentless INVALID fragment. Still uncovered by every shape.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I have always just used my debit card, but my bank keeps offering me a credit card."
+      },
+      {
+        "role": "assistant",
+        "content": "That is a common decision point. The two cards behave quite differently once you look past the fact that both are plastic rectangles you tap at a till."
+      }
+    ]
+  },
+  {
+    "id": "ff_088",
+    "category": "follow_up_fragment",
+    "scenario": "S1",
+    "topic": "consumer finance",
+    "answer_shape": "bullets",
+    "fragment_type": "subject_naming",
+    "cached_query": "What is the difference between a debit card and a credit card?",
+    "cached_answer": "Debit card:\n- Draws on your own current-account balance, immediately.\n- Declines if the balance is not there; you cannot go into debt on the card.\n- No interest, because nothing is borrowed.\n- Not reported to credit bureaus, so it does not build a credit history.\n- On a disputed charge, the money is out of your account while it is investigated.\n\nCredit card:\n- Borrows from the issuer up to an agreed credit limit.\n- Repaid on a monthly statement; interest applies to anything not cleared in full.\n- Reported to credit bureaus, so on-time use builds a credit history.\n- Stronger fraud and purchase protection, because it is the issuer's money at risk.",
+    "new_query": "which of the two cards has better travel insurance?",
+    "enriched_query": "Which has better travel insurance, a debit card or a credit card?",
+    "expected_verdict": "INVALID",
+    "rationale": "Travel insurance is a distinct benefit no shape mentions; 'fraud protection' is not travel insurance.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I have always just used my debit card, but my bank keeps offering me a credit card."
+      },
+      {
+        "role": "assistant",
+        "content": "That is a common decision point. The two cards behave quite differently once you look past the fact that both are plastic rectangles you tap at a till."
+      }
+    ]
+  },
+  {
+    "id": "ff_089",
+    "category": "follow_up_fragment",
+    "scenario": "S2",
+    "topic": "product support - small appliance",
+    "answer_shape": "prose_table",
+    "fragment_type": "subject_naming",
+    "cached_query": "What do the error codes E14 and E22 mean on the Bellini Uno espresso machine?",
+    "cached_answer": "Both are sensor faults and both clear once the cause is fixed.\n\n| Code | Meaning | Fix |\n| :--- | :--- | :--- |\n| E14 | Water tank empty, or not seated on its valve | Refill to MAX and press the tank home until it clicks |\n| E22 | Grinder jammed, usually oily beans packing the burrs | Power off at the wall, empty the hopper, brush the burrs, restart |\n",
+    "new_query": "can you tell me what E14 and E22 mean?",
+    "enriched_query": "What do error codes E14 and E22 mean on the Bellini Uno espresso machine?",
+    "expected_verdict": "VALID",
+    "rationale": "Subject-naming version of the contentless VALID fragment.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Bellini Uno flashed two codes at me this morning, E14 and E22."
+      },
+      {
+        "role": "assistant",
+        "content": "Both of those are documented codes on that machine rather than a general failure."
+      }
+    ]
+  },
+  {
+    "id": "ff_090",
+    "category": "follow_up_fragment",
+    "scenario": "S2",
+    "topic": "product support - small appliance",
+    "answer_shape": "bullets",
+    "fragment_type": "subject_naming",
+    "cached_query": "What do the error codes E14 and E22 mean on the Bellini Uno espresso machine?",
+    "cached_answer": "- **E14 - water tank.** Read from the float sensor in the tank. Fires when the tank is empty or has not been pushed fully onto its valve. Refill to the MAX line and press the tank home until it clicks; the code clears on the next brew.\n- **E22 - grinder jam.** Fires when the grinder motor over-draws current, which means the burrs are packed. Usually caused by oily dark-roast beans. Switch off at the wall, empty the hopper, brush the burr chamber, power back on; the code clears after one successful grind.",
+    "new_query": "what are the E14 and E22 errors on the Uno?",
+    "enriched_query": "What are the E14 and E22 errors on the Bellini Uno espresso machine?",
+    "expected_verdict": "VALID",
+    "rationale": "Same ask, both codes named. Covered in full by every shape.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Bellini Uno flashed two codes at me this morning, E14 and E22."
+      },
+      {
+        "role": "assistant",
+        "content": "Both of those are documented codes on that machine rather than a general failure."
+      }
+    ]
+  },
+  {
+    "id": "ff_091",
+    "category": "follow_up_fragment",
+    "scenario": "S2",
+    "topic": "product support - small appliance",
+    "answer_shape": "numbered_list",
+    "fragment_type": "subject_naming",
+    "cached_query": "What do the error codes E14 and E22 mean on the Bellini Uno espresso machine?",
+    "cached_answer": "1. E14 - water tank empty or not seated. The float sensor in the tank has stopped reading water.\n2. Fix for E14: refill to the MAX line, then press the tank back until it clicks onto its valve. The code clears on the next brew.\n3. E22 - grinder jammed. The grinder motor is over-drawing current because the burrs are packed, usually with oily dark-roast beans.\n4. Fix for E22: switch off at the wall socket, empty the bean hopper, brush the burr chamber with the supplied brush, then power back on. The code clears after one successful grind.",
+    "new_query": "and what does E31 mean on the Uno?",
+    "enriched_query": "What does error code E31 mean on the Bellini Uno espresso machine?",
+    "expected_verdict": "INVALID",
+    "rationale": "Subject-naming version of the contentless INVALID fragment; E31 is absent from every shape.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Bellini Uno flashed two codes at me this morning, E14 and E22."
+      },
+      {
+        "role": "assistant",
+        "content": "Both of those are documented codes on that machine rather than a general failure."
+      }
+    ]
+  },
+  {
+    "id": "ff_092",
+    "category": "follow_up_fragment",
+    "scenario": "S2",
+    "topic": "product support - small appliance",
+    "answer_shape": "extra_dimensions",
+    "fragment_type": "subject_naming",
+    "cached_query": "What do the error codes E14 and E22 mean on the Bellini Uno espresso machine?",
+    "cached_answer": "E14 is the water-tank code: the float sensor has stopped reading water, either because the tank is empty or because it has not been pressed fully onto its valve. Refill to MAX and push it home until it clicks. E22 is the grinder code: the grinder motor is over-drawing current because the burrs are packed, almost always with oily dark-roast beans. Power off at the wall, empty the hopper, brush the burr chamber, power back on.\n\nSome context around the two codes:\n\nHow often they appear. E14 is by far the most common code on this machine and is almost never a real fault. E22 shows up perhaps once a year on a machine fed oily beans, and never on drier medium roasts.\n\nWhether they self-clear. Both do, once the cause is fixed - neither needs a service reset and neither is stored in the fault log.\n\nWarranty. Neither code voids the warranty, but repeated E22 with visible burr damage is treated as user maintenance rather than a defect.\n\nPrevention. Keeping the tank above the MIN line and using medium roasts rather than very oily dark roasts avoids nearly every occurrence of both.",
+    "new_query": "what does E14 mean on the Bellini Duo?",
+    "enriched_query": "What does error code E14 mean on the Bellini Duo espresso machine?",
+    "expected_verdict": "INVALID",
+    "rationale": "Different entity: a different machine model. The answer is scoped to the Uno.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Bellini Uno flashed two codes at me this morning, E14 and E22."
+      },
+      {
+        "role": "assistant",
+        "content": "Both of those are documented codes on that machine rather than a general failure."
+      }
+    ]
+  },
+  {
+    "id": "ff_093",
+    "category": "follow_up_fragment",
+    "scenario": "S3",
+    "topic": "product support - networking hardware",
+    "answer_shape": "numbered_list",
+    "fragment_type": "subject_naming",
+    "cached_query": "How do I reset the Nimbus R7 router to factory settings?",
+    "cached_answer": "1. Leave the router powered on. The reset is performed live, not while unplugged.\n2. Locate the recessed pinhole marked RESET on the back panel, next to the WAN socket.\n3. Push a straightened paperclip in until you feel the button click, and hold it for ten seconds.\n4. Watch the status LED change from solid white to blinking amber, then release.\n5. Wait roughly two minutes while the router reboots by itself.\n6. Reconnect with the SSID and password printed on the label on the underside of the unit; the admin password is back to its default too.\n7. Expect every custom setting to be gone: renamed SSID, port forwards, static DHCP leases, guest network and parental schedules.",
+    "new_query": "short version of the R7 factory reset please",
+    "enriched_query": "In short, how do I factory reset the Nimbus R7 router?",
+    "expected_verdict": "VALID",
+    "rationale": "Subject-naming version of the contentless VALID fragment; still just a depth modifier.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Nimbus R7 is in a weird state and I think I need to wipe it back to how it shipped."
+      },
+      {
+        "role": "assistant",
+        "content": "A factory reset will do that. It is a hardware button rather than a menu item, so it works even when you cannot log into the web interface."
+      }
+    ]
+  },
+  {
+    "id": "ff_094",
+    "category": "follow_up_fragment",
+    "scenario": "S3",
+    "topic": "product support - networking hardware",
+    "answer_shape": "extra_dimensions",
+    "fragment_type": "subject_naming",
+    "cached_query": "How do I reset the Nimbus R7 router to factory settings?",
+    "cached_answer": "Hold a paperclip in the recessed RESET pinhole on the back panel for ten seconds while the router is powered on, until the status LED goes from solid white to blinking amber. Release, wait about two minutes for the reboot, and reconnect using the SSID and password on the label underneath. Every custom setting - SSID, admin password, port forwards, static DHCP leases, guest network, parental schedules - is erased.\n\nA few related points:\n\nReset versus reboot. A reboot is the power button or a 2-second press of the same pinhole; it clears a hung radio but keeps all settings. Only the 10-second hold is a factory reset. Most connectivity problems are fixed by the reboot.\n\nFirmware. A factory reset does not roll firmware back. Whatever version is installed stays installed.\n\nLED sequence timing. Solid white is normal operation, blinking amber is reset accepted, blinking white is booting, and solid amber for more than five minutes means the boot failed.\n\nWhen it is the right move. Use it after a failed firmware update, when the admin password is lost, or before selling the unit on.",
+    "new_query": "what are the steps to factory reset the Nimbus R7?",
+    "enriched_query": "What are the steps to factory reset the Nimbus R7 router?",
+    "expected_verdict": "VALID",
+    "rationale": "Same procedure, subject named. Covered by every shape.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Nimbus R7 is in a weird state and I think I need to wipe it back to how it shipped."
+      },
+      {
+        "role": "assistant",
+        "content": "A factory reset will do that. It is a hardware button rather than a menu item, so it works even when you cannot log into the web interface."
+      }
+    ]
+  },
+  {
+    "id": "ff_095",
+    "category": "follow_up_fragment",
+    "scenario": "S3",
+    "topic": "product support - networking hardware",
+    "answer_shape": "short_prose",
+    "fragment_type": "subject_naming",
+    "cached_query": "How do I reset the Nimbus R7 router to factory settings?",
+    "cached_answer": "With the router powered on, push a straightened paperclip into the recessed RESET pinhole on the back and hold it for ten seconds, until the status LED blinks amber. Release it and let the router reboot, which takes about two minutes. It will come back with the SSID and password printed on the label underneath, and every custom setting - Wi-Fi name, port forwards, guest network - will be gone.",
+    "new_query": "how do I restore my old settings after a factory reset on the R7?",
+    "enriched_query": "How do I restore my previous settings after a factory reset on the Nimbus R7 router?",
+    "expected_verdict": "INVALID",
+    "rationale": "Subject-naming version of the contentless INVALID fragment. Restore is not described anywhere.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Nimbus R7 is in a weird state and I think I need to wipe it back to how it shipped."
+      },
+      {
+        "role": "assistant",
+        "content": "A factory reset will do that. It is a hardware button rather than a menu item, so it works even when you cannot log into the web interface."
+      }
+    ]
+  },
+  {
+    "id": "ff_096",
+    "category": "follow_up_fragment",
+    "scenario": "S3",
+    "topic": "product support - networking hardware",
+    "answer_shape": "long_prose",
+    "fragment_type": "subject_naming",
+    "cached_query": "How do I reset the Nimbus R7 router to factory settings?",
+    "cached_answer": "A factory reset on the R7 is done with the recessed button, not from the web interface, so it works even when you cannot log in.\n\nLeave the router plugged in and powered on. On the back panel, next to the WAN socket, there is a pinhole marked RESET. Straighten a paperclip, push it in until you feel the button click, and hold it there for a full ten seconds. Watch the status LED: it will go from solid white to blinking amber, which is the confirmation that the reset has been accepted. Release the paperclip then.\n\nThe router reboots on its own and takes roughly two minutes to come back. When it does, it is in the state it shipped in: the Wi-Fi network name and password are the ones printed on the label on the underside of the unit, the admin password is back to the default, and everything you configured yourself - a renamed SSID, port forwarding rules, static DHCP leases, the guest network, parental schedules - has been erased.",
+    "new_query": "how do I factory reset the Nimbus R9?",
+    "enriched_query": "How do I factory reset the Nimbus R9 router?",
+    "expected_verdict": "INVALID",
+    "rationale": "Different entity: a different router model, whose button placement and LED behaviour are not established here.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My Nimbus R7 is in a weird state and I think I need to wipe it back to how it shipped."
+      },
+      {
+        "role": "assistant",
+        "content": "A factory reset will do that. It is a hardware button rather than a menu item, so it works even when you cannot log into the web interface."
+      }
+    ]
+  },
+  {
+    "id": "ff_097",
+    "category": "follow_up_fragment",
+    "scenario": "S4",
+    "topic": "general science",
+    "answer_shape": "short_prose",
+    "fragment_type": "subject_naming",
+    "cached_query": "Why do leaves change colour in autumn?",
+    "cached_answer": "As days shorten and nights cool, a tree stops making chlorophyll, the green pigment that dominates a leaf all summer. The existing chlorophyll then breaks down, and the yellow and orange carotenoids that were in the leaf all along stop being masked and become visible. Reds and purples are different: those anthocyanins are made fresh in autumn from sugars trapped in the leaf as the tree seals it off at the base.",
+    "new_query": "how does the leaf colour change actually work?",
+    "enriched_query": "How does the autumn leaf colour change actually work?",
+    "expected_verdict": "VALID",
+    "rationale": "Subject-naming version of the contentless VALID fragment.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My street is suddenly gold and red and it was all green two weeks ago."
+      },
+      {
+        "role": "assistant",
+        "content": "That is the autumn pigment change, and it is happening faster this year than usual because the nights turned cold quickly."
+      }
+    ]
+  },
+  {
+    "id": "ff_098",
+    "category": "follow_up_fragment",
+    "scenario": "S4",
+    "topic": "general science",
+    "answer_shape": "long_prose",
+    "fragment_type": "subject_naming",
+    "cached_query": "Why do leaves change colour in autumn?",
+    "cached_answer": "The colour was always there. Through the growing season a leaf is packed with chlorophyll, which absorbs red and blue light and reflects green, and that green simply overwhelms every other pigment present.\n\nShorter days and cooler nights are the trigger. They tell the tree to stop investing in the leaf, so chlorophyll production halts while the existing chlorophyll keeps degrading as it always did. Within a couple of weeks the green is gone, and the carotenoids - the yellows and oranges that were sitting in the leaf the whole summer, unnoticed - are revealed.\n\nThe reds and purples work differently and are not a reveal at all. Anthocyanins are manufactured in the autumn itself. As the tree builds the abscission layer, a corky seal across the base of the leaf stalk, sugars produced by the last of the photosynthesis are trapped in the leaf, and the tree converts them into anthocyanins. That is why red autumn colour is variable from year to year while yellow is reliable: it depends on how much sugar was trapped and how much sunlight fell on the leaf while it was being sealed off.",
+    "new_query": "why do leaves go yellow and red in the autumn?",
+    "enriched_query": "Why do leaves turn yellow and red in autumn?",
+    "expected_verdict": "VALID",
+    "rationale": "Direct restatement of the cached question with the colours named. Fully covered.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My street is suddenly gold and red and it was all green two weeks ago."
+      },
+      {
+        "role": "assistant",
+        "content": "That is the autumn pigment change, and it is happening faster this year than usual because the nights turned cold quickly."
+      }
+    ]
+  },
+  {
+    "id": "ff_099",
+    "category": "follow_up_fragment",
+    "scenario": "S4",
+    "topic": "general science",
+    "answer_shape": "prose_table",
+    "fragment_type": "subject_naming",
+    "cached_query": "Why do leaves change colour in autumn?",
+    "cached_answer": "Shorter days and cooler nights stop chlorophyll production, the green fades, and what is underneath - or what is newly made - shows through.\n\n| Pigment | Colour | Where it comes from |\n| :--- | :--- | :--- |\n| Chlorophyll | Green | Made all summer; production stops in autumn and it breaks down |\n| Carotenoids | Yellow, orange | Present in the leaf all along, merely unmasked when the green goes |\n| Anthocyanins | Red, purple | Made fresh in autumn from sugars trapped by the abscission layer |\n",
+    "new_query": "why don't evergreen needles change colour in autumn?",
+    "enriched_query": "Why do evergreen needles not change colour in autumn?",
+    "expected_verdict": "INVALID",
+    "rationale": "Subject-naming version of the contentless INVALID fragment; evergreens appear in no shape.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My street is suddenly gold and red and it was all green two weeks ago."
+      },
+      {
+        "role": "assistant",
+        "content": "That is the autumn pigment change, and it is happening faster this year than usual because the nights turned cold quickly."
+      }
+    ]
+  },
+  {
+    "id": "ff_100",
+    "category": "follow_up_fragment",
+    "scenario": "S4",
+    "topic": "general science",
+    "answer_shape": "bullets",
+    "fragment_type": "subject_naming",
+    "cached_query": "Why do leaves change colour in autumn?",
+    "cached_answer": "- Shorter days and cooler nights signal the tree to stop making chlorophyll.\n- The chlorophyll already in the leaf continues to break down, so the green fades over a couple of weeks.\n- Carotenoids - yellow and orange - were in the leaf all summer and were simply masked by the green. They are now visible.\n- Anthocyanins - red and purple - are different: they are made fresh in autumn.\n- The tree seals the leaf base with a corky abscission layer, trapping sugars in the leaf, and those sugars are converted into anthocyanins.\n- That is why yellow is reliable each year and red varies with the weather.",
+    "new_query": "when should I rake up the fallen leaves?",
+    "enriched_query": "When should I rake up fallen autumn leaves?",
+    "expected_verdict": "INVALID",
+    "rationale": "A different question in the same topic. Garden timing appears in no shape; the answers are entirely about pigment chemistry.",
+    "history": [
+      {
+        "role": "user",
+        "content": "My street is suddenly gold and red and it was all green two weeks ago."
+      },
+      {
+        "role": "assistant",
+        "content": "That is the autumn pigment change, and it is happening faster this year than usual because the nights turned cold quickly."
+      }
+    ]
+  },
+  {
+    "id": "ff_101",
+    "category": "follow_up_fragment",
+    "scenario": "S5",
+    "topic": "consumer security advice",
+    "answer_shape": "prose_table",
+    "fragment_type": "subject_naming",
+    "cached_query": "Should I use a VPN or a proxy to stay private on public Wi-Fi?",
+    "cached_answer": "For public Wi-Fi, use a VPN. The threat there is the network operator, and only one of the two actually defends against it.\n\n| | VPN | Proxy |\n| :--- | :--- | :--- |\n| Scope | The whole device, every application | One application you configure |\n| Encryption | Yes, an encrypted tunnel | Usually none |\n| What the Wi-Fi operator sees | An opaque stream to one address | The request contents, in the clear |\n| Right tool for public Wi-Fi | Yes | No |\n| What it is actually for | Privacy on untrusted networks | Making one app appear to be elsewhere |\n",
+    "new_query": "so for public wifi, is a VPN or a proxy better?",
+    "enriched_query": "For public Wi-Fi, is a VPN or a proxy better?",
+    "expected_verdict": "VALID",
+    "rationale": "Subject-naming version of the contentless VALID fragment.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I work from cafes a lot and someone told me I should be running something to protect my traffic."
+      },
+      {
+        "role": "assistant",
+        "content": "There are two things people usually mean by that, and they are not equivalent."
+      }
+    ]
+  },
+  {
+    "id": "ff_102",
+    "category": "follow_up_fragment",
+    "scenario": "S5",
+    "topic": "consumer security advice",
+    "answer_shape": "bullets",
+    "fragment_type": "subject_naming",
+    "cached_query": "Should I use a VPN or a proxy to stay private on public Wi-Fi?",
+    "cached_answer": "- On public Wi-Fi the adversary is the network itself, so encryption is the requirement.\n- A VPN encrypts all traffic leaving the device, not just one app's.\n- Through a VPN the access-point operator sees only an opaque stream to a single address - not the sites, not the contents.\n- A proxy reroutes only the one application you configure; everything else goes out in the clear.\n- Most proxies do not encrypt, so the network operator can still read the requests.\n- Verdict: use a VPN. A proxy is for geo-shifting a single app on a network you already trust, not for privacy on an untrusted one.",
+    "new_query": "should I run a VPN or a proxy when I'm on cafe wifi?",
+    "enriched_query": "Should I run a VPN or a proxy on cafe Wi-Fi?",
+    "expected_verdict": "VALID",
+    "rationale": "The cached question restated with the subject named. Fully covered.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I work from cafes a lot and someone told me I should be running something to protect my traffic."
+      },
+      {
+        "role": "assistant",
+        "content": "There are two things people usually mean by that, and they are not equivalent."
+      }
+    ]
+  },
+  {
+    "id": "ff_103",
+    "category": "follow_up_fragment",
+    "scenario": "S5",
+    "topic": "consumer security advice",
+    "answer_shape": "numbered_list",
+    "fragment_type": "subject_naming",
+    "cached_query": "Should I use a VPN or a proxy to stay private on public Wi-Fi?",
+    "cached_answer": "1. Identify the threat: on public Wi-Fi it is the network operator and anyone else on the same access point.\n2. A VPN encrypts everything leaving the device and tunnels it to a server you choose.\n3. Consequently the access-point operator sees an opaque stream to one address, and neither the sites nor the contents.\n4. A proxy, by contrast, covers only the single application you point at it.\n5. Most proxies add no encryption, so the request contents remain readable on the local network.\n6. Therefore use a VPN for public Wi-Fi. Keep a proxy for making one application appear to be in another country, on a network you already trust.",
+    "new_query": "what does a VPN cost compared to a proxy?",
+    "enriched_query": "What does a VPN cost compared with a proxy?",
+    "expected_verdict": "INVALID",
+    "rationale": "Subject-naming version of the contentless INVALID fragment; no shape gives a price.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I work from cafes a lot and someone told me I should be running something to protect my traffic."
+      },
+      {
+        "role": "assistant",
+        "content": "There are two things people usually mean by that, and they are not equivalent."
+      }
+    ]
+  },
+  {
+    "id": "ff_104",
+    "category": "follow_up_fragment",
+    "scenario": "S5",
+    "topic": "consumer security advice",
+    "answer_shape": "extra_dimensions",
+    "fragment_type": "subject_naming",
+    "cached_query": "Should I use a VPN or a proxy to stay private on public Wi-Fi?",
+    "cached_answer": "Use a VPN. It encrypts everything leaving the device and hides both the sites and the contents from whoever runs the access point, which is the actual public Wi-Fi threat. A proxy covers only one configured application and usually adds no encryption at all, so it does not address that threat; it is a geo-shifting tool for networks you already trust.\n\nSome adjacent dimensions worth knowing:\n\nSpeed. A VPN adds a hop and encryption overhead, typically costing 10-30 percent of throughput and a few milliseconds of latency. A proxy adds a hop but no crypto, so it is usually faster.\n\nLogging. Both move your trust rather than removing it - you stop trusting the cafe and start trusting the VPN or proxy operator. A published no-logs policy that has been independently audited is the only meaningful distinction between providers.\n\nDNS leaks. A badly configured VPN client can still send DNS queries over the local network, which reveals every domain you visit. Check for DNS leaks after setting one up.\n\nCorporate split tunnelling. Work VPNs often route only company traffic through the tunnel and everything else directly, which means they do not protect your personal browsing on that cafe network at all.",
+    "new_query": "which VPN provider should I sign up with?",
+    "enriched_query": "Which VPN provider should I sign up with?",
+    "expected_verdict": "INVALID",
+    "rationale": "A product recommendation. No shape names a single provider; a specific fact the answer does not contain.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I work from cafes a lot and someone told me I should be running something to protect my traffic."
+      },
+      {
+        "role": "assistant",
+        "content": "There are two things people usually mean by that, and they are not equivalent."
+      }
+    ]
+  },
+  {
+    "id": "ff_105",
+    "category": "follow_up_fragment",
+    "scenario": "S6",
+    "topic": "home improvement / general knowledge",
+    "answer_shape": "numbered_list",
+    "fragment_type": "subject_naming",
+    "cached_query": "What are the two main types of solar panel used on home roofs?",
+    "cached_answer": "1. Monocrystalline. Wafers cut from a single grown silicon crystal.\n2. Its continuous lattice gives about 20-23 percent efficiency, the highest of the two, and a uniform black appearance.\n3. Manufacturing wastes silicon, so monocrystalline carries the higher price, and it is the choice when roof area is limited.\n4. Polycrystalline. Cast from molten silicon that solidifies into many crystals.\n5. Grain boundaries between those crystals cost some performance: about 15-18 percent efficiency, and a blue speckled appearance.\n6. Little silicon is wasted, so polycrystalline is cheaper, and it is the choice when there is ample unshaded roof and budget matters more than area.",
+    "new_query": "and what's polycrystalline like?",
+    "enriched_query": "What is a polycrystalline solar panel like, compared with a monocrystalline one?",
+    "expected_verdict": "VALID",
+    "rationale": "Subject-naming version of the contentless VALID fragment - 'the other one' named explicitly.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I'm getting quotes for solar and every installer keeps naming two different panel types."
+      },
+      {
+        "role": "assistant",
+        "content": "Yes - domestic rooftop installations effectively come down to two silicon panel families."
+      }
+    ]
+  },
+  {
+    "id": "ff_106",
+    "category": "follow_up_fragment",
+    "scenario": "S6",
+    "topic": "home improvement / general knowledge",
+    "answer_shape": "extra_dimensions",
+    "fragment_type": "subject_naming",
+    "cached_query": "What are the two main types of solar panel used on home roofs?",
+    "cached_answer": "Domestic roofs use two silicon panel types. Monocrystalline is cut from a single grown crystal, looks uniformly black, runs at about 20-23 percent efficiency and costs more. Polycrystalline is cast from many crystals at once, looks blue and speckled, runs at about 15-18 percent and costs less, so it needs more roof area for the same output.\n\nSeveral further dimensions separate them:\n\nTemperature coefficient. Output falls as panels heat up. Monocrystalline typically loses about 0.3 percent per degree above 25C, polycrystalline about 0.4, so the gap widens on a hot roof.\n\nWarranty. Both are usually sold with a 25-year performance warranty, but monocrystalline products more often guarantee a higher end-of-term output figure.\n\nAppearance on the roof. The uniform black of monocrystalline is much less visually obtrusive on a dark roof, which matters for planning consent in conservation areas.\n\nWeight and roof load. Both sit around 18-20 kg per panel, so structural load is rarely the deciding factor between them.",
+    "new_query": "what are monocrystalline and polycrystalline panels?",
+    "enriched_query": "What are monocrystalline and polycrystalline solar panels?",
+    "expected_verdict": "VALID",
+    "rationale": "The cached question with both types named. Fully covered.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I'm getting quotes for solar and every installer keeps naming two different panel types."
+      },
+      {
+        "role": "assistant",
+        "content": "Yes - domestic rooftop installations effectively come down to two silicon panel families."
+      }
+    ]
+  },
+  {
+    "id": "ff_107",
+    "category": "follow_up_fragment",
+    "scenario": "S6",
+    "topic": "home improvement / general knowledge",
+    "answer_shape": "short_prose",
+    "fragment_type": "subject_naming",
+    "cached_query": "What are the two main types of solar panel used on home roofs?",
+    "cached_answer": "The two are monocrystalline and polycrystalline. Monocrystalline panels are cut from a single silicon crystal, look uniformly black, and convert about 20-23 percent of the light that hits them, but they cost more. Polycrystalline panels are cast from many crystals, look blue and speckled, and manage about 15-18 percent, so they need more roof area for the same output - but they are cheaper per panel.",
+    "new_query": "what about thin-film panels for a home roof?",
+    "enriched_query": "What are thin-film solar panels for a home roof?",
+    "expected_verdict": "INVALID",
+    "rationale": "Subject-naming version of the contentless INVALID fragment; thin-film appears in no shape.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I'm getting quotes for solar and every installer keeps naming two different panel types."
+      },
+      {
+        "role": "assistant",
+        "content": "Yes - domestic rooftop installations effectively come down to two silicon panel families."
+      }
+    ]
+  },
+  {
+    "id": "ff_108",
+    "category": "follow_up_fragment",
+    "scenario": "S6",
+    "topic": "home improvement / general knowledge",
+    "answer_shape": "long_prose",
+    "fragment_type": "subject_naming",
+    "cached_query": "What are the two main types of solar panel used on home roofs?",
+    "cached_answer": "Almost every domestic rooftop installation uses one of two silicon panel types, and the choice between them is mostly a trade of roof area against price.\n\nMonocrystalline panels are made from wafers cut from a single grown silicon crystal. Because the crystal lattice is continuous, electrons move through it with fewer obstacles, and efficiency lands around 20 to 23 percent. Visually they are uniformly black with rounded cell corners. The manufacturing process wastes a good deal of silicon, which is why they carry the higher price.\n\nPolycrystalline panels are cast: molten silicon is poured into a mould and allowed to solidify into many crystals at once. The grain boundaries between those crystals impede electron flow slightly, so efficiency sits around 15 to 18 percent, and the panels have the familiar blue, speckled appearance. Very little silicon is wasted, so they are cheaper.\n\nIn practice that means monocrystalline wins when roof space is the constraint, and polycrystalline wins when budget is the constraint and there is plenty of unshaded roof to cover.",
+    "new_query": "how much do monocrystalline and polycrystalline panels cost to install?",
+    "enriched_query": "How much do monocrystalline and polycrystalline solar panels cost to install?",
+    "expected_verdict": "INVALID",
+    "rationale": "Installed cost is a specific figure no shape gives - 'more expensive' and 'cheaper' are relative, not an installation price.",
+    "history": [
+      {
+        "role": "user",
+        "content": "I'm getting quotes for solar and every installer keeps naming two different panel types."
+      },
+      {
+        "role": "assistant",
+        "content": "Yes - domestic rooftop installations effectively come down to two silicon panel families."
+      }
+    ]
+  },
+  {
+    "id": "ff_109",
+    "category": "follow_up_fragment",
+    "scenario": "S7",
+    "topic": "workplace security advice",
+    "answer_shape": "short_prose",
+    "fragment_type": "subject_naming",
+    "cached_query": "Should I turn on two-factor authentication for my work email?",
+    "cached_answer": "Yes. With two-factor authentication switched on, a stolen or reused password is no longer enough to get into the account, and password reuse is how the large majority of account takeovers actually begin. Use an authenticator app rather than SMS codes where you can, because a SIM-swap defeats SMS. Turning it on takes about two minutes in your account settings.",
+    "new_query": "why does 2FA on work email matter so much?",
+    "enriched_query": "Why does two-factor authentication on a work email account matter so much?",
+    "expected_verdict": "VALID",
+    "rationale": "Subject-naming version of the contentless VALID fragment.",
+    "history": [
+      {
+        "role": "user",
+        "content": "IT keeps nagging me to set up 2FA on my work email and I keep putting it off."
+      },
+      {
+        "role": "assistant",
+        "content": "It is worth doing, and the reason is more specific than 'security is good'."
+      }
+    ]
+  },
+  {
+    "id": "ff_110",
+    "category": "follow_up_fragment",
+    "scenario": "S7",
+    "topic": "workplace security advice",
+    "answer_shape": "long_prose",
+    "fragment_type": "subject_naming",
+    "cached_query": "Should I turn on two-factor authentication for my work email?",
+    "cached_answer": "Yes, and it is probably the single highest-value security change available to you.\n\nThe reason is what attacks on email accounts actually look like. Very few of them are a determined attacker targeting you specifically. The overwhelming majority are credential stuffing: someone takes a list of email addresses and passwords leaked from an unrelated breach and tries them, automatically, against every service they can. If you have ever reused that password, the attempt succeeds. Two-factor authentication breaks that whole class of attack, because the password on its own no longer opens the account.\n\nNot all second factors are equal. An SMS code is much better than nothing, but it can be intercepted by a SIM-swap, where an attacker persuades your mobile carrier to move your number to their SIM. An authenticator app generates its codes on your device with no network involvement, so there is nothing for the carrier to hand over. Prefer the app.\n\nThe practical cost is small. Enabling it is a two-minute job in the account security settings, and after the initial setup most work systems only re-prompt on a new device or after a set period.",
+    "new_query": "is it worth switching on two-factor auth for my work mail?",
+    "enriched_query": "Is it worth switching on two-factor authentication for my work email?",
+    "expected_verdict": "VALID",
+    "rationale": "The cached question restated, subject named. Fully covered.",
+    "history": [
+      {
+        "role": "user",
+        "content": "IT keeps nagging me to set up 2FA on my work email and I keep putting it off."
+      },
+      {
+        "role": "assistant",
+        "content": "It is worth doing, and the reason is more specific than 'security is good'."
+      }
+    ]
+  },
+  {
+    "id": "ff_111",
+    "category": "follow_up_fragment",
+    "scenario": "S7",
+    "topic": "workplace security advice",
+    "answer_shape": "prose_table",
+    "fragment_type": "subject_naming",
+    "cached_query": "Should I turn on two-factor authentication for my work email?",
+    "cached_answer": "Yes - it is the highest-value change available, because it breaks the attack that actually happens: credential stuffing with a password leaked somewhere else.\n\n| | Password only | Password plus second factor |\n| :--- | :--- | :--- |\n| A leaked, reused password | Opens the account | Does not open the account |\n| Credential-stuffing attempts | Succeed if the password matches | Fail |\n| Effort to set up | None | About two minutes in account settings |\n\nChoose an authenticator app over SMS codes where you can: a SIM-swap can move your phone number to an attacker's SIM and with it the SMS codes, whereas an authenticator app generates codes on the device with no network involvement.",
+    "new_query": "how do I get back into my work email if I lose my 2FA phone?",
+    "enriched_query": "How do I recover access to my work email if I lose the phone with my two-factor authentication app?",
+    "expected_verdict": "INVALID",
+    "rationale": "Subject-naming version of the contentless INVALID fragment; recovery appears in no shape.",
+    "history": [
+      {
+        "role": "user",
+        "content": "IT keeps nagging me to set up 2FA on my work email and I keep putting it off."
+      },
+      {
+        "role": "assistant",
+        "content": "It is worth doing, and the reason is more specific than 'security is good'."
+      }
+    ]
+  },
+  {
+    "id": "ff_112",
+    "category": "follow_up_fragment",
+    "scenario": "S7",
+    "topic": "workplace security advice",
+    "answer_shape": "bullets",
+    "fragment_type": "subject_naming",
+    "cached_query": "Should I turn on two-factor authentication for my work email?",
+    "cached_answer": "- Yes, turn it on. It is the highest-value change available for a work email account.\n- The attack it stops is credential stuffing: leaked passwords from unrelated breaches, replayed automatically against every service.\n- That is how the large majority of account takeovers actually start, not targeted attacks.\n- With a second factor, a correct password on its own no longer opens the account.\n- Prefer an authenticator app to SMS: a SIM-swap moves your number, and the codes with it, to an attacker's SIM.\n- An authenticator app generates codes on your own device, with no carrier involved.\n- Setup takes about two minutes in the account security settings.",
+    "new_query": "how do I set up an authenticator app for my work email, step by step?",
+    "enriched_query": "What are the steps to set up an authenticator app for two-factor authentication on my work email?",
+    "expected_verdict": "INVALID",
+    "rationale": "The answers recommend an authenticator app and say setup takes about two minutes, but none of them gives the steps. A specific additional fact the answer does not contain.",
+    "history": [
+      {
+        "role": "user",
+        "content": "IT keeps nagging me to set up 2FA on my work email and I keep putting it off."
+      },
+      {
+        "role": "assistant",
+        "content": "It is worth doing, and the reason is more specific than 'security is good'."
+      }
+    ]
+  }
+]

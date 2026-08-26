@@ -4,7 +4,12 @@ from configs.qwen_1_5b import SYSTEM_PROMPT, FEW_SHOTS
 
 CONFIG = {
     "name": "phi_3_5_mini",
-    "enabled": True,
+    # Disabled: this config carries its own COPY of a system prompt that has
+    # drifted from the shipped one (server/app/services/validator.py), and runs
+    # a GGUF build through llama-cpp rather than the Ollama path production
+    # uses - so its numbers do not describe DejaQ's validator. Kept for the
+    # historical record. New candidates use "ollama_model" instead.
+    "enabled": False,
     "use_prefilter": False,
     "heuristic_only": False,
     "loader": {
