@@ -18,12 +18,14 @@
         "name": "next"
       }
     ],
+    // Do NOT map runtime module specifiers (react, react/jsx-dev-runtime,
+    // next/link, ...) to their .d.ts files here. Turbopack honors tsconfig
+    // `paths` at bundle time, so such a mapping resolves the auto-injected JSX
+    // runtime import to a type-only module -> jsxDEV is undefined -> every
+    // client component throws "(void 0) is not a function". Webpack masks it;
+    // Turbopack (the `next dev` default) does not. Keep only real aliases.
     "paths": {
-      "@/*": ["./*"],
-      "react": ["./node_modules/@types/react/index.d.ts"],
-      "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime.d.ts"],
-      "react/jsx-dev-runtime": ["./node_modules/@types/react/jsx-dev-runtime.d.ts"],
-      "next/link": ["./node_modules/next/dist/client/link.d.ts"]
+      "@/*": ["./*"]
     }
   },
   "include": [
