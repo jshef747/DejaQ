@@ -188,7 +188,7 @@ class RecordingStoreMemory:
     def store_interaction(
         self, normalized_query, generalized_answer, original_query, user_id,
         image_dhash=None, image_clip=None, image_kind=None, image_text=None,
-        file_sha=None, file_kind=None, rag_document_id=None,
+        file_sha=None, file_kind=None, file_name=None, rag_document_id=None,
         authored=None, rag_document_ids=None,
     ) -> str:
         doc_id = derive_doc_id(

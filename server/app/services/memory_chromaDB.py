@@ -142,6 +142,11 @@ class CacheLookupResult:
     # deterministic, so the gate is equality. See services/file_text.py.
     file_sha: str | None = None
     file_kind: str | None = None
+    # Original filename of the matched entry's attached file, when the caller
+    # had one to store (decision-card display only — the gate itself still
+    # keys on file_sha, never on this). Absent on entries stored before this
+    # field existed, or when no filename was available at store time.
+    file_name: str | None = None
     # Explicit `@`-reference identity of the matched entry (present only when
     # the answer was grounded in one specific knowledge-base document by id,
     # never by search). Exact-equality gate, same shape as file_sha.
@@ -295,6 +300,7 @@ class MemoryService:
                     image_text=meta.get("image_text"),
                     file_sha=meta.get("file_sha"),
                     file_kind=meta.get("file_kind"),
+                    file_name=meta.get("file_name"),
                     rag_document_id=meta.get("rag_document_id"),
                     authored=meta.get("authored"),
                 ))
@@ -372,6 +378,7 @@ class MemoryService:
         image_text: str | None = None,
         file_sha: str | None = None,
         file_kind: str | None = None,
+        file_name: str | None = None,
         rag_document_id: int | None = None,
         authored: str | None = None,
         rag_document_ids: str | None = None,
@@ -407,6 +414,8 @@ class MemoryService:
         if file_sha and file_kind:
             metadata["file_sha"] = file_sha
             metadata["file_kind"] = file_kind
+            if file_name:
+                metadata["file_name"] = file_name
         # Explicit `@`-reference identity: written only when the answer was
         # grounded in one specific knowledge-base document by id. Exact
         # equality gate on the serve path, same as file_sha above.

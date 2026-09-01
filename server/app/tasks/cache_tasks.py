@@ -103,6 +103,7 @@ def generalize_and_store_task(
     image_text: str | None = None,
     file_sha: str | None = None,
     file_kind: str | None = None,
+    file_name: str | None = None,
     rag_document_ids: str | None = None,
     rag_document_id: int | None = None,
 ) -> dict:
@@ -185,7 +186,7 @@ def generalize_and_store_task(
             clean_query, generalized, original_query, user_id,
             image_dhash=image_dhash, image_clip=image_clip,
             image_kind=image_kind, image_text=image_text,
-            file_sha=file_sha, file_kind=file_kind,
+            file_sha=file_sha, file_kind=file_kind, file_name=file_name,
             rag_document_ids=rag_document_ids,
             rag_document_id=rag_document_id,
         )
