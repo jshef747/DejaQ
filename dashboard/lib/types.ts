@@ -111,6 +111,9 @@ export type LlmConfigResponse = {
   adjuster_system_prompt: string | null;
   generalizer_system_prompt: string | null;
   local_model_system_prompt: string | null;
+  // Attachment content-difficulty judge role ("Classified by difficulty").
+  judge_model: string;
+  judge_system_prompt: string;
   routing_threshold: number | null;
   // Which difficulty classifier is active: "legacy" (NVIDIA DeBERTa) or
   // "labse" (LaBSE, the shipped default). routing_threshold above is
@@ -127,6 +130,12 @@ export type LlmConfigResponse = {
   // that says what clearing the field restores, never the effective fields
   // above (those show the override once one is set).
   token_budget_defaults: Record<TokenBudgetField, number>;
+  // Per-file-type attachment routing: the EFFECTIVE map (extension ->
+  // "local"/"external") this workspace answers on, and the shipped defaults so
+  // the UI can tell a custom/moved type from a default one. Types in neither
+  // map route external. See server/app/services/attachment_routing.py.
+  attachment_routing: Record<string, AttachmentRoute>;
+  attachment_routing_defaults: Record<string, AttachmentRoute>;
   overrides: Record<string, unknown>;
   is_default: boolean;
   updated_at: string | null;
@@ -148,13 +157,22 @@ export type LlmConfigUpdate = Partial<{
   adjuster_system_prompt: string | null;
   generalizer_system_prompt: string | null;
   local_model_system_prompt: string | null;
+  judge_model: string | null;
+  judge_system_prompt: string | null;
   routing_threshold: number | null;
   classifier_choice: "legacy" | "labse" | null;
   legacy_routing_threshold: number | null;
   default_max_tokens: number | null;
   rewrite_max_tokens: number | null;
   ollama_num_ctx: number | null;
+  // The full effective map (the UI sends the whole thing); the server keeps
+  // only its diffs from the shipped defaults. null resets to the pure default.
+  attachment_routing: Record<string, AttachmentRoute> | null;
 }>;
+
+/** The three attachment destinations. "auto" = DejaQ's content-difficulty
+ * judge decides local vs. external per file ("Classified by difficulty"). */
+export type AttachmentRoute = "local" | "external" | "auto";
 
 /** Prompt field identifiers - keys into LlmConfigResponse/Update's
  * *_system_prompt fields. */

@@ -863,3 +863,110 @@ def test_llm_config_classifier_thresholds_are_independent_of_each_other(isolated
     assert result.classifier_choice == "legacy"
     assert result.legacy_routing_threshold == 0.9  # still there
     assert result.routing_threshold == 0.2  # also survived
+
+
+def test_attachment_routing_defaults_when_no_override(isolated_org_db):
+    from app.config import DEFAULT_ATTACHMENT_ROUTING
+    from app.services.llm_config_service import read_for_workspace
+
+    _create_workspace()
+    result = read_for_workspace("acme")
+
+    assert result.attachment_routing == DEFAULT_ATTACHMENT_ROUTING
+    assert result.attachment_routing_defaults == DEFAULT_ATTACHMENT_ROUTING
+    assert "attachment_routing" not in result.overrides
+
+
+def test_attachment_routing_stores_only_diffs_and_custom_types(isolated_org_db):
+    from app.config import DEFAULT_ATTACHMENT_ROUTING
+    from app.services.llm_config_service import update_for_workspace
+    from app.db import llm_config_repo, workspace_repo
+    from app.db.session import get_session
+
+    _create_workspace()
+
+    # Dashboard PUTs the whole effective map: move csv->local, add a custom type,
+    # leave everything else at its default.
+    full = {**DEFAULT_ATTACHMENT_ROUTING, "csv": "local", "flac": "external"}
+    result = update_for_workspace("acme", {"attachment_routing": full}, {"attachment_routing"})
+
+    # Effective map reflects the change...
+    assert result.attachment_routing["csv"] == "local"
+    assert result.attachment_routing["flac"] == "external"
+    assert result.attachment_routing["pdf"] == "auto"  # untouched default
+
+    # ...but only the diffs are actually stored.
+    with get_session() as session:
+        ws = workspace_repo.get_workspace_by_slug(session, "acme")
+        row = llm_config_repo.get_for_workspace(session, ws.id)
+        assert row.attachment_routing == {"csv": "local", "flac": "external"}
+
+
+def test_attachment_routing_reset_to_null_restores_default(isolated_org_db):
+    from app.config import DEFAULT_ATTACHMENT_ROUTING
+    from app.services.llm_config_service import read_for_workspace, update_for_workspace
+
+    _create_workspace()
+    update_for_workspace(
+        "acme",
+        {"attachment_routing": {**DEFAULT_ATTACHMENT_ROUTING, "csv": "local"}},
+        {"attachment_routing"},
+    )
+    update_for_workspace("acme", {"attachment_routing": None}, {"attachment_routing"})
+
+    assert read_for_workspace("acme").attachment_routing == DEFAULT_ATTACHMENT_ROUTING
+
+
+def test_attachment_routing_rejects_bad_route(isolated_org_db):
+    from app.services.llm_config_service import InvalidLlmConfigUpdate, update_for_workspace
+
+    _create_workspace()
+    with pytest.raises(InvalidLlmConfigUpdate):
+        update_for_workspace("acme", {"attachment_routing": {"csv": "sideways"}}, {"attachment_routing"})
+
+
+def test_judge_role_defaults_and_override(isolated_org_db, monkeypatch):
+    from app.config import DEFAULT_JUDGE_SYSTEM_PROMPT, JUDGE_MODEL_NAME
+    from app.services import llm_config_service
+    from app.services.llm_config_service import read_for_workspace, update_for_workspace
+    from app.services.model_backends import MODEL_RUNTIME_SPECS
+
+    monkeypatch.setattr(
+        llm_config_service.ollama_catalog, "list_available_models", lambda force_refresh=False: ["phi3.5:latest"]
+    )
+    _create_workspace()
+
+    # Defaults: shipped judge model (resolved to its real Ollama tag) + prompt.
+    result = read_for_workspace("acme")
+    assert result.judge_model == MODEL_RUNTIME_SPECS[JUDGE_MODEL_NAME].ollama_model
+    assert result.judge_system_prompt == DEFAULT_JUDGE_SYSTEM_PROMPT
+
+    # Override both; judge_model is validated against installed Ollama tags.
+    result = update_for_workspace(
+        "acme",
+        {"judge_model": "phi3.5:latest", "judge_system_prompt": "Reply HARD or EASY only."},
+        {"judge_model", "judge_system_prompt"},
+    )
+    assert result.judge_model == "phi3.5:latest"
+    assert result.judge_system_prompt == "Reply HARD or EASY only."
+    assert result.overrides["judge_model"] == "phi3.5:latest"
+
+
+def test_judge_model_rejects_uninstalled_tag(isolated_org_db, monkeypatch):
+    from app.services import llm_config_service
+    from app.services.llm_config_service import InvalidLlmConfigUpdate, update_for_workspace
+
+    monkeypatch.setattr(
+        llm_config_service.ollama_catalog, "list_available_models", lambda force_refresh=False: ["phi3.5:latest"]
+    )
+    _create_workspace()
+    with pytest.raises(InvalidLlmConfigUpdate):
+        update_for_workspace("acme", {"judge_model": "not-installed:9b"}, {"judge_model"})
+
+
+def test_judge_system_prompt_rejects_blank(isolated_org_db):
+    from app.services.llm_config_service import InvalidLlmConfigUpdate, update_for_workspace
+
+    _create_workspace()
+    with pytest.raises(InvalidLlmConfigUpdate):
+        update_for_workspace("acme", {"judge_system_prompt": "   "}, {"judge_system_prompt"})

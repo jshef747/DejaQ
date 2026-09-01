@@ -9,6 +9,7 @@ import SectionHeader from "@/components/ui/SectionHeader";
 import { updateLlmConfig } from "@/app/actions/llm-config";
 import { getAvailableModels } from "@/app/actions/available-models";
 import type {
+  AttachmentRoute,
   AvailableModelsResponse,
   LlmConfigResponse,
   LlmConfigUpdate,
@@ -477,6 +478,26 @@ export default function PipelineClient({
           />
         )}
       </div>
+
+      <AttachmentRoutingPanel
+        config={config}
+        workspaceSlug={workspaceSlug}
+        onConfigUpdate={(next) => {
+          setConfig(next);
+          router.refresh();
+        }}
+      />
+
+      <JudgeEditor
+        config={config}
+        workspaceSlug={workspaceSlug}
+        availableModels={availableModels.models}
+        modelsUnknown={modelsUnknown}
+        onConfigUpdate={(next) => {
+          setConfig(next);
+          router.refresh();
+        }}
+      />
     </div>
   );
 }
@@ -1156,6 +1177,442 @@ function ClassifierEditor({
         </div>
         <StatusText status={status} style={{ display: "block", marginTop: 10 }} />
       </div>
+    </div>
+  );
+}
+
+// --- Attachment routing ------------------------------------------------------
+// Per-file-type routing: which attachment types answer on the local model,
+// which go to the external provider, and which are left to DejaQ's own
+// content-difficulty judge ("Classified by difficulty"). Drag a type between
+// the three columns (or use its move buttons), search the list, and add a
+// custom extension. Types in none of the columns are UNRECOGNISED and route
+// external. Mirrors the server map in server/app/services/attachment_routing.py.
+
+interface RouteMeta {
+  label: string;
+  short: string;
+  color: string;
+}
+const ROUTE_META: Record<AttachmentRoute, RouteMeta> = {
+  local: { label: "Local model", short: "Local", color: "var(--green)" },
+  auto: { label: "Classified by difficulty", short: "Auto", color: "var(--fg)" },
+  external: { label: "External provider", short: "External", color: "var(--accent)" },
+};
+const ATTACH_ROUTES: AttachmentRoute[] = ["local", "auto", "external"];
+
+function isValidTypeKey(raw: string): boolean {
+  return /^[a-z0-9]{1,16}$/.test(raw);
+}
+
+function AttachmentRoutingPanel({
+  config,
+  workspaceSlug,
+  onConfigUpdate,
+}: {
+  config: LlmConfigResponse;
+  workspaceSlug: string;
+  onConfigUpdate: (next: LlmConfigResponse) => void;
+}) {
+  const [draft, setDraft] = useState<Record<string, AttachmentRoute>>(config.attachment_routing);
+  const [search, setSearch] = useState("");
+  const [customType, setCustomType] = useState("");
+  const [customErr, setCustomErr] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState<AttachmentRoute | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<StatusState>({ kind: "idle", text: "" });
+
+  useEffect(() => {
+    setDraft(config.attachment_routing);
+  }, [config.attachment_routing]);
+
+  const defaults = config.attachment_routing_defaults;
+  const dirty = JSON.stringify(draft) !== JSON.stringify(config.attachment_routing);
+
+  function move(type: string, to: AttachmentRoute) {
+    setDraft((prev) => (prev[type] === to ? prev : { ...prev, [type]: to }));
+  }
+
+  function addCustom(to: AttachmentRoute) {
+    const key = customType.trim().toLowerCase().replace(/^\./, "");
+    if (!isValidTypeKey(key)) {
+      setCustomErr("Use a bare extension like 'csv' (lowercase letters and digits, no dot).");
+      return;
+    }
+    if (key in draft) {
+      setCustomErr(`'${key}' is already in the list.`);
+      return;
+    }
+    setCustomErr(null);
+    setCustomType("");
+    move(key, to);
+  }
+
+  async function handleSave() {
+    setBusy(true);
+    setStatus({ kind: "idle", text: "" });
+    const res = await updateLlmConfig(workspaceSlug, { attachment_routing: draft });
+    setBusy(false);
+    if (!res.ok) {
+      setStatus({ kind: "error", text: res.error });
+      return;
+    }
+    onConfigUpdate(res.data);
+    setStatus({ kind: "success", text: "Attachment routing saved." });
+  }
+
+  async function handleReset() {
+    setBusy(true);
+    setStatus({ kind: "idle", text: "" });
+    const res = await updateLlmConfig(workspaceSlug, { attachment_routing: null });
+    setBusy(false);
+    if (!res.ok) {
+      setStatus({ kind: "error", text: res.error });
+      return;
+    }
+    onConfigUpdate(res.data);
+    setStatus({ kind: "success", text: "Attachment routing reset to defaults." });
+  }
+
+  const q = search.trim().toLowerCase();
+  const overrideCount = Object.entries(draft).filter(([k, v]) => defaults[k] !== v).length;
+
+  return (
+    <div
+      style={{
+        marginTop: 28,
+        background: "var(--bg-2)",
+        border: "1px solid var(--border)",
+        borderRadius: 8,
+        padding: "18px 20px",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+        <h2 style={{ fontSize: 14, fontWeight: 600, margin: 0 }}>Attachment routing</h2>
+        <span className={`ds-pill ${overrideCount > 0 ? "ds-pill-hit" : "ds-pill-neutral"}`}>
+          {overrideCount} customised
+        </span>
+        <div style={{ flex: 1 }} />
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search file types…"
+          aria-label="Search file types"
+          className="ds-input"
+          style={{ maxWidth: 220 }}
+        />
+      </div>
+      <p style={{ fontSize: 12, color: "var(--fg-dim)", margin: "8px 0 16px", maxWidth: 640 }}>
+        Which model answers an attachment is decided by its file type. Drag a type between the
+        columns, or use its move buttons. <strong style={{ color: "var(--fg)" }}>Classified by difficulty</strong>{" "}
+        lets DejaQ&apos;s own content judge pick local or external per file. Any type not listed here
+        (or a file with no extension) routes to the external provider.
+      </p>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+        {ATTACH_ROUTES.map((col) => {
+          const meta = ROUTE_META[col];
+          const items = Object.keys(draft)
+            .filter((t) => draft[t] === col && (q === "" || t.includes(q)))
+            .sort();
+          return (
+            <div
+              key={col}
+              data-testid={`attach-col-${col}`}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragOver(col);
+              }}
+              onDragLeave={() => setDragOver((c) => (c === col ? null : c))}
+              onDrop={(e) => {
+                e.preventDefault();
+                const type = e.dataTransfer.getData("text/plain");
+                if (type) move(type, col);
+                setDragOver(null);
+              }}
+              style={{
+                background: dragOver === col ? "var(--accent-bg)" : "var(--bg-1, #171717)",
+                border: `1px solid ${dragOver === col ? "var(--accent-border)" : "var(--border)"}`,
+                borderRadius: 6,
+                padding: 12,
+                minHeight: 150,
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 11,
+                  textTransform: "uppercase",
+                  letterSpacing: 0.4,
+                  color: meta.color,
+                  fontWeight: 600,
+                  marginBottom: 10,
+                }}
+              >
+                {meta.label}
+                <span style={{ color: "var(--fg-dim)", fontWeight: 400 }}> · {items.length}</span>
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {items.map((type) => {
+                  const custom = !(type in defaults);
+                  const others = ATTACH_ROUTES.filter((r) => r !== col);
+                  return (
+                    <span
+                      key={type}
+                      draggable
+                      onDragStart={(e) => e.dataTransfer.setData("text/plain", type)}
+                      title={custom ? "custom type" : undefined}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6,
+                        background: "var(--bg-3)",
+                        border: `1px solid ${custom ? "var(--accent-border)" : "var(--border-2)"}`,
+                        borderRadius: 5,
+                        padding: "3px 5px 3px 8px",
+                        fontSize: 12,
+                        fontFamily: "var(--font-mono)",
+                        cursor: "grab",
+                      }}
+                    >
+                      {type}
+                      {others.map((r) => (
+                        <button
+                          key={r}
+                          type="button"
+                          aria-label={`Move ${type} to ${ROUTE_META[r].label}`}
+                          title={`Move to ${ROUTE_META[r].label}`}
+                          onClick={() => move(type, r)}
+                          style={{
+                            background: "var(--bg-2)",
+                            border: "1px solid var(--border-2)",
+                            borderRadius: 3,
+                            color: ROUTE_META[r].color,
+                            cursor: "pointer",
+                            fontSize: 10,
+                            lineHeight: 1.4,
+                            padding: "0 4px",
+                            fontFamily: "var(--font-sans, inherit)",
+                          }}
+                        >
+                          {ROUTE_META[r].short}
+                        </button>
+                      ))}
+                    </span>
+                  );
+                })}
+                {items.length === 0 && <span style={{ fontSize: 12, color: "var(--fg-dim)" }}>none</span>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Add a custom type */}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 16 }}>
+        <input
+          type="text"
+          value={customType}
+          onChange={(e) => {
+            setCustomType(e.target.value);
+            setCustomErr(null);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") addCustom("external");
+          }}
+          placeholder="add type, e.g. rtf"
+          aria-label="Add custom file type"
+          className="ds-input"
+          style={{ maxWidth: 160, fontFamily: "var(--font-mono)" }}
+        />
+        <span style={{ fontSize: 12, color: "var(--fg-dim)" }}>add to:</span>
+        {ATTACH_ROUTES.map((r) => (
+          <Button
+            key={r}
+            size="sm"
+            onClick={() => addCustom(r)}
+            disabled={busy || customType.trim() === ""}
+          >
+            {ROUTE_META[r].short}
+          </Button>
+        ))}
+        {customErr && <span style={{ fontSize: 12, color: "var(--red)" }}>{customErr}</span>}
+      </div>
+
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 16 }}>
+        <Button variant="primary" onClick={handleSave} loading={busy} disabled={busy || !dirty}>
+          Save
+        </Button>
+        <Button onClick={handleReset} disabled={busy || overrideCount === 0}>
+          Reset to defaults
+        </Button>
+        <StatusText status={status} />
+      </div>
+    </div>
+  );
+}
+
+// --- Content-difficulty judge (7th pipeline role) ---------------------------
+// The model + prompt behind the "Classified by difficulty" attachment route.
+// Same override pattern as the six flow roles (nullable judge_model +
+// judge_system_prompt, validated against live Ollama tags, shipped-default
+// fallback), rendered as its own card next to the routing panel it powers.
+
+function JudgeEditor({
+  config,
+  workspaceSlug,
+  availableModels,
+  modelsUnknown,
+  onConfigUpdate,
+}: {
+  config: LlmConfigResponse;
+  workspaceSlug: string;
+  availableModels: string[];
+  modelsUnknown: boolean;
+  onConfigUpdate: (next: LlmConfigResponse) => void;
+}) {
+  const [draftModel, setDraftModel] = useState(config.judge_model ?? "");
+  const [draftPrompt, setDraftPrompt] = useState(config.judge_system_prompt ?? "");
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<StatusState>({ kind: "idle", text: "" });
+
+  useEffect(() => {
+    setDraftModel(config.judge_model ?? "");
+    setDraftPrompt(config.judge_system_prompt ?? "");
+  }, [config.judge_model, config.judge_system_prompt]);
+
+  const overridden = "judge_model" in config.overrides || "judge_system_prompt" in config.overrides;
+  const modelPickerDisabled = busy || (modelsUnknown && availableModels.length === 0);
+
+  function buildPatch(): LlmConfigUpdate {
+    const patch: LlmConfigUpdate = {};
+    if (draftModel !== (config.judge_model ?? "")) patch.judge_model = draftModel || null;
+    const prompt = draftPrompt.trim();
+    if (draftPrompt !== (config.judge_system_prompt ?? "")) {
+      patch.judge_system_prompt = prompt === "" ? null : draftPrompt;
+    }
+    return patch;
+  }
+
+  async function handleSave() {
+    const patch = buildPatch();
+    if (Object.keys(patch).length === 0) {
+      setStatus({ kind: "error", text: "No changes to save." });
+      return;
+    }
+    setBusy(true);
+    setStatus({ kind: "idle", text: "" });
+    const res = await updateLlmConfig(workspaceSlug, patch);
+    setBusy(false);
+    if (!res.ok) {
+      setStatus({ kind: "error", text: res.error });
+      return;
+    }
+    onConfigUpdate(res.data);
+    setStatus({ kind: "success", text: "Judge saved." });
+  }
+
+  async function handleReset() {
+    setBusy(true);
+    setStatus({ kind: "idle", text: "" });
+    const res = await updateLlmConfig(workspaceSlug, { judge_model: null, judge_system_prompt: null });
+    setBusy(false);
+    if (!res.ok) {
+      setStatus({ kind: "error", text: res.error });
+      return;
+    }
+    onConfigUpdate(res.data);
+    setStatus({ kind: "success", text: "Judge reset to defaults." });
+  }
+
+  return (
+    <div
+      style={{
+        marginTop: 20,
+        background: "var(--bg-2)",
+        border: "1px solid var(--border)",
+        borderRadius: 8,
+        padding: "18px 20px",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+        <h2 style={{ fontSize: 14, fontWeight: 600, margin: 0 }}>Content-difficulty judge</h2>
+        <span className={`ds-pill ${overridden ? "ds-pill-hit" : "ds-pill-neutral"}`}>
+          {overridden ? "Overridden" : "Default"}
+        </span>
+      </div>
+      <p style={{ fontSize: 12, color: "var(--fg-dim)", margin: "8px 0 14px", maxWidth: 640 }}>
+        The model and prompt behind the{" "}
+        <strong style={{ color: "var(--fg)" }}>Classified by difficulty</strong> attachment route. It reads a
+        file in ~12K-character chunks, one call per chunk answering a single word (HARD or EASY), so a
+        smaller, faster model than your local answering model can be a good fit here.
+      </p>
+
+      <div className="ds-flow-warnrow">
+        <span>&#9650;</span>
+        <span>
+          The judge fails toward local: any error, timeout, or unclear verdict routes the file to the local
+          model with no error surfaced, so a too-weak judge model quietly disables external escalation.
+        </span>
+      </div>
+      <div className="ds-flow-warnrow">
+        <span>&#9650;</span>
+        <span>Editing the judge&apos;s system prompt changes routing behaviour directly.</span>
+      </div>
+
+      {modelsUnknown && (
+        <div className="ds-pill ds-pill-err" style={{ margin: "12px 0", padding: "8px 12px", borderRadius: 5, fontSize: 12, display: "block" }}>
+          Ollama is unreachable — model editing is disabled until it is reachable again.
+        </div>
+      )}
+
+      <Field label="Judge model">
+        <select
+          name="judge-model"
+          value={draftModel}
+          onChange={(e) => setDraftModel(e.target.value)}
+          disabled={modelPickerDisabled}
+          className="ds-input"
+          style={{ cursor: modelPickerDisabled ? "not-allowed" : "pointer", opacity: modelPickerDisabled ? 0.62 : 1 }}
+        >
+          {draftModel && !modelsUnknown && !availableModels.includes(draftModel) && (
+            <option value={draftModel}>{draftModel} (not installed)</option>
+          )}
+          {draftModel && modelsUnknown && <option value={draftModel}>{draftModel}</option>}
+          {availableModels.map((model) => (
+            <option key={model} value={model}>{model}</option>
+          ))}
+        </select>
+      </Field>
+      {!modelsUnknown && (
+        <div className="ds-field-hint" style={{ marginTop: -8, marginBottom: 14 }}>
+          installed: {availableModels.join(" · ") || "none found"}
+        </div>
+      )}
+
+      <Field label="Judge system prompt">
+        <textarea
+          name="judge_system_prompt"
+          value={draftPrompt}
+          onChange={(e) => setDraftPrompt(e.target.value)}
+          disabled={busy}
+          className="ds-textarea"
+          rows={7}
+          style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, lineHeight: 1.6, opacity: busy ? 0.62 : 1 }}
+        />
+      </Field>
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <Button variant="primary" onClick={handleSave} loading={busy} disabled={busy}>
+          Save
+        </Button>
+        {overridden && (
+          <Button onClick={handleReset} disabled={busy}>
+            Reset to default
+          </Button>
+        )}
+      </div>
+      <StatusText status={status} style={{ display: "block", marginTop: 10 }} />
     </div>
   );
 }

@@ -111,6 +111,7 @@ def _patch_pipeline(
     external=None, external_model=None, judge_result=None,
     supports_vision=True, skip_judge=False, judge_fn=None,
     local_attachment_max_tokens=None, ollama_num_ctx=None,
+    attachment_routing=None,
 ):
     async def _noop_log(*a, **k):
         return None
@@ -129,6 +130,8 @@ def _patch_pipeline(
         _config_kwargs["local_attachment_max_tokens"] = local_attachment_max_tokens
     if ollama_num_ctx is not None:
         _config_kwargs["ollama_num_ctx"] = ollama_num_ctx
+    if attachment_routing is not None:
+        _config_kwargs["attachment_routing"] = attachment_routing
     monkeypatch.setattr(
         openai_compat,
         "_read_effective_llm_config",
@@ -148,7 +151,7 @@ def _patch_pipeline(
     elif judge_fn is not None:
         monkeypatch.setattr(openai_compat, "_judge_hard_content", judge_fn)
     elif judge_result is not None:
-        async def _fake_judge(llm_router, judge_text):
+        async def _fake_judge(llm_router, judge_text, system_prompt=None):
             return judge_result
 
         monkeypatch.setattr(openai_compat, "_judge_hard_content", _fake_judge)
@@ -272,7 +275,12 @@ def test_document_image_judged_hard_routes_external(monkeypatch):
     external = CapturingExternalLLM()
     monkeypatch.setattr(openai_compat, "extract_image_text", lambda data: DOCUMENT_OCR)
     monkeypatch.setattr(openai_compat, "ocr_image_plaintext", lambda data: "some ocr'd document text")
-    _patch_pipeline(monkeypatch, router, external=external, external_model="claude-sonnet-4-6", judge_result=True)
+    # Images default to the "local" route (skip judge); map png -> "auto" so the
+    # content-difficulty judge runs, which is what this test is about.
+    _patch_pipeline(
+        monkeypatch, router, external=external, external_model="claude-sonnet-4-6",
+        judge_result=True, attachment_routing={"png": "auto"},
+    )
 
     resp = _post_image(QUESTION)
 
@@ -285,7 +293,8 @@ def test_document_image_judged_easy_routes_local(monkeypatch):
     router = StubRouter()
     monkeypatch.setattr(openai_compat, "extract_image_text", lambda data: DOCUMENT_OCR)
     monkeypatch.setattr(openai_compat, "ocr_image_plaintext", lambda data: "some ocr'd document text")
-    _patch_pipeline(monkeypatch, router, judge_result=False)
+    # png -> "auto" so the judge actually runs (default is "local", skip judge).
+    _patch_pipeline(monkeypatch, router, judge_result=False, attachment_routing={"png": "auto"})
 
     resp = _post_image(QUESTION)
 
@@ -345,7 +354,7 @@ def _marker_only_in_last_chunk_doc():
     return text
 
 
-async def _judge_on_marker(llm_router, judge_text):
+async def _judge_on_marker(llm_router, judge_text, system_prompt=None):
     return "MARKERHARD" in judge_text
 
 
@@ -390,7 +399,7 @@ def test_single_slice_file_makes_exactly_one_judge_call(monkeypatch):
     chunking existed: one judge call, not a chunking pass over a 1-item list."""
     calls = []
 
-    async def _counting_judge(llm_router, judge_text):
+    async def _counting_judge(llm_router, judge_text, system_prompt=None):
         calls.append(judge_text)
         return False
 

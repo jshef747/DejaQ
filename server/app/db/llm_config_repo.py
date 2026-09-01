@@ -13,6 +13,7 @@ _CONFIG_FIELDS = {
     "enricher_model",
     "normalizer_model",
     "validator_model",
+    "judge_model",
     "enricher_system_prompt",
     "normalizer_system_prompt",
     "validator_system_prompt",
@@ -20,6 +21,7 @@ _CONFIG_FIELDS = {
     "adjuster_system_prompt",
     "generalizer_system_prompt",
     "local_model_system_prompt",
+    "judge_system_prompt",
     "routing_threshold",
     "classifier_choice",
     "legacy_routing_threshold",
@@ -27,6 +29,7 @@ _CONFIG_FIELDS = {
     "rewrite_max_tokens",
     "ollama_num_ctx",
     "local_attachment_max_tokens",
+    "attachment_routing",
 }
 
 

@@ -11,6 +11,7 @@ PROMPT_FIELDS = (
     "adjuster_system_prompt",
     "generalizer_system_prompt",
     "local_model_system_prompt",
+    "judge_system_prompt",
 )
 
 
@@ -30,6 +31,10 @@ class LlmConfigResponse(BaseModel):
     enricher_model: str
     normalizer_model: str
     validator_model: str
+    # Attachment content-difficulty judge model ("Classified by difficulty"
+    # route). Falls back to config.JUDGE_MODEL_NAME when the workspace has no
+    # override.
+    judge_model: str
     # Which difficulty classifier is currently active for this workspace -
     # "legacy" (NVIDIA DeBERTa) or "labse" (LaBSE, the shipped default).
     classifier_choice: Literal["legacy", "labse"]
@@ -40,6 +45,7 @@ class LlmConfigResponse(BaseModel):
     adjuster_system_prompt: str
     generalizer_system_prompt: str
     local_model_system_prompt: str
+    judge_system_prompt: str
     routing_threshold: float
     # The legacy classifier's own threshold - kept separate from
     # routing_threshold (LaBSE's) since the two classifiers score on
@@ -49,6 +55,12 @@ class LlmConfigResponse(BaseModel):
     rewrite_max_tokens: int
     ollama_num_ctx: int
     local_attachment_max_tokens: int
+    # The EFFECTIVE per-file-type attachment routing map (extension ->
+    # "local"/"external") this workspace answers on, and the shipped defaults
+    # so the dashboard can distinguish a custom/moved type from a default one.
+    # Unlisted types route external. See services/attachment_routing.py.
+    attachment_routing: dict[str, str]
+    attachment_routing_defaults: dict[str, str]
     # The shipped/global default for each token budget field, regardless of
     # whether this workspace overrides it - see LlmConfigResult in
     # llm_config_service.py for why the effective fields above can't serve
@@ -68,6 +80,7 @@ class LlmConfigUpdate(BaseModel):
     enricher_model: str | None = None
     normalizer_model: str | None = None
     validator_model: str | None = None
+    judge_model: str | None = None
     enricher_system_prompt: str | None = None
     normalizer_system_prompt: str | None = None
     validator_system_prompt: str | None = None
@@ -75,6 +88,7 @@ class LlmConfigUpdate(BaseModel):
     adjuster_system_prompt: str | None = None
     generalizer_system_prompt: str | None = None
     local_model_system_prompt: str | None = None
+    judge_system_prompt: str | None = None
     routing_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     classifier_choice: Literal["legacy", "labse"] | None = None
     legacy_routing_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -98,6 +112,11 @@ class LlmConfigUpdate(BaseModel):
     # window at request time, so a value raised past what the context window
     # can hold is harmless, not rejected here.
     local_attachment_max_tokens: int | None = Field(default=None, gt=0)
+    # Full effective per-file-type routing map (the dashboard sends the whole
+    # thing); the service validates it and stores only the diffs from the
+    # shipped defaults. null resets to the pure default. Keys/values are
+    # validated in llm_config_service via attachment_routing.validate_full_map.
+    attachment_routing: dict[str, str] | None = None
 
     @field_validator(*PROMPT_FIELDS)
     @classmethod

@@ -182,11 +182,12 @@ def test_image_answered_locally_with_no_external_credential(monkeypatch, caplog)
     assert resp.status_code == 200
     assert resp.json()["output_text"] == ANSWER
     assert resp.headers["x-dejaq-model-used"] == openai_compat.LOCAL_LLM_MODEL_NAME
-    # 2 calls: the hard-content judge on the OCR'd text, then generation. The
-    # stub answers every call with ANSWER, which doesn't parse as HARD, so the
-    # judge defaults to easy and the route stays local - same outcome as
-    # before the judge existed, just one extra call to reach it.
-    assert router.calls == 2
+    # 1 call: generation only. Image types default to the "local" route in the
+    # per-file-type routing map, which answers locally and SKIPS the
+    # content-difficulty judge (vision is local-only - see attachment_routing).
+    # The judge path is still reachable by mapping an image type to "auto";
+    # test_document_image_judged_hard_routes_external covers that.
+    assert router.calls == 1
     assert router.last_images == [base64.b64encode(IMAGE_BYTES).decode("ascii")], (
         "the image bytes must reach the local generation call"
     )
