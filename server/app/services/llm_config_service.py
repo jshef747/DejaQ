@@ -5,8 +5,11 @@ from pydantic import BaseModel
 
 from app.config import (
     CONTEXT_ADJUSTER_MODEL_NAME,
+    DEFAULT_ATTACHMENT_ROUTING,
     DEFAULT_CLASSIFIER_CHOICE,
+    DEFAULT_JUDGE_SYSTEM_PROMPT,
     DEFAULT_MAX_TOKENS,
+    JUDGE_MODEL_NAME,
     ENRICHER_MODEL_NAME,
     EXTERNAL_MODEL_NAME,
     GENERALIZER_MODEL_NAME,
@@ -22,7 +25,7 @@ from app.config import (
 from app.db import credential_repo, llm_config_repo
 from app.db.models.workspace import Workspace
 from app.db.session import get_session
-from app.services import model_catalog, ollama_catalog
+from app.services import attachment_routing, model_catalog, ollama_catalog
 from app.services.context_adjuster import (
     DEFAULT_ADJUST_SYSTEM_PROMPT,
     DEFAULT_GENERALIZE_SYSTEM_PROMPT,
@@ -49,6 +52,7 @@ _OLLAMA_ROLE_FIELDS = {
     "enricher_model",
     "normalizer_model",
     "validator_model",
+    "judge_model",
 }
 
 # Prompt override fields - validated for non-empty content only (§
@@ -63,6 +67,7 @@ _PROMPT_FIELDS = {
     "adjuster_system_prompt",
     "generalizer_system_prompt",
     "local_model_system_prompt",
+    "judge_system_prompt",
 }
 
 _CLASSIFIER_CHOICES = {"legacy", "labse"}
@@ -123,6 +128,7 @@ class LlmConfigResult(BaseModel):
     enricher_model: str
     normalizer_model: str
     validator_model: str
+    judge_model: str
     enricher_system_prompt: str
     normalizer_system_prompt: str
     validator_system_prompt: str
@@ -130,6 +136,7 @@ class LlmConfigResult(BaseModel):
     adjuster_system_prompt: str
     generalizer_system_prompt: str
     local_model_system_prompt: str
+    judge_system_prompt: str
     routing_threshold: float
     # "legacy" or "labse" - which classifier this workspace routes on.
     classifier_choice: str
@@ -146,6 +153,15 @@ class LlmConfigResult(BaseModel):
     # attachment size, not generation length), so it is not validated
     # against them.
     local_attachment_max_tokens: int
+    # The EFFECTIVE per-file-type routing map this workspace answers on:
+    # {**DEFAULT_ATTACHMENT_ROUTING, **its stored overrides}. The dashboard
+    # renders every entry into its two destination columns; the request path
+    # (openai_compat) routes on exactly this. Unlisted types route external
+    # (attachment_routing.UNRECOGNISED_ROUTE) and never appear here.
+    attachment_routing: dict[str, str]
+    # The shipped defaults, so the dashboard can tell a custom/moved type from
+    # one that is following the default - same role token_budget_defaults plays.
+    attachment_routing_defaults: dict[str, str]
     # The shipped/global default for each of the four fields above, ALWAYS -
     # regardless of whether this workspace overrides it. The fields above are
     # the EFFECTIVE value (override-or-default), so once a workspace has an
@@ -205,6 +221,10 @@ def _effective(row, credentials_configured: list[str] | None = None) -> LlmConfi
             row.validator_model if row and row.validator_model is not None
             else _shipped_default_ollama_tag(VALIDATOR_MODEL_NAME)
         ),
+        "judge_model": (
+            row.judge_model if row and row.judge_model is not None
+            else _shipped_default_ollama_tag(JUDGE_MODEL_NAME)
+        ),
         "enricher_system_prompt": (
             row.enricher_system_prompt if row and row.enricher_system_prompt is not None
             else ENRICHER_DEFAULT_SYSTEM_PROMPT
@@ -233,6 +253,10 @@ def _effective(row, credentials_configured: list[str] | None = None) -> LlmConfi
             row.local_model_system_prompt if row and row.local_model_system_prompt is not None
             else LOCAL_DEFAULT_SYSTEM_PROMPT
         ),
+        "judge_system_prompt": (
+            row.judge_system_prompt if row and row.judge_system_prompt is not None
+            else DEFAULT_JUDGE_SYSTEM_PROMPT
+        ),
         "routing_threshold": (
             row.routing_threshold
             if row and row.routing_threshold is not None
@@ -259,6 +283,10 @@ def _effective(row, credentials_configured: list[str] | None = None) -> LlmConfi
             row.local_attachment_max_tokens if row and row.local_attachment_max_tokens is not None
             else LOCAL_ATTACHMENT_MAX_TOKENS
         ),
+        "attachment_routing": attachment_routing.effective_map(
+            row.attachment_routing if row else None
+        ),
+        "attachment_routing_defaults": dict(DEFAULT_ATTACHMENT_ROUTING),
     }
     overrides: dict[str, str | float | int] = {}
     if row:
@@ -270,6 +298,7 @@ def _effective(row, credentials_configured: list[str] | None = None) -> LlmConfi
             "enricher_model",
             "normalizer_model",
             "validator_model",
+            "judge_model",
             "enricher_system_prompt",
             "normalizer_system_prompt",
             "validator_system_prompt",
@@ -277,6 +306,7 @@ def _effective(row, credentials_configured: list[str] | None = None) -> LlmConfi
             "adjuster_system_prompt",
             "generalizer_system_prompt",
             "local_model_system_prompt",
+            "judge_system_prompt",
             "routing_threshold",
             "classifier_choice",
             "legacy_routing_threshold",
@@ -634,6 +664,29 @@ def read_for_workspace(workspace_slug: str) -> LlmConfigResult:
         return _effective(row, credentials)
 
 
+def _normalise_attachment_routing(payload: dict[str, Any], fields_set: set[str]) -> dict[str, Any]:
+    """Validate a submitted full routing map and reduce it to stored overrides.
+
+    The dashboard PUTs the whole effective map; we keep only its diffs from
+    DEFAULT_ATTACHMENT_ROUTING (see attachment_routing.overrides_from_full), so
+    a workspace stores the minimum and untouched types follow future default
+    changes. `None` (reset to pure default) passes straight through. An empty
+    pruned map is normalised to None for the same reason: no diffs IS the
+    default, and storing `{}` would only be a second way to spell it.
+    """
+    if "attachment_routing" not in fields_set:
+        return payload
+    value = payload.get("attachment_routing")
+    if value is None:
+        return payload
+    try:
+        cleaned = attachment_routing.validate_full_map(value)
+    except ValueError as exc:
+        raise InvalidLlmConfigUpdate(str(exc)) from exc
+    overrides = attachment_routing.overrides_from_full(cleaned)
+    return {**payload, "attachment_routing": overrides or None}
+
+
 def update_for_workspace(
     workspace_slug: str,
     payload: dict[str, Any],
@@ -645,6 +698,7 @@ def update_for_workspace(
     _validate_ollama_overrides(payload, fields_set)
     _validate_prompt_overrides(payload, fields_set)
     _validate_classifier_choice(payload, fields_set)
+    payload = _normalise_attachment_routing(payload, fields_set)
     derived = _validate_and_resolve_external_model(payload, fields_set)
     if derived:
         payload = {**payload, **derived}

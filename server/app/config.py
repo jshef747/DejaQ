@@ -449,6 +449,50 @@ OLLAMA_NUM_CTX = int(_get_float("DEJAQ_OLLAMA_NUM_CTX", 32768))
 # past what OLLAMA_NUM_CTX can hold has no effect.
 LOCAL_ATTACHMENT_MAX_TOKENS = int(_get_float("DEJAQ_LOCAL_ATTACHMENT_MAX_TOKENS", 8000))
 
+# --- Per-file-type attachment routing ---
+# Which model answers an attachment is decided by its file type, not by one
+# hard-wired rule. Three destinations (see services/attachment_routing.py):
+#   - "local"    : answer on the local model, skipping the content-difficulty
+#                  judge (vision is local-only, so images belong here).
+#   - "external" : answer on the workspace's external provider (arithmetic over
+#                  many rows is unreliable locally, so tabular data belongs here).
+#   - "auto"     : let DejaQ's own content-difficulty judge decide local vs.
+#                  external per file - the dashboard labels this "Classified by
+#                  difficulty". This is master's existing attachment behaviour.
+# This is the shipped default map (extension -> one of the three); a workspace
+# stores only its diffs on workspace_llm_configs.attachment_routing (NULL = pure
+# default), and the effective map a request routes on is
+# {**DEFAULT_ATTACHMENT_ROUTING, **overrides}. A type in NEITHER map is
+# UNRECOGNISED and routes "external" (route_for_attachment) - the
+# captain-confirmed default.
+#
+# The default groups are evidence-based (routing-fix report §5):
+#   - images                 -> local: only the local model path has vision.
+#   - tabular (csv/xlsx/tsv…) -> external: the content-judge under-fires on
+#                               "sum this column" and the local model mis-adds.
+#   - prose documents & code  -> auto: the content-judge already splits these
+#                               well (easy prose local, dense docs external).
+# "external"/"auto->external" still needs an external model configured; a type
+# routed external on a credential-less workspace 422s exactly as any hard query
+# does - the map is a routing preference, not a capability guarantee.
+DEFAULT_ATTACHMENT_ROUTING: dict[str, str] = {
+    # images - local (vision is local-only)
+    "jpg": "local", "png": "local", "gif": "local", "webp": "local",
+    "bmp": "local", "tiff": "local", "heic": "local", "svg": "local", "ico": "local",
+    # spreadsheets / tabular data - external (arithmetic + aggregation)
+    "csv": "external", "tsv": "external", "xlsx": "external", "xls": "external",
+    "ods": "external", "parquet": "external",
+    # prose documents - auto (let the content-difficulty judge decide)
+    "pdf": "auto", "docx": "auto", "doc": "auto", "odt": "auto",
+    "rtf": "auto", "md": "auto", "txt": "auto",
+    # code / config / markup - prose-like text, same judge path
+    "py": "auto", "js": "auto", "ts": "auto", "tsx": "auto", "jsx": "auto",
+    "json": "auto", "yaml": "auto", "toml": "auto", "xml": "auto",
+    "html": "auto", "css": "auto", "sh": "auto", "sql": "auto",
+    "java": "auto", "c": "auto", "cpp": "auto", "h": "auto", "go": "auto",
+    "rs": "auto", "rb": "auto", "php": "auto", "swift": "auto", "kt": "auto",
+}
+
 # Deadline for adjust() alone, the one rewrite role on the synchronous
 # cache-hit path. Its budget is REWRITE_MAX_TOKENS, sized so a full-fidelity
 # rewrite of the largest stored answer fits; without a deadline of its own the
@@ -565,6 +609,33 @@ CONTEXT_ADJUSTER_MODEL_NAME = _get_text("DEJAQ_CONTEXT_ADJUSTER_MODEL_NAME", "qw
 # model already answers it correctly, so the original claim doesn't hold; the
 # swap rests on speed and equal accuracy alone.
 VALIDATOR_MODEL_NAME = _get_text("DEJAQ_VALIDATOR_MODEL_NAME", "granite4_1_3b")
+# Model for the attachment content-difficulty judge (the "Classified by
+# difficulty" attachment route). Defaults to the local answering model - the
+# judge historically ran on it - but it is its own pipeline role so an operator
+# with a large local model can point the judge at a smaller/faster one: it
+# reads whole documents in ~12K-char chunks, one call per chunk answering a
+# single word, so it is a good candidate for a lighter model. On a workspace
+# override later uninstalled from Ollama, LLMRouterService falls back to
+# LOCAL_LLM_MODEL_NAME (this same shipped default) rather than 500ing.
+JUDGE_MODEL_NAME = _get_text("DEJAQ_JUDGE_MODEL_NAME", LOCAL_LLM_MODEL_NAME)
+# System prompt for that judge. It must elicit exactly one word, HARD or EASY -
+# see the judge in openai_compat.py, which treats any answer without "HARD" as
+# EASY (routes local). Editing it changes routing behaviour directly.
+DEFAULT_JUDGE_SYSTEM_PROMPT = (
+    "You are judging whether a document requires advanced, specialized "
+    "expertise to answer correctly - the kind of question that needs "
+    "graduate-level reasoning, formal proofs, rigorous multi-step "
+    "derivations, or deep domain expertise (advanced mathematics, physics, "
+    "law, medicine, finance, engineering, computer science, philosophy, "
+    "etc). The hard content may be located anywhere in the document, "
+    "including deep within it, even if the user's own question sounds "
+    "generic or simple (e.g. \"what does this say?\" or \"help me with "
+    "this\") - judge the DOCUMENT's content, not just the question's "
+    "phrasing. Ordinary documents (schedules, receipts, notes, "
+    "correspondence, simple instructions, casual conversation) are EASY, "
+    "even if long or repetitive. Reply with exactly one word: HARD or EASY. "
+    "No explanation."
+)
 # Cache hits at or below this cosine distance are near-identical to the stored
 # query; skip the validator and serve them directly (the embedding already
 # guarantees the cached answer covers the question).

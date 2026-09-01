@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -22,6 +22,9 @@ class WorkspaceLlmConfig(Base):
     enricher_model: Mapped[str | None] = mapped_column(String, nullable=True)
     normalizer_model: Mapped[str | None] = mapped_column(String, nullable=True)
     validator_model: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Attachment content-difficulty judge role ("Classified by difficulty"
+    # route). NULL falls back to config.JUDGE_MODEL_NAME / DEFAULT_JUDGE_SYSTEM_PROMPT.
+    judge_model: Mapped[str | None] = mapped_column(String, nullable=True)
     # Prompt overrides - TEXT, not length-limited String: few-shots pushed some
     # shipped defaults to 1-2KB, and a custom prompt may run longer.
     enricher_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -31,6 +34,7 @@ class WorkspaceLlmConfig(Base):
     adjuster_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     generalizer_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     local_model_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    judge_system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     routing_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
     # Which difficulty classifier this workspace routes on: "legacy" (NVIDIA
     # DeBERTa) or "labse" (LaBSE). NULL falls back to config.py's
@@ -53,6 +57,12 @@ class WorkspaceLlmConfig(Base):
     # LOCAL_ATTACHMENT_MAX_TOKENS in app/config.py; NULL falls back to it. See
     # that constant's comment and the size gate in openai_compat.py.
     local_attachment_max_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Per-file-type attachment routing OVERRIDES only - the workspace's diffs
+    # from config.DEFAULT_ATTACHMENT_ROUTING (extension -> "local"/"external",
+    # plus any custom types). NULL = pure default. The effective map a request
+    # routes on is {**DEFAULT_ATTACHMENT_ROUTING, **this}. See
+    # services/attachment_routing.py.
+    attachment_routing: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

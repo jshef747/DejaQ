@@ -55,6 +55,7 @@ from app.services.file_text import FileText, extract as extract_file_text
 from app.services.model_backends import LocalVisionUnsupportedError
 from app.dependencies.auth import ResolvedWorkspace, require_org_key
 from app.services import (
+    attachment_routing,
     cache_filter,
     llm_config_service,
     ollama_catalog,
@@ -87,6 +88,7 @@ from app.config import (
     CACHE_ALIAS_ENABLED,
     CACHE_BAND_MAX_DISTANCE,
     CACHE_FILE_ENABLED,
+    DEFAULT_ATTACHMENT_ROUTING,
     CONTEXT_ADJUSTER_MODEL_NAME,
     DEFAULT_CLASSIFIER_CHOICE,
     DEFAULT_MAX_TOKENS,
@@ -99,6 +101,8 @@ from app.config import (
     EXTERNAL_MODEL_NAME,
     GENERALIZER_MODEL_NAME,
     LEGACY_ROUTING_THRESHOLD,
+    DEFAULT_JUDGE_SYSTEM_PROMPT,
+    JUDGE_MODEL_NAME,
     LOAD_LABSE_CLASSIFIER,
     LOAD_LEGACY_CLASSIFIER,
     LOCAL_ATTACHMENT_MAX_TOKENS,
@@ -148,6 +152,9 @@ class ModelServices:
     adjuster: object
     enricher: object
     validator: object
+    # The attachment content-difficulty judge - an LLMRouterService on the
+    # workspace's judge_model (its own role; may differ from llm_router).
+    judge: object = None
 
 
 @dataclass(frozen=True)
@@ -183,6 +190,8 @@ class EffectiveLlmConfig:
     enricher_model: str = ENRICHER_MODEL_NAME
     normalizer_model: str = NORMALIZER_MODEL_NAME
     validator_model: str = VALIDATOR_MODEL_NAME
+    judge_model: str = JUDGE_MODEL_NAME
+    judge_system_prompt: str = DEFAULT_JUDGE_SYSTEM_PROMPT
     enricher_system_prompt: str = ENRICHER_DEFAULT_SYSTEM_PROMPT
     normalizer_system_prompt: str = NORMALIZER_DEFAULT_SYSTEM_PROMPT
     validator_system_prompt: str = VALIDATOR_DEFAULT_SYSTEM_PROMPT
@@ -203,6 +212,12 @@ class EffectiveLlmConfig:
     # gates service-pool selection (no *_overridden flag needed): it is a
     # plain comparison value read only by the file-routing size gate below.
     local_attachment_max_tokens: int = LOCAL_ATTACHMENT_MAX_TOKENS
+    # The EFFECTIVE per-file-type routing map ({**DEFAULT_ATTACHMENT_ROUTING,
+    # **workspace overrides}) - what the attachment branch below routes on. A
+    # scalar comparison value like the token budgets; never gates the service
+    # pool. Defaults to the shipped map so a test-constructed config (and the
+    # no-workspace path) routes exactly as an untouched workspace would.
+    attachment_routing: dict = field(default_factory=lambda: dict(DEFAULT_ATTACHMENT_ROUTING))
     # Which of the fields above are workspace overrides rather than shipped
     # defaults - used to decide whether the request path needs a freshly
     # resolved service instance or can reuse the default-model singleton
@@ -214,6 +229,8 @@ class EffectiveLlmConfig:
     enricher_model_overridden: bool = False
     normalizer_model_overridden: bool = False
     validator_model_overridden: bool = False
+    judge_model_overridden: bool = False
+    judge_system_prompt_overridden: bool = False
     enricher_system_prompt_overridden: bool = False
     normalizer_system_prompt_overridden: bool = False
     validator_system_prompt_overridden: bool = False
@@ -371,6 +388,8 @@ def _effective_from_config(config) -> EffectiveLlmConfig:
         enricher_model=config.enricher_model,
         normalizer_model=config.normalizer_model,
         validator_model=config.validator_model,
+        judge_model=config.judge_model,
+        judge_system_prompt=config.judge_system_prompt,
         enricher_system_prompt=config.enricher_system_prompt,
         normalizer_system_prompt=config.normalizer_system_prompt,
         validator_system_prompt=config.validator_system_prompt,
@@ -382,12 +401,15 @@ def _effective_from_config(config) -> EffectiveLlmConfig:
         rewrite_max_tokens=config.rewrite_max_tokens,
         ollama_num_ctx=config.ollama_num_ctx,
         local_attachment_max_tokens=config.local_attachment_max_tokens,
+        attachment_routing=config.attachment_routing,
         local_model_overridden="local_model" in config.overrides,
         generalizer_model_overridden="generalizer_model" in config.overrides,
         adjuster_model_overridden="adjuster_model" in config.overrides,
         enricher_model_overridden="enricher_model" in config.overrides,
         normalizer_model_overridden="normalizer_model" in config.overrides,
         validator_model_overridden="validator_model" in config.overrides,
+        judge_model_overridden="judge_model" in config.overrides,
+        judge_system_prompt_overridden="judge_system_prompt" in config.overrides,
         enricher_system_prompt_overridden="enricher_system_prompt" in config.overrides,
         normalizer_system_prompt_overridden="normalizer_system_prompt" in config.overrides,
         validator_system_prompt_overridden="validator_system_prompt" in config.overrides,
@@ -434,6 +456,7 @@ def _services_for_model_profile(model_profile: str, llm_config: EffectiveLlmConf
             ),
             enricher=get_context_enricher_service(model_name=WEAK_CPU_MODEL_NAME),
             validator=_validator,
+            judge=get_llm_router_service(model_name=WEAK_CPU_MODEL_NAME),
         )
     # Per-workspace pipeline config (dashboard-driven: a model and a system
     # prompt per role). Only resolve a fresh service_factory instance when
@@ -533,12 +556,30 @@ def _services_for_model_profile(model_profile: str, llm_config: EffectiveLlmConf
         )
         else _validator
     )
+    # The judge is its own role: an LLMRouterService on judge_model. Its system
+    # prompt is passed per call (not a router default), so the pool key is
+    # model + num_ctx. When neither is overridden this resolves to the same
+    # shared instance the local answering model uses - the judge's historical
+    # home - so a workspace that never touches it pays no extra resident model.
+    # On a judge_model uninstalled from Ollama at request time, LLMRouterService
+    # falls back to LOCAL_LLM_MODEL_NAME (see complete_with_default_fallback),
+    # and _judge_hard_content additionally swallows any error into an EASY
+    # verdict - the judge fails toward local either way.
+    judge = (
+        get_llm_router_service(
+            model_name=llm_config.judge_model if llm_config.judge_model_overridden else None,
+            num_ctx=llm_config.ollama_num_ctx if llm_config.ollama_num_ctx_overridden else None,
+        )
+        if (llm_config.judge_model_overridden or llm_config.ollama_num_ctx_overridden)
+        else _llm_router
+    )
     return ModelServices(
         normalizer=normalizer,
         llm_router=llm_router,
         adjuster=adjuster,
         enricher=enricher,
         validator=validator,
+        judge=judge,
     )
 
 
@@ -786,21 +827,11 @@ def _query_with_inlined_file(user_query: str, doc: FileText | None) -> str:
 #     and the answer trivially parseable - a free-form version of this prompt
 #     spent its whole token budget describing the content instead of
 #     committing to a verdict.
-_HARD_CONTENT_JUDGE_SYSTEM_PROMPT = (
-    "You are judging whether a document requires advanced, specialized "
-    "expertise to answer correctly - the kind of question that needs "
-    "graduate-level reasoning, formal proofs, rigorous multi-step "
-    "derivations, or deep domain expertise (advanced mathematics, physics, "
-    "law, medicine, finance, engineering, computer science, philosophy, "
-    "etc). The hard content may be located anywhere in the document, "
-    "including deep within it, even if the user's own question sounds "
-    "generic or simple (e.g. \"what does this say?\" or \"help me with "
-    "this\") - judge the DOCUMENT's content, not just the question's "
-    "phrasing. Ordinary documents (schedules, receipts, notes, "
-    "correspondence, simple instructions, casual conversation) are EASY, "
-    "even if long or repetitive. Reply with exactly one word: HARD or EASY. "
-    "No explanation."
-)
+# The shipped judge prompt now lives in config.py (DEFAULT_JUDGE_SYSTEM_PROMPT)
+# because the judge is a configurable pipeline role - llm_config_service needs
+# the same default without importing this router. Aliased here so existing
+# references and tests keep working.
+_HARD_CONTENT_JUDGE_SYSTEM_PROMPT = DEFAULT_JUDGE_SYSTEM_PROMPT
 
 
 async def _judge_hard_content(
@@ -869,7 +900,10 @@ def _chunk_for_judge(text: str) -> list[str]:
     return chunks
 
 
-async def _judge_hard_content_over_text(llm_router, user_query: str, text: str) -> bool:
+async def _judge_hard_content_over_text(
+    llm_router, user_query: str, text: str,
+    system_prompt: str = _HARD_CONTENT_JUDGE_SYSTEM_PROMPT,
+) -> bool:
     """Judge `text` (a file's extracted text, or a document image's OCR'd
     text) for hard content, chunking it first (see _chunk_for_judge) so a
     hard passage past the first window isn't missed. Each chunk gets the same
@@ -878,13 +912,17 @@ async def _judge_hard_content_over_text(llm_router, user_query: str, text: str) 
     later chunk cannot change a HARD answer back to EASY, and skipping the
     remaining calls is exactly the saving that matters on a document whose
     hard part is early.
+
+    `llm_router` is the workspace's configured judge service (a role of its own
+    now, not necessarily the local answering model), and `system_prompt` its
+    configured judge prompt.
     """
     for chunk in _chunk_for_judge(text):
         judge_query = _query_with_inlined_file(
             user_query,
             FileText(kind="", text=chunk, sha="", char_count=len(chunk), ok=True, reason=""),
         )
-        if await _judge_hard_content(llm_router, judge_query):
+        if await _judge_hard_content(llm_router, judge_query, system_prompt):
             return True
     return False
 
@@ -1906,6 +1944,57 @@ async def run_chat_pipeline(
                 )
 
         # 4. Cache miss — classify then route
+        #
+        # Per-file-type routing: the workspace's map (dashboard Pipeline page)
+        # decides the destination per attachment type, replacing the old
+        # "attachments always try local" rule. Three routes:
+        #   - "external" (or any UNRECOGNISED type, or the hard_external header)
+        #     behaves exactly like the hard_external override *for this
+        #     attachment*: it takes the same well-tested external path, not a
+        #     parallel one. `_force_external_attachment`.
+        #   - "local" answers on the local model and SKIPS the content-difficulty
+        #     judge (vision is local-only; the user asked to keep this type
+        #     local). `_force_local_attachment`. Capability/size fallbacks below
+        #     (vision gate, oversized-file gate) still apply - they are
+        #     correctness limits, not a difficulty preference.
+        #   - "auto" is master's existing behaviour: run the content-difficulty
+        #     judge and let it pick local vs. external. Neither flag set.
+        # Non-attachment requests leave the route "local"/both flags clear and
+        # are untouched here.
+        if _request_has_image:
+            _attachment_route = attachment_routing.route_for_attachment(
+                llm_config.attachment_routing, filename=None, mime=image_mime, is_image=True
+            )
+        elif _request_has_file and file_doc is not None:
+            _attachment_route = attachment_routing.route_for_attachment(
+                llm_config.attachment_routing, filename=file_name, mime=file_mime, is_image=False
+            )
+        else:
+            _attachment_route = attachment_routing.ROUTE_LOCAL
+        _force_external_attachment = (
+            routing_mode == ROUTING_MODE_HARD_EXTERNAL
+            or _attachment_route == attachment_routing.ROUTE_EXTERNAL
+        )
+        _force_local_attachment = (
+            not _force_external_attachment
+            and _attachment_route == attachment_routing.ROUTE_LOCAL
+        )
+        if _request_has_image or _request_has_file:
+            logger.info(
+                "attachment routing: kind=%s type=%s map=%s -> %s%s",
+                "image" if _request_has_image else "file",
+                attachment_routing.type_key_for(
+                    filename=None if _request_has_image else file_name,
+                    mime=image_mime if _request_has_image else file_mime,
+                    is_image=_request_has_image,
+                ),
+                _attachment_route,
+                "external" if _force_external_attachment
+                else "local(forced)" if _force_local_attachment
+                else "auto(judge)",
+                " (hard_external override)" if routing_mode == ROUTING_MODE_HARD_EXTERNAL else "",
+            )
+
         if _request_has_image:
             # Ask Ollama's /api/show (cached, ollama_catalog.supports_vision) whether
             # the workspace's configured local model actually reports "vision" -
@@ -1915,7 +2004,7 @@ async def run_chat_pipeline(
             # safety net for the window between here and a stale capability cache
             # entry (model swapped in Ollama after the last refresh).
             _local_supports_vision = ollama_catalog.supports_vision(llm_config.local_model)
-            if _local_supports_vision and routing_mode != ROUTING_MODE_HARD_EXTERNAL:
+            if _local_supports_vision and not _force_external_attachment:
                 # A confident document image gets the same hard-content judge a
                 # file does, on its OCR'd text - the vision model is never asked
                 # to judge raw pixels (measured unreliable: 4/4 wrong on exactly
@@ -1924,11 +2013,12 @@ async def run_chat_pipeline(
                 # read, has no reliable text to judge and keeps today's
                 # unconditional local routing unchanged.
                 _image_is_hard = False
-                if image_ocr is not None and image_ocr.is_document:
+                if not _force_local_attachment and image_ocr is not None and image_ocr.is_document:
                     with trace.step("hard_content_judge"):
                         _image_ocr_text = await run_in_threadpool(ocr_image_plaintext, image_bytes)
                         _image_is_hard = await _judge_hard_content_over_text(
-                            services.llm_router, user_query, _image_ocr_text
+                            services.judge or services.llm_router, user_query, _image_ocr_text,
+                            llm_config.judge_system_prompt,
                         )
                 if _image_is_hard:
                     classification = {"complexity": "hard", "score": 1.0, "task_type": "image_external_judged_hard"}
@@ -2004,15 +2094,23 @@ async def run_chat_pipeline(
             _external_pdf_capable = bool(
                 llm_config.external_model
             ) and external_supports_pdf(llm_config.external_model)
-            if _file_usable_locally and routing_mode != ROUTING_MODE_HARD_EXTERNAL:
-                # File fits the local context window - but "fits" isn't "easy".
-                # Judge on the same inlined text generation would see (reusing
-                # _query_with_inlined_file, not hand-rolled fencing, so a
-                # document that says "ignore your instructions" still reads as
-                # DATA to the judge, not a command).
+            if _file_usable_locally and _force_local_attachment:
+                # The map pins this type local: answer locally and skip the
+                # content-difficulty judge entirely (the "auto" route below is
+                # the one that judges). Size/readability still had to pass to
+                # get here (_file_usable_locally); this only skips the
+                # difficulty call, never a capability check.
+                classification = {"complexity": "easy", "score": 0.0, "task_type": "file_local"}
+            elif _file_usable_locally and not _force_external_attachment:
+                # "auto" route: file fits the local context window - but "fits"
+                # isn't "easy". Judge on the same inlined text generation would
+                # see (reusing _query_with_inlined_file, not hand-rolled
+                # fencing, so a document that says "ignore your instructions"
+                # still reads as DATA to the judge, not a command).
                 with trace.step("hard_content_judge"):
                     _file_is_hard = await _judge_hard_content_over_text(
-                        services.llm_router, user_query, file_doc.text
+                        services.judge or services.llm_router, user_query, file_doc.text,
+                        llm_config.judge_system_prompt,
                     )
                 if _file_is_hard:
                     classification = {"complexity": "hard", "score": 1.0, "task_type": "file_external_judged_hard"}
@@ -2037,7 +2135,7 @@ async def run_chat_pipeline(
                 and file_doc.kind == "pdf"
                 and not file_doc.readable
                 and file_doc.image_bytes is not None
-                and routing_mode != ROUTING_MODE_HARD_EXTERNAL
+                and not _force_external_attachment
                 and ollama_catalog.supports_vision(llm_config.local_model)
                 and not _external_pdf_capable
             ):
@@ -2063,7 +2161,7 @@ async def run_chat_pipeline(
                 file_doc is not None
                 and file_doc.kind == "pdf"
                 and not file_doc.readable
-                and routing_mode != ROUTING_MODE_HARD_EXTERNAL
+                and not _force_external_attachment
                 and not _external_pdf_capable
             ):
                 # Nothing to show ANY model - not even pixels (pypdf could not
