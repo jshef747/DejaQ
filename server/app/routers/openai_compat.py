@@ -125,6 +125,7 @@ from app.utils.exceptions import (
     ExternalLLMAuthError,
     ExternalLLMError,
 )
+from app.utils.decision_card import DecisionCard, timing_breakdown
 from app.utils.logger import clear_request_id, content_snippet, hide_content, set_request_id
 from app.utils.pipeline_trace import PipelineTrace
 from app.schemas.chat import ExternalLLMRequest
@@ -903,6 +904,7 @@ def _chunk_for_judge(text: str) -> list[str]:
 async def _judge_hard_content_over_text(
     llm_router, user_query: str, text: str,
     system_prompt: str = _HARD_CONTENT_JUDGE_SYSTEM_PROMPT,
+    *, chunk_progress: list[tuple[int, int]] | None = None,
 ) -> bool:
     """Judge `text` (a file's extracted text, or a document image's OCR'd
     text) for hard content, chunking it first (see _chunk_for_judge) so a
@@ -916,13 +918,21 @@ async def _judge_hard_content_over_text(
     `llm_router` is the workspace's configured judge service (a role of its own
     now, not necessarily the local answering model), and `system_prompt` its
     configured judge prompt.
+
+    `chunk_progress`, if passed, gets one (matched_index, total_chunks) tuple
+    appended on a HARD verdict (index is 1-based) - display-only, for the
+    decision-card judge line. Doesn't change the return type, so existing
+    callers (and their test doubles) are unaffected.
     """
-    for chunk in _chunk_for_judge(text):
+    chunks = _chunk_for_judge(text)
+    for idx, chunk in enumerate(chunks, start=1):
         judge_query = _query_with_inlined_file(
             user_query,
             FileText(kind="", text=chunk, sha="", char_count=len(chunk), ok=True, reason=""),
         )
         if await _judge_hard_content(llm_router, judge_query, system_prompt):
+            if chunk_progress is not None:
+                chunk_progress.append((idx, len(chunks)))
             return True
     return False
 
@@ -1109,6 +1119,7 @@ def _bg_generalize_and_store(
     image_text: str | None = None,
     file_sha: str | None = None,
     file_kind: str | None = None,
+    file_name: str | None = None,
     rag_document_ids: str | None = None,
     rag_document_id: int | None = None,
 ) -> None:
@@ -1154,7 +1165,7 @@ def _bg_generalize_and_store(
             clean_query, generalized, original_query, tenant_id,
             image_dhash=image_dhash, image_clip=image_clip,
             image_kind=image_kind, image_text=image_text,
-            file_sha=file_sha, file_kind=file_kind,
+            file_sha=file_sha, file_kind=file_kind, file_name=file_name,
             rag_document_ids=rag_document_ids,
             rag_document_id=rag_document_id,
         )
@@ -1361,6 +1372,7 @@ async def run_chat_pipeline(
     _request_has_rag_ref = rag_document_id is not None
     _t0 = time.monotonic()
     trace = PipelineTrace()
+    card: DecisionCard | None = None
     cache_namespace: str = getattr(raw_request.state, "cache_namespace", "dejaq_default")
     workspace_slug: str = getattr(raw_request.state, "workspace_slug", "anonymous")
     workspace_id: int | None = getattr(raw_request.state, "workspace_id", None)
@@ -1406,6 +1418,10 @@ async def run_chat_pipeline(
                 "start workspace=%s dept=%s namespace=%s model=%s",
                 workspace_slug, dept, cache_namespace, model,
             )
+        # One decision card per request for the "requests" terminal log mode
+        # (see docs/decision-card.md) — every field set below comes from a
+        # value the pipeline already computes; this adds no decision logic.
+        card = DecisionCard(question=query or "")
 
         # 1. Enrich
         enrich_succeeded = False
@@ -1413,8 +1429,11 @@ async def run_chat_pipeline(
             with trace.step("enrich"):
                 enriched = await services.enricher.enrich(user_query, history)
                 enrich_succeeded = True
-        except Exception:
+            if enrich_succeeded and enriched != user_query:
+                card.add("enriched", f'"{content_snippet(enriched) or ""}"')
+        except Exception as exc:
             logger.exception("Enricher failed")
+            card.error(f"enricher failed ({type(exc).__name__}); used the raw question instead")
             enriched = user_query
 
         # 2. Normalize
@@ -1489,6 +1508,7 @@ async def run_chat_pipeline(
                 _kind, len(image_bytes) / 1024, _attach_origin, _why,
                 hide_content(user_query),
             )
+            card.add("image", f"{_kind} {len(image_bytes) / 1024:.0f}KB — {_why}")
 
         # Read the attached file once — used both to gate a hit and to store on a
         # miss. Unlike the image above there is no kind to infer and no threshold
@@ -1527,6 +1547,12 @@ async def run_chat_pipeline(
                 _why,
                 hide_content(user_query),
             )
+            card.add(
+                "file",
+                f"{file_name or '(unnamed)'} "
+                f"({(file_doc.kind if file_doc else None) or 'unsupported'}, "
+                f"{len(file_bytes) / 1024:.0f}KB)",
+            )
 
         # Image + file gates, evaluated per pool candidate in score order. A
         # REJECT (kind mismatch, different attachment, ...) tries the next
@@ -1540,6 +1566,7 @@ async def run_chat_pipeline(
             _cand_image_anchored = False
             _cand_file_anchored = False
             _cand_rag_anchored = False
+            _cand_image_gate_line: str | None = None
 
             # Image gate. Kinds must agree (a photo never matches a document
             # entry, and a text request never matches either), then the
@@ -1579,6 +1606,10 @@ async def run_chat_pipeline(
                     float(_candidate.distance or 0.0),
                     _diagnostic_prompt(_candidate.matched_query) or "",
                     _candidate.entry_id or "?",
+                )
+                _cand_image_gate_line = (
+                    f"{'ACCEPT' if verdict else 'REJECT'} — this={_request_kind} "
+                    f"cached={_entry_kind} {_measured}"
                 )
                 if not verdict:
                     _cand_passed = False
@@ -1669,6 +1700,8 @@ async def run_chat_pipeline(
                 _image_anchored = _cand_image_anchored
                 _file_anchored = _cand_file_anchored
                 _rag_anchored = _cand_rag_anchored
+                if _cand_image_gate_line:
+                    card.add("image_gate", _cand_image_gate_line)
                 break
         else:
             # No pool candidate passed both gates (or the pool was empty) —
@@ -1678,6 +1711,30 @@ async def run_chat_pipeline(
                 nearest_distance=_pool_nearest_distance,
                 nearest_prompt=_pool_nearest_prompt,
             )
+
+        # Card cache line: whatever candidate the loop above landed on (hit or
+        # miss), report the closest match and which tier decided it. A hit that
+        # is anchored to a stored file shows that file, since the answer is
+        # about a document the asker did not necessarily attach this turn.
+        if cache_lookup.hit:
+            _card_tier = "rescue" if cache_lookup.rescued else (
+                "band" if cache_lookup.requires_validation else "trusted"
+            )
+            _card_dist = float(cache_lookup.distance or 0.0)
+            _card_prompt = _diagnostic_prompt(cache_lookup.matched_query) or ""
+        else:
+            _card_tier = "miss"
+            _card_dist = cache_lookup.nearest_distance if cache_lookup.nearest_distance is not None else 0.0
+            _card_prompt = _diagnostic_prompt(cache_lookup.nearest_prompt) or ""
+        if not cache_lookup.hit and not _card_prompt:
+            _card_cache_line = "no candidates in this department yet"
+        else:
+            # max(0, ...): cosine distance is never truly negative - this is
+            # float noise on a near-identical match (e.g. -1e-8), display only.
+            _card_cache_line = f'closest: "{_card_prompt}" dist {max(_card_dist, 0.0):.2f} ({_card_tier})'
+        if cache_lookup.hit and cache_lookup.file_sha:
+            _card_cache_line += f" (file: {cache_lookup.file_name or cache_lookup.file_sha[:8]})"
+        card.add("cache", _card_cache_line)
 
         # The text lookup found no candidate to gate at all, so the image was never
         # compared. Report how close the TEXT got and to what, because that — not
@@ -1810,8 +1867,9 @@ async def run_chat_pipeline(
                                 cache_lookup.matched_query or "",
                                 cached_answer,
                             )
-                except Exception:
+                except Exception as exc:
                     logger.exception("Validator failed; treating as cache miss (fail-safe)")
+                    card.error(f"validator crashed ({type(exc).__name__}); treated as cache miss")
                     _validator_accepted = False
 
             if not _validator_accepted:
@@ -1825,7 +1883,18 @@ async def run_chat_pipeline(
                     "image" if _image_anchored else "file" if _file_anchored else "text",
                     _cache_distance, _cache_matched_query, trace.summary(),
                 )
+                card.add(
+                    "validator",
+                    f'checked cached answer against the question -> REJECT '
+                    f'({(_validator_verdict or "").strip()[:60] or "unparseable"})',
+                )
             else:
+                if not _skip_validation:
+                    card.add(
+                        "validator",
+                        f'checked cached answer against the question -> ACCEPT '
+                        f'({(_validator_verdict or "").strip()[:60] or "ok"})',
+                    )
                 # Single-turn request (no prior conversation turns) close enough
                 # to the matched question that there is no real tone/length gap
                 # for adjust() to close — skip the rewrite and serve the stored
@@ -1903,6 +1972,9 @@ async def run_chat_pipeline(
                     _image_log_suffix(_request_has_image, _image_kind(image_ocr) if _request_has_image else None,
                               _image_clip_distance, _image_hamming, _image_token_jaccard),
                 )
+                card.add("answer", f"<- cache, {_latency / 1000:.1f}s  ({timing_breakdown(trace.steps)})")
+                card.outcome = "cache HIT · served from cache"
+                logger.info(card.render())
 
                 prompt_tokens = int(len(clean_query.split()) * 1.3)
                 words = answer.split(" ")
@@ -1995,6 +2067,7 @@ async def run_chat_pipeline(
                 " (hard_external override)" if routing_mode == ROUTING_MODE_HARD_EXTERNAL else "",
             )
 
+        _card_difficulty_score: float | None = None
         if _request_has_image:
             # Ask Ollama's /api/show (cached, ollama_catalog.supports_vision) whether
             # the workspace's configured local model actually reports "vision" -
@@ -2016,9 +2089,20 @@ async def run_chat_pipeline(
                 if not _force_local_attachment and image_ocr is not None and image_ocr.is_document:
                     with trace.step("hard_content_judge"):
                         _image_ocr_text = await run_in_threadpool(ocr_image_plaintext, image_bytes)
+                        _judge_progress: list[tuple[int, int]] = []
                         _image_is_hard = await _judge_hard_content_over_text(
                             services.judge or services.llm_router, user_query, _image_ocr_text,
                             llm_config.judge_system_prompt,
+                            chunk_progress=_judge_progress,
+                        )
+                        _judge_where = (
+                            f" (chunk {_judge_progress[0][0]}/{_judge_progress[0][1]})"
+                            if _judge_progress else ""
+                        )
+                        card.add(
+                            "judge",
+                            f"{'HARD' if _image_is_hard else 'EASY'}{_judge_where}"
+                            f" -> {'external' if _image_is_hard else 'local'}",
                         )
                 if _image_is_hard:
                     classification = {"complexity": "hard", "score": 1.0, "task_type": "image_external_judged_hard"}
@@ -2108,9 +2192,20 @@ async def run_chat_pipeline(
                 # fencing, so a document that says "ignore your instructions"
                 # still reads as DATA to the judge, not a command).
                 with trace.step("hard_content_judge"):
+                    _judge_progress = []
                     _file_is_hard = await _judge_hard_content_over_text(
                         services.judge or services.llm_router, user_query, file_doc.text,
                         llm_config.judge_system_prompt,
+                        chunk_progress=_judge_progress,
+                    )
+                    _judge_where = (
+                        f" (chunk {_judge_progress[0][0]}/{_judge_progress[0][1]})"
+                        if _judge_progress else ""
+                    )
+                    card.add(
+                        "judge",
+                        f"{'HARD' if _file_is_hard else 'EASY'}{_judge_where}"
+                        f" -> {'external' if _file_is_hard else 'local'}",
                     )
                 if _file_is_hard:
                     classification = {"complexity": "hard", "score": 1.0, "task_type": "file_external_judged_hard"}
@@ -2198,9 +2293,10 @@ async def run_chat_pipeline(
                     # scoring it as one under-fires on hard follow-ups (see
                     # dejaq-difficulty-definition/report.md section 3(b)).
                     classification = active_classifier.predict_complexity(enriched)
-            except Exception:
+            except Exception as exc:
                 logger.exception("Difficulty classifier (%s) failed", llm_config.classifier_choice)
                 classification = {"complexity": "easy", "score": 0.0, "task_type": "Unknown"}
+                card.error(f"difficulty classifier ({llm_config.classifier_choice}) failed ({type(exc).__name__}); defaulted to easy/local")
             else:
                 threshold = llm_config.active_routing_threshold
                 classification = {
@@ -2215,9 +2311,16 @@ async def run_chat_pipeline(
                     threshold,
                     classification["complexity"],
                 )
+                _card_difficulty_score = float(classification["score"])
 
         complexity = classification["complexity"]
         route = "external" if complexity == "hard" else "local"
+        if _card_difficulty_score is not None:
+            _card_route_model = (
+                (llm_config.external_model or "no external model configured")
+                if route == "external" else _local_model_used(services.llm_router)
+            )
+            card.add("difficulty", f"{_card_difficulty_score:.2f} -> {route.upper()} ({_card_route_model})")
 
         # RAG: on a genuine cache miss, ground the answer in the workspace's
         # curated knowledge base — but ONLY for a document the user actually
@@ -2246,8 +2349,15 @@ async def run_chat_pipeline(
                         clean_query,
                         RAG_TOP_K,
                     )
-            except Exception:
+            except Exception as exc:
                 logger.exception("RAG explicit-reference retrieval failed; answering without it")
+                card.error(f"RAG retrieval failed ({type(exc).__name__}); answering without grounding")
+            if rag_context:
+                card.add(
+                    "rag",
+                    f"{rag_document_title or f'document #{rag_document_id}'} "
+                    f"({len(rag_context)} chunk{'s' if len(rag_context) != 1 else ''})",
+                )
         # Optionally send grounded requests to the long-context external provider
         # instead of the local model. Off by default — the local model still
         # receives the same injected knowledge, so routing stays stable.
@@ -2749,6 +2859,7 @@ async def run_chat_pipeline(
                             elif _request_has_file:
                                 _apply_kwargs["kwargs"].update({
                                     "file_sha": _file_sha, "file_kind": _file_kind,
+                                    "file_name": file_name,
                                 })
                             if _request_has_rag_ref:
                                 # Independent of image/file above (not elif) - a
@@ -2787,6 +2898,7 @@ async def run_chat_pipeline(
                                 image_text=_img_text,
                                 file_sha=_file_sha,
                                 file_kind=_file_kind,
+                                file_name=file_name,
                                 rag_document_ids=_rag_document_ids,
                                 rag_document_id=rag_document_id,
                             )
@@ -2840,6 +2952,20 @@ async def run_chat_pipeline(
                                   _image_clip_distance, _image_hamming, _image_token_jaccard),
                 _rag_log_suffix(rag_context),
             )
+            if route_ == "error":
+                card.error(gen.get("error_detail") or "generation failed; served the generic apology")
+            elif finish_reason_ == "length":
+                card.error("answer was truncated (finish_reason=length); not cached")
+            card.add(
+                "answer",
+                f"<- {route_}, {_latency / 1000:.1f}s  ({timing_breakdown(trace.steps)})",
+            )
+            card.outcome = (
+                "cache MISS · stored for next time"
+                if store_status in ("queued", "background", "background-fallback")
+                else "cache MISS · not stored"
+            )
+            logger.info(card.render())
 
             if route_ == "external" and ext_response_ is not None:
                 # Real provider usage, not the word-count estimate below - Anthropic (and
@@ -2978,6 +3104,16 @@ async def run_chat_pipeline(
             completion_tokens=completion_tokens,
             finish_reason=finish_reason,
         )
+    except PipelineError as exc:
+        # A pipeline-level failure (missing credential, unsupported model,
+        # rejected attachment, ...) never reaches either "done" card above -
+        # print what card lines we did collect plus the loud error, so the
+        # terminal still shows why this request produced no answer.
+        if card is not None:
+            card.error(f"{exc.status_code}: {exc.detail}")
+            card.outcome = "request FAILED · no answer generated"
+            logger.info(card.render())
+        raise
     finally:
         clear_request_id(request_token)
 

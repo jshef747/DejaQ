@@ -800,10 +800,25 @@ fi
 echo -e "\n${YELLOW}Press Ctrl+C to stop all services.${NC}\n"
 
 if [[ "$LOG_MODE" == "requests" && "$RUN_BACKEND" == "true" ]]; then
+  # One decision card per request (app/utils/decision_card.py) replaces the
+  # old interleaved per-stage lines. A card is logged as one record with its
+  # internal newlines encoded as \x01 (so it survives `grep -o` as a single
+  # line); `tr` expands them back before printing. 'all' mode and the raw
+  # uvicorn.log are untouched — they still tail every original log line,
+  # cards included, exactly as logged.
   (
     tail -n 0 -f "$LOG_DIR/uvicorn.log" \
-      | grep --line-buffered -E "router\.openai_compat.*(start workspace=|done cache=|validator rejected)" \
-      | format_terminal_logs
+      | grep --line-buffered -o 'DECISION_CARD.*' \
+      | while IFS= read -r card_line; do
+          printf '%s\n' "$LOG_SEPARATOR"
+          # $'\x01', not '\x01': BSD tr (macOS/shipped default) has no \x
+          # hex-escape support in its own argument parsing and would instead
+          # treat '\x01' as four literal characters to translate ('\', 'x',
+          # '0', '1'), mangling every x/0/1 in the card into a newline. The
+          # $'...' ANSI-C quote makes bash itself expand the byte, so tr
+          # receives the real 0x01 regardless of which tr this runs against.
+          printf '%s\n' "${card_line#DECISION_CARD }" | tr $'\x01' '\n'
+        done
   ) &
 else
   (
