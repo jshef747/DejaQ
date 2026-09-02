@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.routers import rag_documents_public
 
-_AUTH = {"Authorization": "Bearer test-key"}
+_AUTH = {"Authorization": "Bearer test-key", "X-DejaQ-Department": "eng"}
 
 
 @pytest.fixture(autouse=True)
@@ -21,6 +21,7 @@ def _stub_api_key(monkeypatch):
     monkeypatch.setattr(
         _KEY_CACHE, "resolve", lambda token: ("demo", 1) if token == "test-key" else None
     )
+    monkeypatch.setattr(_KEY_CACHE, "namespace", lambda *a, **kw: "test-namespace")
 
 
 class _Chunk:

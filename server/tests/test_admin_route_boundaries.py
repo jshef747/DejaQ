@@ -108,6 +108,7 @@ def test_public_feedback_route_uses_gateway_context_and_shared_service(
         return _FeedbackResult(status="ok", new_score=4.0)
 
     monkeypatch.setattr(_KEY_CACHE, "resolve", _resolve)
+    monkeypatch.setattr(_KEY_CACHE, "namespace", lambda *a, **kw: "acme__eng")
     monkeypatch.setattr(feedback, "submit_feedback_service", _submit_feedback_service)
 
     response = TestClient(app).post(
@@ -133,7 +134,7 @@ def test_public_feedback_route_uses_gateway_context_and_shared_service(
     assert call["workspace"] == "acme"
     assert call["workspace_id"] == 1
     assert call["department"] == "eng"
-    assert call["cache_namespace"] == "acme--default"
+    assert call["cache_namespace"] == "acme__eng"
     assert call["validate_namespace"] is True
 
 

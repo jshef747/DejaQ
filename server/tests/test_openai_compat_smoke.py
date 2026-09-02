@@ -11,7 +11,7 @@ from tests.conftest import StreamingLocalRouterMixin
 # /v1/chat/completions requires a valid workspace API key (401 otherwise).
 # Every test client sends this token; the autouse fixture below makes the key
 # cache accept it. Tests that stub _KEY_CACHE.resolve themselves override it.
-_AUTH = {"Authorization": "Bearer test-key"}
+_AUTH = {"Authorization": "Bearer test-key", "X-DejaQ-Department": "eng"}
 
 
 @pytest.fixture(autouse=True)
@@ -21,6 +21,7 @@ def _stub_api_key(monkeypatch):
     monkeypatch.setattr(
         _KEY_CACHE, "resolve", lambda token: ("demo", 1) if token == "test-key" else None
     )
+    monkeypatch.setattr(_KEY_CACHE, "namespace", lambda *a, **kw: "test-namespace")
 
 
 class StubEnricher:

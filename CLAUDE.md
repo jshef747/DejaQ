@@ -103,7 +103,7 @@ DEJAQ_USE_CELERY=false uv run uvicorn app.main:app --reload
 
 ### Workspace model
 
-DejaQ is multi-**workspace**: you (the operator) are above all workspaces and can create as many as needed. Each workspace owns API keys + provider credentials + LLM routing config; departments are cache partitions within a workspace. The workspace slug is the billing/isolation boundary — departments only segment the cache.
+DejaQ is multi-**workspace**: you (the operator) are above all workspaces and can create as many as needed. Each workspace owns API keys + provider credentials + LLM routing config; departments are cache partitions within a workspace. The workspace slug is the billing/isolation boundary — departments only segment the cache. Every gateway (`/v1/*`) request must name an existing department via `X-DejaQ-Department` — there is no shared default cache namespace; a missing header is 422, an unknown department is 404 (`app/middleware/api_key.py`).
 
 On first launch with an empty DB the dashboard routes to an **onboarding wizard**: create a workspace → department → reveal the one-time API key. The CLI `dejaq-admin workspace create --name <name>` is the headless alternative.
 
