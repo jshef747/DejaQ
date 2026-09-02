@@ -25,11 +25,12 @@ def test_feedback_route_preserves_legacy_deleted_shape(monkeypatch):
         return FeedbackResult(status="deleted")
 
     monkeypatch.setattr(_KEY_CACHE, "resolve", lambda token: ("acme", 7))
+    monkeypatch.setattr(_KEY_CACHE, "namespace", lambda *a, **kw: "acme--default")
     monkeypatch.setattr(feedback, "submit_feedback_service", _submit_feedback_service)
 
     response = TestClient(app).post(
         "/v1/feedback",
-        headers={"Authorization": "Bearer org-key"},
+        headers={"Authorization": "Bearer org-key", "X-DejaQ-Department": "eng"},
         json={"response_id": "acme--default:doc1", "rating": "negative"},
     )
 
@@ -58,6 +59,7 @@ def test_feedback_route_returns_escalation_fields_for_interaction_feedback(monke
         )
 
     monkeypatch.setattr(_KEY_CACHE, "resolve", lambda token: ("acme", 7))
+    monkeypatch.setattr(_KEY_CACHE, "namespace", lambda *a, **kw: "acme__eng")
     monkeypatch.setattr(feedback, "submit_feedback_service", _submit_feedback_service)
 
     response = TestClient(app).post(
@@ -186,11 +188,12 @@ def test_feedback_route_forwards_edited_answer_and_returns_edit_fields(monkeypat
         )
 
     monkeypatch.setattr(_KEY_CACHE, "resolve", lambda token: ("acme", 7))
+    monkeypatch.setattr(_KEY_CACHE, "namespace", lambda *a, **kw: "acme__eng")
     monkeypatch.setattr(feedback, "submit_feedback_service", _submit_feedback_service)
 
     response = TestClient(app).post(
         "/v1/feedback",
-        headers={"Authorization": "Bearer org-key"},
+        headers={"Authorization": "Bearer org-key", "X-DejaQ-Department": "eng"},
         json={
             "interaction_id": "int_1",
             "rating": "positive",
@@ -215,10 +218,11 @@ def test_feedback_route_rejects_an_edit_on_a_negative_rating(monkeypatch):
     from app.middleware.api_key import _KEY_CACHE
 
     monkeypatch.setattr(_KEY_CACHE, "resolve", lambda token: ("acme", 7))
+    monkeypatch.setattr(_KEY_CACHE, "namespace", lambda *a, **kw: "acme__eng")
 
     response = TestClient(app).post(
         "/v1/feedback",
-        headers={"Authorization": "Bearer org-key"},
+        headers={"Authorization": "Bearer org-key", "X-DejaQ-Department": "eng"},
         json={"interaction_id": "int_1", "rating": "negative", "edited_answer": "text"},
     )
 
@@ -229,10 +233,11 @@ def test_feedback_route_rejects_an_edit_without_an_interaction_id(monkeypatch):
     from app.middleware.api_key import _KEY_CACHE
 
     monkeypatch.setattr(_KEY_CACHE, "resolve", lambda token: ("acme", 7))
+    monkeypatch.setattr(_KEY_CACHE, "namespace", lambda *a, **kw: "acme__eng")
 
     response = TestClient(app).post(
         "/v1/feedback",
-        headers={"Authorization": "Bearer org-key"},
+        headers={"Authorization": "Bearer org-key", "X-DejaQ-Department": "eng"},
         json={"response_id": "acme--default:doc1", "rating": "positive", "edited_answer": "text"},
     )
 

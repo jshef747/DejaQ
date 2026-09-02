@@ -41,6 +41,7 @@ def _stub_api_key(monkeypatch):
     monkeypatch.setattr(
         _KEY_CACHE, "resolve", lambda token: ("demo", 1) if token == "test-key" else None
     )
+    monkeypatch.setattr(_KEY_CACHE, "namespace", lambda *a, **kw: "test-namespace")
 
 
 def _patch_pipeline(monkeypatch, classifier_choice: str, external_llm=None, **extra_config):

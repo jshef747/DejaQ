@@ -30,6 +30,7 @@ def _stub_api_key(monkeypatch):
     monkeypatch.setattr(
         _KEY_CACHE, "resolve", lambda token: ("demo", 1) if token == "test-key" else None
     )
+    monkeypatch.setattr(_KEY_CACHE, "namespace", lambda *a, **kw: "test-namespace")
 
 
 class PiecewiseRouter:
@@ -119,6 +120,7 @@ def test_headers_are_sent_before_generation_starts(monkeypatch):
             (b"content-type", b"application/json"),
             (b"content-length", str(len(body)).encode()),
             (b"authorization", _AUTH["Authorization"].encode()),
+            (b"x-dejaq-department", _AUTH["X-DejaQ-Department"].encode()),
         ],
         "client": ("127.0.0.1", 1234),
         "server": ("testserver", 80),

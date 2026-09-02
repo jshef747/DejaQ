@@ -90,6 +90,10 @@ export async function POST(request: NextRequest) {
   if (isNextResponse(config)) return config;
 
   const body = await request.json();
+  const deptSlug = typeof body.deptSlug === "string" ? body.deptSlug.trim() : "";
+  if (!deptSlug) {
+    return proxyError(422, "Pick a department in Settings before sending a message.");
+  }
   const attachment = parseAttachment(body.attachment);
   const ragDocumentId = typeof body.ragDocumentId === "number" ? body.ragDocumentId : null;
 
@@ -108,7 +112,7 @@ export async function POST(request: NextRequest) {
       method: "POST",
       headers: buildGatewayHeaders(
         config.apiKey,
-        body.deptSlug,
+        deptSlug,
         body.modelProfile as ModelProfile,
         body.routingMode as RoutingMode,
         attachment?.sticky ?? false,

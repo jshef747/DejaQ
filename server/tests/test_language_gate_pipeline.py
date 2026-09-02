@@ -44,6 +44,7 @@ def _stub_api_key(monkeypatch):
     monkeypatch.setattr(
         _KEY_CACHE, "resolve", lambda token: ("demo", 1) if token == "test-key" else None
     )
+    monkeypatch.setattr(_KEY_CACHE, "namespace", lambda *a, **kw: "test-namespace")
 
 ENGLISH_ANSWER = "The capital of France is Paris."
 HEBREW_ANSWER = "הבירה של צרפת היא פריז."

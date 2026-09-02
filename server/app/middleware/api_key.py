@@ -3,7 +3,7 @@ import time
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 
 from app.config import KEY_CACHE_TTL
 from app.utils.db_freshness import db_mtime as _db_mtime
@@ -101,8 +101,23 @@ class _KeyCache:
         self._ensure_fresh()
         return self._keys.get(token)
 
-    def namespace(self, workspace_id: int, workspace_slug: str, dept_slug: str | None) -> str:
-        """Return cache_namespace for the given workspace+dept, or the workspace default."""
+    def namespace(self, workspace_id: int, workspace_slug: str, dept_slug: str) -> str:
+        """Return cache_namespace for the given workspace+dept.
+
+        Raises DepartmentResolutionError if the department doesn't exist under
+        the workspace — there is no shared default namespace to fall back to.
+        """
+        ns = self._depts.get((workspace_id, dept_slug))
+        if ns:
+            return ns
+        raise DepartmentResolutionError(
+            404, f"Department '{dept_slug}' not found in workspace '{workspace_slug}'"
+        )
+
+    def namespace_or_default(
+        self, workspace_id: int, workspace_slug: str, dept_slug: str | None
+    ) -> str:
+        """Non-gateway (/v1/*) authenticated paths: unchanged legacy fallback behavior."""
         if dept_slug:
             ns = self._depts.get((workspace_id, dept_slug))
             if ns:
@@ -113,6 +128,13 @@ class _KeyCache:
                 workspace_slug,
             )
         return f"{workspace_slug}--default"
+
+
+class DepartmentResolutionError(Exception):
+    def __init__(self, status_code: int, detail: str) -> None:
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
 
 
 _KEY_CACHE = _KeyCache(ttl=KEY_CACHE_TTL)
@@ -145,7 +167,20 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
                 if resolved:
                     workspace_slug, workspace_id = resolved
                     dept_slug = request.headers.get("X-DejaQ-Department") or None
-                    cache_namespace = _KEY_CACHE.namespace(workspace_id, workspace_slug, dept_slug)
+                    if request.url.path.startswith("/v1/"):
+                        # Gateway requests must name an existing department -
+                        # there is no shared default cache namespace.
+                        if not dept_slug:
+                            return JSONResponse(
+                                status_code=422,
+                                content={"detail": "X-DejaQ-Department header is required"},
+                            )
+                        try:
+                            cache_namespace = _KEY_CACHE.namespace(workspace_id, workspace_slug, dept_slug)
+                        except DepartmentResolutionError as exc:
+                            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+                    else:
+                        cache_namespace = _KEY_CACHE.namespace_or_default(workspace_id, workspace_slug, dept_slug)
                 else:
                     redacted = api_key[:8] + "..." if len(api_key) > 8 else api_key
                     logger.warning("Unrecognized API key: %s — serving as anonymous", redacted)
