@@ -31,7 +31,8 @@ from app.services.context_adjuster import (
     DEFAULT_GENERALIZE_SYSTEM_PROMPT,
 )
 from app.services.context_enricher import DEFAULT_SYSTEM_PROMPT as ENRICHER_DEFAULT_SYSTEM_PROMPT
-from app.services.llm_providers.litellm_transport import _LITELLM_PROVIDER_KEYS, _litellm_key
+from app.services.llm_providers.provider_keys import DEJAQ_PROVIDER_KEYS as _DEJAQ_PROVIDER_KEYS
+from app.services.llm_providers.provider_keys import litellm_key as _litellm_key
 from app.services.llm_router import DEFAULT_SYSTEM_PROMPT as LOCAL_DEFAULT_SYSTEM_PROMPT
 from app.services.model_backends import MODEL_RUNTIME_SPECS
 from app.services.model_catalog import STRUCTURED_CREDENTIAL_PROVIDERS
@@ -502,13 +503,10 @@ def _validate_token_budget_overrides(
         )
 
 
-# Inverse of litellm_transport's DejaQ->LiteLLM provider-key map: DejaQ's
-# credential lookup (get_workspace_provider_key, still keyed on DejaQ's own
-# provider names) needs the DejaQ key back from whatever LiteLLM's
-# get_llm_provider() resolves. Migration stage A1's provider-key-namespace
-# unification (plan section 2.11, "M7") deletes both maps together; it is
-# not part of this stage.
-_DEJAQ_PROVIDER_KEYS = {litellm_key: dejaq_key for dejaq_key, litellm_key in _LITELLM_PROVIDER_KEYS.items()}
+# `_DEJAQ_PROVIDER_KEYS` (LiteLLM provider key -> DejaQ provider key) is
+# imported from `provider_keys.py` above, shared with the usability
+# predicate in `llm_providers/__init__.py` and the transport's own
+# DejaQ->LiteLLM direction.
 
 # Frozen copy of the 38 model ids the deleted `provider_registry.PROVIDERS`
 # used to carry for DejaQ's six live providers - the one part of that

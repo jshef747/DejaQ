@@ -1,20 +1,6 @@
 from datetime import datetime
-from enum import StrEnum
 
 from pydantic import BaseModel, field_validator
-
-
-class ProviderEnum(StrEnum):
-    google = "google"
-    openai = "openai"
-    anthropic = "anthropic"
-    xai = "xai"
-    deepseek = "deepseek"
-    mistral = "mistral"
-    cohere = "cohere"
-    together = "together"
-    groq = "groq"
-    fireworks = "fireworks"
 
 
 class CredentialUpsertRequest(BaseModel):
@@ -30,7 +16,7 @@ class CredentialUpsertRequest(BaseModel):
 
 
 class CredentialResponse(BaseModel):
-    provider: ProviderEnum
+    provider: str
     key_preview: str
     created_at: datetime
     updated_at: datetime

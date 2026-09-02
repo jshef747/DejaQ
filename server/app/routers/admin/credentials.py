@@ -6,7 +6,6 @@ from app.schemas.credentials import (
     CredentialDeleteResponse,
     CredentialResponse,
     CredentialUpsertRequest,
-    ProviderEnum,
 )
 from app.services.credential_service import CredentialService
 
@@ -39,22 +38,28 @@ def list_credentials(workspace_slug: str):
 @router.put("/workspaces/{workspace_slug}/credentials/{provider}", response_model=CredentialResponse)
 def upsert_credential(
     workspace_slug: str,
-    provider: ProviderEnum,
+    provider: str,
     body: CredentialUpsertRequest,
 ):
     workspace_id = _resolve_workspace_id(workspace_slug)
     service = _credential_service()
     with get_session() as session:
-        row = service.upsert(session, workspace_id, provider.value, body.api_key)
+        try:
+            row = service.upsert(session, workspace_id, provider, body.api_key)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         return service.to_masked_response(row)
 
 
 @router.delete("/workspaces/{workspace_slug}/credentials/{provider}", response_model=CredentialDeleteResponse)
-def delete_credential(workspace_slug: str, provider: ProviderEnum):
+def delete_credential(workspace_slug: str, provider: str):
     workspace_id = _resolve_workspace_id(workspace_slug)
     service = _credential_service()
     with get_session() as session:
-        deleted = service.delete(session, workspace_id, provider.value)
+        try:
+            deleted = service.delete(session, workspace_id, provider)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     if not deleted:
-        raise HTTPException(status_code=404, detail=f"No {provider.value} credential found.")
+        raise HTTPException(status_code=404, detail=f"No {provider} credential found.")
     return CredentialDeleteResponse(deleted=True)

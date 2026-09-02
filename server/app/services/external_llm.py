@@ -2,17 +2,18 @@ import logging
 from collections.abc import AsyncGenerator
 
 from app.schemas.chat import ExternalLLMRequest, ExternalLLMResponse, ExternalStreamChunk
-from app.services.llm_providers import LIVE_PROVIDERS, LLMProviderClient, redact_api_key
+from app.services.llm_providers import LLMProviderClient, is_usable_provider, redact_api_key
 from app.services.llm_providers.litellm_transport import LiteLLMTransportClient
 from app.utils.exceptions import ExternalLLMError
 
 logger = logging.getLogger("dejaq.services.external_llm")
 
-# Migration stage L6: every live provider now routes through the one
-# LiteLLM transport - no hand-written vendor clients left.
-_PROVIDER_CLIENTS: dict[str, LLMProviderClient] = {
-    provider: LiteLLMTransportClient(provider) for provider in LIVE_PROVIDERS
-}
+# Every usable provider (see `llm_providers.is_usable_provider`) routes
+# through the one LiteLLM transport - no hand-written vendor clients left.
+# Built lazily, one `LiteLLMTransportClient` per provider on first use,
+# rather than eagerly for a hand-kept set: any single-API-key provider
+# LiteLLM serves is usable, not just a fixed six.
+_PROVIDER_CLIENTS: dict[str, LLMProviderClient] = {}
 
 
 class ExternalLLMService:
@@ -20,8 +21,11 @@ class ExternalLLMService:
     def _client_for(provider: str) -> LLMProviderClient:
         client = _PROVIDER_CLIENTS.get(provider)
         if client is None:
-            logger.error("External LLM provider is not wired: %s", provider)
-            raise ExternalLLMError(f"Provider '{provider}' is not wired to a live client.")
+            if not is_usable_provider(provider):
+                logger.error("External LLM provider is not usable: %s", provider)
+                raise ExternalLLMError(f"Provider '{provider}' is not wired to a live client.")
+            client = LiteLLMTransportClient(provider)
+            _PROVIDER_CLIENTS[provider] = client
         return client
 
     async def generate_response(

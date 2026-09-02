@@ -12,6 +12,7 @@ pytestmark = pytest.mark.no_model
 _ALLOWED_IMPORTERS = {
     "app/services/llm_providers/_litellm_config.py",
     "app/services/llm_providers/litellm_transport.py",
+    "app/services/llm_providers/provider_keys.py",
     "app/services/model_catalog.py",
 }
 

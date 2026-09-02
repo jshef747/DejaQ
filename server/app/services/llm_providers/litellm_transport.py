@@ -15,6 +15,7 @@ from app.services.llm_providers.common import (
     normalize_finish_reason,
     redact_api_key,
 )
+from app.services.llm_providers.provider_keys import litellm_key as _litellm_key
 from app.utils.exceptions import (
     ExternalAttachmentTooLargeError,
     ExternalAttachmentUnsupportedError,
@@ -25,16 +26,9 @@ from app.utils.exceptions import (
 
 logger = logging.getLogger("dejaq.services.llm_providers.litellm_transport")
 
-# DejaQ's provider keys are not all LiteLLM's. `google`, `together` and
-# `fireworks` are not real LiteLLM provider names (verified against
-# litellm.provider_list); LiteLLM's names are `gemini`, `together_ai` and
-# `fireworks_ai`. The other seven DejaQ providers match. Migration stage A2
-# deletes this map by moving DejaQ onto LiteLLM's own provider namespace.
-_LITELLM_PROVIDER_KEYS = {
-    "google": "gemini",
-    "together": "together_ai",
-    "fireworks": "fireworks_ai",
-}
+# The DejaQ->LiteLLM provider-key rename map lives in `provider_keys.py`,
+# shared with `llm_providers/__init__.py`'s usability predicate and
+# `llm_config_service.py`'s inverse lookup, imported above as `_litellm_key`.
 
 # Exit seam (plan section 4, row 7): the three non-default hosts the deleted
 # `provider_registry.ProviderSpec.base_url` used to carry, so a hand-written
@@ -49,10 +43,6 @@ _LITELLM_PROVIDER_KEYS = {
 # litellm.request_timeout defaults to 6000.0 seconds (100 minutes); every
 # call must pass its own timeout rather than inherit that.
 _REQUEST_TIMEOUT_SECONDS = 60.0
-
-
-def _litellm_key(provider: str) -> str:
-    return _LITELLM_PROVIDER_KEYS.get(provider, provider)
 
 
 def _confirmed_incapable(model: str, capability_field: str) -> bool:
@@ -230,8 +220,8 @@ def _mapped_errors(api_key: str, provider: str) -> Iterator[None]:
 class LiteLLMTransportClient:
     """One `LLMProviderClient` implementation routing through LiteLLM.
 
-    One instance per key in `llm_providers.LIVE_PROVIDERS`, built by
-    `external_llm._PROVIDER_CLIENTS`. `provider` is DejaQ's own provider key,
+    One instance per usable provider key (see `llm_providers.is_usable_provider`),
+    built lazily and cached by `external_llm._client_for`. `provider` is DejaQ's own provider key,
     used only for error logging/mapping here - the wire model string comes
     straight from `request.model`, which is already LiteLLM-qualified (see
     `generate_response`).
