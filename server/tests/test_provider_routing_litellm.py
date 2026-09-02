@@ -1,6 +1,7 @@
-"""Migration stages L2-L6: `external_llm._PROVIDER_CLIENTS` switches DejaQ's
-live providers, one at a time, onto the LiteLLM transport. Each stage's
-routing assertion lives here, added in the same commit as the switch.
+"""Any single-API-key provider LiteLLM serves is usable end to end - see
+`llm_providers.is_usable_provider` and `external_llm._client_for`'s lazy,
+per-provider client cache. Structured-credential providers (Bedrock/Azure)
+stay rejected.
 """
 import asyncio
 
@@ -8,40 +9,43 @@ import pytest
 
 from app.schemas.chat import ExternalLLMRequest
 from app.services import external_llm
-from app.services.llm_providers import LIVE_PROVIDERS
+from app.services.llm_providers import is_usable_provider
 from app.services.llm_providers.litellm_transport import LiteLLMTransportClient
+from app.utils.exceptions import ExternalLLMError
 from tests._fake_llm_server import FakeLLMServer
 
 pytestmark = pytest.mark.no_model
 
 
-def test_deepseek_routes_through_litellm_transport():
-    deepseek_client = external_llm._PROVIDER_CLIENTS["deepseek"]
-    assert isinstance(deepseek_client, LiteLLMTransportClient)
-    assert deepseek_client._provider == "deepseek"
+@pytest.mark.parametrize("provider", ["google", "openai", "anthropic", "xai", "deepseek", "groq", "mistral"])
+def test_usable_providers_route_through_litellm_transport(provider):
+    assert is_usable_provider(provider)
+    client = external_llm.ExternalLLMService._client_for(provider)
+    assert isinstance(client, LiteLLMTransportClient)
+    assert client._provider == provider
 
 
-def test_every_live_provider_routes_through_the_one_litellm_transport():
-    """Migration stage L6: `openai` was the control that never migrated
-    through L2-L5 - it lost that status here, once `llm_providers/openai.py`
-    was deleted. Every live provider now shares one client class."""
-    assert set(external_llm._PROVIDER_CLIENTS.keys()) == LIVE_PROVIDERS
-    for provider, client in external_llm._PROVIDER_CLIENTS.items():
-        assert isinstance(client, LiteLLMTransportClient)
-        assert client._provider == provider
+def test_client_for_a_provider_is_cached_across_calls():
+    first = external_llm.ExternalLLMService._client_for("mistral")
+    second = external_llm.ExternalLLMService._client_for("mistral")
+    assert first is second
 
 
-def test_google_routes_through_litellm_transport():
-    google_client = external_llm._PROVIDER_CLIENTS["google"]
-    assert isinstance(google_client, LiteLLMTransportClient)
-    assert google_client._provider == "google"
+def test_the_three_renamed_providers_are_usable():
+    for provider in ("google", "together", "fireworks"):
+        assert is_usable_provider(provider)
 
 
-def test_xai_and_groq_route_through_litellm_transport():
-    xai_client = external_llm._PROVIDER_CLIENTS["xai"]
-    groq_client = external_llm._PROVIDER_CLIENTS["groq"]
-    assert isinstance(xai_client, LiteLLMTransportClient) and xai_client._provider == "xai"
-    assert isinstance(groq_client, LiteLLMTransportClient) and groq_client._provider == "groq"
+def test_structured_credential_provider_is_rejected():
+    assert not is_usable_provider("azure")
+    with pytest.raises(ExternalLLMError):
+        external_llm.ExternalLLMService._client_for("azure")
+
+
+def test_unknown_provider_key_is_rejected():
+    assert not is_usable_provider("not-a-real-provider")
+    with pytest.raises(ExternalLLMError):
+        external_llm.ExternalLLMService._client_for("not-a-real-provider")
 
 
 def _ok_groq_response(content: str = "Groq answer") -> dict:

@@ -69,3 +69,41 @@ def test_credential_service_upsert_rejects_unsupported_provider(
 
         with pytest.raises(ValueError, match="Unsupported provider"):
             service.upsert(session, workspace_id, "invalid_provider", "ciphertext")
+
+
+def test_credential_service_upsert_accepts_any_single_key_litellm_provider(
+    isolated_org_db,
+    credential_key,
+):
+    """Not a hand-kept ten-name list any more - any provider LiteLLM serves
+    with a single API-key string is accepted, mistral included."""
+    from app.db.models.workspace import Workspace
+    from app.db.session import get_session
+    from app.services.credential_service import CredentialService
+
+    service = CredentialService()
+    with get_session() as session:
+        ws = Workspace(name="Acme", slug="acme")
+        session.add(ws)
+        session.flush()
+        row = service.upsert(session, ws.id, "mistral", "mistral-key-123")
+        assert row.provider == "mistral"
+
+
+def test_credential_service_upsert_rejects_structured_credential_provider(
+    isolated_org_db,
+    credential_key,
+):
+    from app.db.models.workspace import Workspace
+    from app.db.session import get_session
+    from app.services.credential_service import CredentialService
+
+    service = CredentialService()
+    with get_session() as session:
+        ws = Workspace(name="Acme", slug="acme")
+        session.add(ws)
+        session.flush()
+        workspace_id = ws.id
+
+        with pytest.raises(ValueError, match="structured credential"):
+            service.upsert(session, workspace_id, "azure", "ciphertext")

@@ -4,20 +4,8 @@ from sqlalchemy.orm import Session
 import app.config as config
 from app.db import credential_repo
 from app.db.models.workspace_provider_credentials import WorkspaceProviderCredentials
+from app.services.llm_providers import is_usable_provider
 from app.services.model_catalog import STRUCTURED_CREDENTIAL_PROVIDERS
-
-SUPPORTED_PROVIDERS = {
-    "google",
-    "openai",
-    "anthropic",
-    "xai",
-    "deepseek",
-    "mistral",
-    "cohere",
-    "together",
-    "groq",
-    "fireworks",
-}
 
 
 class CredentialEncryptionKeyMissing(RuntimeError):
@@ -60,13 +48,13 @@ class CredentialService:
         raw_key: str,
     ) -> WorkspaceProviderCredentials:
         provider = provider.lower()
-        if provider in STRUCTURED_CREDENTIAL_PROVIDERS:
-            raise ValueError(
-                f"Provider '{provider}' needs a structured credential (more than one "
-                "field) that workspace_provider_credentials cannot store yet "
-                "(app/services/model_catalog.py:STRUCTURED_CREDENTIAL_PROVIDERS)."
-            )
-        if provider not in SUPPORTED_PROVIDERS:
+        if not is_usable_provider(provider):
+            if provider in STRUCTURED_CREDENTIAL_PROVIDERS:
+                raise ValueError(
+                    f"Provider '{provider}' needs a structured credential (more than one "
+                    "field) that workspace_provider_credentials cannot store yet "
+                    "(app/services/model_catalog.py:STRUCTURED_CREDENTIAL_PROVIDERS)."
+                )
             raise ValueError(f"Unsupported provider '{provider}'.")
         stripped = raw_key.strip()
         if not stripped:
@@ -86,7 +74,7 @@ class CredentialService:
 
     def delete(self, session: Session, workspace_id: int, provider: str) -> bool:
         provider = provider.lower()
-        if provider not in SUPPORTED_PROVIDERS:
+        if not is_usable_provider(provider):
             raise ValueError(f"Unsupported provider '{provider}'.")
         return credential_repo.delete_credential(session, workspace_id, provider)
 

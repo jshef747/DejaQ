@@ -8,10 +8,10 @@ from app.db.session import get_session
 from app.routers.admin.credentials import _credential_service, _resolve_workspace_id
 from app.schemas.chat import ExternalLLMRequest
 from app.schemas.test_provider import TestProviderRequest, TestProviderResponse
-from app.services.credential_service import SUPPORTED_PROVIDERS, CredentialService
+from app.services.credential_service import CredentialService
 from app.services.external_llm import ExternalLLMService
 from app.services.llm_config_service import resolve_provider_for_model
-from app.services.llm_providers import LIVE_PROVIDERS, redact_api_key
+from app.services.llm_providers import is_usable_provider, redact_api_key
 from app.utils.exceptions import ExternalLLMAuthError, ExternalLLMError, ExternalLLMTimeoutError
 
 logger = logging.getLogger("dejaq.routers.admin.test_provider")
@@ -66,8 +66,12 @@ async def test_provider(
             status_code=422, detail=f"Unknown provider for model '{body.model}'."
         )
 
-    if provider in SUPPORTED_PROVIDERS and provider not in LIVE_PROVIDERS:
-        raise HTTPException(status_code=422, detail=f"Provider '{provider}' is not yet wired.")
+    if not is_usable_provider(provider):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Provider '{provider}' needs a structured credential (more than one field) "
+            "and cannot be tested this way.",
+        )
 
     api_key = await run_in_threadpool(_load_workspace_api_key, workspace_slug, provider)
     if api_key is None:

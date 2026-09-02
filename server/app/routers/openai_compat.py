@@ -27,11 +27,10 @@ from app.schemas.openai_compat import (
 from app.services.external_llm import ExternalLLMService
 from app.services.credential_service import (
     ENCRYPTION_KEY_MISMATCH_DETAIL,
-    SUPPORTED_PROVIDERS,
     CredentialEncryptionKeyMissing,
     get_workspace_provider_key,
 )
-from app.services.llm_providers import LIVE_PROVIDERS
+from app.services.llm_providers import is_usable_provider
 from app.services.llm_providers.litellm_transport import external_supports_pdf
 from app.services.memory_chromaDB import (
     CacheLookupResult,
@@ -2438,12 +2437,11 @@ async def run_chat_pipeline(
                     "is not mapped to a supported provider.",
                 )
 
-            if provider in SUPPORTED_PROVIDERS and provider not in LIVE_PROVIDERS:
+            if not is_usable_provider(provider):
                 raise PipelineError(
                     422,
-                    f"Provider '{provider}' is not yet wired to a live client. "
-                    "Configure a model from a supported provider "
-                    f"({', '.join(sorted(LIVE_PROVIDERS))}).",
+                    f"Provider '{provider}' needs a structured credential (more than "
+                    "one field) and is not usable for external routing.",
                 )
 
             if workspace_id is not None:
