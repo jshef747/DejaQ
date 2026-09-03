@@ -26,7 +26,7 @@ The normalizer checks whether the question is asking for a subjective recommenda
 "How does photosynthesis work?"      → "how does photosynthesis work?"
 ```
 
-**Opinion question** → an LLM (Gemma 4 E2B) rewrites it to a short canonical form.
+**Opinion question** → an LLM rewrites it to a short canonical form (default `granite4.1:3b` on master, per-workspace configurable via `normalizer_model`).
 
 ```
 "What is the greatest coffee bean origin?" → "best coffee"
@@ -49,7 +49,7 @@ One edge case: "What's the best way to cook steak?" uses "best" but isn't asking
 ```
 User query
     ↓
-Opinion? ──yes──> Gemma E2B rewrite ──> "best <noun>"
+Opinion? ──yes──> LLM rewrite (granite4.1:3b default) ──> "best <noun>"
     │
     no
     ↓

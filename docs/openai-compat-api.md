@@ -18,11 +18,13 @@ Authorization: Bearer <dejaq-workspace-api-key>
 
 Use `dejaq-admin key generate --workspace <slug>` or the dashboard key screen to create keys. `/admin/v1/*` authenticates separately: it always grants an unauthenticated dev-admin context, protected by loopback binding rather than a credential. An admin token is never accepted by the `/v1/*` gateway, which always uses workspace API keys.
 
-Optional department isolation:
+Department (required for every authenticated `/v1/*` call, including `/v1/feedback`):
 
 ```text
 X-DejaQ-Department: <department-slug>
 ```
+
+The department names the cache partition. A missing header is a 422 and an unknown department a 404 - there is no shared default namespace.
 
 ## POST /v1/chat/completions
 
@@ -127,9 +129,17 @@ Gateway headers:
 | `x-dejaq-response-id` | Cache entry response id when feedback can be submitted. On a **streaming** miss the header goes out before the answer exists, so it names the entry the request *intends* to store - see [Feedback](#feedback) |
 | `x-dejaq-rag-chunks` | Present on a cache miss when the answer was **grounded** in the workspace knowledge base (RAG); value is the number of injected chunks. Absent when nothing was retrieved |
 | `x-dejaq-answer-authored` | `human` when the served cache entry holds an answer a person wrote through [Edit & Save](#edit--save). Only ever set on a hit - a miss is by definition an answer nobody has corrected yet |
+| `x-dejaq-cache-distance` | Cosine distance of the served cache hit (diagnostic) |
+| `x-dejaq-cache-matched-query` | The stored query the hit matched, percent-encoded (diagnostic) |
+| `x-dejaq-validator-verdict` | The cache validator's decision when a band/rescue hit was checked (diagnostic) |
+| `x-dejaq-nearest-cache-distance` / `x-dejaq-nearest-cache-prompt` | On a miss, the nearest cache entry's distance and its query (percent-encoded) - diagnostic |
+| `x-dejaq-enriched-query` | The context-enricher's standalone rewrite of the query, percent-encoded (diagnostic) |
+| `x-dejaq-prompt-difficulty` / `x-dejaq-prompt-difficulty-score` | The difficulty classifier's `easy`/`hard` label and score on a miss (diagnostic) |
+| `x-dejaq-rag-document-id` / `x-dejaq-rag-document-title` | The `@`-referenced knowledge-base document's id and title (percent-encoded), when the request referenced one |
 
 > `POST /v1/responses` (OpenAI Responses API, newer format) shares the same auth, headers, and
-> pipeline. It is stateless: `previous_response_id` / `conversation` are rejected with HTTP 400.
+> pipeline. It is stateless: `previous_response_id` / `conversation` are rejected with HTTP 422
+> (a Pydantic validation error).
 
 > **Knowledge grounding (RAG):** on a cache miss, DejaQ retrieves relevant chunks from the
 > workspace's admin-curated knowledge base and injects them into the prompt before the model
@@ -174,10 +184,24 @@ entry was anchored to the same attachment:
   stored (scanned, corrupt, or encrypted files land here); the answer still returns, uncached.
   Text/Markdown/code files have no such floor.
 
-On a miss, attachment requests skip the difficulty classifier and route unconditionally to the
-workspace's external provider (the local model is text-only). Attachment answers are stored
-verbatim, so on an attachment-anchored hit the context adjuster is skipped — no tone was ever
-stripped. Raw image bytes are never stored, only fingerprints.
+On a miss, attachment requests skip the difficulty classifier, but they are **not** routed
+unconditionally external. The route is decided by whether the local model can handle the
+attachment:
+
+- **Images** route **local** when the workspace's configured local model reports the `vision`
+  capability (`ollama_catalog.supports_vision`, a cached Ollama `/api/show` check), and
+  **external** otherwise.
+- **Files** route **local** when extraction produced usable text (every kind, PDF included -
+  inlined into the prompt), and **external** when it did not (a scanned or corrupt file with no
+  text layer).
+- A per-file-type routing map (`DEFAULT_ATTACHMENT_ROUTING`, per-workspace overridable) sets each
+  type to `local`, `external`, or `auto`; `auto` runs the content-difficulty judge to pick local
+  vs. external per attachment. An unrecognised type routes external.
+- `X-DejaQ-Routing-Mode: hard_external` is a ceiling above all of the above: it forces external
+  regardless of capability or the routing map.
+
+Attachment answers are stored verbatim, so on an attachment-anchored hit the context adjuster is
+skipped — no tone was ever stripped. Raw image bytes are never stored, only fingerprints.
 
 Thresholds and their measured derivations: [image-gate.md](image-gate.md), [file-gate.md](file-gate.md).
 
@@ -247,8 +271,11 @@ If the gateway returns `x-dejaq-response-id`, submit feedback to:
 ```http
 POST /v1/feedback
 Authorization: Bearer <dejaq-workspace-api-key>
+X-DejaQ-Department: <department-slug>
 Content-Type: application/json
 ```
+
+`X-DejaQ-Department` is required here too (same rule as the gateway); a missing header is a 422 before the endpoint runs.
 
 ```json
 {
