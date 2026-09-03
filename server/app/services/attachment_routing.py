@@ -61,7 +61,7 @@ def normalise_key(raw: str) -> str:
     return key
 
 
-def type_key_for(*, filename: str | None, mime: str | None, is_image: bool) -> str | None:
+def type_key_for(*, filename: str | None, mime: str | None) -> str | None:
     """The map key for an actual attachment, or None if undeterminable.
 
     Prefers the filename's extension (the only reliable signal for DOCX and
@@ -96,14 +96,14 @@ def effective_map(overrides: dict[str, str] | None) -> dict[str, str]:
 
 
 def route_for_attachment(
-    effective: dict[str, str], *, filename: str | None, mime: str | None, is_image: bool
+    effective: dict[str, str], *, filename: str | None, mime: str | None
 ) -> str:
     """"local", "external" or "auto" for one attachment.
 
     An unrecognised type (no key, or a key in neither defaults nor overrides)
     routes external - see UNRECOGNISED_ROUTE.
     """
-    key = type_key_for(filename=filename, mime=mime, is_image=is_image)
+    key = type_key_for(filename=filename, mime=mime)
     if key is None:
         return UNRECOGNISED_ROUTE
     return effective.get(key, UNRECOGNISED_ROUTE)
@@ -149,13 +149,13 @@ def demo() -> None:
     assert eff["pdf"] == "auto"
 
     # request-time routing (shipped defaults)
-    assert route_for_attachment(effective_map(None), filename="q3.csv", mime="text/csv", is_image=False) == "external"
-    assert route_for_attachment(effective_map(None), filename="report.pdf", mime=None, is_image=False) == "auto"
-    assert route_for_attachment(effective_map(None), filename=None, mime="image/png", is_image=True) == "local"
+    assert route_for_attachment(effective_map(None), filename="q3.csv", mime="text/csv") == "external"
+    assert route_for_attachment(effective_map(None), filename="report.pdf", mime=None) == "auto"
+    assert route_for_attachment(effective_map(None), filename=None, mime="image/png") == "local"
     # unrecognised extension -> external
-    assert route_for_attachment(effective_map(None), filename="thing.xyz", mime=None, is_image=False) == "external"
+    assert route_for_attachment(effective_map(None), filename="thing.xyz", mime=None) == "external"
     # no signal at all -> external
-    assert route_for_attachment(effective_map(None), filename=None, mime="", is_image=False) == "external"
+    assert route_for_attachment(effective_map(None), filename=None, mime="") == "external"
 
     assert validate_full_map({"log": "auto"}) == {"log": "auto"}
     try:
