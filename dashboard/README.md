@@ -34,11 +34,11 @@ workspace and generate an API key to start using the gateway.
 
 - Workspaces and departments
 - Workspace API keys for `/v1/chat/completions` and `/v1/feedback`
-- Workspace provider credentials for Google, OpenAI, Anthropic, xAI, DeepSeek, and Groq
+- Workspace provider credentials for any single-API-key LiteLLM provider the operator has credentials for
 - Per-workspace LLM config and provider test calls
 - Per-workspace pipeline stage models, system prompts, and token budgets (Pipeline page)
 - Per-workspace knowledge base (RAG documents)
-- Request stats and cache feedback review
+- Request stats
 
 Gateway requests (`/v1/*`) always use DejaQ workspace API keys, never the dashboard's own auth.
 

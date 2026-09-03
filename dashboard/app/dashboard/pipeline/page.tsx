@@ -52,6 +52,12 @@ export default async function PipelinePage({
   }
 
   let activeSlug = workspace;
+
+  // If the slug from the URL no longer exists (e.g. workspace was deleted), treat as absent.
+  if (activeSlug && !workspaces.some((w) => w.slug === activeSlug)) {
+    activeSlug = undefined;
+  }
+
   if (!activeSlug && workspaces.length > 0) {
     redirect(`/dashboard/pipeline?workspace=${workspaces[0].slug}`);
   }

@@ -3,10 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "cross-env DEBUG= next dev --webpack",
-    "dev:turbo": "cross-env DEBUG= next dev --turbopack",
+    "dev": "cross-env DEBUG= next dev --webpack --hostname 127.0.0.1",
+    "dev:turbo": "cross-env DEBUG= next dev --turbopack --hostname 127.0.0.1",
     "build": "cross-env DEBUG= next build --webpack",
-    "start": "next start"
+    "start": "next start --hostname 127.0.0.1",
+    "lint": "eslint ."
   },
   "dependencies": {
     "lucide-react": "^1.14.0",
@@ -21,6 +22,8 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "cross-env": "^10.1.0",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.2.4",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

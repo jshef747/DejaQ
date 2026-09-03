@@ -16,7 +16,6 @@ import {
   ChevronDown,
   Check,
 } from "lucide-react";
-import { listWorkspaces } from "@/app/actions/workspaces";
 import type { WorkspaceItem } from "@/lib/types";
 
 const CHAT_URL = process.env.NEXT_PUBLIC_CHAT_URL ?? "http://localhost:4000";
@@ -43,21 +42,17 @@ const WORKSPACE_SCOPED_PATHS = [
 
 interface SidebarProps {
   email: string;
+  workspaces: WorkspaceItem[];
 }
 
-export default function Sidebar({ email }: SidebarProps) {
+export default function Sidebar({ email, workspaces }: SidebarProps) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const router = useRouter();
   const activeWorkspace = searchParams.get("workspace") ?? "";
 
-  const [workspaces, setWorkspaces] = useState<WorkspaceItem[]>([]);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    listWorkspaces().then(setWorkspaces).catch(() => {});
-  }, []);
 
   useEffect(() => {
     if (workspaces.length === 0) return;

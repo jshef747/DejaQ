@@ -17,11 +17,6 @@ export default function OnboardingWizard({ alreadyOnboarded }: { alreadyOnboarde
   // client component, so useState keeps the original value — the redirect fires only for
   // users who land here while already having workspaces (e.g. manual /onboarding visit).
   const [skip] = useState(alreadyOnboarded);
-  useEffect(() => {
-    if (skip) router.replace("/dashboard");
-  }, [skip, router]);
-
-  if (skip) return null;
 
   // Step 1 state
   const [workspaceName, setWorkspaceName] = useState("");
@@ -39,6 +34,12 @@ export default function OnboardingWizard({ alreadyOnboarded }: { alreadyOnboarde
   const [keyError, setKeyError] = useState("");
   const [copied, setCopied] = useState(false);
   const [deptSlug, setDeptSlug] = useState("general");
+
+  useEffect(() => {
+    if (skip) router.replace("/dashboard");
+  }, [skip, router]);
+
+  if (skip) return null;
 
   async function handleCreateWorkspace(e: React.FormEvent) {
     e.preventDefault();

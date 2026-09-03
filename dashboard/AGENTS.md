@@ -58,6 +58,17 @@ over setting an input's `.value` directly or the `fill` command - both bypass
 React's controlled-input event chain, so the DOM shows the new text but
 component state never updates.
 
+## ESLint
+
+`eslint.config.mjs` imports `eslint-config-next`'s default export directly
+(`export default [...nextConfig]`) - it's already a flat-config array, no
+`FlatCompat`/`.eslintrc` shim needed for this Next version. This version's
+default rule set includes `react-hooks/set-state-in-effect` (React Compiler-
+era strictness), which flags the ordinary prop-to-draft-state resync effects
+used throughout Settings/Pipeline/Combobox; that rule is turned off in
+`eslint.config.mjs` with a comment - it's a real, working pattern here, not a
+bug, and rewriting it is an architecture change, not a lint fix.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.
