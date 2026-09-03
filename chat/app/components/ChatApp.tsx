@@ -664,6 +664,7 @@ export default function ChatApp() {
                 cacheMatchedQuery: result.cacheMatchedQuery,
                 authoredByHuman: result.answerAuthored === "human",
                 cacheEnrichedQuery: result.cacheEnrichedQuery,
+                validatorVerdict: result.validatorVerdict,
                 ragChunks: result.ragChunks,
                 // Server-confirmed, not the client's own optimistic guess: only
                 // set when the pipeline actually grounded this answer in the

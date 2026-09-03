@@ -66,6 +66,11 @@ export interface AppMessage {
   cacheDistance?: number | null;
   cacheMatchedQuery?: string | null;
   cacheEnrichedQuery?: string | null;
+  // The server's own validator outcome ("valid" on every cache hit,
+  // "invalid" when a near-miss candidate was rejected on a miss). The real
+  // ground truth for whether this answer's match was validator-vouched -
+  // never re-derived client-side from a distance threshold.
+  validatorVerdict?: string | null;
   // Count of knowledge-base passages injected on a miss that RAG grounded.
   // Null when nothing was retrieved, or on a cache hit (grounding, if
   // any, happened whenever that answer was first generated, not now). Count
