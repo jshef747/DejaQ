@@ -1,6 +1,5 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { responseErrorMessage as errorMessage } from "@/app/actions/errors";
 import { apiFetch } from "@/lib/api";
 import type { LlmConfigResponse, LlmConfigUpdate } from "@/lib/types";
@@ -30,6 +29,5 @@ export async function updateLlmConfig(
   }
 
   const data = (await res.json()) as LlmConfigResponse;
-  revalidatePath("/dashboard/settings");
   return { ok: true, data };
 }
