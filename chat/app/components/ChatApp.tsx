@@ -28,6 +28,7 @@ import {
 import ChatMessage, { type AppMessage, type FeedbackPhase } from "./ChatMessage";
 import ConnectScreen from "./ConnectScreen";
 import ConversationSidebar, { SIDEBAR_COLLAPSE_WIDTH } from "./ConversationSidebar";
+import { SidebarErrorBoundary } from "./SidebarErrorBoundary";
 import MessageInput from "./MessageInput";
 import ResponseDetail from "./ResponseDetail";
 import SettingsModal from "./SettingsModal";
@@ -938,18 +939,20 @@ export default function ChatApp() {
         overflow: "hidden",
       }}
     >
-      <ConversationSidebar
-        conversations={conversations}
-        activeId={activeConvId}
-        onSelect={handleSelectConversation}
-        onNew={startNewConversation}
-        onDelete={handleDeleteConversation}
-        onOpenSettings={() => setSettingsOpen(true)}
-        deptSlug={settings.deptSlug}
-        connected={connected}
-        collapsed={sidebarCollapsed}
-        generatingIds={generatingIds}
-      />
+      <SidebarErrorBoundary>
+        <ConversationSidebar
+          conversations={conversations}
+          activeId={activeConvId}
+          onSelect={handleSelectConversation}
+          onNew={startNewConversation}
+          onDelete={handleDeleteConversation}
+          onOpenSettings={() => setSettingsOpen(true)}
+          deptSlug={settings.deptSlug}
+          connected={connected}
+          collapsed={sidebarCollapsed}
+          generatingIds={generatingIds}
+        />
+      </SidebarErrorBoundary>
 
       <div style={{ display: "flex", flex: 1, flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
         {/* ── Header ── */}

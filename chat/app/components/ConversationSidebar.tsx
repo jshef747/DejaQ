@@ -296,7 +296,7 @@ function ConversationRow({
 const MAX_DASHES = 6;
 
 function RouteDashes({ conv }: { conv: StoredConversation }) {
-  const dashes = conv.messages
+  const dashes = (Array.isArray(conv.messages) ? conv.messages : [])
     .filter((m) => m.role === "assistant")
     .map((m) => classifyRoute(m.tier, m.modelUsed))
     .filter((route) => route !== null)
