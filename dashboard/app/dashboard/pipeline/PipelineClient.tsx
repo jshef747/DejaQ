@@ -179,6 +179,9 @@ export default function PipelineClient({
   const configKey = JSON.stringify(initialConfig);
   useEffect(() => {
     setConfig(initialConfig);
+    // Deliberately keyed on configKey, not initialConfig itself: initialConfig is a
+    // new object reference on every parent render, which would re-run this on every
+    // render instead of only when its content actually changes (a fresh server fetch).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configKey]);
 
@@ -550,9 +553,9 @@ function SharedModelWarning({ config }: { config: LlmConfigResponse }) {
         ))}
         <div style={{ marginTop: 6 }}>
           Each line above is stages that share one model - calls to it can queue behind each other, adding seconds
-          to what should be a fast cache hit. Raising Ollama's parallel slot count may fix this, if the machine has
+          to what should be a fast cache hit. Raising Ollama&apos;s parallel slot count may fix this, if the machine has
           memory to spare: set <code>OLLAMA_NUM_PARALLEL</code> where the Ollama server starts, then restart it.
-          Putting a group's stages on different models also removes that collision, without touching the server.
+          Putting a group&apos;s stages on different models also removes that collision, without touching the server.
         </div>
       </div>
     </div>
@@ -886,7 +889,6 @@ function ExternalEditor({
   useEffect(() => {
     setDraftBudget(budgetKey in config.overrides ? String(config[budgetKey]) : "");
     setStatus({ kind: "idle", text: "" });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config]);
 
   async function handleSave() {
@@ -1008,7 +1010,6 @@ function ClassifierEditor({
       "legacy_routing_threshold" in config.overrides ? String(config.legacy_routing_threshold) : "",
     );
     setStatus({ kind: "idle", text: "" });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config]);
 
   const overridden =
