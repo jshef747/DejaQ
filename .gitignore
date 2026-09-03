@@ -1,7 +1,6 @@
 .env
 .DS_Store
 .idea/
-.logs/
 logs/
 chroma_data/
 dump.rdb
@@ -14,10 +13,8 @@ validator-test/
 .opencode/
 .claude/scheduled_tasks.lock
 server/celerybeat-schedule*
-docs/dejaq-presentation-brief.md
 docs/*.docx
 docs/*.pdf
-presentation/
 
 # Generated eval / load-test output
 evals/**/reports/
