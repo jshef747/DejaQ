@@ -168,6 +168,20 @@ def test_image_hit_validates_in_image_mode_and_skips_the_adjuster(monkeypatch):
     assert response.json()["output_text"] == CACHED_ANSWER
 
 
+def test_image_only_request_no_text_is_answered_not_422(monkeypatch):
+    """F2: an image attached with no typed text must be answered (default query),
+    not rejected with 'No user message found'."""
+    _patch_pipeline(
+        monkeypatch, validator=RecordingValidator(accept=True), adjuster=TrackingAdjuster(),
+        memory=ImageHitMemory(), ocr=_document_ocr(),
+    )
+
+    response = _post_image("")
+
+    assert response.status_code == 200
+    assert response.headers["x-dejaq-model-used"] == "cache"
+
+
 def test_image_hit_rejected_by_validator_is_not_served(monkeypatch):
     """The sibling case: same image, but 'question 1' vs 'question 2'."""
     validator, adjuster = RecordingValidator(accept=False), TrackingAdjuster()

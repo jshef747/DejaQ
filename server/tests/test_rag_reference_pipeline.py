@@ -247,6 +247,88 @@ def test_referenced_miss_stores_the_answer_verbatim_with_the_document_id(monkeyp
     assert memory.stored[0]["rag_document_id"] == DOC_A_ID
 
 
+HEBREW_TITLE = "מדריך משתמש"
+
+
+def _use_hebrew_title(monkeypatch):
+    monkeypatch.setattr(
+        openai_responses.rag_document_repo, "get",
+        lambda session, workspace_id, doc_id: SimpleNamespace(title=HEBREW_TITLE),
+    )
+
+
+def _assert_title_decodes(resp):
+    import urllib.parse
+
+    raw = resp.headers["x-dejaq-rag-document-title"]
+    # Percent-encoded so Starlette's latin-1 header encoding never raises on a
+    # non-Latin-1 title (F1); the client decodes it with decodeURIComponent.
+    assert urllib.parse.unquote(raw) == HEBREW_TITLE
+
+
+def test_hebrew_titled_reference_hit_returns_200_and_encoded_title(monkeypatch):
+    """F1: a non-Latin-1 RAG document title must not 500 the response. Hit path,
+    non-streaming."""
+    _patch_pipeline(
+        monkeypatch, validator=RecordingValidator(True),
+        adjuster=TrackingAdjuster(), memory=ReferenceHitMemory(),
+    )
+    _use_hebrew_title(monkeypatch)
+
+    resp = _post(PARAPHRASE_QUESTION, rag_document_id=DOC_A_ID)
+
+    assert resp.status_code == 200
+    assert resp.headers["x-dejaq-tier"] == "cache"
+    _assert_title_decodes(resp)
+
+
+def test_hebrew_titled_reference_hit_streaming_returns_200(monkeypatch):
+    """F1: same on the streaming hit path - StreamingResponse encodes its
+    headers eagerly in the constructor, so a raw title would 500 there too."""
+    _patch_pipeline(
+        monkeypatch, validator=RecordingValidator(True),
+        adjuster=TrackingAdjuster(), memory=ReferenceHitMemory(),
+    )
+    _use_hebrew_title(monkeypatch)
+
+    resp = TestClient(app, headers=_AUTH).post(
+        "/v1/responses",
+        json={"model": "gpt-4o", "input": PARAPHRASE_QUESTION,
+              "rag_document_id": DOC_A_ID, "stream": True},
+    )
+
+    assert resp.status_code == 200
+    _assert_title_decodes(resp)
+
+
+def test_hebrew_titled_reference_miss_returns_200(monkeypatch):
+    """F1: the miss path sets the title header after _sanitize_headers, so it
+    was the same crash. Non-streaming and streaming."""
+    memory = RecordingStoreMemory()
+    _patch_pipeline(monkeypatch, validator=RecordingValidator(True), adjuster=BlindGeneralizer(), memory=memory)
+    monkeypatch.setattr(
+        openai_compat, "_services_for_model_profile",
+        lambda profile, llm_config=None: openai_compat.ModelServices(
+            normalizer=StubNormalizer(), llm_router=StubLocalRouter(),
+            adjuster=BlindGeneralizer(), enricher=StubEnricher(), validator=RecordingValidator(True),
+        ),
+    )
+    monkeypatch.setattr(openai_compat.rag_service, "retrieve_by_document", lambda *a, **k: [])
+    _use_hebrew_title(monkeypatch)
+
+    resp = _post("some fresh question nobody asked yet", rag_document_id=DOC_A_ID)
+    assert resp.status_code == 200
+    _assert_title_decodes(resp)
+
+    resp_stream = TestClient(app, headers=_AUTH).post(
+        "/v1/responses",
+        json={"model": "gpt-4o", "input": "another fresh question",
+              "rag_document_id": DOC_A_ID, "stream": True},
+    )
+    assert resp_stream.status_code == 200
+    _assert_title_decodes(resp_stream)
+
+
 def test_two_documents_asked_the_same_question_get_two_entries():
     """The cache-key half of item 6: `derive_doc_id` must not let two different
     referenced documents asked the same question collide into one entry."""

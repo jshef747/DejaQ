@@ -41,29 +41,29 @@ SMALL_FILE = b"Total is 1 plus 2 plus 3. " * 5  # clears CACHE_FILE_MIN_CHARS, f
 def test_default_map_routes_by_group():
     eff = attachment_routing.effective_map(None)
     # tabular -> external, images -> local, prose docs -> auto (judge)
-    assert attachment_routing.route_for_attachment(eff, filename="q.csv", mime="text/csv", is_image=False) == "external"
-    assert attachment_routing.route_for_attachment(eff, filename="r.pdf", mime=None, is_image=False) == "auto"
-    assert attachment_routing.route_for_attachment(eff, filename="notes.txt", mime="text/plain", is_image=False) == "auto"
-    assert attachment_routing.route_for_attachment(eff, filename=None, mime="image/png", is_image=True) == "local"
+    assert attachment_routing.route_for_attachment(eff, filename="q.csv", mime="text/csv") == "external"
+    assert attachment_routing.route_for_attachment(eff, filename="r.pdf", mime=None) == "auto"
+    assert attachment_routing.route_for_attachment(eff, filename="notes.txt", mime="text/plain") == "auto"
+    assert attachment_routing.route_for_attachment(eff, filename=None, mime="image/png") == "local"
 
 
 def test_unrecognised_type_routes_external():
     eff = attachment_routing.effective_map(None)
     # extension in neither defaults nor overrides
-    assert attachment_routing.route_for_attachment(eff, filename="a.xyz", mime=None, is_image=False) == "external"
+    assert attachment_routing.route_for_attachment(eff, filename="a.xyz", mime=None) == "external"
     # no signal at all (no extension, no usable MIME subtype)
-    assert attachment_routing.route_for_attachment(eff, filename=None, mime="", is_image=False) == "external"
+    assert attachment_routing.route_for_attachment(eff, filename=None, mime="") == "external"
 
 
 def test_override_moves_a_type_between_destinations():
     eff = attachment_routing.effective_map({"csv": "local", "pdf": "external"})
-    assert attachment_routing.route_for_attachment(eff, filename="q.csv", mime=None, is_image=False) == "local"
-    assert attachment_routing.route_for_attachment(eff, filename="r.pdf", mime=None, is_image=False) == "external"
+    assert attachment_routing.route_for_attachment(eff, filename="q.csv", mime=None) == "local"
+    assert attachment_routing.route_for_attachment(eff, filename="r.pdf", mime=None) == "external"
 
 
 def test_custom_type_is_honoured():
     eff = attachment_routing.effective_map({"flac": "local"})
-    assert attachment_routing.route_for_attachment(eff, filename="song.flac", mime=None, is_image=False) == "local"
+    assert attachment_routing.route_for_attachment(eff, filename="song.flac", mime=None) == "local"
 
 
 def test_overrides_prune_drops_defaults_keeps_diffs_and_custom():
