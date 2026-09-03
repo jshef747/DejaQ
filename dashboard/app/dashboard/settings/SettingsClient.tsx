@@ -43,7 +43,12 @@ function providerLabel(key: string | null) {
   return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function initialProviderFor(modelsByProvider: Record<string, CatalogModel[]>, modelId: string | null | undefined) {
+function initialProviderFor(
+  modelsByProvider: Record<string, CatalogModel[]>,
+  modelId: string | null | undefined,
+  externalProvider?: string | null,
+) {
+  if (externalProvider) return externalProvider;
   if (!modelId) return null;
   const entry = Object.entries(modelsByProvider).find(([, models]) => models.some((m) => m.id === modelId));
   return entry?.[0] ?? null;
@@ -78,7 +83,7 @@ export default function SettingsClient({
   const apiKeyFieldId = useId();
 
   const [provider, setProvider] = useState<string | null>(
-    initialProviderFor(initialModelsByProvider, initialConfig.external_model),
+    initialProviderFor(initialModelsByProvider, initialConfig.external_model, initialConfig.external_provider),
   );
   const [externalModel, setExternalModel] = useState(initialConfig.external_model ?? "");
   const [apiKey, setApiKey] = useState("");
@@ -113,7 +118,7 @@ export default function SettingsClient({
   const credsKey = JSON.stringify(initialCredentials);
 
   useEffect(() => {
-    setProvider(initialProviderFor(initialModelsByProvider, initialConfig.external_model));
+    setProvider(initialProviderFor(initialModelsByProvider, initialConfig.external_model, initialConfig.external_provider));
     setExternalModel(initialConfig.external_model ?? "");
     setCredentials(initialCredentials);
     setModelsByProvider(initialModelsByProvider);
@@ -255,7 +260,7 @@ export default function SettingsClient({
       setSaveStatus({ kind: "error", text: res.error });
       return;
     }
-    setProvider(initialProviderFor(modelsByProvider, res.data.external_model));
+    setProvider(initialProviderFor(modelsByProvider, res.data.external_model, res.data.external_provider));
     setExternalModel(res.data.external_model ?? "");
     setApiKey("");
     setSaveStatus({ kind: "success", text: `Defaults restored ${formatTime(new Date())}` });
