@@ -670,7 +670,9 @@ fi
 
 # ── 0. Database migrations ──────────────────────────────────────────────────
 echo -e "${CYAN}[0/5] Applying database migrations...${NC}"
-"$ALEMBIC" upgrade head &>"$LOG_DIR/alembic.log"
+"$ALEMBIC" upgrade head &>"$LOG_DIR/alembic.log" || {
+  echo -e "${RED}Database migrations failed. Check $LOG_DIR/alembic.log${NC}"; exit 1
+}
 echo -e "  ${GREEN}Database schema is up to date${NC}"
 
 # ── 1. ChromaDB ─────────────────────────────────────────────────────────────
