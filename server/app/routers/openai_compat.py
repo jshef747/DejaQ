@@ -1389,7 +1389,7 @@ async def run_chat_pipeline(
 
     if not user_query:
         # An attachment-only turn (image or file, no typed text) is a real
-        # request — the reference chat composer lets a user attach and send
+        # request - the reference chat composer lets a user attach and send
         # without typing. Default the query to a generic ask so the request is
         # answered instead of 422ing. A request with neither text nor
         # attachment has nothing to answer and keeps the 422.

@@ -283,7 +283,7 @@ def test_hebrew_titled_reference_hit_returns_200_and_encoded_title(monkeypatch):
 
 
 def test_hebrew_titled_reference_hit_streaming_returns_200(monkeypatch):
-    """F1: same on the streaming hit path — StreamingResponse encodes its
+    """F1: same on the streaming hit path - StreamingResponse encodes its
     headers eagerly in the constructor, so a raw title would 500 there too."""
     _patch_pipeline(
         monkeypatch, validator=RecordingValidator(True),

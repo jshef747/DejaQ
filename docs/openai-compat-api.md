@@ -201,7 +201,7 @@ attachment:
   regardless of capability or the routing map.
 
 Attachment answers are stored verbatim, so on an attachment-anchored hit the context adjuster is
-skipped — no tone was ever stripped. Raw image bytes are never stored, only fingerprints.
+skipped - no tone was ever stripped. Raw image bytes are never stored, only fingerprints.
 
 Thresholds and their measured derivations: [image-gate.md](image-gate.md), [file-gate.md](file-gate.md).
 
