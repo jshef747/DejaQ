@@ -134,6 +134,53 @@ def test_admin_llm_config_defaults_update_and_clear(isolated_org_db, authed_admi
     assert empty.status_code == 422
 
 
+def test_admin_llm_config_get_surfaces_external_provider(isolated_org_db, authed_admin_client):
+    """The GET response must carry external_provider so the dashboard's
+    Settings page can preselect the provider combobox on a plain reload
+    (F2: previously dropped from the response, so Save stayed disabled
+    until the provider was re-picked by hand)."""
+    client, headers = authed_admin_client
+    client.post("/admin/v1/workspaces", json={"name": "Acme"}, headers=headers)
+
+    defaulted = client.get("/admin/v1/workspaces/acme/llm-config", headers=headers)
+    assert defaulted.json()["external_provider"] is None
+
+    updated = client.put(
+        "/admin/v1/workspaces/acme/llm-config",
+        json={"external_model": "gemini/gemini-2.5-pro"},
+        headers=headers,
+    )
+    assert updated.json()["external_provider"] == "google"
+
+    reloaded = client.get("/admin/v1/workspaces/acme/llm-config", headers=headers)
+    assert reloaded.json()["external_provider"] == "google"
+
+
+def test_admin_llm_config_get_derives_provider_for_pre_migration_null_row(isolated_org_db, authed_admin_client):
+    """A row written before the external_provider column existed has no
+    stored provider (see test_llm_config_read_leaves_null_external_provider_unguessed
+    in test_llm_config_service.py - the service layer itself never guesses).
+    The admin GET response derives one anyway, from the qualified model
+    name, via the same resolver used at write time - so pre-migration
+    configs reload with the provider combobox populated too."""
+    from app.db import llm_config_repo, workspace_repo
+    from app.db.session import get_session
+
+    client, headers = authed_admin_client
+    client.post("/admin/v1/workspaces", json={"name": "Acme"}, headers=headers)
+
+    with get_session() as session:
+        workspace = workspace_repo.get_workspace_by_slug(session, "acme")
+        llm_config_repo.upsert_for_workspace(
+            session, workspace.id, {"external_model": "gemini/gemini-2.5-pro"}, {"external_model"}
+        )
+
+    resp = client.get("/admin/v1/workspaces/acme/llm-config", headers=headers)
+
+    assert resp.json()["external_model"] == "gemini/gemini-2.5-pro"
+    assert resp.json()["external_provider"] == "google"
+
+
 def test_admin_llm_config_surfaces_read_only_vision_capability(isolated_org_db, authed_admin_client, monkeypatch):
     """The field is read-only - LlmConfigUpdate has no such field, so it
     cannot be set by a client - and is derived fresh from /api/show, not
