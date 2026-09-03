@@ -28,6 +28,9 @@ const SSE_HEADERS_TO_FORWARD = [
   "x-dejaq-rag-chunks",
   "x-dejaq-rag-document-id",
   "x-dejaq-rag-document-title",
+  "x-dejaq-validator-verdict",
+  "x-dejaq-nearest-cache-distance",
+  "x-dejaq-nearest-cache-prompt",
 ];
 
 interface ChatMsg {

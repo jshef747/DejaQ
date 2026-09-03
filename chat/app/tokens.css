@@ -32,10 +32,12 @@
   --fg-dim: #a8aeb8;
   --fg-dimmer: #6e7581;
 
-  /* DejaQ orange - two sanctioned uses only: the cache route, and the
-     pinned-attachment state in components/MessageInput.tsx. Nothing else -
-     not a button, link, active row, or any other surface. AGENTS.md carries
-     the same two-use wording; change both together or they drift. --accent
+  /* DejaQ orange - the cache route, and every RAG/attachment affordance in
+     components/MessageInput.tsx: the pinned-attachment state, the
+     RAG-reference chip (icon, label, Clear button), the RAG-suggestion
+     chip's Use button, and the @-mention dropdown's active row. Not used for
+     ordinary buttons, links, or active rows outside that family. AGENTS.md
+     carries the same wording; change both together or they drift. --accent
      is the readable ink tone, --accent-solid the fill; on dark they must
      differ or orange text on near-black is muddy. */
   --accent: #ff8f5c;

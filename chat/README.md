@@ -13,7 +13,7 @@ cp .env.local.example .env.local
 Fill in:
 
 ```bash
-DEJAQ_API_KEY=dq_...
+DEJAQ_API_KEY=<your workspace API key>
 DEJAQ_API_BASE_URL=http://127.0.0.1:8000
 NEXT_PUBLIC_DASHBOARD_URL=http://localhost:3000/dashboard
 ```
