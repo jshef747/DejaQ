@@ -53,6 +53,12 @@ export default async function SettingsPage({
   }
 
   let activeSlug = workspace;
+
+  // If the slug from the URL no longer exists (e.g. workspace was deleted), treat as absent.
+  if (activeSlug && !workspaces.some((w) => w.slug === activeSlug)) {
+    activeSlug = undefined;
+  }
+
   if (!activeSlug && workspaces.length > 0) {
     redirect(`/dashboard/settings?workspace=${workspaces[0].slug}`);
   }
