@@ -9,15 +9,18 @@ import { textDirection } from "./text-direction";
 import { diffQueries, isLossyHeaderText } from "./word-diff";
 
 // Server-side cache-tier thresholds (DEJAQ_CACHE_TRUST_DISTANCE,
-// DEJAQ_CACHE_BAND_MAX_DISTANCE, DEJAQ_CACHE_RESCUE_MAX_DISTANCE, and
-// DEJAQ_VALIDATOR_SKIP_DISTANCE — CLAUDE.md, app/config.py). Global
-// constants, not per-workspace overridable, so drawing the scale from them
-// here is safe: this file has no way to learn a workspace's own values, and
-// none exist.
+// DEJAQ_CACHE_BAND_MAX_DISTANCE, DEJAQ_CACHE_RESCUE_MAX_DISTANCE -
+// CLAUDE.md, app/config.py). Global constants, not per-workspace
+// overridable, so drawing the scale from them here is safe: this file has
+// no way to learn a workspace's own values, and none exist. There used to be
+// a fourth constant here (VALIDATOR_SKIP_DISTANCE) for guessing whether the
+// validator ran from the distance alone - it drifted out of sync with the
+// server's real default and showed the wrong badge on real hits. That guess
+// is gone; the validator line now reads message.validatorVerdict, the
+// server's own x-dejaq-validator-verdict header, instead.
 const TRUST_DISTANCE = 0.15;
 const BAND_MAX_DISTANCE = 0.2;
 const RESCUE_MAX_DISTANCE = 0.6;
-const VALIDATOR_SKIP_DISTANCE = 0.05;
 
 // The side panel's width. It overlays the transcript rather than taking room
 // from it, so nothing else in the layout is derived from this number.
@@ -203,6 +206,20 @@ export default function ResponseDetail({
           </>
         )}
 
+        {/* The enricher rewrite is computed - and sent - for every request that
+            needed it, cache hit or not; this used to only render inside
+            WhyItMatched, which is gated on route === "cache", so a follow-up
+            that missed never showed what the pipeline understood "there" or
+            "that" to mean. */}
+        {route !== "cache" && message.cacheEnrichedQuery && (
+          <>
+            <Divider />
+            <Section title="Understood as">
+              <SearchedAsRow enriched={message.cacheEnrichedQuery} topMargin={0} />
+            </Section>
+          </>
+        )}
+
         <Divider />
 
         {/* Routing */}
@@ -374,7 +391,7 @@ function WhyItMatched({ typedQuery, message }: { typedQuery: string | null; mess
   const lossy = isLossyHeaderText(stored);
   const diff = typedQuery && !lossy ? diffQueries(typedQuery, stored) : null;
   const tier = distance <= TRUST_DISTANCE ? "Trusted" : distance <= BAND_MAX_DISTANCE ? "Band" : "Rescue";
-  const validatorNeeded = distance > VALIDATOR_SKIP_DISTANCE;
+  const validatorVerdict = message.validatorVerdict ?? null;
 
   // Scale drawn against the rescue ceiling — trusted/band/rescue proportion
   // exactly like the server's own thresholds (0.15 / 0.20 / 0.60 of 0.60).
@@ -483,12 +500,14 @@ function WhyItMatched({ typedQuery, message }: { typedQuery: string | null; mess
           {tier}
         </span>
         <div style={{ flex: 1 }} />
-        <span style={{ alignItems: "center", color: "var(--fg-dimmer)", display: "flex", fontSize: "11.5px", gap: "5px" }}>
-          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="var(--green)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M3.2 8.4 6.4 11.6 12.8 5" />
-          </svg>
-          {validatorNeeded ? "validator confirmed the match" : "no validator needed"}
-        </span>
+        {validatorVerdict === "valid" && (
+          <span style={{ alignItems: "center", color: "var(--fg-dimmer)", display: "flex", fontSize: "11.5px", gap: "5px" }}>
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="var(--green)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3.2 8.4 6.4 11.6 12.8 5" />
+            </svg>
+            validator confirmed the match
+          </span>
+        )}
       </div>
     </Section>
   );

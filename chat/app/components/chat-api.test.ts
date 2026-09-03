@@ -1,5 +1,21 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { sendFeedback } from "./chat-api";
+import { sendChatMessage, sendFeedback } from "./chat-api";
+
+// A minimal SSE stream that mirrors what /api/chat actually sends: one
+// content delta, then [DONE]. Headers are what sendChatMessage's callers
+// (ResponseDetail's badges) rely on entirely - none of this is re-derived
+// client-side, so a header the proxy drops or a name typo here would never
+// throw, just silently show nothing.
+function sseResponse(headers: Record<string, string>): Response {
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'));
+      controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+      controller.close();
+    },
+  });
+  return new Response(body, { status: 200, headers });
+}
 
 // Feedback race (server: feedback_service.py retry) still 404s once its retry
 // budget is spent. The backend's real message must reach the user - not the
@@ -148,5 +164,107 @@ describe("sendFeedback error mapping", () => {
     const result = await sendFeedback("acme__eng:doc1", null, null, "positive", "", "eng");
 
     expect(result).toEqual({ kind: "error", status: 424, message: "No DejaQ API key configured." });
+  });
+});
+
+// F2/F3: the validator-verdict and nearest-cache-* headers are the server's
+// own ground truth, forwarded by /api/chat's SSE_HEADERS_TO_FORWARD - chat
+// must read the real values rather than guess from a distance threshold.
+describe("sendChatMessage header parsing", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("parses the validator verdict and nearest-cache diagnostics", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse({
+          "x-dejaq-tier": "cache",
+          "x-dejaq-validator-verdict": "valid",
+          "x-dejaq-nearest-cache-distance": "0.4123",
+          "x-dejaq-nearest-cache-prompt": encodeURIComponent("a nearby stored question"),
+        }),
+      ),
+    );
+
+    const result = await sendChatMessage([{ role: "user", content: "hi" }], "eng");
+
+    expect(result).toMatchObject({
+      kind: "success",
+      validatorVerdict: "valid",
+      nearestCacheDistance: 0.4123,
+      nearestCacheQuery: "a nearby stored question",
+    });
+  });
+
+  it("reports null diagnostics when the server sends none", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sseResponse({ "x-dejaq-tier": "local" })));
+
+    const result = await sendChatMessage([{ role: "user", content: "hi" }], "eng");
+
+    expect(result).toMatchObject({
+      kind: "success",
+      validatorVerdict: null,
+      nearestCacheDistance: null,
+      nearestCacheQuery: null,
+    });
+  });
+
+  it("still surfaces the enriched query on a miss, not just a cache hit", async () => {
+    // F4's underlying data: the header itself is sent on a miss too.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse({
+          "x-dejaq-tier": "local",
+          "x-dejaq-enriched-query": encodeURIComponent("how many people live in Berlin, Germany?"),
+        }),
+      ),
+    );
+
+    const result = await sendChatMessage([{ role: "user", content: "how many people live there?" }], "eng");
+
+    expect(result).toMatchObject({
+      kind: "success",
+      tier: "local",
+      cacheEnrichedQuery: "how many people live in Berlin, Germany?",
+    });
+  });
+
+  it("decodes the RAG document title header instead of leaving it percent-encoded", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse({
+          "x-dejaq-tier": "local",
+          "x-dejaq-rag-document-title": encodeURIComponent("מדיניות החזרים והחזרות"),
+        }),
+      ),
+    );
+
+    const result = await sendChatMessage([{ role: "user", content: "hi" }], "eng");
+
+    expect(result).toMatchObject({
+      kind: "success",
+      ragDocumentTitle: "מדיניות החזרים והחזרות",
+    });
+  });
+
+  it("decodes a RAG document title with spaces", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse({
+          "x-dejaq-tier": "local",
+          "x-dejaq-rag-document-title": encodeURIComponent("Return Policy Notes"),
+        }),
+      ),
+    );
+
+    const result = await sendChatMessage([{ role: "user", content: "hi" }], "eng");
+
+    expect(result).toMatchObject({
+      kind: "success",
+      ragDocumentTitle: "Return Policy Notes",
+    });
   });
 });

@@ -619,6 +619,20 @@ def _validate_and_resolve_external_model(payload: dict[str, Any], fields_set: se
     if model is None:
         return {"external_provider": None}
 
+    # Reject a double-prefixed id like 'gemini/gemini/...' or 'openai/openai/...':
+    # litellm.get_llm_provider strips only the first segment, so it resolves and
+    # is stored verbatim, then the vendor rejects the malformed id at request
+    # time. Catch it here at config write instead.
+    parts = model.split("/")
+    if len(parts) >= 2 and parts[0] == parts[1] and (
+        model_catalog.is_provider_prefix(parts[0])
+        or model_catalog.is_provider_prefix(_litellm_key(parts[0]))
+    ):
+        raise InvalidLlmConfigUpdate(
+            f"external_model: '{model}' repeats the provider prefix '{parts[0]}/' - "
+            f"drop the duplicate (e.g. '{'/'.join(parts[1:])}')."
+        )
+
     try:
         litellm_provider = model_catalog.resolve_provider(model)
     except ValueError as exc:
@@ -638,9 +652,10 @@ def _validate_and_resolve_external_model(payload: dict[str, Any], fields_set: se
 
     if litellm_provider in STRUCTURED_CREDENTIAL_PROVIDERS:
         raise InvalidLlmConfigUpdate(
-            f"external_model: '{model}' - provider '{litellm_provider}' needs a "
-            "structured credential (more than one field) that "
-            "workspace_provider_credentials cannot store yet "
+            f"external_model: '{model}' - provider '{litellm_provider}' cannot be "
+            "authenticated with the single API key workspace_provider_credentials "
+            "stores (it needs a structured credential, a service account, or is a "
+            "local endpoint) "
             "(app/services/model_catalog.py:STRUCTURED_CREDENTIAL_PROVIDERS)."
         )
 

@@ -8,11 +8,22 @@ router = APIRouter()
 
 def _with_vision_capability(result: llm_config_service.LlmConfigResult) -> dict:
     # Enriched at the router, not inside llm_config_service.LlmConfigResult:
-    # this is a display-only field for this one admin response, not part of
+    # these are display-only fields for this one admin response, not part of
     # the effective pipeline config other callers (openai_compat,
     # pipeline_config_cache, the Celery task) resolve.
+    external_provider = result.external_provider
+    if external_provider is None and result.external_model is not None:
+        # A row written before the external_provider column existed (see
+        # llm_config_service.read_for_workspace's own null-provider test):
+        # the service deliberately leaves this unguessed for every other
+        # caller, but the dashboard's provider combobox needs *something* to
+        # preselect on reload, so derive it here from the qualified model
+        # name via the one resolver that already exists - never a second
+        # provider table.
+        external_provider = llm_config_service.resolve_provider_for_model(result.external_model)
     return {
         **result.model_dump(),
+        "external_provider": external_provider,
         "local_model_supports_vision": ollama_catalog.supports_vision(result.local_model),
     }
 

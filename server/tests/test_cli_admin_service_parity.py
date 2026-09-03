@@ -30,7 +30,7 @@ def test_workspace_list_uses_admin_service(monkeypatch):
 
     monkeypatch.setattr(admin.admin_service, "list_workspaces", _list_workspaces)
 
-    result = CliRunner().invoke(admin.cli, ["org", "list"])
+    result = CliRunner().invoke(admin.cli, ["workspace", "list"])
 
     assert result.exit_code == 0
     assert calls == ["list"]
@@ -89,15 +89,15 @@ def test_cli_smoke_flow_uses_shared_services(isolated_org_db, isolated_stats_db,
         assert result.exit_code == 0, result.output
         return result.output
 
-    org_create = _invoke_ok(["org", "create", "--name", "Acme"])
-    assert "Workspace created" in org_create
-    assert "Acme" in org_create
-    assert "acme" in org_create
+    workspace_create = _invoke_ok(["workspace", "create", "--name", "Acme"])
+    assert "Workspace created" in workspace_create
+    assert "Acme" in workspace_create
+    assert "acme" in workspace_create
 
-    org_list = _invoke_ok(["org", "list"])
-    assert "Workspaces" in org_list
-    assert "Acme" in org_list
-    assert "acme" in org_list
+    workspace_list = _invoke_ok(["workspace", "list"])
+    assert "Workspaces" in workspace_list
+    assert "Acme" in workspace_list
+    assert "acme" in workspace_list
 
     dept_create = _invoke_ok(["dept", "create", "--workspace", "acme", "--name", "Eng"])
     assert "Department created" in dept_create
@@ -139,11 +139,11 @@ def test_cli_smoke_flow_uses_shared_services(isolated_org_db, isolated_stats_db,
     assert "Department eng deleted" in dept_delete
     assert "Freed namespace: acme__eng" in dept_delete
 
-    org_delete = _invoke_ok(
-        ["org", "delete", "--slug", "acme"],
+    workspace_delete = _invoke_ok(
+        ["workspace", "delete", "--slug", "acme"],
         input="y\n",
     )
-    assert "Workspace acme deleted" in org_delete
+    assert "Workspace acme deleted" in workspace_delete
 
     assert calls == [
         "create_workspace",

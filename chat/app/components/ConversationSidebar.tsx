@@ -296,7 +296,7 @@ function ConversationRow({
 const MAX_DASHES = 6;
 
 function RouteDashes({ conv }: { conv: StoredConversation }) {
-  const dashes = conv.messages
+  const dashes = (Array.isArray(conv.messages) ? conv.messages : [])
     .filter((m) => m.role === "assistant")
     .map((m) => classifyRoute(m.tier, m.modelUsed))
     .filter((route) => route !== null)
@@ -332,7 +332,12 @@ function WorkspaceFooter({
 }) {
   const initials = connected && deptSlug ? deptSlug.slice(0, 2).toUpperCase() : "";
   return (
-    <div style={{ alignItems: "center", borderTop: "1px solid var(--border)", display: "flex", flexShrink: 0, gap: "10px", padding: "12px 14px" }}>
+    // Extra left padding reserves room for Next's dev-mode "N" indicator,
+    // which floats fixed over the true bottom-left corner of the viewport
+    // and otherwise sits directly on top of the initials badge and the
+    // start of the department name. Dev-only artifact; harmless in a
+    // production build where the indicator doesn't render.
+    <div style={{ alignItems: "center", borderTop: "1px solid var(--border)", display: "flex", flexShrink: 0, gap: "10px", padding: "12px 14px 12px 54px" }}>
       <div
         style={{
           alignItems: "center",

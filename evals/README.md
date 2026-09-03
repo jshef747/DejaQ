@@ -2,6 +2,12 @@
 
 Each harness runs from its own directory with `uv`. Generated `reports/` are gitignored.
 
+The cache-trust distance (`DEJAQ_CACHE_TRUST_DISTANCE`, default `0.15`) is hand-copied as a
+literal in four harness files (`enricher/harness/metrics.py`, `normalizer/harness/metrics.py`,
+`validator/scripts/image_intent_check.py`, `validator/scripts/pipeline_latency.py`) rather than
+imported from `server/app/config.py` - evals are offline-by-design and don't import server code.
+If that default ever changes, update all four by hand.
+
 | Harness | Purpose | Best config |
 |---|---|---|
 | `enricher/` | Context enricher fidelity | `v3_improved_fewshots` |

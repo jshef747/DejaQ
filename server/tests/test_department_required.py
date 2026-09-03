@@ -75,6 +75,19 @@ def test_v1_responses_rejects_missing_department_before_running_pipeline(monkeyp
     assert response.json()["detail"] == "X-DejaQ-Department header is required"
 
 
+def test_v1_feedback_rejects_missing_department_header(monkeypatch):
+    """Gateway-level: /v1/feedback also 422s on a missing department header
+    (path.startswith("/v1/") in ApiKeyMiddleware covers it too)."""
+    response = TestClient(app).post(
+        "/v1/feedback",
+        headers={"Authorization": "Bearer org-key"},
+        json={"response_id": "acme__eng:doc1", "rating": "positive"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "X-DejaQ-Department header is required"
+
+
 def test_no_shared_default_namespace_construction_remains():
     """The `<workspace>--default` fallback string must not appear in the
     module - it was the silent shared namespace this task removes."""

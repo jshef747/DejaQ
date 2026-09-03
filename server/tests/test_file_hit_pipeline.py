@@ -150,6 +150,34 @@ def test_same_pdf_is_served_from_cache(monkeypatch):
     assert adjuster.adjust_calls == []
 
 
+def test_file_only_request_no_text_is_answered_not_422(monkeypatch):
+    """F2: a file attached with no typed text must be answered (default query),
+    not rejected with 'No user message found'."""
+    _patch_pipeline(
+        monkeypatch, validator=RecordingValidator(accept=True),
+        adjuster=TrackingAdjuster(), memory=FileHitMemory(),
+    )
+
+    resp = _post("", pdf=PDF_A)
+
+    assert resp.status_code == 200
+    assert resp.headers["x-dejaq-tier"] == "cache"
+
+
+def test_no_text_and_no_attachment_still_422s_with_a_clearer_message(monkeypatch):
+    """F2: the 422 stays for a request with neither text nor an attachment, and
+    the message names the real cause."""
+    _patch_pipeline(
+        monkeypatch, validator=RecordingValidator(accept=True),
+        adjuster=TrackingAdjuster(), memory=FileHitMemory(),
+    )
+
+    resp = _post("")
+
+    assert resp.status_code == 422
+    assert "text" in resp.json()["detail"] and "image" in resp.json()["detail"]
+
+
 def test_a_different_pdf_is_not_served_the_cached_answer(monkeypatch):
     """The false-merge check. It replaces the threshold sweep the image gate
     needs: with exact hashing, one differing document is enough to prove it."""

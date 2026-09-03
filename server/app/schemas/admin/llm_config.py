@@ -20,6 +20,12 @@ class LlmConfigResponse(BaseModel):
     # DEJAQ_EXTERNAL_MODEL env default is set - "no model configured", not a
     # silently substituted one.
     external_model: str | None
+    # The provider the dashboard's provider combobox should preselect for
+    # external_model - resolved (never guessed a second way) by
+    # llm_config_service._effective, including the pre-migration null-provider
+    # fallback via resolve_provider_for_model. None only when external_model
+    # itself is None (nothing configured) or unplaceable.
+    external_provider: str | None
     local_model: str
     # Read-only: whether local_model reports Ollama's "vision" capability via
     # /api/show. None means unknown (Ollama unreachable, or the model isn't

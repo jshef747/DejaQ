@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { GripVertical, Hash, Search, Trash2, Plus, Pencil, Users } from "lucide-react";
+import { Hash, Search, Trash2, Plus, Pencil, Users } from "lucide-react";
 import Modal from "@/components/Modal";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import Button from "@/components/ui/Button";
@@ -46,16 +46,8 @@ export default function DepartmentsClient({ workspaceSlug, workspaces, depts, st
   const [renameErr, setRenameErr] = useState<string | null>(null);
 
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const [drag, setDrag] = useState<{ slug: string } | null>(null);
-  const [dropTarget, setDropTarget] = useState<{ slug: string; pos: "before" | "after" } | null>(null);
-  const [order, setOrder] = useState(() => depts.map((d) => d.slug));
 
-  const rows = order
-    .map((slug) => depts.find((d) => d.slug === slug))
-    .filter(Boolean) as DepartmentItem[];
-  for (const d of depts) {
-    if (!order.includes(d.slug)) rows.push(d);
-  }
+  const rows = depts;
 
   const statsMap: Record<string, DeptStatsItem> = {};
   for (const s of statsItems) { statsMap[s.department] = s; }
@@ -85,7 +77,6 @@ export default function DepartmentsClient({ workspaceSlug, workspaces, depts, st
     setDeleteBusy(false);
     if (!res.ok) { setDeleteErr(res.error); return; }
     setConfirmDeleteSlug(null);
-    setOrder((o) => o.filter((s) => s !== deptSlug));
     router.refresh();
   }
 
@@ -104,33 +95,13 @@ export default function DepartmentsClient({ workspaceSlug, workspaces, depts, st
 
   function toggle(slug: string) { setExpanded((e) => ({ ...e, [slug]: !e[slug] })); }
 
-  function onDragStart(slug: string) { setDrag({ slug }); }
-  function onDragOver(e: React.DragEvent, slug: string) {
-    if (!drag) return;
-    e.preventDefault();
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const pos = e.clientY - rect.top < rect.height / 2 ? "before" : "after";
-    setDropTarget({ slug, pos });
-  }
-  function onDrop(e: React.DragEvent) {
-    e.preventDefault();
-    if (!drag || !dropTarget || drag.slug === dropTarget.slug) { setDrag(null); setDropTarget(null); return; }
-    const arr = rows.map((d) => d.slug).filter((s) => s !== drag.slug);
-    const idx = arr.indexOf(dropTarget.slug);
-    const at = dropTarget.pos === "after" ? idx + 1 : idx;
-    arr.splice(at, 0, drag.slug);
-    setOrder(arr);
-    setDrag(null);
-    setDropTarget(null);
-  }
-
   const currentWorkspace = workspaces.find((w) => w.slug === workspaceSlug);
 
   return (
     <div className="ds-page">
       <SectionHeader
         title="Departments"
-        subtitle="Cache partitions inside a single workspace. Drag rows to reorder; click a row to inspect its configuration."
+        subtitle="Cache partitions inside a single workspace. Click a row to inspect its configuration."
         action={
           <Button variant="primary" onClick={() => { setCreateName(""); setCreateErr(null); setCreateOpen(true); }}>
             <Plus size={13} /> New department
@@ -215,7 +186,7 @@ export default function DepartmentsClient({ workspaceSlug, workspaces, depts, st
             action={<Button variant="primary" onClick={() => { setCreateName(""); setCreateErr(null); setCreateOpen(true); }}><Plus size={13} /> New department</Button>}
           />
         ) : (
-          <div onDrop={onDrop} onDragEnd={() => { setDrag(null); setDropTarget(null); }}>
+          <div>
             {rows.map((dept, di) => {
               const stats = statsMap[dept.slug];
               const hits = stats?.hits ?? 0;
@@ -223,16 +194,9 @@ export default function DepartmentsClient({ workspaceSlug, workspaces, depts, st
               const total = hits + misses;
               const rate = total ? hits / total : 0;
               const isOpen = !!expanded[dept.slug];
-              const isDragging = drag?.slug === dept.slug;
-              const dropBefore = dropTarget?.slug === dept.slug && dropTarget.pos === "before";
-              const dropAfter = dropTarget?.slug === dept.slug && dropTarget.pos === "after";
               return (
                 <div key={dept.id}>
-                  {dropBefore && <div style={{ height: 2, background: "var(--accent)", margin: "0 12px" }} />}
                   <div
-                    draggable
-                    onDragStart={() => onDragStart(dept.slug)}
-                    onDragOver={(e) => onDragOver(e, dept.slug)}
                     onClick={() => toggle(dept.slug)}
                     style={{
                       display: "grid",
@@ -241,15 +205,12 @@ export default function DepartmentsClient({ workspaceSlug, workspaces, depts, st
                       padding: "10px 12px",
                       alignItems: "center",
                       borderBottom: isOpen || di < rows.length - 1 ? "1px solid var(--border)" : "none",
-                      opacity: isDragging ? 0.5 : 1,
-                      background: isDragging ? "var(--bg-3)" : "transparent",
-                      cursor: "grab",
+                      cursor: "pointer",
                       userSelect: "none",
                       transition: "background 0.1s",
                     }}
                   >
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <GripVertical size={12} style={{ color: "var(--fg-dimmer)", flexShrink: 0 }} />
                       <Hash size={12} style={{ color: "var(--accent)", flexShrink: 0 }} />
                       <span style={{ fontFamily: "var(--font-mono)", fontWeight: 500, fontSize: 12 }}>{dept.slug}</span>
                       <span style={{ color: "var(--fg-dimmer)", fontFamily: "var(--font-mono)", fontSize: 10.5 }}>{dept.name}</span>
@@ -336,7 +297,6 @@ export default function DepartmentsClient({ workspaceSlug, workspaces, depts, st
                       </div>
                     </div>
                   )}
-                  {dropAfter && <div style={{ height: 2, background: "var(--accent)", margin: "0 12px" }} />}
                 </div>
               );
             })}
@@ -345,7 +305,6 @@ export default function DepartmentsClient({ workspaceSlug, workspaces, depts, st
       </div>
 
       <div style={{ marginTop: 12, fontSize: 11, color: "var(--fg-dimmer)", fontFamily: "var(--font-mono)", display: "flex", gap: 16 }}>
-        <span>↕ drag to reorder · order affects routing priority</span>
         <span>↓ click row to view cache config</span>
       </div>
 

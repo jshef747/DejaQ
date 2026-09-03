@@ -51,7 +51,6 @@ dump.rdb
 .specify/
 .claude/
 .gemini/
-.logs/
 celerybeat-schedule
 celerybeat-schedule-shm
 celerybeat-schedule-wal

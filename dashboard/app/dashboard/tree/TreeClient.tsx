@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import {
   ChevronRight,
   ChevronDown,
-  Building2,
   Hash,
   GitBranch,
   ExternalLink,

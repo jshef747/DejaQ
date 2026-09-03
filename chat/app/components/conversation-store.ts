@@ -16,13 +16,28 @@ export interface StoredConversation {
 const STORAGE_KEY = "dejaq_conversations";
 const MAX_CONVERSATIONS = 20;
 
+// Guards against a corrupt/old-format entry (e.g. `messages: null`) crashing
+// every reader downstream (ConversationSidebar's RouteDashes and friends
+// assume the shape holds). Malformed entries are dropped, not repaired -
+// there's no way to recover a conversation's messages once the shape is wrong.
+export function isValidStoredConversation(entry: unknown): entry is StoredConversation {
+  if (!entry || typeof entry !== "object") return false;
+  const c = entry as Record<string, unknown>;
+  return (
+    typeof c.id === "string" &&
+    typeof c.title === "string" &&
+    Array.isArray(c.messages) &&
+    typeof c.lastUpdated === "number"
+  );
+}
+
 function readFromStorage(): StoredConversation[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) ? parsed.filter(isValidStoredConversation) : [];
   } catch {
     return [];
   }

@@ -86,7 +86,10 @@ DEJAQ_USE_CELERY=false uv run uvicorn app.main:app --reload
 ```
 
 > **Dashboard auth:** dev bypass only — no login, no configuration. The management API is
-> protected by loopback binding, not a credential.
+> protected by loopback binding, not a credential. The dashboard itself binds to
+> `127.0.0.1` (loopback-only) when launched through `start.sh` or the package scripts;
+> a manual dev-server invocation outside those entry points is not automatically
+> loopback-bound.
 
 ## Frontend
 
@@ -119,7 +122,7 @@ The chat app runs at `http://localhost:4000` and opens on a connect screen at fi
 - `/admin/v1/*` — management API; unauthenticated dev-admin context, protected by loopback binding
 - `dejaq-admin` — workspace, department, key, stats, and knowledge-base CLI (headless/server-only bootstrap)
 
-Responses include `X-DejaQ-Interaction-Id`, `X-DejaQ-Tier` (`cache`|`local`|`external`), and (when cached) `X-DejaQ-Response-Id` headers. See [docs/getting-started.md](docs/getting-started.md), [docs/openai-compat-api.md](docs/openai-compat-api.md), [docs/cli-instructions.md](docs/cli-instructions.md), [server/README.md](server/README.md), and [dashboard/README.md](dashboard/README.md).
+Every `/v1/*` gateway call must name an existing department via the `X-DejaQ-Department` header - there is no shared default cache namespace; a missing header is `422`, an unknown department is `404`. Responses include `X-DejaQ-Interaction-Id`, `X-DejaQ-Tier` (`cache`|`local`|`external`), and (when cached) `X-DejaQ-Response-Id` headers. See [docs/getting-started.md](docs/getting-started.md), [docs/openai-compat-api.md](docs/openai-compat-api.md), [docs/cli-instructions.md](docs/cli-instructions.md), [server/README.md](server/README.md), and [dashboard/README.md](dashboard/README.md).
 
 ## Attachments (images and files)
 
@@ -212,3 +215,8 @@ npx tsc --noEmit --pretty false
 npm run build
 npm test
 ```
+
+`server/scripts/load_test_mixed_chat_requests.py` fires concurrent `/v1/chat/completions`
+requests with mixed cache hits/misses across departments against a running stack, to exercise
+concurrency (`--help` for options) - a standalone, manually-run tool, not part of the pytest
+suite.

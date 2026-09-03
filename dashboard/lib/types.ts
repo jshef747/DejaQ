@@ -94,6 +94,11 @@ export type RagDocumentItem = {
 
 export type LlmConfigResponse = {
   external_model: string | null;
+  // The provider external_model belongs to - resolved server-side so the
+  // Settings provider combobox can preselect it on load without re-deriving
+  // it from a fetched model list. null only when external_model is null or
+  // unplaceable.
+  external_provider: string | null;
   local_model: string | null;
   // Read-only, derived fresh from Ollama's /api/show on every read - not an
   // override, so it has no counterpart in LlmConfigUpdate. null means

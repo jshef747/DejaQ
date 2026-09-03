@@ -527,9 +527,9 @@ ADJUST_TIMEOUT_SECONDS = _get_float("DEJAQ_ADJUST_TIMEOUT_SECONDS", 30.0)
 
 # Control-plane access control:
 # DEJAQ_ADMIN_LOOPBACK_ONLY (default True) — /admin/v1/* only accepts loopback peers.
-# DEJAQ_BIND_HOST — uvicorn listen host; used by start.sh (127.0.0.1 for bare uv run).
+# DEJAQ_BIND_HOST - uvicorn listen host; read directly by start.sh
+# (${DEJAQ_BIND_HOST:-0.0.0.0}), never by the app, so it has no constant here.
 ADMIN_LOOPBACK_ONLY = _get_bool("DEJAQ_ADMIN_LOOPBACK_ONLY", True)
-BIND_HOST = _get_text("DEJAQ_BIND_HOST", "127.0.0.1")
 
 # Enricher stays on qwen_1_5b (qwen2.5:1.5b), NOT switched to qwen3:0.6b as
 # dejaq-model-roles-refresh proposed: that switch was conditional on the

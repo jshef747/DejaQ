@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import ConfirmDialog from "@/components/ConfirmDialog";
@@ -43,7 +43,12 @@ function providerLabel(key: string | null) {
   return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function initialProviderFor(modelsByProvider: Record<string, CatalogModel[]>, modelId: string | null | undefined) {
+function initialProviderFor(
+  modelsByProvider: Record<string, CatalogModel[]>,
+  modelId: string | null | undefined,
+  externalProvider?: string | null,
+) {
+  if (externalProvider) return externalProvider;
   if (!modelId) return null;
   const entry = Object.entries(modelsByProvider).find(([, models]) => models.some((m) => m.id === modelId));
   return entry?.[0] ?? null;
@@ -75,12 +80,12 @@ export default function SettingsClient({
   loadError,
 }: Props) {
   const router = useRouter();
+  const apiKeyFieldId = useId();
 
   const [provider, setProvider] = useState<string | null>(
-    initialProviderFor(initialModelsByProvider, initialConfig.external_model),
+    initialProviderFor(initialModelsByProvider, initialConfig.external_model, initialConfig.external_provider),
   );
   const [externalModel, setExternalModel] = useState(initialConfig.external_model ?? "");
-  const [threshold, setThreshold] = useState(initialConfig.routing_threshold ?? 0.75);
   const [apiKey, setApiKey] = useState("");
   const [credentials, setCredentials] = useState(initialCredentials);
   const [modelsByProvider, setModelsByProvider] = useState(initialModelsByProvider);
@@ -113,12 +118,14 @@ export default function SettingsClient({
   const credsKey = JSON.stringify(initialCredentials);
 
   useEffect(() => {
-    setProvider(initialProviderFor(initialModelsByProvider, initialConfig.external_model));
+    setProvider(initialProviderFor(initialModelsByProvider, initialConfig.external_model, initialConfig.external_provider));
     setExternalModel(initialConfig.external_model ?? "");
-    setThreshold(initialConfig.routing_threshold ?? 0.75);
     setCredentials(initialCredentials);
     setModelsByProvider(initialModelsByProvider);
     setApiKey("");
+    // Deliberately keyed on configKey/credsKey, not the objects themselves: those are
+    // fresh references on every parent render, which would re-run this on every render
+    // instead of only when their content actually changes (a fresh server fetch).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configKey, credsKey]);
 
@@ -151,8 +158,6 @@ export default function SettingsClient({
   }, [catalogProviders, credentialedKeys]);
 
   const currentCredential = credentials.find((item) => item.provider === provider);
-  const models = (provider && modelsByProvider[provider]) || [];
-
   const providerGroups = useMemo(() => {
     const toOption = (item: CatalogProviderItem) => ({
       value: item.key,
@@ -167,6 +172,7 @@ export default function SettingsClient({
   }, [groupedProviders]);
 
   const filteredModels = useMemo(() => {
+    const models = (provider && modelsByProvider[provider]) || [];
     const q = externalModel.trim().toLowerCase();
     const list = q ? models.filter((m) => m.id.toLowerCase().includes(q)) : models;
     return [
@@ -177,7 +183,7 @@ export default function SettingsClient({
         })),
       },
     ];
-  }, [models, externalModel]);
+  }, [provider, modelsByProvider, externalModel]);
 
   const hasUnsavedKey = apiKey.trim().length > 0;
   const canTest = !!currentCredential && !hasUnsavedKey && !testBusy;
@@ -205,7 +211,6 @@ export default function SettingsClient({
     const trimmedKey = apiKey.trim();
     const patch: LlmConfigUpdate = {};
     if (externalModel !== initialConfig.external_model) patch.external_model = externalModel;
-    if (threshold !== initialConfig.routing_threshold) patch.routing_threshold = threshold;
 
     if (!trimmedKey && Object.keys(patch).length === 0) {
       setSaveStatus({ kind: "info", text: "No changes to save." });
@@ -235,7 +240,6 @@ export default function SettingsClient({
         setSaveStatus({ kind: "error", text: configRes.error });
         return;
       }
-      setThreshold(configRes.data.routing_threshold ?? threshold);
       setExternalModel(configRes.data.external_model ?? externalModel);
     }
 
@@ -250,16 +254,14 @@ export default function SettingsClient({
     setSaveStatus({ kind: "idle", text: "" });
     const res = await updateLlmConfig(workspaceSlug, {
       external_model: null,
-      routing_threshold: null,
     });
     setSaveBusy(false);
     if (!res.ok) {
       setSaveStatus({ kind: "error", text: res.error });
       return;
     }
-    setProvider(initialProviderFor(modelsByProvider, res.data.external_model));
+    setProvider(initialProviderFor(modelsByProvider, res.data.external_model, res.data.external_provider));
     setExternalModel(res.data.external_model ?? "");
-    setThreshold(res.data.routing_threshold ?? 0.75);
     setApiKey("");
     setSaveStatus({ kind: "success", text: `Defaults restored ${formatTime(new Date())}` });
     router.refresh();
@@ -358,9 +360,10 @@ export default function SettingsClient({
               </Field>
             </div>
 
-            <Field label={`${providerLabel(provider)} API key`} hint="Leave blank to keep the stored key unchanged">
+            <Field id={apiKeyFieldId} label={`${providerLabel(provider)} API key`} hint="Leave blank to keep the stored key unchanged">
               <div style={{ display: "flex", gap: 8 }}>
                 <Input
+                  id={apiKeyFieldId}
                   type="password"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
@@ -378,24 +381,6 @@ export default function SettingsClient({
                     Remove key
                   </Button>
                 )}
-              </div>
-            </Field>
-
-            <Field label="Difficulty threshold" hint="Lower = more provider calls, higher = more local answers">
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.01"
-                  value={threshold}
-                  onChange={(e) => setThreshold(parseFloat(e.target.value))}
-                  className="ds-slider"
-                  style={{ flex: 1 }}
-                />
-                <div style={{ background: "var(--accent-bg)", border: "1px solid var(--accent-border)", borderRadius: 5, color: "var(--accent)", fontFamily: "var(--font-mono)", fontSize: 12, minWidth: 52, padding: "5px 8px", textAlign: "center" }}>
-                  {threshold.toFixed(2)}
-                </div>
               </div>
             </Field>
           </div>

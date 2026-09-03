@@ -20,7 +20,10 @@ async def submit_feedback(
 ):
     workspace = resolved_workspace.workspace_slug
     workspace_id = resolved_workspace.workspace_id
-    dept = raw_request.headers.get("X-DejaQ-Department") or "default"
+    # ApiKeyMiddleware requires an existing department on every /v1/* request
+    # (a missing header is 422, an unknown one 404), so the header is always
+    # present here - no "default" fallback.
+    dept = raw_request.headers.get("X-DejaQ-Department")
     # The namespace the write path used, resolved from the departments table by
     # ApiKeyMiddleware. Deriving it again from the slugs sent a workspace whose
     # department is named "Default" to `<workspace>--default` while its entries

@@ -1,0 +1,1 @@
+`department-required-no-department-selected.png` verifies PR #78 (commit `4ff7ee5`, "fix(gateway): require an existing department, remove silent shared cache namespace") - see `docs/verification/README.md` for the sibling decision-card screenshots.

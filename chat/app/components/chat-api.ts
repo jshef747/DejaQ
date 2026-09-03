@@ -24,6 +24,9 @@ function dejaqHeaders(overrides?: { server?: string; apiKey?: string }): Record<
 // server (openai_compat.py `_encode_header_text`) since HTTP headers are
 // Latin-1 only. Malformed input can't actually reach here - the server always
 // encodes - but a raw fallback is cheap insurance against a future drift.
+// All three are decoded here; `nearestCacheQuery` is carried on ChatSuccess
+// but not yet rendered anywhere - the near-miss diagnostic it would power
+// isn't wired into the UI yet.
 function decodeHeaderText(value: string | null): string | null {
   if (value === null) return null;
   try {
@@ -60,9 +63,22 @@ export interface ChatSuccess {
   // Edit & Save. Null on a miss, and on an ordinary cache entry.
   answerAuthored: string | null;
   // The standalone question the context enricher rewrote a follow-up into
-  // before searching the cache. Null both when there was nothing to rewrite
-  // (enrich() returned the message unchanged) and on any non-cache answer.
+  // before searching the cache. Null only when there was nothing to rewrite
+  // (enrich() returned the message unchanged) - the server sends this header
+  // on a cache miss too, not just a hit.
   cacheEnrichedQuery: string | null;
+  // The server's own validator outcome for this response's cache lookup:
+  // "valid" on every cache hit (skipped or actually run, the server doesn't
+  // currently distinguish the two in this header), "invalid" when a
+  // near-miss candidate was found and rejected on a miss. Null when no
+  // candidate was close enough to validate at all.
+  validatorVerdict: string | null;
+  // Diagnostics for the closest cache entry when this answer did NOT come
+  // from the cache (a miss that still had a near-miss candidate). Not
+  // currently rendered anywhere in chat/ - forwarded so a future "why didn't
+  // this hit" panel doesn't need another round of header plumbing.
+  nearestCacheDistance: number | null;
+  nearestCacheQuery: string | null;
   // Count of knowledge-base passages RAG injected on a miss it grounded.
   // Null on a cache hit or when nothing was retrieved.
   ragChunks: number | null;
@@ -189,9 +205,13 @@ export async function sendChatMessage(
   const cacheMatchedQuery = decodeHeaderText(response.headers.get("x-dejaq-cache-matched-query"));
   const answerAuthored = response.headers.get("x-dejaq-answer-authored") ?? null;
   const cacheEnrichedQuery = decodeHeaderText(response.headers.get("x-dejaq-enriched-query"));
+  const validatorVerdict = response.headers.get("x-dejaq-validator-verdict") ?? null;
+  const rawNearestDistance = response.headers.get("x-dejaq-nearest-cache-distance");
+  const nearestCacheDistance = rawNearestDistance !== null ? Number(rawNearestDistance) : null;
+  const nearestCacheQuery = decodeHeaderText(response.headers.get("x-dejaq-nearest-cache-prompt"));
   const rawRagChunks = response.headers.get("x-dejaq-rag-chunks");
   const ragChunks = rawRagChunks !== null ? Number(rawRagChunks) : null;
-  const ragDocumentTitle = response.headers.get("x-dejaq-rag-document-title") ?? null;
+  const ragDocumentTitle = decodeHeaderText(response.headers.get("x-dejaq-rag-document-title"));
 
   onMeta?.({ modelUsed, tier });
 
@@ -292,6 +312,9 @@ export async function sendChatMessage(
     cacheMatchedQuery,
     answerAuthored,
     cacheEnrichedQuery,
+    validatorVerdict,
+    nearestCacheDistance,
+    nearestCacheQuery,
     ragChunks,
     ragDocumentTitle,
     streamError,

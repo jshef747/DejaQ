@@ -27,7 +27,7 @@ export default async function DashboardLayout({
   return (
     <div className="ds-app">
       <Suspense fallback={<aside className="ds-sidebar" style={{ width: "220px", minWidth: 0 }} />}>
-        <Sidebar email={email} />
+        <Sidebar email={email} workspaces={workspaces} />
       </Suspense>
       <main className="ds-main">
         {children}

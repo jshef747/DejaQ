@@ -5,7 +5,6 @@ import { useState } from "react";
 import {
   ChevronRight,
   Hash,
-  GripVertical,
   Search,
   Briefcase,
   ExternalLink,
@@ -45,10 +44,6 @@ export default function WorkspacesClient({ workspaces, allDepts, statsMap, error
     workspaces.forEach((w, i) => { init[w.slug] = i < 2; });
     return init;
   });
-  const [drag, setDrag] = useState<{ kind: "workspace" | "dept"; slug: string; fromWorkspace?: string } | null>(null);
-  const [dropTarget, setDropTarget] = useState<{ slug: string; pos: "before" | "after" | "into" } | null>(null);
-  const [workspaceOrder, setWorkspaceOrder] = useState(() => workspaces.map((w) => w.slug));
-
   const [createOpen, setCreateOpen] = useState(false);
   const [createName, setCreateName] = useState("");
   const [createBusy, setCreateBusy] = useState(false);
@@ -96,7 +91,6 @@ export default function WorkspacesClient({ workspaces, allDepts, statsMap, error
     setDeleteBusy(false);
     if (!res.ok) { setDeleteErr(res.error); return; }
     setConfirmDeleteSlug(null);
-    setWorkspaceOrder((o) => o.filter((s) => s !== slug));
     router.refresh();
   }
 
@@ -108,6 +102,7 @@ export default function WorkspacesClient({ workspaces, allDepts, statsMap, error
   const toggle = (slug: string) => setExpanded((e) => ({ ...e, [slug]: !e[slug] }));
 
   const searchLower = search.toLowerCase();
+  const workspaceOrder = workspaces.map((w) => w.slug);
   const visibleSlugs = search.trim()
     ? workspaceOrder.filter((slug) => {
         const ws = workspaces.find((w) => w.slug === slug);
@@ -117,48 +112,11 @@ export default function WorkspacesClient({ workspaces, allDepts, statsMap, error
       })
     : workspaceOrder;
 
-  function onWorkspaceDragStart(slug: string) { setDrag({ kind: "workspace", slug }); }
-  function onWorkspaceDragOver(e: React.DragEvent, slug: string) {
-    if (!drag || drag.kind !== "workspace") return;
-    e.preventDefault();
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const pos = e.clientY - rect.top < rect.height / 2 ? "before" : "after";
-    setDropTarget({ slug, pos });
-  }
-  function onDeptDragStart(deptSlug: string, fromWorkspace: string) { setDrag({ kind: "dept", slug: deptSlug, fromWorkspace }); }
-  function onDeptDragOver(e: React.DragEvent, deptSlug: string) {
-    if (!drag || drag.kind !== "dept") return;
-    e.preventDefault();
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const pos = e.clientY - rect.top < rect.height / 2 ? "before" : "after";
-    setDropTarget({ slug: deptSlug, pos });
-  }
-  function onWorkspaceDropZone(e: React.DragEvent, workspaceSlug: string) {
-    if (!drag || drag.kind !== "dept") return;
-    e.preventDefault();
-    setDropTarget({ slug: workspaceSlug, pos: "into" });
-  }
-  function onDrop(e: React.DragEvent) {
-    e.preventDefault();
-    if (!drag || !dropTarget) { setDrag(null); setDropTarget(null); return; }
-    if (drag.kind === "workspace" && (dropTarget.pos === "before" || dropTarget.pos === "after")) {
-      if (drag.slug !== dropTarget.slug) {
-        const next = workspaceOrder.filter((s) => s !== drag.slug);
-        const idx = next.indexOf(dropTarget.slug);
-        const at = dropTarget.pos === "after" ? idx + 1 : idx;
-        next.splice(at, 0, drag.slug);
-        setWorkspaceOrder(next);
-      }
-    }
-    setDrag(null);
-    setDropTarget(null);
-  }
-
   return (
     <div className="ds-page">
       <SectionHeader
         title="Workspaces"
-        subtitle="Drag to reorder. Each workspace owns API keys and provider credentials; each department is a cache partition."
+        subtitle="Each workspace owns API keys and provider credentials; each department is a cache partition."
         action={
           <div style={{ display: "flex", gap: 8 }}>
             <Button size="sm" onClick={() => { const all: Record<string, boolean> = {}; workspaces.forEach((w) => (all[w.slug] = true)); setExpanded(all); }}>
@@ -212,7 +170,7 @@ export default function WorkspacesClient({ workspaces, allDepts, statsMap, error
             action={!search ? <Button variant="primary" onClick={() => { setCreateName(""); setCreateErr(null); setCreateOpen(true); }}><Plus size={13} /> New workspace</Button> : undefined}
           />
         ) : (
-          <div onDrop={onDrop} onDragEnd={() => { setDrag(null); setDropTarget(null); }}>
+          <div>
             {visibleSlugs.map((slug, wi) => {
               const ws = workspaces.find((w) => w.slug === slug);
               if (!ws) return null;
@@ -222,22 +180,10 @@ export default function WorkspacesClient({ workspaces, allDepts, statsMap, error
               const wsMisses = rows.reduce((a, d) => a + (statsMap[`${slug}::${d.slug}`]?.misses ?? 0), 0);
               const wsTotal = wsHits + wsMisses;
               const wsRate = wsTotal ? wsHits / wsTotal : 0;
-              const isDragging = drag?.kind === "workspace" && drag.slug === slug;
-              const dropBefore = dropTarget?.slug === slug && dropTarget.pos === "before";
-              const dropAfter = dropTarget?.slug === slug && dropTarget.pos === "after";
-              const dropInto = dropTarget?.slug === slug && dropTarget.pos === "into";
 
               return (
                 <div key={slug}>
-                  {dropBefore && <div style={{ height: 2, background: "var(--accent)", margin: "0 12px" }} />}
                   <div
-                    draggable
-                    onDragStart={() => onWorkspaceDragStart(slug)}
-                    onDragOver={(e) => {
-                      if (drag?.kind === "dept") { onWorkspaceDropZone(e, slug); return; }
-                      onWorkspaceDragOver(e, slug);
-                    }}
-                    onDragLeave={() => setDropTarget(null)}
                     onClick={() => toggle(slug)}
                     style={{
                       display: "grid",
@@ -246,16 +192,12 @@ export default function WorkspacesClient({ workspaces, allDepts, statsMap, error
                       padding: "10px 12px",
                       alignItems: "center",
                       borderBottom: isOpen || wi < visibleSlugs.length - 1 ? "1px solid var(--border)" : "none",
-                      background: dropInto ? "var(--accent-bg)" : isDragging ? "var(--bg-3)" : "transparent",
-                      opacity: isDragging ? 0.5 : 1,
-                      cursor: "grab",
-                      borderLeft: dropInto ? "2px solid var(--accent)" : "2px solid transparent",
+                      cursor: "pointer",
                       userSelect: "none",
                       transition: "background 0.1s",
                     }}
                   >
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <GripVertical size={12} style={{ color: "var(--fg-dimmer)", flexShrink: 0 }} />
                       <ChevronRight
                         size={11}
                         style={{
@@ -327,7 +269,6 @@ export default function WorkspacesClient({ workspaces, allDepts, statsMap, error
                       </Button>
                     </div>
                   </div>
-                  {dropAfter && !isOpen && <div style={{ height: 2, background: "var(--accent)", margin: "0 12px" }} />}
 
                   {isOpen && (
                     <div style={{ background: "var(--bg)", borderBottom: wi < visibleSlugs.length - 1 ? "1px solid var(--border)" : "none" }}>
@@ -342,16 +283,9 @@ export default function WorkspacesClient({ workspaces, allDepts, statsMap, error
                         const misses = stats?.misses ?? 0;
                         const total = hits + misses;
                         const rate = total ? hits / total : 0;
-                        const deptDragging = drag?.kind === "dept" && drag.slug === d.slug;
-                        const deptBefore = dropTarget?.slug === d.slug && dropTarget.pos === "before";
-                        const deptAfter = dropTarget?.slug === d.slug && dropTarget.pos === "after";
                         return (
                           <div key={d.id}>
-                            {deptBefore && <div style={{ height: 2, background: "var(--accent)", marginLeft: 58, marginRight: 12 }} />}
                             <div
-                              draggable
-                              onDragStart={() => onDeptDragStart(d.slug, slug)}
-                              onDragOver={(e) => onDeptDragOver(e, d.slug)}
                               style={{
                                 display: "grid",
                                 gridTemplateColumns: COL,
@@ -359,13 +293,9 @@ export default function WorkspacesClient({ workspaces, allDepts, statsMap, error
                                 padding: "8px 12px",
                                 alignItems: "center",
                                 borderBottom: di < rows.length - 1 ? "1px solid var(--border)" : "none",
-                                opacity: deptDragging ? 0.5 : 1,
-                                background: deptDragging ? "var(--bg-3)" : "transparent",
-                                cursor: "grab",
                               }}
                             >
                               <div style={{ display: "flex", alignItems: "center", gap: 8, paddingLeft: 44 }}>
-                                <GripVertical size={10} style={{ color: "var(--fg-dimmer)" }} />
                                 <span style={{ color: "var(--fg-dimmer)" }}>└</span>
                                 <Hash size={12} style={{ color: "var(--accent)", flexShrink: 0 }} />
                                 <span style={{ fontFamily: "var(--font-mono)", fontWeight: 500, fontSize: 12 }}>{d.slug}</span>
@@ -395,13 +325,11 @@ export default function WorkspacesClient({ workspaces, allDepts, statsMap, error
                                 </Button>
                               </div>
                             </div>
-                            {deptAfter && <div style={{ height: 2, background: "var(--accent)", marginLeft: 58, marginRight: 12 }} />}
                           </div>
                         );
                       })}
                     </div>
                   )}
-                  {dropAfter && isOpen && <div style={{ height: 2, background: "var(--accent)", margin: "0 12px" }} />}
                 </div>
               );
             })}
@@ -410,7 +338,6 @@ export default function WorkspacesClient({ workspaces, allDepts, statsMap, error
       </div>
 
       <div style={{ marginTop: 12, fontSize: 11, color: "var(--fg-dimmer)", fontFamily: "var(--font-mono)", display: "flex", gap: 16 }}>
-        <span>↕ drag rows to reorder</span>
         <span>↓ click a row to expand</span>
       </div>
 

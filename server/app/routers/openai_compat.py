@@ -1385,12 +1385,22 @@ async def run_chat_pipeline(
     )
     _attach_origin = "carried-over" if _attach_sticky else "freshly-attached"
 
-    # Adapt message list into a minimal OAIChatRequest-like object for extract_pipeline_inputs
-    _pseudo_request = type("_PseudoRequest", (), {"messages": messages})()
     user_query, history, system_prompt = extract_pipeline_inputs(list(messages))
 
     if not user_query:
-        raise PipelineError(422, "No user message found in messages array")
+        # An attachment-only turn (image or file, no typed text) is a real
+        # request - the reference chat composer lets a user attach and send
+        # without typing. Default the query to a generic ask so the request is
+        # answered instead of 422ing. A request with neither text nor
+        # attachment has nothing to answer and keeps the 422.
+        if _request_has_image:
+            user_query = "Describe the attached image."
+        elif _request_has_file:
+            user_query = "Summarize the attached file."
+        else:
+            raise PipelineError(
+                422, "No user message found: send text, an image, or a file."
+            )
 
     completion_id = _new_completion_id()
     request_token = set_request_id(_short_request_id(completion_id))
@@ -2000,7 +2010,9 @@ async def run_chat_pipeline(
                     # this doesn't reuse x-dejaq-rag-chunks.
                     hit_headers["x-dejaq-rag-document-id"] = str(rag_document_id)
                     if rag_document_title:
-                        hit_headers["x-dejaq-rag-document-title"] = rag_document_title
+                        hit_headers["x-dejaq-rag-document-title"] = _encode_header_text(
+                            rag_document_title
+                        )
                 hit_headers.update(_nearest_headers(cache_lookup))
                 hit_headers.update(_enriched_headers(user_query, enriched, enrich_succeeded))
                 return ChatPipelineResult(
@@ -2034,11 +2046,11 @@ async def run_chat_pipeline(
         # are untouched here.
         if _request_has_image:
             _attachment_route = attachment_routing.route_for_attachment(
-                llm_config.attachment_routing, filename=None, mime=image_mime, is_image=True
+                llm_config.attachment_routing, filename=None, mime=image_mime
             )
         elif _request_has_file and file_doc is not None:
             _attachment_route = attachment_routing.route_for_attachment(
-                llm_config.attachment_routing, filename=file_name, mime=file_mime, is_image=False
+                llm_config.attachment_routing, filename=file_name, mime=file_mime
             )
         else:
             _attachment_route = attachment_routing.ROUTE_LOCAL
@@ -2057,7 +2069,6 @@ async def run_chat_pipeline(
                 attachment_routing.type_key_for(
                     filename=None if _request_has_image else file_name,
                     mime=image_mime if _request_has_image else file_mime,
-                    is_image=_request_has_image,
                 ),
                 _attachment_route,
                 "external" if _force_external_attachment
@@ -3001,7 +3012,9 @@ async def run_chat_pipeline(
                 # depending on how that chunk count is wired through.
                 headers["x-dejaq-rag-document-id"] = str(rag_document_id)
                 if rag_document_title:
-                    headers["x-dejaq-rag-document-title"] = rag_document_title
+                    headers["x-dejaq-rag-document-title"] = _encode_header_text(
+                        rag_document_title
+                    )
             if response_id:
                 headers["x-dejaq-response-id"] = response_id
             if _validator_verdict is not None:

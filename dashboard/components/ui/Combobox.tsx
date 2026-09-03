@@ -15,6 +15,7 @@ interface ComboboxProps {
   /** true = editable text input that filters as you type (the caller re-filters `groups`); false = button-only, native-<select>-style listbox with typeahead. */
   filterable?: boolean;
   emptyText?: string;
+  id?: string;
 }
 
 type FlatEntry = { option: ComboboxOption; groupIndex: number };
@@ -33,6 +34,7 @@ export default function Combobox({
   disabled,
   filterable = false,
   emptyText = "No matches",
+  id,
 }: ComboboxProps) {
   const baseId = useId();
   const [open, setOpen] = useState(false);
@@ -95,6 +97,8 @@ export default function Combobox({
       document.removeEventListener("pointerdown", onDocPointerDown, true);
       window.removeEventListener("scroll", onScroll, true);
     };
+    // Deliberately keyed on `open` alone: these listeners should attach/detach only on
+    // an open/close transition, not on every render that recreates `close`'s closure.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -222,6 +226,7 @@ export default function Combobox({
     <div className="ds-combo" ref={rootRef} onBlur={onRootBlur}>
       {filterable ? (
         <input
+          id={id}
           ref={inputRef}
           role="combobox"
           aria-expanded={open}
@@ -242,6 +247,7 @@ export default function Combobox({
         />
       ) : (
         <button
+          id={id}
           ref={buttonRef}
           type="button"
           role="combobox"
