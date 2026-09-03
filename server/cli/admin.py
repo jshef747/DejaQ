@@ -30,12 +30,6 @@ def workspace() -> None:
     """Manage workspaces."""
 
 
-# Keep legacy 'org' alias for one release to avoid breaking existing operator scripts.
-@cli.group(hidden=True)
-def org() -> None:
-    """[Deprecated] Use 'workspace' instead."""
-
-
 @workspace.command("create")
 @click.option("--name", required=True, help="Display name for the workspace.")
 def workspace_create(name: str) -> None:
@@ -105,30 +99,6 @@ def workspace_delete(slug: str) -> None:
         f"Workspace [bold]{slug}[/bold] deleted"
         + (f" (and {result.departments_removed} department(s) removed)." if result.departments_removed else ".")
     )
-
-
-# Legacy aliases (hidden)
-@org.command("create")
-@click.option("--name", required=True, help="Display name for the workspace.")
-def org_create(name: str) -> None:
-    """[Deprecated] Use 'workspace create' instead."""
-    console.print("[yellow]Warning: 'org create' is deprecated. Use 'workspace create'.[/yellow]")
-    workspace_create.callback(name=name)
-
-
-@org.command("list")
-def org_list() -> None:
-    """[Deprecated] Use 'workspace list' instead."""
-    console.print("[yellow]Warning: 'org list' is deprecated. Use 'workspace list'.[/yellow]")
-    workspace_list.callback()
-
-
-@org.command("delete")
-@click.option("--slug", required=True, help="Slug of the workspace to delete.")
-def org_delete(slug: str) -> None:
-    """[Deprecated] Use 'workspace delete' instead."""
-    console.print("[yellow]Warning: 'org delete' is deprecated. Use 'workspace delete'.[/yellow]")
-    workspace_delete.callback(slug=slug)
 
 
 # ---------------------------------------------------------------------------
