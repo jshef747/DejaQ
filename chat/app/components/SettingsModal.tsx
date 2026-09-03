@@ -26,6 +26,20 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
   const [healthText, setHealthText] = useState("");
   const [departments, setDepartments] = useState<Department[]>([]);
   const [deptStatus, setDeptStatus] = useState<DeptLoadStatus>("idle");
+  // The server + key the department list currently in `departments` was
+  // actually fetched against. Editing either field without re-fetching would
+  // otherwise let Save send a department picked from a stale list — PR #78
+  // made an existing department mandatory on every /v1/* call, so a mismatch
+  // here is a "connected but every send 404s" trap, not just a stale label.
+  const [deptsFetchedFor, setDeptsFetchedFor] = useState({
+    server: initialSettings.serverBaseUrl,
+    apiKey: initialSettings.apiKey,
+  });
+  // Set only when a fallback silently swapped the selection (the previously
+  // selected department no longer exists in the freshly fetched list) —
+  // shown once, next to the dropdown, instead of changing the value with no
+  // acknowledgment at all.
+  const [deptSwitchedNotice, setDeptSwitchedNotice] = useState<string | null>(null);
   const firstInputRef = useRef<HTMLSelectElement>(null);
 
   useEffect(() => {
@@ -40,6 +54,8 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
     setHealthText("");
     setDepartments([]);
     setDeptStatus("loading");
+    setDeptSwitchedNotice(null);
+    setDeptsFetchedFor({ server: initialSettings.serverBaseUrl, apiKey: initialSettings.apiKey });
     setTimeout(() => firstInputRef.current?.focus(), 50);
 
     let cancelled = false;
@@ -56,7 +72,9 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
 
         setDepartments(result);
         setDeptStatus("loaded");
-        setDeptSlug((prev) => (result.some((d) => d.slug === prev) ? prev : result[0]?.slug ?? ""));
+        const { slug, notice } = resolveDeptSelection(result, initialSettings.deptSlug);
+        setDeptSlug(slug);
+        setDeptSwitchedNotice(notice);
       },
     );
 
@@ -107,7 +125,10 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
 
     setDepartments(depts);
     setDeptStatus("loaded");
-    setDeptSlug((prev) => (depts.some((d) => d.slug === prev) ? prev : depts[0]?.slug ?? ""));
+    setDeptsFetchedFor({ server: target, apiKey: key });
+    const { slug, notice } = resolveDeptSelection(depts, deptSlug);
+    setDeptSlug(slug);
+    setDeptSwitchedNotice(notice);
     setHealth("ok");
     setHealthText(`Connected. Celery: ${result.celery}`);
   }
@@ -123,7 +144,14 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
     onClose();
   }
 
-  const canSave = deptSlug.trim().length > 0;
+  // The department list in `departments` was fetched against
+  // deptsFetchedFor, not necessarily the server/key currently typed. Saving
+  // anyway would send a department picked from a stale list against a
+  // server/key that may not even have it — "Test again" is what refreshes
+  // both together.
+  const fieldsDrifted =
+    serverBaseUrl.trim() !== deptsFetchedFor.server || apiKey.trim() !== deptsFetchedFor.apiKey;
+  const canSave = deptSlug.trim().length > 0 && !fieldsDrifted;
   const deptDisabled = deptStatus === "loading" || departments.length === 0;
 
   if (!open) return null;
@@ -281,7 +309,10 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
             <select
               ref={firstInputRef}
               value={deptSlug}
-              onChange={(e) => setDeptSlug(e.target.value)}
+              onChange={(e) => {
+                setDeptSlug(e.target.value);
+                setDeptSwitchedNotice(null);
+              }}
               disabled={deptDisabled}
               style={{ ...inputStyle, cursor: deptDisabled ? "not-allowed" : "pointer", opacity: deptDisabled ? 0.55 : 1 }}
             >
@@ -296,6 +327,16 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
               )}
             </select>
           </div>
+          {deptSwitchedNotice && (
+            <p style={{ color: "var(--amber)", fontSize: "11.5px", lineHeight: "17px", marginLeft: "144px", marginTop: "8px" }}>
+              {deptSwitchedNotice}
+            </p>
+          )}
+          {fieldsDrifted && (
+            <p style={{ color: "var(--amber)", fontSize: "11.5px", lineHeight: "17px", marginLeft: "144px", marginTop: "8px" }}>
+              Server or API key changed since the department list was loaded — click &ldquo;Test again&rdquo; before saving.
+            </p>
+          )}
           <p style={{ color: "var(--fg-dimmer)", fontSize: "11.5px", lineHeight: "17px", marginLeft: "144px", marginTop: "8px" }}>
             Each department has its own cache. Answers are never shared across them.
           </p>
@@ -331,13 +372,42 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
           <button onClick={onClose} style={btn("ghost")}>
             Cancel
           </button>
-          <button onClick={handleSave} disabled={!canSave} title={!canSave ? "Department is required" : undefined} style={btn("primary", !canSave)}>
+          <button
+            onClick={handleSave}
+            disabled={!canSave}
+            title={
+              fieldsDrifted
+                ? "Server or API key changed — click Test again first"
+                : !canSave
+                  ? "Department is required"
+                  : undefined
+            }
+            style={btn("primary", !canSave)}
+          >
             Save
           </button>
         </div>
       </div>
     </div>
   );
+}
+
+// Picks which department stays selected once a fresh list lands: keep the
+// previous slug if it still exists, otherwise fall back to the first entry —
+// and say so, since a department that vanished server-side (deleted mid-
+// session) would otherwise silently reassign the active cache namespace with
+// no on-screen trace.
+function resolveDeptSelection(
+  depts: Department[],
+  prevSlug: string,
+): { slug: string; notice: string | null } {
+  if (depts.some((d) => d.slug === prevSlug)) return { slug: prevSlug, notice: null };
+  const fallback = depts[0];
+  if (!prevSlug || !fallback) return { slug: fallback?.slug ?? "", notice: null };
+  return {
+    slug: fallback.slug,
+    notice: `"${prevSlug}" no longer exists — switched to ${fallback.label} (${fallback.slug}).`,
+  };
 }
 
 // ─── Routing mode: a segmented control, not a <select> — it's a diagnostic
