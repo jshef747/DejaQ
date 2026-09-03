@@ -14,60 +14,22 @@
 
 ---
 
-## 1. Install dependencies
+## 1. Install and run
 
-```bash
-cd server
-uv sync
-cd ../dashboard && npm install
-cd ../chat && npm install
-```
+The install-and-run steps (Ollama tags to pull, `uv sync`, `npm install` for the two
+frontends, `alembic upgrade head`, and `start.sh` / the manual redis+uvicorn+celery stack with
+the `DEJAQ_USE_CELERY=false` fallback) live in the root
+[Quick Start](../README.md#quick-start) so they only change in one place. Do that, then come
+back here to bootstrap the app.
 
----
-
-## 2. Migrate the database
-
-```bash
-cd server
-uv run alembic upgrade head
-```
-
-No `.env` is needed for local dev. (Optional overrides: copy `server/.env.example` to
-`server/.env`.)
+The five pipeline generation roles default to `granite4.1:3b` (normalizer, generalizer,
+validator), `qwen2.5:1.5b` (context enricher, adjuster) and `gemma4:e4b` (local answering).
+None is fixed - each is per-workspace configurable on the dashboard **Pipeline** page - so
+the tags you need are whatever your workspaces use.
 
 ---
 
-## 3. Start Ollama and pull models
-
-```bash
-ollama serve
-ollama pull qwen2.5:0.5b qwen2.5:1.5b gemma4:e2b gemma4:e4b
-```
-
-## 4. Start the stack
-
-```bash
-./start.sh --stack=all --mode=local
-# remote Ollama: ./start.sh --stack=all --mode=remote --ollama-url=http://<host>:11434
-```
-
-Cross-platform (macOS/Linux, and Windows git-bash — Redis runs in WSL; override the distro
-with `DEJAQ_WSL_DISTRO`). Or launch by hand:
-
-```bash
-redis-server                                                            # terminal 1 (optional)
-cd server && uv run uvicorn app.main:app --reload                        # terminal 2
-cd server && uv run celery -A app.celery_app:celery_app worker \
-  --queues=background --pool=solo --loglevel=info                        # terminal 3 (optional)
-cd dashboard && npm run dev                                               # terminal 4
-cd chat && npm run dev                                                   # terminal 5
-```
-
-> **No Redis?** Drop the Redis + Celery terminals and set `DEJAQ_USE_CELERY=false`.
-
----
-
-## 5. Open the app and bootstrap
+## 2. Open the app and bootstrap
 
 | Surface | URL |
 |---------|-----|
