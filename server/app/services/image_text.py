@@ -55,12 +55,15 @@ class OcrResult:
 
     @property
     def is_document(self) -> bool:
-        """Both criteria must hold — each catches what the other misses.
+        """Both criteria must hold, but confidence does the real separating.
 
         Measured: real documents scored mean confidence 83.3-92.2 with 54-373
         confident words. Unreadable photos-of-screens reached 60 confident words
-        but only ~35 mean confidence; a real photo reached 87.7 confidence but
-        only 38 words. Requiring both separates them with margin either side.
+        but only ~35 mean confidence, so the confidence floor rejects them. The
+        word floor (CACHE_IMAGE_OCR_MIN_WORDS = 6) is deliberately low: a short
+        crop read well - measured 9 words at 86.8 confidence - is a small
+        document, not something to refuse. Amount of text is not the test; OCR
+        quality is.
         """
         return (
             self.ok

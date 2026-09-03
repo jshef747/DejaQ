@@ -132,6 +132,8 @@ def supports_vision(model: str, force_refresh: bool = False) -> bool | None:
     """Whether the Ollama tag `model` reports the "vision" capability.
 
     None means "unknown" - Ollama unreachable or the model not found on it -
-    never raises. This is an indicator only; nothing acts on the result yet.
+    never raises. This drives attachment routing on the request path: an image
+    (and the scanned-PDF local-vision rescue) routes to the local model when it
+    reports vision, and to the external provider otherwise (openai_compat.py).
     """
     return _CAPABILITY_CACHE.get(model, force_refresh=force_refresh)
