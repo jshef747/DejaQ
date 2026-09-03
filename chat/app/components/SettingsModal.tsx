@@ -247,7 +247,7 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
                 type={showApiKey ? "text" : "password"}
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
-                placeholder="dq_..."
+                placeholder="paste your workspace API key"
                 spellCheck={false}
                 autoComplete="off"
                 style={{ ...inputStyle, paddingRight: "38px" }}

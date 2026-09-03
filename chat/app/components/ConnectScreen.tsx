@@ -119,7 +119,7 @@ export default function ConnectScreen({ initialSettings, onConnected, dashboardU
                 setApiKey(e.target.value);
                 if (status !== "idle") setStatus("idle");
               }}
-              placeholder="dq_..."
+              placeholder="paste your workspace API key"
               spellCheck={false}
               autoComplete="off"
               style={{
