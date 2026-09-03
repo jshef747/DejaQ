@@ -16,6 +16,16 @@ function keyEvent(init: Partial<KeyboardEvent>): KeyboardEvent {
 }
 
 describe("matchesNewChatShortcut", () => {
+  // Cmd/Ctrl+N is browser-reserved (new window); Cmd/Ctrl+Shift+O turned out
+  // to collide with Chrome's own Bookmark Manager shortcut on
+  // Windows/Linux/ChromeOS. Pinned here so a future change can't silently
+  // reintroduce a chord Chrome reserves - the test below would still pass
+  // against a reserved chord since it only checks internal consistency.
+  it("is not the reserved Cmd/Ctrl+N or the Bookmark-Manager-colliding Cmd/Ctrl+Shift+O", () => {
+    expect(NEW_CHAT_SHORTCUT).not.toEqual({ key: "n", shift: false });
+    expect(NEW_CHAT_SHORTCUT).not.toEqual({ key: "o", shift: true });
+  });
+
   it("matches the advertised chord on both platform modifiers", () => {
     const key = NEW_CHAT_SHORTCUT.key;
     expect(matchesNewChatShortcut(keyEvent({ metaKey: true, shiftKey: true, key }))).toBe(true);

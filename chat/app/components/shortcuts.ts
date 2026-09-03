@@ -5,8 +5,11 @@ import { useEffect, useState } from "react";
 // One definition of the New chat shortcut, so the keydown binding and the hint
 // the sidebar renders are derived from the same place and cannot drift.
 // Cmd/Ctrl+N is reserved by the browser for a new window and never reaches the
-// page, which is why this is Cmd/Ctrl+Shift+O.
-export const NEW_CHAT_SHORTCUT = { key: "o", shift: true } as const;
+// page. Cmd/Ctrl+Shift+O was tried next but is itself Chrome's reserved
+// Bookmark Manager shortcut on Windows/Linux/ChromeOS (fine on Mac, whose
+// Bookmark Manager binding is Cmd+Option+B) - silently defeated by the same
+// mechanism that ruled out +N. +K is not reserved by Chrome on any platform.
+export const NEW_CHAT_SHORTCUT = { key: "k", shift: true } as const;
 
 export function matchesNewChatShortcut(e: KeyboardEvent): boolean {
   return (
