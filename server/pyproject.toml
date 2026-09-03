@@ -58,11 +58,11 @@ package = true
 include = ["app*", "cli*"]
 
 [dependency-groups]
-test = ["pytest>=8.0", "pytest-html>=4.1"]
+test = ["pytest>=8.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--html=test_reports/report.html --self-contained-html -v"
+addopts = "-v"
 markers = [
     "no_model: no ML model needed",
     "qwen: requires Qwen 0.5B",
