@@ -5,7 +5,6 @@ export { default as Card } from "./Card";
 export { default as Pill } from "./Pill";
 export { default as EmptyState } from "./EmptyState";
 export { default as Skeleton, SkeletonRows } from "./Skeleton";
-export { default as IconButton } from "./IconButton";
 export { default as ToastStack } from "./Toast";
 export type { ToastItem, ToastKind } from "./Toast";
 export { default as SectionHeader } from "./SectionHeader";
