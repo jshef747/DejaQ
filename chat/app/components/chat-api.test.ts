@@ -229,4 +229,42 @@ describe("sendChatMessage header parsing", () => {
       cacheEnrichedQuery: "how many people live in Berlin, Germany?",
     });
   });
+
+  it("decodes the RAG document title header instead of leaving it percent-encoded", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse({
+          "x-dejaq-tier": "local",
+          "x-dejaq-rag-document-title": encodeURIComponent("מדיניות החזרים והחזרות"),
+        }),
+      ),
+    );
+
+    const result = await sendChatMessage([{ role: "user", content: "hi" }], "eng");
+
+    expect(result).toMatchObject({
+      kind: "success",
+      ragDocumentTitle: "מדיניות החזרים והחזרות",
+    });
+  });
+
+  it("decodes a RAG document title with spaces", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        sseResponse({
+          "x-dejaq-tier": "local",
+          "x-dejaq-rag-document-title": encodeURIComponent("Return Policy Notes"),
+        }),
+      ),
+    );
+
+    const result = await sendChatMessage([{ role: "user", content: "hi" }], "eng");
+
+    expect(result).toMatchObject({
+      kind: "success",
+      ragDocumentTitle: "Return Policy Notes",
+    });
+  });
 });

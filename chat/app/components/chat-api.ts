@@ -211,7 +211,7 @@ export async function sendChatMessage(
   const nearestCacheQuery = decodeHeaderText(response.headers.get("x-dejaq-nearest-cache-prompt"));
   const rawRagChunks = response.headers.get("x-dejaq-rag-chunks");
   const ragChunks = rawRagChunks !== null ? Number(rawRagChunks) : null;
-  const ragDocumentTitle = response.headers.get("x-dejaq-rag-document-title") ?? null;
+  const ragDocumentTitle = decodeHeaderText(response.headers.get("x-dejaq-rag-document-title"));
 
   onMeta?.({ modelUsed, tier });
 
