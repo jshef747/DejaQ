@@ -2,57 +2,26 @@
 
 FastAPI backend for the DejaQ gateway, semantic cache, management API, `dejaq-admin` CLI, and background cache tasks.
 
-## Setup
+## Setup and Run
+
+The setup and run steps (Ollama tags to pull, `uv sync`, `alembic upgrade head`,
+`start.sh`, the redis/uvicorn/celery stack, and the `DEJAQ_USE_CELERY=false` single-process
+fallback) live in the root [Quick Start](../README.md#quick-start) so they only have to change
+in one place. Server-only notes below.
+
+Local model acceleration builds (optional):
 
 ```bash
-cd server
-uv sync
-uv run alembic upgrade head
-# Optional — only to override defaults:
-# cp .env.example .env
+CMAKE_ARGS="-DLLAMA_METAL=on" uv sync   # Apple Silicon (Metal)
+CMAKE_ARGS="-DLLAMA_CUBLAS=on" uv sync  # NVIDIA (CUDA)
 ```
 
-For Apple Silicon local model acceleration:
-
-```bash
-CMAKE_ARGS="-DLLAMA_METAL=on" uv sync
-```
-
-For NVIDIA CUDA builds:
-
-```bash
-CMAKE_ARGS="-DLLAMA_CUBLAS=on" uv sync
-```
-
-## Run
-
-Generation runs through Ollama. Start it and pull the tags first:
-
-```bash
-ollama serve
-ollama pull qwen2.5:0.5b qwen2.5:1.5b gemma4:e2b gemma4:e4b
-```
-
-Recommended local stack:
-
-```bash
-redis-server
-uv run uvicorn app.main:app --reload
-uv run celery -A app.celery_app:celery_app worker --queues=background --pool=solo --loglevel=info
-```
-
-Single-process local fallback:
-
-```bash
-DEJAQ_USE_CELERY=false uv run uvicorn app.main:app --reload
-```
-
-The startup helper selects local vs remote Ollama:
-
-```bash
-../start.sh --stack=server --mode=local
-../start.sh --stack=server --mode=remote --ollama-url=http://<host>:11434
-```
+The five pipeline generation roles default to `granite4.1:3b` (normalizer, generalizer,
+validator), `qwen2.5:1.5b` (context enricher, adjuster) and `gemma4:e4b` (local answering),
+mapped from logical labels in `app/services/model_backends.py::MODEL_RUNTIME_SPECS`. None of
+them is fixed: each is per-workspace configurable on the dashboard **Pipeline** page (see the
+`DEJAQ_*_MODEL_NAME` defaults below), so the tags you actually need are whatever your
+workspaces are configured to use.
 
 ## API Surfaces
 
@@ -80,7 +49,7 @@ Hard-query external provider calls use encrypted per-workspace credentials store
 | `DEJAQ_LOG_SHOW_CONTENT` | `false` | Include prompt/response content in request logs |
 | `DEJAQ_EVICTION_FLOOR` | `-5.0` | Cache score floor for eviction |
 | `DEJAQ_EXTERNAL_MODEL` | unset (no default) | Server-wide fallback hard-query model when a workspace has no `external_model` override. There is no baked-in default: with neither this nor a workspace override set, a hard query returns 422 naming the fix rather than being silently routed to some provider |
-| `DEJAQ_ROUTING_THRESHOLD` | `0.3` | Default easy/hard threshold |
+| `DEJAQ_ROUTING_THRESHOLD` | `0.50` | Default easy/hard threshold |
 | `DEJAQ_CHROMA_HOST` | `127.0.0.1` | ChromaDB host |
 | `DEJAQ_CHROMA_PORT` | `8001` | ChromaDB port |
 | `DEJAQ_OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama endpoint for all generation (local or remote) |
@@ -127,8 +96,8 @@ uv run pytest -q \
   tests/test_admin_api_resources.py \
   tests/test_feedback_service.py \
   tests/test_openai_compat_smoke.py \
-  tests/test_provider_clients_contract.py \
-  tests/test_provider_clients_logging.py \
+  tests/test_litellm_transport_contract.py \
+  tests/test_provider_temperature_and_errors.py \
   tests/test_stats_service.py \
   tests/test_memory_chromadb.py
 ```

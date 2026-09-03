@@ -22,14 +22,28 @@ from functools import lru_cache
 
 import litellm
 
-# Providers whose credential is more than a single opaque string.
-# workspace_provider_credentials has nowhere to put the extra fields;
-# roadmap Stage 4's config JSON column would fix that but is not
-# built by this migration (captain decision, dejaq-litellm-migration-
-# plan-v2-decision-nonstring-credential-providers). Remove a provider
-# from this set only once it can actually be authenticated to: build the
-# config JSON column, then remove the key from this set.
-STRUCTURED_CREDENTIAL_PROVIDERS = {"bedrock", "bedrock_converse", "azure", "azure_ai"}
+# Providers that cannot be authenticated with the single opaque API-key
+# string workspace_provider_credentials stores, so DejaQ cannot offer them:
+#   - bedrock/azure need a structured multi-field credential (SigV4,
+#     endpoint+api-version+deployment) - roadmap Stage 4's config JSON column
+#     would fix that but is not built (captain decision, dejaq-litellm-
+#     migration-plan-v2-decision-nonstring-credential-providers);
+#   - vertex_ai needs a GCP service account, not an API key;
+#   - ollama is a local endpoint keyed by base_url, with no API key at all -
+#     it is DejaQ's *local* generation backend, never an external provider.
+# Remove a provider from this set only once it can actually be authenticated
+# to with what workspace_provider_credentials can store. The name is kept for
+# its existing importers; membership is "not a single-API-key provider".
+STRUCTURED_CREDENTIAL_PROVIDERS = {
+    "bedrock",
+    "bedrock_converse",
+    "azure",
+    "azure_ai",
+    "vertex_ai",
+    "vertex_ai_beta",
+    "ollama",
+    "ollama_chat",
+}
 
 
 @dataclass(frozen=True)
@@ -37,6 +51,20 @@ class CatalogModel:
     id: str
     provider: str
     deprecation_date: str | None = None
+
+
+def _qualified_id(model_id: str, provider: str) -> str:
+    """`provider/model` - the form llm_config_service accepts and stores.
+
+    A bare `model_cost` id like `gemini-2.5-flash` is rejected (or worse,
+    mis-resolves to vertex_ai) by write-time validation; only the qualified
+    form round-trips to the right provider. Ids that already carry the
+    provider prefix are left alone so we never double-prefix (which A7 now
+    rejects outright).
+    """
+    if model_id == provider or model_id.startswith(f"{provider}/"):
+        return model_id
+    return f"{provider}/{model_id}"
 
 
 @lru_cache(maxsize=1)
@@ -49,7 +77,11 @@ def _catalog() -> tuple[CatalogModel, ...]:
         if not provider or provider in STRUCTURED_CREDENTIAL_PROVIDERS:
             continue
         models.append(
-            CatalogModel(id=model_id, provider=provider, deprecation_date=spec.get("deprecation_date"))
+            CatalogModel(
+                id=_qualified_id(model_id, provider),
+                provider=provider,
+                deprecation_date=spec.get("deprecation_date"),
+            )
         )
     # Deprecated last (None sorts before any date string), alphabetical within each half.
     models.sort(key=lambda m: (m.deprecation_date is not None, m.id))
@@ -69,6 +101,13 @@ def provider_counts() -> dict[str, int]:
 
 def models_for_provider(provider: str) -> tuple[CatalogModel, ...]:
     return tuple(model for model in _catalog() if model.provider == provider)
+
+
+def is_provider_prefix(name: str) -> bool:
+    """True when `name` is a bare LiteLLM provider prefix (e.g. 'gemini',
+    'openai'). Kept here because this module is the one allowed to import
+    litellm (tests/test_litellm_single_import.py)."""
+    return name in litellm.provider_list
 
 
 def resolve_provider(model: str) -> str:

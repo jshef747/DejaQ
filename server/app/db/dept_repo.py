@@ -12,6 +12,15 @@ def create_dept(session: Session, workspace_slug: str, name: str) -> DeptRead:
     if workspace is None:
         raise ValueError(f"Workspace '{workspace_slug}' not found.")
     dept_slug = slugify_name(name)
+    existing = (
+        session.query(Department)
+        .filter_by(workspace_id=workspace.id, slug=dept_slug)
+        .first()
+    )
+    if existing is not None:
+        raise ValueError(
+            f"Department '{dept_slug}' already exists under workspace '{workspace_slug}'."
+        )
     cache_namespace = f"{workspace_slug}__{dept_slug}"
     dept = Department(
         workspace_id=workspace.id,

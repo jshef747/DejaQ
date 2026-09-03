@@ -5,7 +5,21 @@ import app.config as config
 from app.db import credential_repo
 from app.db.models.workspace_provider_credentials import WorkspaceProviderCredentials
 from app.services.llm_providers import is_usable_provider
+from app.services.llm_providers.provider_keys import DEJAQ_PROVIDER_KEYS
 from app.services.model_catalog import STRUCTURED_CREDENTIAL_PROVIDERS
+
+
+def _normalize_provider(provider: str) -> str:
+    """Store and look up credentials under DejaQ's provider key, never
+    LiteLLM's. The catalog and a `gemini/<id>` model resolve to the LiteLLM
+    key ('gemini', 'together_ai', 'fireworks_ai'); external_provider and the
+    request-path credential lookup use the DejaQ key ('google', 'together',
+    'fireworks'). Mapping every credential key back through DEJAQ_PROVIDER_KEYS
+    means a key saved from a catalog-derived form is found for the model that
+    needs it, instead of a spurious 402.
+    """
+    lowered = provider.lower()
+    return DEJAQ_PROVIDER_KEYS.get(lowered, lowered)
 
 
 class CredentialEncryptionKeyMissing(RuntimeError):
@@ -47,12 +61,13 @@ class CredentialService:
         provider: str,
         raw_key: str,
     ) -> WorkspaceProviderCredentials:
-        provider = provider.lower()
+        provider = _normalize_provider(provider)
         if not is_usable_provider(provider):
             if provider in STRUCTURED_CREDENTIAL_PROVIDERS:
                 raise ValueError(
-                    f"Provider '{provider}' needs a structured credential (more than one "
-                    "field) that workspace_provider_credentials cannot store yet "
+                    f"Provider '{provider}' cannot be authenticated with the single API "
+                    "key workspace_provider_credentials stores (it needs a structured "
+                    "credential, a service account, or is a local endpoint) "
                     "(app/services/model_catalog.py:STRUCTURED_CREDENTIAL_PROVIDERS)."
                 )
             raise ValueError(f"Unsupported provider '{provider}'.")
@@ -63,7 +78,7 @@ class CredentialService:
         return credential_repo.upsert_credential(session, workspace_id, provider, encrypted)
 
     def get_decrypted_key(self, session: Session, workspace_id: int, provider: str) -> str | None:
-        row = credential_repo.get_credential(session, workspace_id, provider.lower())
+        row = credential_repo.get_credential(session, workspace_id, _normalize_provider(provider))
         if row is None:
             return None
         return self.decrypt(row.encrypted_key)
@@ -73,7 +88,7 @@ class CredentialService:
         return [self._to_masked_dict(row) for row in rows]
 
     def delete(self, session: Session, workspace_id: int, provider: str) -> bool:
-        provider = provider.lower()
+        provider = _normalize_provider(provider)
         if not is_usable_provider(provider):
             raise ValueError(f"Unsupported provider '{provider}'.")
         return credential_repo.delete_credential(session, workspace_id, provider)
@@ -118,7 +133,7 @@ def get_workspace_provider_key(session: Session, workspace_id: int, provider: st
     A row that exists but cannot be decrypted is a genuine server-side problem and
     still raises; the caller reports it as one.
     """
-    row = credential_repo.get_credential(session, workspace_id, provider.lower())
+    row = credential_repo.get_credential(session, workspace_id, _normalize_provider(provider))
     if row is None:
         return None
     try:

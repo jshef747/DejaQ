@@ -90,6 +90,32 @@ def test_credential_service_upsert_accepts_any_single_key_litellm_provider(
         assert row.provider == "mistral"
 
 
+def test_credential_stored_under_litellm_key_is_found_under_dejaq_key(
+    isolated_org_db,
+    credential_key,
+):
+    """A2: the catalog uses LiteLLM keys ('gemini'), but the request path looks
+    a credential up under the DejaQ key ('google', from external_provider). A
+    key saved as 'gemini' must be normalised to 'google' on upsert so the
+    gemini/<id> model that needs it finds it, instead of a spurious 402."""
+    from app.db.models.workspace import Workspace
+    from app.db.session import get_session
+    from app.services.credential_service import CredentialService, get_workspace_provider_key
+
+    service = CredentialService()
+    with get_session() as session:
+        ws = Workspace(name="Acme", slug="acme")
+        session.add(ws)
+        session.flush()
+
+        row = service.upsert(session, ws.id, "gemini", "AIzaGeminiKey")
+        assert row.provider == "google"  # stored under the DejaQ key
+        # Found under the DejaQ key the request path uses (external_provider="google").
+        assert get_workspace_provider_key(session, ws.id, "google") == "AIzaGeminiKey"
+        # And still reachable via the LiteLLM key thanks to normalisation.
+        assert get_workspace_provider_key(session, ws.id, "gemini") == "AIzaGeminiKey"
+
+
 def test_credential_service_upsert_rejects_structured_credential_provider(
     isolated_org_db,
     credential_key,

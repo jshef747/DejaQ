@@ -109,19 +109,75 @@ def test_model_absent_from_model_cost_is_accepted_not_rejected(isolated_org_db):
     from model_cost and DejaQ ships it today. Rejecting unknown models would break the
     product the day a vendor ships a new one, so an unknown-but-addressable model must
     still be accepted. This is the assertion most likely to be broken by a well-meaning
-    later change that tries to validate against the catalog."""
-    assert "groq/groq/compound" not in litellm.model_cost
+    later change that tries to validate against the catalog. The model is
+    qualified (groq/...) but not double-prefixed, so it passes the A7
+    double-prefix guard - only genuine 'groq/groq/...' repeats are rejected."""
+    assert "groq/compound-2099" not in litellm.model_cost
 
     from app.services.llm_config_service import update_for_workspace
 
     _create_workspace()
 
     result = update_for_workspace(
-        "acme", {"external_model": "groq/groq/compound"}, {"external_model"}
+        "acme", {"external_model": "groq/compound-2099"}, {"external_model"}
     )
 
-    assert result.external_model == "groq/groq/compound"
+    assert result.external_model == "groq/compound-2099"
     assert result.external_provider == "groq"
+
+
+def test_catalog_gemini_ids_are_qualified_and_validate_as_is(isolated_org_db):
+    """A2: the catalog offers Gemini models in a form its own config endpoint
+    accepts. Before the fix the ids were bare ('gemini-2.5-flash'), which the
+    PUT either rejected (422) or mis-resolved to vertex_ai; the qualified
+    'gemini/<id>' resolves to provider 'gemini' -> external_provider 'google'."""
+    from app.services import model_catalog
+    from app.services.llm_config_service import update_for_workspace
+
+    gemini = model_catalog.models_for_provider("gemini")
+    assert gemini, "fixture assumption: LiteLLM catalog has gemini chat models"
+    assert all(m.id.startswith("gemini/") for m in gemini)
+
+    _create_workspace()
+    result = update_for_workspace("acme", {"external_model": gemini[0].id}, {"external_model"})
+    assert result.external_model == gemini[0].id
+    assert result.external_provider == "google"
+
+
+def test_catalog_excludes_non_single_key_providers():
+    """A7: vertex_ai (service account) and ollama (local, no key) join
+    bedrock/azure in the excluded set - they can't authenticate with the
+    single API key workspace_provider_credentials stores."""
+    from app.services import model_catalog
+
+    providers_present = {m.provider for m in model_catalog.all_models()}
+    assert "vertex_ai" not in providers_present
+    assert "ollama" not in providers_present
+
+
+@pytest.mark.parametrize(
+    "model", ["gemini/gemini/gemini-2.5-flash", "openai/openai/gpt-4o", "groq/groq/compound"]
+)
+def test_double_prefixed_model_is_rejected(isolated_org_db, model):
+    """A7: a repeated provider prefix resolves (LiteLLM strips only the first
+    segment) and is stored verbatim, then the vendor rejects it at request
+    time. Catch it at config write instead."""
+    from app.services.llm_config_service import InvalidLlmConfigUpdate, update_for_workspace
+
+    _create_workspace()
+    with pytest.raises(InvalidLlmConfigUpdate, match="repeats the provider prefix"):
+        update_for_workspace("acme", {"external_model": model}, {"external_model"})
+
+
+@pytest.mark.parametrize("model", ["vertex_ai/gemini-2.5-flash", "ollama/llama3"])
+def test_non_single_key_provider_model_is_rejected_at_config_write(isolated_org_db, model):
+    """A7: vertex_ai and ollama pass litellm.get_llm_provider but cannot be
+    authenticated with a single API key, so they are rejected at write."""
+    from app.services.llm_config_service import InvalidLlmConfigUpdate, update_for_workspace
+
+    _create_workspace()
+    with pytest.raises(InvalidLlmConfigUpdate):
+        update_for_workspace("acme", {"external_model": model}, {"external_model"})
 
 
 def test_credential_upsert_for_a_structured_credential_provider_is_rejected(monkeypatch):
