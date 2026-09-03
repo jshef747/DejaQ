@@ -26,6 +26,8 @@ const RANGE_LABELS: Record<string, string> = {
 };
 
 function LineChart({ data1, data2, labels }: { data1: number[]; data2: number[]; labels: string[] }) {
+  const [tooltip, setTooltip] = useState<{ i: number; x: number; y: number } | null>(null);
+
   if (data1.length === 0) return null;
 
   const W = 900, H = 240, P = { t: 16, r: 16, b: 28, l: 40 };
@@ -35,8 +37,6 @@ function LineChart({ data1, data2, labels }: { data1: number[]; data2: number[];
   const path = (data: number[]) => data.map((v, i) => `${i === 0 ? "M" : "L"} ${P.l + i * xStep} ${y(v)}`).join(" ");
   const area = (data: number[]) =>
     `${path(data)} L ${P.l + (data.length - 1) * xStep} ${H - P.b} L ${P.l} ${H - P.b} Z`;
-
-  const [tooltip, setTooltip] = useState<{ i: number; x: number; y: number } | null>(null);
 
   return (
     <div style={{ position: "relative" }}>
@@ -343,13 +343,14 @@ export default function AnalyticsClient({ workspaceSlug, range, deptStats, error
         ) : (
           <div style={{ overflowX: "auto" }}>
             <div style={{ display: "grid", gridTemplateColumns: COL }}>
-              {["Department", "Hit rate", "Hits", "Misses", "Requests", "Share"].map((col, i) => (
-                <div key={col} style={thStyle}
-                  onClick={() => ["hit_rate", "hits", "misses", "requests"].includes(["hit_rate", "hits", "misses", "requests"][i - 1]) ? toggleSort(["hit_rate", "hits", "misses", "requests"][i - 1] as SortCol) : undefined}
-                >
-                  {col}{i > 0 && sortIndicator(["hit_rate", "hits", "misses", "requests", "requests"][i - 1] as SortCol)}
-                </div>
-              ))}
+              {(["Department", "Hit rate", "Hits", "Misses", "Requests", "Share"] as const).map((col, i) => {
+                const sortableCol: SortCol | null = (["hit_rate", "hits", "misses", "requests", null] as (SortCol | null)[])[i - 1] ?? null;
+                return (
+                  <div key={col} style={thStyle} onClick={() => sortableCol && toggleSort(sortableCol)}>
+                    {col}{sortableCol && sortIndicator(sortableCol)}
+                  </div>
+                );
+              })}
             </div>
 
             {sortedItems.map((d, i) => {
