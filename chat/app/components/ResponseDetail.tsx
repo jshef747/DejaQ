@@ -9,7 +9,7 @@ import { textDirection } from "./text-direction";
 import { diffQueries, isLossyHeaderText } from "./word-diff";
 
 // Server-side cache-tier thresholds (DEJAQ_CACHE_TRUST_DISTANCE,
-// DEJAQ_CACHE_BAND_MAX_DISTANCE, DEJAQ_CACHE_RESCUE_MAX_DISTANCE —
+// DEJAQ_CACHE_BAND_MAX_DISTANCE, DEJAQ_CACHE_RESCUE_MAX_DISTANCE -
 // CLAUDE.md, app/config.py). Global constants, not per-workspace
 // overridable, so drawing the scale from them here is safe: this file has
 // no way to learn a workspace's own values, and none exist. There used to be

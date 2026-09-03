@@ -28,7 +28,7 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
   const [deptStatus, setDeptStatus] = useState<DeptLoadStatus>("idle");
   // The server + key the department list currently in `departments` was
   // actually fetched against. Editing either field without re-fetching would
-  // otherwise let Save send a department picked from a stale list — PR #78
+  // otherwise let Save send a department picked from a stale list - PR #78
   // made an existing department mandatory on every /v1/* call, so a mismatch
   // here is a "connected but every send 404s" trap, not just a stale label.
   const [deptsFetchedFor, setDeptsFetchedFor] = useState({
@@ -36,7 +36,7 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
     apiKey: initialSettings.apiKey,
   });
   // Set only when a fallback silently swapped the selection (the previously
-  // selected department no longer exists in the freshly fetched list) —
+  // selected department no longer exists in the freshly fetched list) -
   // shown once, next to the dropdown, instead of changing the value with no
   // acknowledgment at all.
   const [deptSwitchedNotice, setDeptSwitchedNotice] = useState<string | null>(null);
@@ -147,7 +147,7 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
   // The department list in `departments` was fetched against
   // deptsFetchedFor, not necessarily the server/key currently typed. Saving
   // anyway would send a department picked from a stale list against a
-  // server/key that may not even have it — "Test again" is what refreshes
+  // server/key that may not even have it - "Test again" is what refreshes
   // both together.
   const fieldsDrifted =
     serverBaseUrl.trim() !== deptsFetchedFor.server || apiKey.trim() !== deptsFetchedFor.apiKey;
@@ -334,7 +334,7 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
           )}
           {fieldsDrifted && (
             <p style={{ color: "var(--amber)", fontSize: "11.5px", lineHeight: "17px", marginLeft: "144px", marginTop: "8px" }}>
-              Server or API key changed since the department list was loaded — click &ldquo;Test again&rdquo; before saving.
+              Server or API key changed since the department list was loaded - click &ldquo;Test again&rdquo; before saving.
             </p>
           )}
           <p style={{ color: "var(--fg-dimmer)", fontSize: "11.5px", lineHeight: "17px", marginLeft: "144px", marginTop: "8px" }}>
@@ -377,7 +377,7 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
             disabled={!canSave}
             title={
               fieldsDrifted
-                ? "Server or API key changed — click Test again first"
+                ? "Server or API key changed - click Test again first"
                 : !canSave
                   ? "Department is required"
                   : undefined
@@ -393,7 +393,7 @@ export default function SettingsModal({ open, initialSettings, onSave, onClose }
 }
 
 // Picks which department stays selected once a fresh list lands: keep the
-// previous slug if it still exists, otherwise fall back to the first entry —
+// previous slug if it still exists, otherwise fall back to the first entry -
 // and say so, since a department that vanished server-side (deleted mid-
 // session) would otherwise silently reassign the active cache namespace with
 // no on-screen trace.
@@ -406,7 +406,7 @@ function resolveDeptSelection(
   if (!prevSlug || !fallback) return { slug: fallback?.slug ?? "", notice: null };
   return {
     slug: fallback.slug,
-    notice: `"${prevSlug}" no longer exists — switched to ${fallback.label} (${fallback.slug}).`,
+    notice: `"${prevSlug}" no longer exists - switched to ${fallback.label} (${fallback.slug}).`,
   };
 }
 
