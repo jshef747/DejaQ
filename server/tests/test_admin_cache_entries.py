@@ -278,7 +278,103 @@ def test_sensitive_fields_absent_and_text_capped(isolated_org_db, authed_admin_c
     assert item["text_truncated"] is True
 
 
+# ── answer detail (full-answer read for editing) ──
+
+
+def test_detail_returns_full_answer_past_the_list_preview_cap(isolated_org_db, authed_admin_client):
+    client, headers = authed_admin_client
+    slug = _make_workspace(client, headers, "Acme")
+    dept = _make_department(client, headers, slug, "Support")
+    namespace = dept["cache_namespace"]
+
+    long_answer = "x" * 5000
+    assert len(long_answer) > cache_admin_service.ANSWER_PREVIEW_CHARS
+    _seed(namespace, "root1", normalized_query="q", answer=long_answer, user_id="a-real-user-id")
+
+    resp = client.get(
+        f"/admin/v1/workspaces/{slug}/cache-entries/root1",
+        params={"department": dept["slug"]},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["answer"] == long_answer
+    assert body["answer_truncated"] is False
+
+    raw_text = resp.text
+    assert "a-real-user-id" not in raw_text
+    assert '"user_id"' not in raw_text
+    assert '"embedding' not in raw_text
+
+
+def test_detail_is_bounded_by_the_edit_endpoint_limit(isolated_org_db, authed_admin_client):
+    client, headers = authed_admin_client
+    slug = _make_workspace(client, headers, "Acme")
+    dept = _make_department(client, headers, slug, "Support")
+    namespace = dept["cache_namespace"]
+
+    oversized_answer = "y" * (cache_admin_service.ANSWER_DETAIL_MAX_CHARS + 500)
+    _seed(namespace, "root1", normalized_query="q", answer=oversized_answer)
+
+    resp = client.get(
+        f"/admin/v1/workspaces/{slug}/cache-entries/root1",
+        params={"department": dept["slug"]},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert len(body["answer"]) == cache_admin_service.ANSWER_DETAIL_MAX_CHARS
+    assert body["answer_truncated"] is True
+
+
+def test_detail_missing_entry_returns_404(isolated_org_db, authed_admin_client):
+    client, headers = authed_admin_client
+    slug = _make_workspace(client, headers, "Acme")
+    dept = _make_department(client, headers, slug, "Support")
+
+    resp = client.get(
+        f"/admin/v1/workspaces/{slug}/cache-entries/does-not-exist",
+        params={"department": dept["slug"]},
+        headers=headers,
+    )
+    assert resp.status_code == 404
+
+
 # ── answer edit ──
+
+
+def test_edit_via_detail_read_does_not_truncate_a_long_answer(isolated_org_db, authed_admin_client):
+    """Regression: openEdit() used to fill the editor from the 3,000-char list
+    preview, so saving a longer answer silently dropped its tail. The editor
+    must be filled from the detail endpoint's full answer instead."""
+    client, headers = authed_admin_client
+    slug = _make_workspace(client, headers, "Acme")
+    dept = _make_department(client, headers, slug, "Support")
+    namespace = dept["cache_namespace"]
+
+    long_answer = "word" + "z" * 4000 + "TAIL-MARKER-END"
+    assert len(long_answer) > cache_admin_service.ANSWER_PREVIEW_CHARS
+    _seed(namespace, "root1", normalized_query="q", answer=long_answer)
+
+    detail = client.get(
+        f"/admin/v1/workspaces/{slug}/cache-entries/root1",
+        params={"department": dept["slug"]},
+        headers=headers,
+    ).json()
+    assert detail["answer"] == long_answer  # what the editor would load
+
+    resp = client.put(
+        f"/admin/v1/workspaces/{slug}/cache-entries/root1",
+        params={"department": dept["slug"]},
+        json={"answer": detail["answer"]},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+
+    scratch = _scratch_client()
+    stored = scratch.get_collection(namespace).get(ids=["root1"], include=["metadatas"])
+    assert stored["metadatas"][0]["generalized_answer"] == long_answer
+    assert stored["metadatas"][0]["generalized_answer"].endswith("TAIL-MARKER-END")
 
 
 def test_edit_preserves_normalized_query_and_embedding(isolated_org_db, authed_admin_client):

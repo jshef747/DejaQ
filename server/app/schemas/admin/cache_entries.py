@@ -27,6 +27,20 @@ class CacheEntryItem(BaseModel):
     rag_document_ids: list[str] = []
 
 
+class CacheEntryDetail(BaseModel):
+    """Full cached answer for editing.
+
+    Bounded by the same limit the edit endpoint accepts (see
+    `answer_edit.MAX_EDITED_ANSWER_BYTES`), never the 3,000-char list preview.
+    Excludes the same sensitive fields as `CacheEntryItem` — only what the
+    editor needs.
+    """
+
+    id: str
+    answer: str
+    answer_truncated: bool
+
+
 class CacheEntryPage(BaseModel):
     workspace: str
     department: str

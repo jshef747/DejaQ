@@ -32,3 +32,4 @@ venv/
 
 # VS Code
 .vscode/
+.task-artifacts/

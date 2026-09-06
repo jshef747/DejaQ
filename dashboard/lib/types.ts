@@ -100,6 +100,12 @@ export type CacheEntryItem = {
   rag_document_ids: string[];
 };
 
+export type CacheEntryDetail = {
+  id: string;
+  answer: string;
+  answer_truncated: boolean;
+};
+
 export type CacheEntryPage = {
   workspace: string;
   department: string;

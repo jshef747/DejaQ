@@ -10,6 +10,7 @@ interface ConfirmDialogProps {
   confirmLabel?: string;
   destructive?: boolean;
   busy?: boolean;
+  error?: string | null;
   onCancel: () => void;
   onConfirm: () => void;
 }
@@ -21,6 +22,7 @@ export default function ConfirmDialog({
   confirmLabel = "Confirm",
   destructive = false,
   busy = false,
+  error = null,
   onCancel,
   onConfirm,
 }: ConfirmDialogProps) {
@@ -43,6 +45,11 @@ export default function ConfirmDialog({
         </>
       }
     >
+      {error && (
+        <div className="ds-pill ds-pill-err" style={{ marginBottom: 12, padding: "8px 12px", borderRadius: 5, fontSize: 12 }}>
+          {error}
+        </div>
+      )}
       <p style={{ margin: 0, color: "var(--fg-dim)", fontSize: "13px", lineHeight: 1.6 }}>
         {message}
       </p>

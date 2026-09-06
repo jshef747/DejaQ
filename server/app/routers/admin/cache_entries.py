@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException, Query
 from app.schemas.admin.cache_entries import (
     CacheAnswerEdit,
     CacheEntryDeleteResult,
+    CacheEntryDetail,
     CacheEntryEditResult,
     CacheEntryPage,
 )
@@ -33,6 +34,17 @@ def list_cache_entries(
     try:
         return cache_admin_service.list_cache_entries(workspace_slug, department, limit=limit, offset=offset)
     except (WorkspaceNotFound, DeptNotFound, ChromaUnavailable) as exc:
+        raise _map_errors(exc)
+
+
+@router.get(
+    "/workspaces/{workspace_slug}/cache-entries/{entry_id}",
+    response_model=CacheEntryDetail,
+)
+def get_cache_entry(workspace_slug: str, entry_id: str, department: str):
+    try:
+        return cache_admin_service.get_cache_entry_detail(workspace_slug, department, entry_id)
+    except (WorkspaceNotFound, DeptNotFound, CacheEntryNotFound, ChromaUnavailable) as exc:
         raise _map_errors(exc)
 
 

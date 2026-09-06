@@ -1,7 +1,7 @@
 "use server";
 
 import { apiFetch } from "@/lib/api";
-import type { CacheEntryDeleteResult, CacheEntryEditResult, CacheEntryPage } from "@/lib/types";
+import type { CacheEntryDeleteResult, CacheEntryDetail, CacheEntryEditResult, CacheEntryPage } from "@/lib/types";
 import { responseErrorMessage } from "./errors";
 
 function base(workspaceSlug: string, entryId?: string) {
@@ -23,6 +23,22 @@ export async function listCacheEntries(
   const res = await apiFetch(`${base(workspaceSlug)}?${params}`);
   if (!res.ok) throw new Error(await responseErrorMessage(res, `Failed to load cache entries (${res.status})`));
   return res.json() as Promise<CacheEntryPage>;
+}
+
+export async function getCacheEntryDetail(
+  workspaceSlug: string,
+  department: string,
+  entryId: string,
+): Promise<{ ok: true; data: CacheEntryDetail } | { ok: false; error: string }> {
+  let res: Response;
+  try {
+    res = await apiFetch(`${base(workspaceSlug, entryId)}?${new URLSearchParams({ department })}`);
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+  if (!res.ok) return { ok: false, error: await responseErrorMessage(res, `Failed to load answer (${res.status})`) };
+  const data = (await res.json()) as CacheEntryDetail;
+  return { ok: true, data };
 }
 
 export async function editCacheEntryAnswer(

@@ -8,7 +8,7 @@ import EmptyState from "@/components/ui/EmptyState";
 import SectionHeader from "@/components/ui/SectionHeader";
 import Modal from "@/components/Modal";
 import ConfirmDialog from "@/components/ConfirmDialog";
-import { listCacheEntries, editCacheEntryAnswer, deleteCacheEntry } from "@/app/actions/cache";
+import { listCacheEntries, getCacheEntryDetail, editCacheEntryAnswer, deleteCacheEntry } from "@/app/actions/cache";
 import type { CacheEntryItem, CacheEntryPage, DepartmentItem } from "@/lib/types";
 
 const fmt = new Intl.DateTimeFormat("en-US", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -82,10 +82,18 @@ export default function CacheClient({
     loadPage(deptSlug, 0);
   }
 
-  function openEdit(entry: CacheEntryItem) {
+  async function openEdit(entry: CacheEntryItem) {
     setEditErr(null);
-    setEditAnswer(entry.answer_preview);
+    setEditAnswer("");
     setEditEntry(entry);
+    setEditBusy(true);
+    const res = await getCacheEntryDetail(workspaceSlug, activeDept, entry.id);
+    setEditBusy(false);
+    if (!res.ok) {
+      setEditErr(res.error);
+      return;
+    }
+    setEditAnswer(res.data.answer);
   }
 
   async function handleSaveEdit() {
@@ -151,9 +159,9 @@ export default function CacheClient({
         </div>
       )}
 
-      {(error || deleteErr) && (
+      {error && (
         <div className="ds-pill ds-pill-err" style={{ marginBottom: 16, padding: "8px 12px", borderRadius: 5, fontSize: 12 }}>
-          {error || deleteErr}
+          {error}
         </div>
       )}
       {successMsg && (
@@ -355,6 +363,7 @@ export default function CacheClient({
         confirmLabel="Delete"
         destructive
         busy={deleteBusy}
+        error={deleteErr}
         onCancel={() => setDeleteEntry(null)}
         onConfirm={handleConfirmDelete}
       />

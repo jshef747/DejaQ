@@ -22,10 +22,11 @@ import chromadb
 from app.config import CHROMA_HOST, CHROMA_PORT
 from app.services import admin_service
 from app.services.admin_service import DeptNotFound, WorkspaceNotFound  # noqa: F401 (re-exported)
-from app.services.answer_edit import validate_edited_answer
+from app.services.answer_edit import MAX_EDITED_ANSWER_BYTES, validate_edited_answer
 from app.services.memory_chromaDB import get_memory_service
 from app.schemas.admin.cache_entries import (
     CacheEntryDeleteResult,
+    CacheEntryDetail,
     CacheEntryEditResult,
     CacheEntryItem,
     CacheEntryPage,
@@ -37,6 +38,9 @@ DEFAULT_LIMIT = 50
 MAX_LIMIT = 100
 QUERY_PREVIEW_CHARS = 400
 ANSWER_PREVIEW_CHARS = 3000
+# Same cap the edit endpoint accepts — a full-answer read must not be
+# narrower than what an edit can save, or a save would still lose the tail.
+ANSWER_DETAIL_MAX_CHARS = MAX_EDITED_ANSWER_BYTES
 
 _IMAGE_META_KEYS = ("image_kind", "image_dhash", "image_clip", "image_text")
 
@@ -179,6 +183,31 @@ def list_cache_entries(
         offset=offset,
         items=items,
     )
+
+
+def get_cache_entry_detail(
+    workspace_slug: str,
+    dept_slug: str,
+    entry_id: str,
+) -> CacheEntryDetail:
+    dept = _resolve_department(workspace_slug, dept_slug)
+    client = _chroma_client()
+    if not _collection_exists(client, dept.cache_namespace):
+        raise CacheEntryNotFound(entry_id)
+
+    try:
+        collection = client.get_collection(dept.cache_namespace)
+        result = collection.get(ids=[entry_id], include=["metadatas"])
+    except Exception as exc:
+        logger.error("Could not read ChromaDB collection '%s'", dept.cache_namespace, exc_info=True)
+        raise ChromaUnavailable("cache storage is temporarily unavailable") from exc
+
+    if not result.get("ids"):
+        raise CacheEntryNotFound(entry_id)
+
+    meta = (result["metadatas"][0] if result.get("metadatas") else {}) or {}
+    answer, truncated = _truncate(meta.get("generalized_answer", ""), ANSWER_DETAIL_MAX_CHARS)
+    return CacheEntryDetail(id=entry_id, answer=answer, answer_truncated=truncated)
 
 
 def edit_cache_entry_answer(
