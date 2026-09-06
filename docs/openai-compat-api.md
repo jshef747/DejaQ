@@ -196,7 +196,9 @@ attachment:
   text layer).
 - A per-file-type routing map (`DEFAULT_ATTACHMENT_ROUTING`, per-workspace overridable) sets each
   type to `local`, `external`, or `auto`; `auto` runs the content-difficulty judge to pick local
-  vs. external per attachment. An unrecognised type routes external.
+  vs. external per attachment. An unrecognised type routes external. Images default to `local`
+  in this map, so the judge does not run on them under the shipped configuration; a workspace
+  can set images to `auto` to opt in.
 - `X-DejaQ-Routing-Mode: hard_external` is a ceiling above all of the above: it forces external
   regardless of capability or the routing map.
 
