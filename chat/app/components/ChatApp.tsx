@@ -36,6 +36,13 @@ import TypingIndicator from "./TypingIndicator";
 import ToastStack, { type ToastAction, type ToastData, type ToastKind } from "./Toast";
 import { RailTrack } from "./ReadingColumn";
 import { classifyRoute, type Route } from "./provenance";
+import {
+  startSend,
+  startEscalation,
+  endEscalation,
+  endGeneration as endGenerationMap,
+  type GenerationState,
+} from "./generation-state";
 import { matchesNewChatShortcut } from "./shortcuts";
 import { textDirection } from "./text-direction";
 
@@ -80,19 +87,12 @@ function turnHadAttachment(messages: AppMessage[], index: number): boolean {
 // depend on it do not re-run for a conversation that has not changed.
 const NO_MESSAGES: AppMessage[] = [];
 
-// What one in-flight answer looks like from the outside. Generation is tracked
-// per conversation, not once for the app: a send belongs to the conversation
-// that asked, and the user is free to navigate away from it while it runs, so
-// a single global flag cannot describe two conversations where only one is
-// working.
-interface GenerationState {
-  // No content delta has landed yet, so the wait strip is still up. The
-  // whole record's presence, not this flag, means "generating".
-  waiting: boolean;
-  route: Route | null;
-  model: string | null;
-  sinceMs: number | null;
-}
+// What one in-flight answer looks like from the outside. Generation is
+// tracked per conversation, not once for the app: a send belongs to the
+// conversation that asked, and the user is free to navigate away from it
+// while it runs, so a single global flag cannot describe two conversations
+// where only one is working. A fresh send and a thumbs-down escalation
+// replay share this state — see generation-state.ts.
 
 // The mutable half of the same send, reached synchronously from the stream
 // callbacks — they cannot wait for a render to know they have been cancelled.
@@ -186,7 +186,14 @@ export default function ChatApp() {
   // other conversation is deliberately invisible here — it shows up in the
   // sidebar instead, and in its own transcript when the user goes back to it.
   const activeGeneration = activeConvId ? generating[activeConvId] : undefined;
-  const isGenerating = Boolean(activeGeneration);
+  // An escalation replay (handleFeedback) shares this record so the wait
+  // strip has one source of truth, but it is not a fresh send: sendFeedback
+  // carries no AbortController the way a fresh send's LiveSend does, so
+  // there is nothing for a Stop click to cancel. Composer lock and the Stop
+  // control read isGenerating specifically, and stay exactly as they were
+  // before escalation had any generation-state footprint at all - only the
+  // wait strip (isWaiting/activeGeneration below) is meant to see it.
+  const isGenerating = Boolean(activeGeneration) && !activeGeneration?.escalating;
   const isWaiting = activeGeneration?.waiting ?? false;
   const generatingIds = Object.keys(generating);
 
@@ -304,12 +311,7 @@ export default function ChatApp() {
   }
 
   function endGeneration(convId: string) {
-    setGenerating((prev) => {
-      if (!(convId in prev)) return prev;
-      const next = { ...prev };
-      delete next[convId];
-      return next;
-    });
+    setGenerating((prev) => endGenerationMap(prev, convId));
   }
 
   // Save the conversation being navigated away from. Skipped while it is
@@ -519,10 +521,7 @@ export default function ChatApp() {
     const assistantId = newId();
     const send: LiveSend = { assistantId, controller: new AbortController(), cancelled: false };
     sendsRef.current.set(convId, send);
-    setGenerating((prev) => ({
-      ...prev,
-      [convId]: { waiting: true, route: null, model: null, sinceMs: null },
-    }));
+    setGenerating((prev) => startSend(prev, convId));
 
     const assistantPlaceholder: AppMessage = {
       id: assistantId,
@@ -734,6 +733,22 @@ export default function ChatApp() {
     // this to "error".
     updateFeedbackPhase(convId, msgId, rating);
 
+    // A thumbs-down replays one tier up - cache to local, local to external -
+    // and the server only attempts that with rating "negative", an
+    // interaction id, and this same message replay (withheld above for an
+    // attachment turn - see feedback_service._apply_cache_feedback). Mirror
+    // that exact condition so the wait strip never announces an escalation
+    // the server was never going to try, e.g. on an already-external answer.
+    const escalationReplay = rating === "negative" && !isAttachmentAnchored && Boolean(msg.requestMessages);
+    const escalationRoute: Route | null = escalationReplay
+      ? msg.tier === "cache"
+        ? "local"
+        : msg.tier === "local"
+          ? "cloud"
+          : null
+      : null;
+    if (escalationRoute) setGenerating((prev) => startEscalation(prev, convId, escalationRoute));
+
     const result = await sendFeedback(
       msg.responseId ?? null,
       msg.interactionId ?? null,
@@ -742,6 +757,8 @@ export default function ChatApp() {
       comment,
       settings.deptSlug,
     );
+
+    if (escalationRoute) setGenerating((prev) => endEscalation(prev, convId));
 
     if (isApiError(result)) {
       updateFeedbackPhase(convId, msgId, "error");
@@ -1070,6 +1087,7 @@ export default function ChatApp() {
                         route={activeGeneration.route}
                         modelUsed={activeGeneration.model}
                         sinceMs={activeGeneration.sinceMs}
+                        escalating={activeGeneration.escalating}
                       />
                     )}
                   </div>

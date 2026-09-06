@@ -370,3 +370,37 @@
 .dq-working-dot {
   animation: working-dot 1.4s ease-in-out infinite;
 }
+
+/* Thumbs-down escalation's wait strip (TypingIndicator, escalating=true):
+   names the destination on mount, then crossfades into the identical
+   generating-on-X pill a fresh send shows for that same route. One
+   fixed-timeline CSS animation, not a JS timer - it has no state to clear,
+   so it can never leave a stray "escalating" label on screen after the real
+   answer, error, or Stop has already removed the whole wait strip. */
+@keyframes escalation-fade-out {
+  0%,
+  55% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes escalation-fade-in {
+  0%,
+  55% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+.dq-escalation-intro {
+  animation: escalation-fade-out 900ms ease forwards;
+}
+
+.dq-escalation-handoff {
+  animation: escalation-fade-in 900ms ease forwards;
+}
