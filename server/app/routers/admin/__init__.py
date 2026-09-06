@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.routers.admin import available_models, credentials, departments, feedback, keys, llm_config, model_catalog, rag_documents, stats, test_provider, whoami, workspaces
+from app.routers.admin import available_models, cache_entries, credentials, departments, feedback, keys, llm_config, model_catalog, rag_documents, stats, test_provider, whoami, workspaces
 
 router = APIRouter(prefix="/admin/v1")
 router.include_router(whoami.router)
@@ -15,3 +15,4 @@ router.include_router(credentials.router)
 router.include_router(test_provider.router)
 router.include_router(feedback.router)
 router.include_router(rag_documents.router)
+router.include_router(cache_entries.router)

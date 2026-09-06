@@ -13,6 +13,7 @@ import {
   GitBranch,
   BookOpen,
   Workflow,
+  Database,
   ChevronDown,
   Check,
 } from "lucide-react";
@@ -26,6 +27,7 @@ const NAV_ITEMS = [
   { href: "/dashboard/departments", label: "Departments", Icon: Users },
   { href: "/dashboard/tree",        label: "Workspace Tree", Icon: GitBranch },
   { href: "/dashboard/keys",        label: "API Keys",    Icon: Key },
+  { href: "/dashboard/cache",       label: "Cache",       Icon: Database },
   { href: "/dashboard/rag",         label: "Knowledge Base", Icon: BookOpen },
   { href: "/dashboard/pipeline",    label: "Pipeline",    Icon: Workflow },
 ];
@@ -33,6 +35,7 @@ const NAV_ITEMS = [
 const WORKSPACE_SCOPED_PATHS = [
   "/dashboard/departments",
   "/dashboard/keys",
+  "/dashboard/cache",
   "/dashboard/rag",
   "/dashboard/pipeline",
   "/dashboard/workspaces",

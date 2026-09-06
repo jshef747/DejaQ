@@ -75,6 +75,52 @@ export type ApiKeyDeleted = {
   deleted: boolean;
 };
 
+// Cache browser (dashboard Cache page). Deliberately excludes user_id,
+// embeddings, image_clip/image_dhash, full file_sha, and system/hidden
+// prompts — see server/app/services/cache_admin_service.py and CLAUDE.md's
+// cache-entries privacy limits.
+export type CacheEntryKind = "text" | "alias" | "human" | "image" | "file" | "rag";
+
+export type CacheEntryItem = {
+  id: string;
+  kind: CacheEntryKind;
+  is_alias: boolean;
+  original_query_preview: string;
+  normalized_query_preview: string;
+  answer_preview: string;
+  text_truncated: boolean;
+  stored_at: string;
+  score: number;
+  hit_count: number;
+  negative_count: number;
+  authored: string | null;
+  alias_of: string | null;
+  attachment_kind: string | null;
+  file_kind: string | null;
+  rag_document_ids: string[];
+};
+
+export type CacheEntryPage = {
+  workspace: string;
+  department: string;
+  department_name: string;
+  cache_namespace: string;
+  total: number;
+  limit: number;
+  offset: number;
+  items: CacheEntryItem[];
+};
+
+export type CacheEntryEditResult = {
+  id: string;
+  redirected: boolean;
+};
+
+export type CacheEntryDeleteResult = {
+  id: string;
+  deleted: boolean;
+};
+
 export type RagDocumentItem = {
   id: number;
   title: string;
