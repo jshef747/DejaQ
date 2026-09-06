@@ -149,7 +149,7 @@ export default function Sidebar({ email, workspaces }: SidebarProps) {
             aria-label={label}
           >
             <Icon size={14} className="ds-nav-icon" />
-            {label}
+            <span>{label}</span>
           </Link>
         );
       })}
@@ -164,7 +164,7 @@ export default function Sidebar({ email, workspaces }: SidebarProps) {
         aria-label="Chat demo (opens in new tab)"
       >
         <MessageSquare size={14} className="ds-nav-icon" />
-        Chat demo ↗
+        <span>Chat demo ↗</span>
       </a>
 
       {/* Account section */}
@@ -176,7 +176,7 @@ export default function Sidebar({ email, workspaces }: SidebarProps) {
         aria-label="Settings"
       >
         <Settings size={14} className="ds-nav-icon" />
-        Settings
+        <span>Settings</span>
       </Link>
 
       {/* Spacer */}
