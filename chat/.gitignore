@@ -16,6 +16,9 @@
 /.next/
 /out/
 
+# session logs (runtime data, written per chat conversation - see app/api/session-log)
+/.session-logs/
+
 # production
 /build
 

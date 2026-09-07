@@ -36,6 +36,7 @@ import TypingIndicator from "./TypingIndicator";
 import ToastStack, { type ToastAction, type ToastData, type ToastKind } from "./Toast";
 import { RailTrack } from "./ReadingColumn";
 import { classifyRoute, type Route } from "./provenance";
+import { logSessionTurn, type RawTurnInput } from "./session-log";
 import {
   startSend,
   startEscalation,
@@ -397,6 +398,47 @@ export default function ChatApp() {
           : prev,
       { requires: (msgs) => msgs.some((m) => m.id === send.assistantId && m.stopped) },
     );
+
+    // Log the stop honestly: whatever text had streamed in before the user
+    // cut it off, with whatever route/model metadata had already arrived.
+    // The user question always sits directly before the assistant message in
+    // the transcript (runSend commits it first) - or is the last message when
+    // Stop lands before the first delta ever created the assistant bubble.
+    const msgs = transcriptsRef.current[convId] ?? [];
+    const assistantIdx = msgs.findIndex((m) => m.id === send.assistantId);
+    const userIdx = assistantIdx >= 0 ? assistantIdx - 1 : msgs.length - 1;
+    const userTurn = userIdx >= 0 ? msgs[userIdx] : undefined;
+    const assistantTurn = assistantIdx >= 0 ? msgs[assistantIdx] : undefined;
+    if (userTurn && userTurn.role === "user") {
+      void logSessionTurn(convId, settings.deptSlug, {
+        turnNumber: msgs.slice(0, userIdx).filter((m) => m.role === "assistant").length + 1,
+        timestampMs: userTurn.ts,
+        originalQuestion: userTurn.content,
+        attachmentName: userTurn.fileName ?? (userTurn.imageUrl ? "image" : null),
+        attachmentKind: userTurn.hadAttachment ? (userTurn.imageUrl ? "image" : "file") : null,
+        ragDocumentTitle: userTurn.ragDocumentTitle ?? null,
+        outcome: "stopped",
+        errorMessage: null,
+        answerText: assistantTurn?.content ?? "",
+        tier: assistantTurn?.tier ?? null,
+        modelUsed: assistantTurn?.modelUsed ?? null,
+        cacheDistance: null,
+        cacheMatchedQuery: null,
+        cacheEnrichedQuery: null,
+        validatorVerdict: null,
+        nearestCacheDistance: null,
+        nearestCacheQuery: null,
+        promptDifficulty: null,
+        promptDifficultyScore: null,
+        latencyMs: null,
+        finishStatus: null,
+        failureMessage: null,
+        serverPromptTokens: null,
+        serverCompletionTokens: null,
+        ragChunks: null,
+        answerAuthored: null,
+      });
+    }
   }
 
   // Stop belongs to the conversation on screen, never to whichever send
@@ -498,6 +540,40 @@ export default function ChatApp() {
       hadAttachment: sentAttachment !== null,
       ragDocumentTitle: sentRagDocument?.title ?? null,
     };
+
+    // Session log turn number: counts completed assistant turns already in
+    // this conversation, so a retry (which replaces the transcript from the
+    // retried turn on) reuses that turn's number rather than always growing.
+    const turnNumber = priorMessages.filter((m) => m.role === "assistant").length + 1;
+    const logBaseFields = {
+      turnNumber,
+      timestampMs: userMsg.ts,
+      originalQuestion: userMsg.content,
+      attachmentName: sentAttachment?.name ?? null,
+      attachmentKind: sentAttachment?.kind ?? null,
+      ragDocumentTitle: sentRagDocument?.title ?? null,
+    };
+    // Fields with no signal at all for a turn that never got a pipeline
+    // response (a pure network/HTTP failure) - "Not available" is rendered
+    // by session-log.ts for every one of these nulls.
+    const noPipelineFields = {
+      tier: null,
+      modelUsed: null,
+      cacheDistance: null,
+      cacheMatchedQuery: null,
+      cacheEnrichedQuery: null,
+      validatorVerdict: null,
+      nearestCacheDistance: null,
+      nearestCacheQuery: null,
+      promptDifficulty: null,
+      promptDifficultyScore: null,
+      finishStatus: null,
+      failureMessage: null,
+      serverPromptTokens: null,
+      serverCompletionTokens: null,
+      ragChunks: null,
+      answerAuthored: null,
+    } as const;
 
     // The transcript this send writes into: the history in front of the
     // question, plus the question. A retry passes the history in front of the
@@ -604,6 +680,14 @@ export default function ChatApp() {
       // attachment needs no restoring — it was never cleared — and a failed
       // send leaves it un-pinned, so a retry still reads as the first attempt.
       markSendFailed(convId, userMsg.id, assistantId, "unsent");
+      void logSessionTurn(convId, settings.deptSlug, {
+        ...logBaseFields,
+        ...noPipelineFields,
+        outcome: "api_error",
+        errorMessage: result.message,
+        answerText: "",
+        latencyMs: null,
+      });
       return;
     }
 
@@ -626,6 +710,29 @@ export default function ChatApp() {
       } else {
         addToast("error", "Empty answer", "The model returned an empty answer. Try rephrasing, or switch routing to external.");
         markSendFailed(convId, userMsg.id, assistantId, "empty-answer");
+        void logSessionTurn(convId, settings.deptSlug, {
+          ...logBaseFields,
+          outcome: "empty_answer",
+          errorMessage: null,
+          answerText: "",
+          tier: result.tier,
+          modelUsed: result.modelUsed,
+          cacheDistance: result.cacheDistance,
+          cacheMatchedQuery: result.cacheMatchedQuery,
+          cacheEnrichedQuery: result.cacheEnrichedQuery,
+          validatorVerdict: result.validatorVerdict,
+          nearestCacheDistance: result.nearestCacheDistance,
+          nearestCacheQuery: result.nearestCacheQuery,
+          promptDifficulty: result.promptDifficulty,
+          promptDifficultyScore: result.promptDifficultyScore,
+          latencyMs: result.latencyMs,
+          finishStatus: result.finishStatus,
+          failureMessage: result.failureMessage,
+          serverPromptTokens: result.serverPromptTokens,
+          serverCompletionTokens: result.serverCompletionTokens,
+          ragChunks: result.ragChunks,
+          answerAuthored: result.answerAuthored,
+        });
         return;
       }
       firstDelta = false;
@@ -674,6 +781,30 @@ export default function ChatApp() {
         ),
       {},
     );
+
+    void logSessionTurn(convId, settings.deptSlug, {
+      ...logBaseFields,
+      outcome: "success",
+      errorMessage: result.streamError,
+      answerText: result.text || "",
+      tier: result.tier,
+      modelUsed: result.modelUsed,
+      cacheDistance: result.cacheDistance,
+      cacheMatchedQuery: result.cacheMatchedQuery,
+      cacheEnrichedQuery: result.cacheEnrichedQuery,
+      validatorVerdict: result.validatorVerdict,
+      nearestCacheDistance: result.nearestCacheDistance,
+      nearestCacheQuery: result.nearestCacheQuery,
+      promptDifficulty: result.promptDifficulty,
+      promptDifficultyScore: result.promptDifficultyScore,
+      latencyMs: result.latencyMs,
+      finishStatus: result.streamError ? null : result.finishStatus,
+      failureMessage: result.failureMessage,
+      serverPromptTokens: result.serverPromptTokens,
+      serverCompletionTokens: result.serverCompletionTokens,
+      ragChunks: result.ragChunks,
+      answerAuthored: result.answerAuthored,
+    });
 
     // The response detail panel's "if generated" comparison is a rolling
     // average of this session's own non-cache latencies — never the cache
@@ -1045,6 +1176,30 @@ export default function ChatApp() {
               >
                 <InspectorPanelIcon />
               </button>
+              {activeConvId && messages.length > 0 && (
+                <>
+                  {/* Relative URLs on purpose: they resolve against whichever
+                      machine is actually serving this chat app, so the log
+                      stays reachable even when the DejaQ server/dashboard run
+                      elsewhere - see chat/app/api/session-log/route.ts. */}
+                  <a
+                    href={`/api/session-log?conversationId=${encodeURIComponent(activeConvId)}&mode=view`}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={iconBtn(false)}
+                    title="View session log"
+                  >
+                    <SessionLogIcon />
+                  </a>
+                  <a
+                    href={`/api/session-log?conversationId=${encodeURIComponent(activeConvId)}&mode=download`}
+                    style={iconBtn(false)}
+                    title="Download session log"
+                  >
+                    <DownloadIcon />
+                  </a>
+                </>
+              )}
               <a href={dashboardUrl} target="_blank" rel="noreferrer" style={iconBtn(false)} title="Open dashboard">
                 <DashboardIcon />
               </a>
@@ -1348,6 +1503,24 @@ function InspectorPanelIcon() {
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
       <rect x="1.9" y="2.6" width="12.2" height="10.8" rx="2" />
       <path d="M10.1 2.6v10.8" />
+    </svg>
+  );
+}
+
+function SessionLogIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 2.5h6l2.5 2.5V13a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1Z" />
+      <path d="M5.5 8h5M5.5 10.5h5M5.5 5.5h2" />
+    </svg>
+  );
+}
+
+function DownloadIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M8 2.5v7.2M5 7l3 3 3-3" />
+      <path d="M2.8 11.8v1.7a1 1 0 0 0 1 1h8.4a1 1 0 0 0 1-1v-1.7" />
     </svg>
   );
 }

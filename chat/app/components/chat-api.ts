@@ -50,6 +50,10 @@ export interface ChatSuccess {
   responseId: string | null;
   conversationId: string | null;
   promptDifficulty: string | null;
+  // Raw classifier score (0.0-1.0) behind promptDifficulty. Null whenever
+  // promptDifficulty is null for the same reason - the classifier only runs
+  // on a genuine cache miss (see CLAUDE.md), so a cache hit reports neither.
+  promptDifficultyScore: number | null;
   promptTokens: number;
   completionTokens: number;
   latencyMs: number;
@@ -91,6 +95,25 @@ export interface ChatSuccess {
   // it AND says so, because a silently truncated answer reads as a complete
   // one. Null on a clean stream.
   streamError: string | null;
+  // The Responses API's own terminal-event vocabulary: "completed" (normal),
+  // "incomplete" (the token budget cut it off - result.finish_reason ==
+  // "length" server-side), "failed" (a mid-stream pipeline error, e.g. a
+  // local-vision capability rejection), or null when no terminal event was
+  // read at all (the fetch/HTTP layer already failed before any SSE frame,
+  // or the connection dropped - see streamError above for that case).
+  finishStatus: "completed" | "incomplete" | "failed" | null;
+  // Set from the `response.failed` event's own error message when
+  // finishStatus is "failed". Null otherwise - never fabricated from a
+  // generic message.
+  failureMessage: string | null;
+  // Real usage from the terminal event's own `response.usage`, NOT the
+  // client-side word-count guess above (promptTokens/completionTokens) -
+  // this is the server's own reported count (real provider counts on an
+  // external-miss answer, a word-count estimate server-side for cache/local
+  // - see CLAUDE.md). Null when no terminal event arrived to report it.
+  serverPromptTokens: number | null;
+  serverCompletionTokens: number | null;
+  serverTotalTokens: number | null;
 }
 
 // Route + model become known as soon as the response headers land, well
@@ -200,6 +223,8 @@ export async function sendChatMessage(
   const responseId = response.headers.get("x-dejaq-response-id") ?? null;
   const conversationId = response.headers.get("x-dejaq-conversation-id") ?? null;
   const promptDifficulty = response.headers.get("x-dejaq-prompt-difficulty") ?? null;
+  const rawDifficultyScore = response.headers.get("x-dejaq-prompt-difficulty-score");
+  const promptDifficultyScore = rawDifficultyScore !== null ? Number(rawDifficultyScore) : null;
   const rawDistance = response.headers.get("x-dejaq-cache-distance");
   const cacheDistance = rawDistance !== null ? Number(rawDistance) : null;
   const cacheMatchedQuery = decodeHeaderText(response.headers.get("x-dejaq-cache-matched-query"));
@@ -231,6 +256,11 @@ export async function sendChatMessage(
   // in `generating` with no way out - the outer try/catch below is what fixes
   // that now, by turning it into a `streamError` result instead of a throw.)
   let streamError: string | null = null;
+  let finishStatus: "completed" | "incomplete" | "failed" | null = null;
+  let failureMessage: string | null = null;
+  let serverPromptTokens: number | null = null;
+  let serverCompletionTokens: number | null = null;
+  let serverTotalTokens: number | null = null;
   try {
     outer: while (true) {
       let value: Uint8Array | undefined;
@@ -268,6 +298,21 @@ export async function sendChatMessage(
               text += delta;
               onDelta?.(delta);
             }
+            // Terminal Responses-API events - already sent on the wire and
+            // already forwarded by the proxy, just not read until now. Real
+            // server-reported usage, never a second client-side guess.
+            if (chunk?.type === "response.completed" || chunk?.type === "response.incomplete") {
+              finishStatus = chunk.type === "response.completed" ? "completed" : "incomplete";
+              const usage = chunk?.response?.usage;
+              if (usage) {
+                serverPromptTokens = usage.input_tokens ?? null;
+                serverCompletionTokens = usage.output_tokens ?? null;
+                serverTotalTokens = usage.total_tokens ?? null;
+              }
+            } else if (chunk?.type === "response.failed") {
+              finishStatus = "failed";
+              failureMessage = chunk?.response?.error?.message ?? "Generation failed.";
+            }
           } catch {
             // malformed chunk — skip
           }
@@ -304,9 +349,15 @@ export async function sendChatMessage(
     responseId,
     conversationId,
     promptDifficulty,
+    promptDifficultyScore,
     promptTokens,
     completionTokens,
     latencyMs,
+    finishStatus,
+    failureMessage,
+    serverPromptTokens,
+    serverCompletionTokens,
+    serverTotalTokens,
     cacheHit: modelUsed === "cache",
     cacheDistance,
     cacheMatchedQuery,
